@@ -68,7 +68,7 @@ import { TelegramChannel } from './comms/telegram-channel';
 import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { setShutdownHooks } from './lifecycle';
-import { attachXaiVoiceStreaming } from './voice/xai-streaming';
+import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import {
@@ -690,11 +690,22 @@ app.use((req, _res, next) => {
     if (path === '/api/voice/tts' || path === '/api/voice/stt' || path === '/api/mobile/voice-debug' || path === '/api/realtime/call') {
       const ua = String(req.headers['user-agent'] || '').slice(0, 160);
       const pairing = req.headers['x-pairing-token'] ? 'pairing=yes' : 'pairing=no';
-      fs.appendFileSync('D:\\Prometheus\\voice-xai-debug.log', `[${new Date().toISOString()}] [voice-preauth] ${req.method} ${path} ${pairing} ua="${ua}"\n`);
+      appendMobileVoiceDebugLog(`[${new Date().toISOString()}] [voice-preauth] ${req.method} ${path} ${pairing} ua="${ua}"\n`);
     }
   } catch {}
   next();
 });
+
+function appendMobileVoiceDebugLog(line: string): void {
+  try {
+    const configured = String(process.env.PROM_VOICE_DEBUG_LOG || '').trim();
+    const logPath = configured || path.join(getConfig().getWorkspacePath(), 'workspace', 'logs', 'voice-debug.log');
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, line);
+  } catch {
+    try { console.warn('[voice-debug] failed to append mobile voice debug log'); } catch {}
+  }
+}
 
 app.post('/api/mobile/voice-debug', (req, res) => {
   try {
@@ -706,7 +717,7 @@ app.post('/api/mobile/voice-debug', (req, res) => {
       mode: String((body as any).mode || '').slice(0, 40),
       data: (body as any).data || {},
     };
-    fs.appendFileSync('D:\\Prometheus\\voice-xai-debug.log', `[${new Date().toISOString()}] [voice-client] ua="${ua}" ${JSON.stringify(safe).slice(0, 1200)}\n`);
+    appendMobileVoiceDebugLog(`[${new Date().toISOString()}] [voice-client] ua="${ua}" ${JSON.stringify(safe).slice(0, 1200)}\n`);
   } catch {}
   res.json({ success: true });
 });
@@ -808,6 +819,8 @@ const { server, wss } = createServer(app, PORT, HOST, undefined, httpsGateway?.p
 const secureBundle = httpsGateway ? createServer(app, httpsGateway.port, HOST, httpsGateway.options) : null;
 const xaiVoiceStreaming = attachXaiVoiceStreaming(server);
 const secureXaiVoiceStreaming = secureBundle ? attachXaiVoiceStreaming(secureBundle.server) : null;
+const openAiRealtimeProxy = attachOpenAiRealtimeProxy(server);
+const secureOpenAiRealtimeProxy = secureBundle ? attachOpenAiRealtimeProxy(secureBundle.server) : null;
 startupMark('http server created');
 startRuntimeHeartbeat();
 setProposalsBroadcast(broadcastWS);
@@ -823,7 +836,7 @@ setShutdownHooks({
   stopInternalWatches: () => internalWatchRunner.stop(),
   stopHeartbeat: () => heartbeatRunner.stop(),
   stopBrain: () => brainRunner.stop(),
-  closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {} },
+  closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {}; try { openAiRealtimeProxy.close(); } catch {}; try { secureOpenAiRealtimeProxy?.close(); } catch {} },
   closeHttpServer: () => new Promise<void>((resolve) => {
     try {
       server.close(() => resolve());

@@ -27,6 +27,21 @@ type SearchDiagnostics = {
   selected_provider?: SearchProvider;
 };
 type SearchProviderOption = 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai' | 'multi';
+type ShoppingProductResult = {
+  id: string;
+  title: string;
+  price?: string;
+  description?: string;
+  rating?: number;
+  reviews?: number;
+  reviewCount?: number;
+  tag?: string;
+  badge?: string;
+  imageUrl?: string;
+  productUrl: string;
+  merchant?: string;
+  confidence?: number;
+};
 type XMediaDescriptor = {
   type: 'image' | 'video';
   url?: string;
@@ -1850,6 +1865,435 @@ export const webFetchTool = {
   schema: {
     url: 'string (required) - Full URL to fetch (include https://)',
     max_chars: 'number (optional, default 10000) - Max characters to return',
+  },
+};
+
+// ── Fast product search/carousel helper ────────────────────────────────────────
+const PRODUCT_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const PRODUCT_METADATA_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const productSearchCache = new Map<string, { at: number; result: ToolResult }>();
+const productMetadataCache = new Map<string, { at: number; meta: Partial<ShoppingProductResult> }>();
+
+const MERCHANT_DOMAINS: Record<string, string> = {
+  amazon: 'amazon.com',
+  'amazon.com': 'amazon.com',
+  walmart: 'walmart.com',
+  'walmart.com': 'walmart.com',
+  target: 'target.com',
+  'target.com': 'target.com',
+  bestbuy: 'bestbuy.com',
+  'best buy': 'bestbuy.com',
+  'bestbuy.com': 'bestbuy.com',
+  ebay: 'ebay.com',
+  'ebay.com': 'ebay.com',
+  homedepot: 'homedepot.com',
+  'home depot': 'homedepot.com',
+  'homedepot.com': 'homedepot.com',
+  lowes: 'lowes.com',
+  "lowe's": 'lowes.com',
+  'lowes.com': 'lowes.com',
+};
+
+function htmlDecodeLite(input: string): string {
+  return String(input || '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function merchantDomain(input: unknown): string {
+  const value = String(input || '').trim().toLowerCase();
+  if (!value) return '';
+  return MERCHANT_DOMAINS[value] || value.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+}
+
+function merchantFromUrl(url: string): string {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+    const known = Object.entries(MERCHANT_DOMAINS).find(([, domain]) => host.endsWith(domain));
+    if (known) return known[0].replace(/\.com$/, '').replace(/\b\w/g, (c) => c.toUpperCase());
+    const base = host.split('.').slice(-2, -1)[0] || host;
+    return base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  } catch {
+    return '';
+  }
+}
+
+function buildProductSearchQuery(query: string, merchant?: string): string {
+  const q = String(query || '').trim();
+  const domain = merchantDomain(merchant);
+  if (!domain) return `${q} product price rating review`;
+  if (domain.includes('amazon.com')) return `site:amazon.com/dp ${q} price rating review`;
+  if (q.toLowerCase().includes(domain.toLowerCase())) return `${q} product price rating review`;
+  return `site:${domain} ${q} product price rating review`;
+}
+
+function stripProductSearchNoise(input: string): string {
+  return htmlDecodeLite(input)
+    .replace(/\b(?:Keyboard shortcuts?|Image unavailable|Eligible for Return|FREE Returns|Sponsored|Climate Pledge Friendly)\b.*$/i, '')
+    .replace(/\b(?:Ships from|Sold by|Delivery|Deliver(?:ed|y)|FREE delivery|Prime members?|Usually ships|Only \d+ left)\b.*$/i, '')
+    .replace(/\b(?:Customer Review|Customers say|Top reviews?|Reviews? with images|See all reviews?)\b.*$/i, '')
+    .replace(/\b(?:Visit the .* Store|Shop the .* Store|Brand:)\b/gi, '')
+    .replace(/\s*#{2,}\s*/g, ' ')
+    .replace(/\s*(?:\|\s*)?(?:Amazon\.com|Walmart\.com|Target|Best Buy|eBay)\s*:\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanProductDescription(snippet: string): string | undefined {
+  let text = stripProductSearchNoise(snippet)
+    .replace(/^\s*[-•]\s*/, '')
+    .replace(/\s*\.\.\.\s*$/g, '')
+    .trim();
+  if (!text) return undefined;
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  text = (sentences.length ? sentences.slice(0, 2).join(' ') : text).trim();
+  if (/^(?:shop|buy|amazon\.com)$/i.test(text)) return undefined;
+  return text.length > 150 ? `${text.slice(0, 149).trim()}…` : text;
+}
+
+function looksLikeProductTitle(title: string): boolean {
+  const value = String(title || '').trim();
+  if (value.length < 8) return false;
+  if (/^(?:amazon\.com|walmart\.com|target|best buy|ebay|shop|search results)$/i.test(value)) return false;
+  if (/\b(?:customer service|help|returns policy|gift cards|sell on|shopping cart)\b/i.test(value)) return false;
+  return true;
+}
+
+function cleanProductTitle(title: string): string {
+  return stripProductSearchNoise(title)
+    .replace(/^\s*(?:Amazon\.com|Walmart\.com|Target|Best Buy|eBay)\s*:\s*/i, '')
+    .replace(/\s*[-|]\s*(?:Amazon\.com|Walmart\.com|Target|Best Buy|eBay|The Home Depot|Lowe'?s).*$/i, '')
+    .replace(/\s*\$[0-9][0-9,]*(?:\.[0-9]{2})?.*$/i, '')
+    .replace(/\s+(?:reviews?|ratings?|stars?).*$/i, '')
+    .replace(/\s+(?:Mechanical Keyboards?|Wireless Keyboards?)\s*-\s*Amazon\.com.*$/i, '')
+    .trim()
+    .slice(0, 110);
+}
+
+function extractPrice(text: string): string | undefined {
+  const clean = stripProductSearchNoise(text);
+  const m = clean.match(/\$[0-9][0-9,]*(?:\.[0-9]{2})?/);
+  return m?.[0];
+}
+
+function extractRating(text: string): number | undefined {
+  const raw = String(text || '');
+  const m = raw.match(/\b([0-5](?:\.[0-9])?)\s*(?:out of\s*5|\/\s*5|stars?|★)/i)
+    || raw.match(/\brated\s+([0-5](?:\.[0-9])?)\b/i);
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isFinite(n) && n >= 0 && n <= 5 ? n : undefined;
+}
+
+function extractReviewCount(text: string): number | undefined {
+  const m = String(text || '').match(/\b([0-9][0-9,]*)\s+(?:reviews?|ratings?)\b/i);
+  if (!m) return undefined;
+  const n = Number(m[1].replace(/,/g, ''));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function extractBadge(text: string): string | undefined {
+  const value = String(text || '');
+  if (/amazon'?s choice/i.test(value)) return "Amazon's Choice";
+  if (/best seller/i.test(value)) return 'Best Seller';
+  if (/overall pick/i.test(value)) return 'Overall Pick';
+  if (/limited time deal/i.test(value)) return 'Deal';
+  if (/sale|save \d+%/i.test(value)) return 'Sale';
+  return undefined;
+}
+
+function productUrlScore(url: string): number {
+  const lower = String(url || '').toLowerCase();
+  if (/\/(?:dp|gp\/product)\//.test(lower)) return 0.3;
+  if (/\/(?:product|products|p|itm|ip|sku)\//.test(lower)) return 0.22;
+  if (/[?&](?:sku|productid|itemid|model)=/.test(lower)) return 0.12;
+  if (/\/search|\/s\?|\/b\?/.test(lower)) return -0.25;
+  return 0;
+}
+
+function canonicalProductUrl(url: string): string {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    const asin = u.href.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i)?.[1]
+      || u.searchParams.get('asin')
+      || u.searchParams.get('ASIN');
+    if (asin && /amazon\./i.test(u.hostname)) return `https://${u.hostname.replace(/^www\./, 'www.')}/dp/${asin.toUpperCase()}`;
+    u.hash = '';
+    for (const key of Array.from(u.searchParams.keys())) {
+      if (/^(?:tag|ascsubtag|ref|ref_|pd_|sprefix|crid|keywords|qid|sr|th|psc|dib|dib_tag|utm_)/i.test(key)) {
+        u.searchParams.delete(key);
+      }
+    }
+    return u.href;
+  } catch {
+    return raw;
+  }
+}
+
+function isWeakProductCandidate(item: SearchResultItem, title: string, price?: string): boolean {
+  const url = String(item.url || '').toLowerCase();
+  const text = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
+  if (!title || title.length < 8) return true;
+  if (/\/(?:search|s|b)\?/.test(url) && !price && !/\b(?:out of 5|stars?|reviews?|ratings?)\b/i.test(text)) return true;
+  if (/\b(?:customer service|help|returns policy|gift cards|sell on)\b/i.test(text)) return true;
+  return false;
+}
+
+function normalizeProductCandidate(item: SearchResultItem, index: number, merchant?: string): ShoppingProductResult | null {
+  const text = `${item.title || ''} ${item.snippet || ''}`;
+  const title = cleanProductTitle(item.title || '');
+  if (!title || !item.url) return null;
+  const price = extractPrice(text);
+  if (isWeakProductCandidate(item, title, price)) return null;
+  const rating = extractRating(text);
+  const reviewCount = extractReviewCount(text);
+  const badge = extractBadge(text);
+  let confidence = 0.45 + productUrlScore(item.url);
+  if (price) confidence += 0.16;
+  if (rating != null) confidence += 0.12;
+  if (reviewCount != null) confidence += 0.1;
+  if (badge) confidence += 0.05;
+  const requestedDomain = merchantDomain(merchant);
+  if (requestedDomain && item.url.toLowerCase().includes(requestedDomain)) confidence += 0.18;
+  return {
+    id: `product_${index + 1}`,
+    title,
+    price,
+    description: cleanProductDescription(item.snippet || ''),
+    rating,
+    reviews: reviewCount,
+    reviewCount,
+    tag: badge,
+    badge,
+    productUrl: canonicalProductUrl(item.url),
+    merchant: merchant ? merchantFromUrl(`https://${requestedDomain || merchant}`) : merchantFromUrl(item.url),
+    confidence: Math.max(0, Math.min(1, Number(confidence.toFixed(2)))),
+  };
+}
+
+function extractMetaTag(html: string, property: string): string | undefined {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i');
+  return htmlDecodeLite(re.exec(html)?.[1] || '');
+}
+
+function asFirstString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) return asFirstString(value[0]);
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return asFirstString(obj.url) || asFirstString(obj.contentUrl) || asFirstString(obj.src);
+  }
+  return undefined;
+}
+
+function normalizeJsonLdType(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(normalizeJsonLdType);
+  return typeof value === 'string' ? [value.toLowerCase()] : [];
+}
+
+function collectJsonLdProducts(value: unknown, out: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (!value || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonLdProducts(item, out);
+    return out;
+  }
+  const obj = value as Record<string, unknown>;
+  if (normalizeJsonLdType(obj['@type']).includes('product')) out.push(obj);
+  collectJsonLdProducts(obj['@graph'], out);
+  return out;
+}
+
+function parseJsonLdProductMetadata(html: string): Partial<ShoppingProductResult> {
+  const meta: Partial<ShoppingProductResult> = {};
+  const scripts = html.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const script of scripts.slice(0, 12)) {
+    const raw = script
+      .replace(/^<script[^>]*>/i, '')
+      .replace(/<\/script>$/i, '')
+      .trim();
+    if (!raw) continue;
+    try {
+      const products = collectJsonLdProducts(JSON.parse(htmlDecodeLite(raw)));
+      for (const product of products) {
+        const title = cleanProductTitle(asFirstString(product.name) || '');
+        if (looksLikeProductTitle(title)) meta.title ||= title;
+        meta.description ||= cleanProductDescription(asFirstString(product.description) || '');
+        meta.imageUrl ||= asFirstString(product.image);
+        const offers = Array.isArray(product.offers) ? product.offers[0] : product.offers;
+        if (offers && typeof offers === 'object') {
+          const offer = offers as Record<string, unknown>;
+          const price = asFirstString(offer.price) || asFirstString(offer.lowPrice);
+          const currency = asFirstString(offer.priceCurrency) || 'USD';
+          if (price && !meta.price) meta.price = `${currency === 'USD' ? '$' : `${currency} `}${price}`;
+        }
+        const rating = product.aggregateRating;
+        if (rating && typeof rating === 'object') {
+          const aggregate = rating as Record<string, unknown>;
+          const ratingValue = Number(asFirstString(aggregate.ratingValue));
+          const reviewCount = Number(String(asFirstString(aggregate.reviewCount) || asFirstString(aggregate.ratingCount) || '').replace(/,/g, ''));
+          if (Number.isFinite(ratingValue) && ratingValue >= 0 && ratingValue <= 5) meta.rating ||= ratingValue;
+          if (Number.isFinite(reviewCount) && reviewCount > 0) {
+            meta.reviews ||= reviewCount;
+            meta.reviewCount ||= reviewCount;
+          }
+        }
+        if (meta.title || meta.price || meta.imageUrl) return meta;
+      }
+    } catch {
+      // Some merchants embed invalid JSON-LD. Open Graph fallback below still helps.
+    }
+  }
+  return meta;
+}
+
+async function fetchProductMetadata(url: string, timeoutMs: number): Promise<Partial<ShoppingProductResult>> {
+  const cached = productMetadataCache.get(url);
+  if (cached && Date.now() - cached.at < PRODUCT_METADATA_CACHE_TTL_MS) return cached.meta;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return {};
+    const contentType = res.headers.get('content-type') || '';
+    if (!/html|text/i.test(contentType)) return {};
+    const html = (await res.text()).slice(0, 240_000);
+    const priceAmount = extractMetaTag(html, 'product:price:amount');
+    const priceCurrency = extractMetaTag(html, 'product:price:currency') || '$';
+    const jsonLd = parseJsonLdProductMetadata(html);
+    const ogTitle = cleanProductTitle(extractMetaTag(html, 'og:title') || extractMetaTag(html, 'twitter:title') || '');
+    const ogDescription = cleanProductDescription(extractMetaTag(html, 'og:description') || extractMetaTag(html, 'twitter:description') || '');
+    const meta: Partial<ShoppingProductResult> = {
+      title: jsonLd.title || (looksLikeProductTitle(ogTitle) ? ogTitle : undefined),
+      description: jsonLd.description || ogDescription,
+      imageUrl: jsonLd.imageUrl || extractMetaTag(html, 'og:image') || extractMetaTag(html, 'twitter:image'),
+      price: jsonLd.price || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined),
+      rating: jsonLd.rating,
+      reviews: jsonLd.reviews,
+      reviewCount: jsonLd.reviewCount,
+    };
+    const compact = Object.fromEntries(Object.entries(meta).filter(([, v]) => v != null && String(v).trim())) as Partial<ShoppingProductResult>;
+    productMetadataCache.set(url, { at: Date.now(), meta: compact });
+    return compact;
+  } catch {
+    return {};
+  }
+}
+
+export async function executeShoppingSearchProducts(args: {
+  query: string;
+  merchant?: string;
+  max_results?: number;
+  provider?: SearchProviderOption;
+  include_metadata?: boolean;
+  metadata_timeout_ms?: number;
+}): Promise<ToolResult> {
+  const query = String(args?.query || '').trim();
+  if (!query) return { success: false, error: 'query is required' };
+  const maxResults = Math.max(1, Math.min(12, Math.floor(Number(args?.max_results || 8))));
+  const provider = (String(args?.provider || 'multi').toLowerCase() || 'multi') as SearchProviderOption;
+  const includeMetadata = args?.include_metadata !== false;
+  const metadataTimeoutMs = Math.max(500, Math.min(5000, Math.floor(Number(args?.metadata_timeout_ms || 1800))));
+  const searchQuery = buildProductSearchQuery(query, args?.merchant);
+  const cacheKey = JSON.stringify({ searchQuery, maxResults, provider, includeMetadata, metadataTimeoutMs });
+  const cached = productSearchCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < PRODUCT_SEARCH_CACHE_TTL_MS) return cached.result;
+
+  const search = await executeWebSearch({ query: searchQuery, max_results: Math.min(10, Math.max(5, maxResults)), provider });
+  if (!search.success || !Array.isArray(search.data?.results)) {
+    return { success: false, error: search.error || 'Product search failed', stdout: search.stdout };
+  }
+
+  const seen = new Set<string>();
+  const products = (search.data.results as SearchResultItem[])
+    .map((item, index) => normalizeProductCandidate(item, index, args?.merchant))
+    .filter((item): item is ShoppingProductResult => {
+      if (!item) return false;
+      const key = `${item.productUrl.replace(/[?#].*$/, '')}|${item.title.toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+    .slice(0, maxResults);
+
+  if (includeMetadata && products.length) {
+    await mapWithConcurrency(products.slice(0, Math.min(products.length, 8)), 4, async (product, index) => {
+      const meta = await fetchProductMetadata(product.productUrl, metadataTimeoutMs);
+      products[index] = {
+        ...product,
+        title: looksLikeProductTitle(meta.title || '') ? meta.title || product.title : product.title,
+        description: meta.description || product.description,
+        imageUrl: meta.imageUrl || product.imageUrl,
+        price: meta.price || product.price,
+        rating: meta.rating || product.rating,
+        reviews: meta.reviews || product.reviews,
+        reviewCount: meta.reviewCount || product.reviewCount,
+        confidence: Math.min(1, Number(((product.confidence || 0.5) + (meta.imageUrl ? 0.08 : 0) + (meta.price && !product.price ? 0.06 : 0)).toFixed(2))),
+      };
+    });
+  }
+
+  const carousel = {
+    title: args?.merchant ? `${query} on ${merchantFromUrl(`https://${merchantDomain(args.merchant)}`) || args.merchant}` : query,
+    source: 'shopping_search_products',
+    items: products,
+  };
+  const stdout = [
+    `Found ${products.length} product candidate${products.length === 1 ? '' : 's'} for "${query}" using existing web search (${String(search.data?.provider || provider)}).`,
+    'No shopping API key was used.',
+    '',
+    JSON.stringify({ query, searchQuery, source: carousel.source, items: products }, null, 2),
+  ].join('\n');
+  const result = {
+    success: true,
+    data: { query, searchQuery, provider: search.data?.provider || provider, products },
+    stdout,
+    extra: { productCarousel: carousel },
+  } as ToolResult;
+  productSearchCache.set(cacheKey, { at: Date.now(), result });
+  return result;
+}
+
+export const shoppingSearchProductsTool = {
+  name: 'shopping_search_products',
+  get description() {
+    return `Fast product search for shopping/product carousel requests using the existing configured web_search providers (${getSearchProvidersSummary()}) plus optional lightweight page metadata fetches. No shopping API keys are required. Prefer this before browser tools when the user asks to find products, compare shopping results, or make a product carousel.`;
+  },
+  execute: executeShoppingSearchProducts,
+  schema: {
+    query: 'string (required) - Product search query',
+    merchant: 'string (optional) - Store/domain such as Amazon, Walmart, Target, Best Buy, ebay.com',
+    max_results: 'number (optional, default 8, max 12) - Product cards to return',
+    provider: 'string (optional, default multi) - One of multi, tinyfish, tavily, google, brave, ddg, xai',
+    include_metadata: 'boolean (optional, default true) - Fetch top result pages briefly for Open Graph images/titles/prices',
+    metadata_timeout_ms: 'number (optional, default 1800, max 5000) - Per-page metadata fetch timeout',
+  },
+  jsonSchema: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string', description: 'Product search query, e.g. "cordless stick vacuum under $300".' },
+      merchant: { type: 'string', description: 'Optional store/domain such as Amazon, Walmart, Target, Best Buy, ebay.com.' },
+      max_results: { type: 'number', description: 'Number of product cards to return. Default 8, max 12.' },
+      provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Default multi.' },
+      include_metadata: { type: 'boolean', description: 'Default true. Briefly fetch top pages for Open Graph images/titles/prices without browser automation.' },
+      metadata_timeout_ms: { type: 'number', description: 'Per-page metadata fetch timeout. Default 1800, max 5000.' },
+    },
+    additionalProperties: false,
   },
 };
 

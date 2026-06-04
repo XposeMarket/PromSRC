@@ -22,6 +22,7 @@ const {
   Menu,
   dialog,
   ipcMain,
+  nativeImage,
   safeStorage,
 } = require('electron');
 const { spawn, execSync }  = require('child_process');
@@ -35,6 +36,7 @@ const GATEWAY_URL  = 'http://127.0.0.1:18789';
 const APP_ID       = 'com.prometheus.desktop';
 const APP_ROOT     = path.join(__dirname, '..');
 const ICON_PATH    = path.join(APP_ROOT, 'assets', 'Prometheus.ico');
+const ICON_IMAGE   = nativeImage.createFromPath(ICON_PATH);
 const MAX_RETRIES  = 200;  // 200 x 300ms = 60s max wait (dev tsx startup can be slow)
 const RETRY_DELAY  = 300;
 const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
@@ -60,6 +62,7 @@ function getGatewayWorkingDirectory() {
 // ─── User Data Dir ─────────────────────────────────────────────────────────
 const USER_DATA_DIR = path.join(app.getPath('appData'), 'Prometheus');
 app.setAppUserModelId(APP_ID);
+app.setName('Prometheus');
 app.setPath('userData', USER_DATA_DIR);
 if (!fs.existsSync(USER_DATA_DIR)) {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true });
@@ -166,7 +169,7 @@ function createSetupWindow() {
     frame:           false,
     resizable:       false,
     center:          true,
-    icon:            ICON_PATH,
+    icon:            ICON_IMAGE.isEmpty() ? ICON_PATH : ICON_IMAGE,
     backgroundColor: '#0a0a0a',
     webPreferences:  { nodeIntegration: false },
   });
@@ -1153,7 +1156,7 @@ function createLoadingWindow() {
     frame:           false,
     resizable:       false,
     center:          true,
-    icon:            ICON_PATH,
+    icon:            ICON_IMAGE.isEmpty() ? ICON_PATH : ICON_IMAGE,
     backgroundColor: '#0a0a0a',
     webPreferences:  { nodeIntegration: false },
   });
@@ -1237,7 +1240,7 @@ function createWindow() {
     height:          920,
     minWidth:        960,
     minHeight:       640,
-    icon:            ICON_PATH,
+    icon:            ICON_IMAGE.isEmpty() ? ICON_PATH : ICON_IMAGE,
     title:           'Prometheus',
     backgroundColor: '#0a0a0a',
     show:            false,

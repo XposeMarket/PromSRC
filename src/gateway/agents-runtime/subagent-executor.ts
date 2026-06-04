@@ -12,7 +12,7 @@ import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
-import { executeWebFetch } from '../../tools/web';
+import { executeWebFetch, executeShoppingSearchProducts } from '../../tools/web';
 import { executeAgentList, executeAgentInfo } from '../../tools/agent-control';
 import { executeDownloadMedia, executeDownloadUrl } from '../../tools/download-tools';
 import { executeAnalyzeImage, executeAnalyzeVideo } from '../../tools/media-analysis';
@@ -2885,12 +2885,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
   if (name === 'show_product_carousel') {
     const items = Array.isArray(args?.items) ? args.items : [];
     const title = String(args?.title || '');
+    const source = String(args?.source || '');
     return {
       name,
       args,
       result: `Product carousel ready: "${title}" — ${items.length} item(s) will be displayed.`,
       error: false,
-      extra: { productCarousel: { title, items } },
+      extra: { productCarousel: { title, source, items } },
     };
   }
 
@@ -9057,6 +9058,25 @@ export async function executeTool(name: string, args: any, workspacePath: string
           provider: 'multi' as any,
         });
         return { name, args, result, error: false };
+      }
+
+      case 'shopping_search_products': {
+        const tr = await executeShoppingSearchProducts({
+          query: args.query || '',
+          merchant: args.merchant != null ? String(args.merchant) : undefined,
+          max_results: args.max_results != null ? Number(args.max_results) : undefined,
+          provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
+          include_metadata: typeof args.include_metadata === 'boolean' ? args.include_metadata : undefined,
+          metadata_timeout_ms: args.metadata_timeout_ms != null ? Number(args.metadata_timeout_ms) : undefined,
+        }) as any;
+        return {
+          name,
+          args,
+          result: tr?.stdout || tr?.error || JSON.stringify(tr || {}),
+          error: tr?.success === false,
+          data: tr?.data,
+          extra: tr?.extra,
+        };
       }
 
 		      case 'web_fetch': {

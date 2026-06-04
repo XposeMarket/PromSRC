@@ -1,4 +1,4 @@
-import { loadBundledExtensionDescriptors } from './loader.js';
+import { loadBundledExtensionDescriptors, loadUserExtensionDescriptors } from './loader.js';
 import type {
   ExtensionKind,
   ExtensionRegistry,
@@ -12,7 +12,13 @@ function toRegistryKey(kind: ExtensionKind, id: string): string {
 }
 
 function buildRegistry(): ExtensionRegistry {
-  const descriptors = loadBundledExtensionDescriptors();
+  const bundled = loadBundledExtensionDescriptors();
+  // User plugins are best-effort: a bad one is skipped in the loader, and one
+  // that collides with a bundled id is skipped here so users can never shadow
+  // or break an official connector.
+  const user = safeLoadUserExtensionDescriptors();
+
+  const descriptors: LoadedExtensionDescriptor[] = [];
   const byId = new Map<string, LoadedExtensionDescriptor>();
   const byKind: Record<ExtensionKind, LoadedExtensionDescriptor[]> = {
     provider: [],
@@ -20,7 +26,7 @@ function buildRegistry(): ExtensionRegistry {
     mcp_preset: [],
   };
 
-  for (const descriptor of descriptors) {
+  for (const descriptor of bundled) {
     const registryKey = toRegistryKey(descriptor.kind, descriptor.id);
     if (byId.has(registryKey)) {
       const existing = byId.get(registryKey)!;
@@ -30,6 +36,20 @@ function buildRegistry(): ExtensionRegistry {
     }
     byId.set(registryKey, descriptor);
     byKind[descriptor.kind].push(descriptor);
+    descriptors.push(descriptor);
+  }
+
+  for (const descriptor of user) {
+    const registryKey = toRegistryKey(descriptor.kind, descriptor.id);
+    if (byId.has(registryKey)) {
+      console.warn(
+        `[extensions] User plugin "${descriptor.kind}:${descriptor.id}" (${descriptor.sourcePath}) conflicts with a bundled extension and was skipped.`,
+      );
+      continue;
+    }
+    byId.set(registryKey, descriptor);
+    byKind[descriptor.kind].push(descriptor);
+    descriptors.push(descriptor);
   }
 
   for (const kind of Object.keys(byKind) as ExtensionKind[]) {
@@ -37,6 +57,15 @@ function buildRegistry(): ExtensionRegistry {
   }
 
   return { descriptors, byId, byKind };
+}
+
+function safeLoadUserExtensionDescriptors(): LoadedExtensionDescriptor[] {
+  try {
+    return loadUserExtensionDescriptors();
+  } catch (err: any) {
+    console.warn(`[extensions] Failed to scan user plugins dir: ${String(err?.message || err)}`);
+    return [];
+  }
 }
 
 export function clearExtensionRegistryCache(): void {

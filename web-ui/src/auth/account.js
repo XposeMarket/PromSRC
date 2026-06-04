@@ -1,7 +1,7 @@
 /**
  * account.js — Prometheus account auth (Supabase via gateway)
  *
- * Handles login, logout, session persistence, and subscription check.
+ * Handles login, logout, session persistence, and purchase/access checks.
  * All Supabase calls go through the local gateway (/api/account/*) so
  * the service role key never leaves the server side.
  */
@@ -9,7 +9,7 @@
 const STORAGE_KEY = 'prometheus_account';
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let _account = null; // { email, userId, isAdmin, subscriptionActive }
+let _account = null; // { email, userId, isAdmin, accessActive, purchaseActive, subscriptionActive }
 
 export function getAccount() { return _account; }
 export function getPersistedAccount() {
@@ -22,15 +22,21 @@ export function getPersistedAccount() {
       email: String(parsed.email || ''),
       userId: parsed.userId ? String(parsed.userId) : undefined,
       isAdmin: Boolean(parsed.isAdmin),
-      subscriptionActive: Boolean(parsed.subscriptionActive),
+      purchaseActive: Boolean(parsed.purchaseActive || parsed.accessActive || parsed.subscriptionActive),
+      accessActive: Boolean(parsed.accessActive || parsed.purchaseActive || parsed.subscriptionActive),
+      subscriptionActive: Boolean(parsed.subscriptionActive || parsed.purchaseActive || parsed.accessActive),
     };
   } catch {
     return null;
   }
 }
 export function isAuthenticated() { return !!_account; }
+export function hasPurchasedAccess(account = _account) {
+  return Boolean(account?.accessActive || account?.purchaseActive || account?.subscriptionActive || account?.isAdmin);
+}
+
 export function hasActiveSubscription() {
-  return _account?.subscriptionActive || _account?.isAdmin;
+  return hasPurchasedAccess(_account);
 }
 
 function persistAccount(account) {
@@ -43,7 +49,9 @@ function persistAccount(account) {
       email: account.email,
       userId: account.userId,
       isAdmin: Boolean(account.isAdmin),
-      subscriptionActive: Boolean(account.subscriptionActive),
+      purchaseActive: Boolean(account.purchaseActive || account.accessActive || account.subscriptionActive),
+      accessActive: Boolean(account.accessActive || account.purchaseActive || account.subscriptionActive),
+      subscriptionActive: Boolean(account.subscriptionActive || account.purchaseActive || account.accessActive),
       cachedAt: Date.now(),
     }));
   } catch {}
@@ -54,7 +62,9 @@ function applyAccountStatus(data) {
     email: data.email,
     userId: data.userId,
     isAdmin: Boolean(data.isAdmin),
-    subscriptionActive: Boolean(data.subscriptionActive),
+    purchaseActive: Boolean(data.purchaseActive || data.accessActive || data.subscriptionActive),
+    accessActive: Boolean(data.accessActive || data.purchaseActive || data.subscriptionActive),
+    subscriptionActive: Boolean(data.subscriptionActive || data.purchaseActive || data.accessActive),
   };
   persistAccount(_account);
   return _account;
@@ -131,7 +141,9 @@ export async function login(email, password) {
     email: data.email || email,
     userId: data.userId,
     isAdmin: Boolean(data.isAdmin),
-    subscriptionActive: Boolean(data.subscriptionActive),
+    purchaseActive: Boolean(data.purchaseActive || data.accessActive || data.subscriptionActive),
+    accessActive: Boolean(data.accessActive || data.purchaseActive || data.subscriptionActive),
+    subscriptionActive: Boolean(data.subscriptionActive || data.purchaseActive || data.accessActive),
   };
   persistAccount(_account);
   return _account;
@@ -162,14 +174,14 @@ export async function loginLegacyBrowser(email, password) {
     isAdmin = Array.isArray(adminData) && adminData.length > 0 && adminData[0].is_admin === true;
   } catch {}
 
-  // 3. Check subscription — admins bypass, everyone else must have an active subscription
-  let subscriptionActive = false;
+  // 3. Check purchased access — admins bypass, everyone else must have an active purchase/access record
+  let purchaseActive = false;
   if (isAdmin) {
-    subscriptionActive = true;
+    purchaseActive = true;
   } else {
     const subsData = await sbBrowserFetch(supabaseUrl, supabaseAnonKey,
       `/rest/v1/subscriptions?user_id=eq.${userId}&status=in.(active,trialing)&limit=1`, {}, accessToken);
-    subscriptionActive = Array.isArray(subsData) && subsData.length > 0;
+    purchaseActive = Array.isArray(subsData) && subsData.length > 0;
   }
 
   // 4. Store verified session in gateway
@@ -183,7 +195,9 @@ export async function loginLegacyBrowser(email, password) {
     email: data.email || email,
     userId: data.userId,
     isAdmin: Boolean(data.isAdmin),
-    subscriptionActive: Boolean(data.subscriptionActive),
+    purchaseActive: Boolean(data.purchaseActive || data.accessActive || data.subscriptionActive),
+    accessActive: Boolean(data.accessActive || data.purchaseActive || data.subscriptionActive),
+    subscriptionActive: Boolean(data.subscriptionActive || data.purchaseActive || data.accessActive),
   };
   persistAccount(_account);
   return _account;
@@ -219,7 +233,7 @@ export async function checkSessionDetailed(opts = {}) {
   }
 
   const persisted = getPersistedAccount();
-  if (retryable && persisted && (persisted.subscriptionActive || persisted.isAdmin)) {
+  if (retryable && persisted && hasPurchasedAccess(persisted)) {
     return {
       authenticated: true,
       definitive: false,
@@ -275,7 +289,7 @@ export function mountLoginScreen(onSuccess) {
       <div id="pls-error" class="pls-error" style="display:none"></div>
       <div id="pls-sub-warn" class="pls-sub-warn" style="display:none">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        No active subscription found. <a href="https://prometheusaiagent.vercel.app/pricing" target="_blank" class="pls-link">Subscribe at prometheusaiagent.vercel.app</a>
+        No Prometheus purchase found. <a href="https://prometheusaiagent.vercel.app/pricing" target="_blank" class="pls-link">Buy access at prometheusaiagent.vercel.app</a>
       </div>
 
       <form id="pls-form" class="pls-form" autocomplete="on">
@@ -477,8 +491,8 @@ export function mountLoginScreen(onSuccess) {
     try {
       const account = await login(email, password);
 
-      if (!account.subscriptionActive && !account.isAdmin) {
-        // Show subscription warning but don't dismiss — user must subscribe
+      if (!hasPurchasedAccess(account)) {
+        // Show purchase warning but don't dismiss — user must buy access
         subWarnEl.style.display = '';
         submitBtn.disabled = false;
         btnText.textContent = 'Sign in';

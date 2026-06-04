@@ -113,6 +113,7 @@ function formatFriendlyToolAction(toolNameRaw: string, args: any = {}): string {
     memory_search_timeline: withSubject('Searching Memory Timeline', pickArg(args, ['query', 'q'])),
     memory_get_related: withSubject('Finding Related Memory', pickArg(args, ['id', 'record_id', 'query'])),
     memory_graph_snapshot: 'Snapshotting Memory Graph...',
+    shopping_search_products: withSubject('Searching Products', pickArg(args, ['query', 'q'])),
     web_search: withSubject('Searching the Web', pickArg(args, ['query', 'q'])),
     web_fetch: withSubject('Fetching URL', pickArg(args, ['url'])),
     run_command: withParens('Running Command', pickArg(args, ['command'], 180)),

@@ -13,6 +13,8 @@
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
+import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
+import { showTutorial } from '../onboarding/tutorial-overlay.js';
 
 const SETTINGS_ICON_PATHS = {
   keyboard: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 9h.01"></path><path d="M10 9h.01"></path><path d="M13 9h.01"></path><path d="M16 9h.01"></path><path d="M7 13h.01"></path><path d="M10 13h.01"></path><path d="M13 13h4"></path><path d="M7 17h10"></path>',
@@ -213,6 +215,33 @@ function setSettingsTab(tab) {
       }
     }
   });
+}
+
+async function replayOnboardingTutorial() {
+  const statusEl = document.getElementById('settings-onboarding-status');
+  setSettingsStatus(statusEl, 'info', 'Opening tutorial...');
+  try {
+    closeSettings();
+    await showTutorial();
+  } catch (err) {
+    setSettingsStatus(statusEl, 'error', `Could not replay tutorial: ${err.message}`);
+  }
+}
+
+async function runOnboardingDevTest() {
+  const statusEl = document.getElementById('settings-onboarding-status');
+  setSettingsStatus(statusEl, 'info', 'Opening onboarding dev test...');
+  try {
+    closeSettings();
+    await window.OnboardingController?.runIfNeeded?.({ devTest: true, skipMigration: true });
+  } catch (err) {
+    setSettingsStatus(statusEl, 'error', `Could not run dev test: ${err.message}`);
+  }
+}
+
+function redoOnboardingFromSettings() {
+  closeSettings();
+  startRedoOnboardingFlow();
 }
 
 function updateBgtHeartbeatLabel() {
@@ -4651,6 +4680,9 @@ function _bumpPairingBadge() {
 window.loadPairingPanel = loadPairingPanel;
 window.loadSecuritySettings = loadSecuritySettings;
 window.revokeCommandPermission = revokeCommandPermission;
+window.redoOnboardingFromSettings = redoOnboardingFromSettings;
+window.replayOnboardingTutorial = replayOnboardingTutorial;
+window.runOnboardingDevTest = runOnboardingDevTest;
 window.saveSecuritySettings = saveSecuritySettings;
 window.setSettingsTab = setSettingsTab;
 window.showIntegMsg = showIntegMsg;

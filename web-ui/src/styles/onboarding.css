@@ -17,10 +17,12 @@
 .prom-onb-card {
   width: min(720px, 92vw);
   max-height: 86vh;
-  background: #fff;
+  background: var(--panel, #fff);
+  color: var(--text, #1a1a1f);
+  border: 1px solid var(--line, rgba(255,255,255,0.12));
   border-radius: 18px;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
-  display: flex; flex-direction: column; overflow: hidden;
+  display: flex !important; flex-direction: column; overflow: hidden;
   animation: prom-onb-pop 260ms cubic-bezier(.2,.9,.3,1.2);
 }
 
@@ -85,7 +87,7 @@
 .prom-onb-btn {
   padding: 9px 18px;
   border-radius: 9px; border: 1px solid var(--line, #ddd);
-  background: #fff; color: var(--text, #222);
+  background: var(--panel, #fff); color: var(--text, #222);
   font-size: 13px; font-weight: 600; cursor: pointer;
   font-family: inherit;
 }

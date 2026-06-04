@@ -759,9 +759,10 @@ body.right-canvas-open .page-title {
 
 /* Sidebar footer */
 .sidebar-footer {
-  margin-top: auto;
-  padding-top: 8px;
+  flex-shrink: 0;
+  padding: 8px;
   border-top: 1px solid rgba(249,115,22,0.18);
+  background: var(--sidebar-bg);
 }
 
 /* ── Workspace (center + right) ── */

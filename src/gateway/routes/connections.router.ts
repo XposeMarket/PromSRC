@@ -28,6 +28,7 @@ import {
   removeObsidianVault,
 } from '../obsidian/bridge.js';
 import { browserOpen, getBrowserSessionInfo } from '../browser-tools.js';
+import { getExtensionDescriptor } from '../../extensions/registry.js';
 const refreshXAITools = () => require('../../extensions/xai-extension-adapter').refreshXAITools();
 const saveXApiCredentials = (...args: any[]) => require('../../auth/x-api-oauth').saveXApiCredentials(...args);
 const loadXApiCredentials = (...args: any[]) => require('../../auth/x-api-oauth').loadXApiCredentials(...args);
@@ -367,7 +368,32 @@ router.post('/api/connections/credentials', async (req: any, res: any) => {
       return;
     }
 
-    saveConnectorCredentials(id, credentialValue, clientSecret || '');
+    try {
+      saveConnectorCredentials(id, credentialValue, clientSecret || '');
+    } catch (registryErr: any) {
+      // User-installed (third-party) connectors have no built-in OAuthConnector
+      // class. Store every submitted credential field generically in the vault
+      // under integration.<id>.credentials so ctx.getCredential() can read them.
+      const descriptor = getExtensionDescriptor(id, 'connector');
+      if (!descriptor) throw registryErr;
+      const fields: Record<string, string> = {};
+      for (const [key, value] of Object.entries(req.body || {})) {
+        if (key === 'id') continue;
+        if (typeof value === 'string' && value.trim()) fields[key] = value;
+      }
+      getVault(getConfig().getConfigDir()).set(
+        `integration.${id}.credentials`,
+        JSON.stringify(fields),
+        `connections:${id}:save`,
+      );
+      const connections = loadSavedConnections();
+      connections[id] = {
+        connected: true,
+        connectedAt: Date.now(),
+        authType: descriptor.setup?.authType || 'api_key',
+      };
+      saveSavedConnections(connections);
+    }
     res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });

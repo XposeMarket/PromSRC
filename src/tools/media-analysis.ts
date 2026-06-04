@@ -9,6 +9,7 @@ import { getActiveWorkspace } from './workspace-context.js';
 import { getProvider, getPrimaryModel } from '../providers/factory.js';
 import { contentToString } from '../providers/content-utils.js';
 import { buildVisionImagePart, primarySupportsVision } from '../gateway/vision-chat.js';
+import { resolveRuntimeBinary } from '../runtime/dependencies.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,7 +21,11 @@ type AnalyzeImageArgs = {
 type AnalyzeVideoArgs = {
   file_path: string;
   prompt?: string;
+  analysis_mode?: 'quick' | 'detail' | 'both';
   sample_count?: number;
+  quick_sample_count?: number;
+  detail_frame_budget?: number;
+  max_detail_frames?: number;
   output_dir?: string;
   extract_audio?: boolean;
   transcribe?: boolean;
@@ -83,6 +88,23 @@ function inferMimeType(filePath: string): string {
     default:
       return 'application/octet-stream';
   }
+}
+
+function normalizeAnalysisMode(value?: unknown): 'quick' | 'detail' | 'both' {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'detail' || raw === 'detailed' || raw === 'deep') return 'detail';
+  if (raw === 'both' || raw === 'quick+detail' || raw === 'quick_detail') return 'both';
+  return 'quick';
+}
+
+function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
+function relPath(workspaceRoot: string, absPath: string): string {
+  return path.relative(workspaceRoot, absPath).replace(/\\/g, '/');
 }
 
 function parseJsonFromStdout(stdout: string): any {
@@ -151,11 +173,18 @@ async function detectPythonRunner(): Promise<PythonRunner | null> {
 async function runVideoAnalyzer(scriptPath: string, args: string[]): Promise<any> {
   const runner = await detectPythonRunner();
   if (!runner) throw new Error('Python was not found on this machine.');
+  const ffmpegPath = resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
+  const ffprobePath = resolveRuntimeBinary('ffprobe', { allowPathFallback: true });
   const { stdout } = await execFileAsync(
     runner.cmd,
-    [...runner.preArgs, scriptPath, ...args],
+    [...runner.preArgs, scriptPath, '--ffmpeg', ffmpegPath, '--ffprobe', ffprobePath, ...args],
     {
       cwd: path.dirname(scriptPath),
+      env: {
+        ...process.env,
+        PROMETHEUS_FFMPEG_PATH: ffmpegPath,
+        PROMETHEUS_FFPROBE_PATH: ffprobePath,
+      },
       timeout: 10 * 60 * 1000,
       windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
@@ -328,7 +357,13 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       return { success: false, error: `video analyzer script not found at ${path.join(workspaceRoot, 'video_analyze.py')} or ${bundledScriptPath}` };
     }
 
-    const sampleCount = Math.min(Math.max(Number(args?.sample_count || 6), 2), 8);
+    const analysisMode = normalizeAnalysisMode(args?.analysis_mode);
+    const sampleCount = boundedNumber(args?.sample_count, 6, 2, 24);
+    const quickSampleCount = boundedNumber(args?.quick_sample_count ?? args?.sample_count, analysisMode === 'quick' ? sampleCount : 16, 2, 24);
+    const detailFrameBudget = Number.isFinite(Number(args?.detail_frame_budget))
+      ? boundedNumber(args?.detail_frame_budget, 0, 2, 72)
+      : 0;
+    const maxDetailFrames = boundedNumber(args?.max_detail_frames ?? args?.detail_frame_budget, 42, 2, 72);
     const defaultOutputDir = path.join('downloads', 'video_analysis', sanitizeStem(path.basename(absPath, path.extname(absPath))));
     const outputDirRel = String(args?.output_dir || defaultOutputDir).trim();
     const outputDirAbs = ensureWorkspacePath(workspaceRoot, outputDirRel);
@@ -338,9 +373,16 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       absPath,
       '--output-dir',
       outputDirAbs,
+      '--mode',
+      analysisMode,
       '--samples',
       String(sampleCount),
+      '--quick-samples',
+      String(quickSampleCount),
+      '--max-detail-frames',
+      String(maxDetailFrames),
     ];
+    if (detailFrameBudget > 0) analyzerArgs.push('--detail-samples', String(detailFrameBudget));
     if (args?.extract_audio !== false) analyzerArgs.push('--extract-audio');
     if (args?.transcribe !== false) analyzerArgs.push('--transcribe');
 
@@ -357,8 +399,23 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     }
 
     const transcript = analyzerResult?.transcript?.available ? String(analyzerResult.transcript.text || '').trim() : '';
-    const relFrames = framePaths.map((framePath: string) => path.relative(workspaceRoot, framePath).replace(/\\/g, '/'));
+    const relFrames = framePaths.map((framePath: string) => relPath(workspaceRoot, framePath));
+    const quick = videoSummary?.quick || null;
+    const detail = videoSummary?.detail || null;
+    const contactSheets = [
+      quick?.contact_sheet,
+      detail?.contact_sheet,
+      ...(Array.isArray(detail?.batch_sheets) ? detail.batch_sheets : []),
+    ].filter((sheet: any) => sheet?.path && fs.existsSync(sheet.path));
+    const visualSheetPaths = contactSheets.map((sheet: any) => String(sheet.path)).slice(0, 8);
+    const fallbackFramePaths = visualSheetPaths.length
+      ? []
+      : framePaths.slice(0, analysisMode === 'quick' ? 8 : 12);
     const prompt = String(args?.prompt || '').trim();
+    const durationSeconds = videoSummary?.duration_seconds ?? analyzerResult?.probe?.json?.format?.duration ?? 'unknown';
+    const detailPlan = detail?.sampling_plan
+      ? `\nDetail sampling plan: ${JSON.stringify(detail.sampling_plan)}`
+      : '';
 
     const userContent: any[] = [
       {
@@ -366,18 +423,30 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         text:
           `${prompt || 'Analyze this video from sampled frames and optional transcript.'}\n` +
           `Video file: ${path.basename(absPath)}\n` +
-          `Duration: ${videoSummary?.duration_seconds ?? analyzerResult?.probe?.json?.format?.duration ?? 'unknown'} seconds\n` +
-          `Frame samples: ${framePaths.length}\n` +
-          `If transcript is missing, rely on the visuals and say audio/transcript was unavailable.`,
+          `Analysis mode: ${analysisMode}\n` +
+          `Duration: ${durationSeconds} seconds\n` +
+          `Frame samples extracted: ${framePaths.length}\n` +
+          `Contact sheets provided: ${visualSheetPaths.length}${detailPlan}\n` +
+          `If transcript is missing, rely on the visuals and say audio/transcript was unavailable.\n` +
+          `For quick mode, summarize the video from the contact sheet. For detail/both mode, read the overview sheet plus detail batch sheets as a chronological scan across the clip.`,
       },
     ];
 
-    for (let idx = 0; idx < framePaths.length; idx += 1) {
+    for (let idx = 0; idx < visualSheetPaths.length; idx += 1) {
+      const sheet = contactSheets[idx] || {};
       userContent.push({
         type: 'text',
-        text: `Frame ${idx + 1} of ${framePaths.length}: ${path.basename(framePaths[idx])}`,
+        text: `Contact sheet ${idx + 1} of ${visualSheetPaths.length}: ${path.basename(visualSheetPaths[idx])}${sheet.frame_count ? ` (${sheet.frame_count} frames)` : ''}`,
       });
-      userContent.push(await readFileAsVisionPart(framePaths[idx]));
+      userContent.push(await readFileAsVisionPart(visualSheetPaths[idx]));
+    }
+
+    for (let idx = 0; idx < fallbackFramePaths.length; idx += 1) {
+      userContent.push({
+        type: 'text',
+        text: `Frame ${idx + 1} of ${fallbackFramePaths.length}: ${path.basename(fallbackFramePaths[idx])}`,
+      });
+      userContent.push(await readFileAsVisionPart(fallbackFramePaths[idx]));
     }
 
     if (transcript) {
@@ -392,7 +461,8 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         role: 'system',
         content:
           'You are a grounded video analyst working from sampled frames and an optional transcript. ' +
-          'Infer cautiously across time. Return concise markdown with sections: Overall Summary, Timeline, Visible Text, Audio/Transcript, Key Objects or People, Uncertainty.',
+          'Infer cautiously across time. Contact sheets show multiple timestamped frames at once; use them for broad coverage, and do not claim frame-perfect playback unless dense detail frames were provided. ' +
+          'Return concise markdown with sections: Overall Summary, Timeline, Visible Text, Audio/Transcript, Key Objects or People, Uncertainty.',
       },
       {
         role: 'user',
@@ -407,9 +477,15 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         file_path: absPath,
         rel_path: path.relative(workspaceRoot, absPath).replace(/\\/g, '/'),
         output_dir: outputDirAbs,
-        output_dir_rel: path.relative(workspaceRoot, outputDirAbs).replace(/\\/g, '/'),
+        output_dir_rel: relPath(workspaceRoot, outputDirAbs),
+        analysis_mode: analysisMode,
         sample_count: framePaths.length,
         sample_frames: relFrames,
+        contact_sheets: contactSheets.map((sheet: any) => ({
+          ...sheet,
+          rel_path: relPath(workspaceRoot, String(sheet.path)),
+        })),
+        detail_sampling_plan: detail?.sampling_plan || null,
         transcript: transcript || null,
         extraction: analyzerResult,
         analysis,
@@ -446,7 +522,11 @@ export const analyzeVideoTool = {
   schema: {
     file_path: 'Workspace-relative or absolute path to the video file',
     prompt: 'Optional analysis prompt or focus instruction',
-    sample_count: 'How many visual samples to extract (default 6, max 8)',
+    analysis_mode: 'quick creates an overview contact sheet, detail creates budgeted chronological batches, both does both',
+    sample_count: 'Backward-compatible sample count for quick mode (default 6, max 24)',
+    quick_sample_count: 'How many frames to include in the quick contact sheet (default 16, max 24)',
+    detail_frame_budget: 'Optional number of detail frames to extract across the full duration. Leave unset to let the Python analyzer choose from duration.',
+    max_detail_frames: 'Hard cap for auto detail extraction (default 42, max 72)',
     output_dir: 'Optional workspace-relative output directory for extracted artifacts',
     extract_audio: 'If true, extract audio when ffmpeg is available (default true)',
     transcribe: 'If true, attempt local whisper transcription when available (default true)',
@@ -457,7 +537,11 @@ export const analyzeVideoTool = {
     properties: {
       file_path: { type: 'string', description: 'Workspace-relative or absolute path to the video file' },
       prompt: { type: 'string', description: 'Optional analysis prompt or focus instruction' },
-      sample_count: { type: 'number', description: 'Number of visual samples to extract (default 6, max 8)' },
+      analysis_mode: { type: 'string', enum: ['quick', 'detail', 'both'], description: 'quick returns a contact-sheet overview; detail extracts budgeted chronological batches; both does both. Default quick.' },
+      sample_count: { type: 'number', description: 'Backward-compatible quick sample count (default 6, max 24)' },
+      quick_sample_count: { type: 'number', description: 'Frames for the quick contact sheet (default 16, max 24)' },
+      detail_frame_budget: { type: 'number', description: 'Optional detail frame budget across the whole duration. Use this instead of asking for every frame on long videos.' },
+      max_detail_frames: { type: 'number', description: 'Hard cap for automatic detail extraction (default 42, max 72)' },
       output_dir: { type: 'string', description: 'Optional workspace-relative output directory for extracted artifacts' },
       extract_audio: { type: 'boolean', description: 'Extract audio when ffmpeg is available' },
       transcribe: { type: 'boolean', description: 'Attempt local whisper transcription when available' },

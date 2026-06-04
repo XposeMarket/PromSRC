@@ -1,5 +1,11 @@
 import { Router } from 'express';
 import { buildExtensionsCatalog } from '../../extensions/catalog-service.js';
+import { reloadExtensions } from '../../extensions/reload.js';
+import {
+  installUserPlugin,
+  listUserPlugins,
+  removeUserPlugin,
+} from '../../extensions/install-service.js';
 import type { ExtensionKind } from '../../extensions/types.js';
 
 export const router = Router();
@@ -25,5 +31,60 @@ router.get('/api/extensions/catalog', (req, res) => {
     res.json({ success: true, catalog });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to build extension catalog' });
+  }
+});
+
+// List user-installed (non-bundled) plugins for the manage surface.
+router.get('/api/extensions/user', (_req, res) => {
+  try {
+    res.json({ success: true, items: listUserPlugins() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to list user plugins' });
+  }
+});
+
+// Hot-reload the extension system from disk (after manual edits in the data dir).
+router.post('/api/extensions/reload', (_req, res) => {
+  try {
+    const reload = reloadExtensions();
+    res.json({ success: true, reload });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to reload extensions' });
+  }
+});
+
+// Install a user plugin: validate manifest, write to the data dir, hot-reload.
+// Body: { manifest: object, indexJs?: string }
+router.post('/api/extensions/install', (req, res) => {
+  try {
+    const manifest = (req.body || {}).manifest;
+    const indexJs = (req.body || {}).indexJs;
+    if (!manifest || typeof manifest !== 'object') {
+      res.status(400).json({ success: false, error: 'manifest object is required' });
+      return;
+    }
+    if (indexJs !== undefined && typeof indexJs !== 'string') {
+      res.status(400).json({ success: false, error: 'indexJs must be a string when provided' });
+      return;
+    }
+    const result = installUserPlugin({ manifest, indexJs });
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to install plugin' });
+  }
+});
+
+// Remove a user plugin by id. Body: { id: string }
+router.post('/api/extensions/remove', (req, res) => {
+  try {
+    const id = String((req.body || {}).id || '').trim();
+    if (!id) {
+      res.status(400).json({ success: false, error: 'id is required' });
+      return;
+    }
+    const result = removeUserPlugin(id);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to remove plugin' });
   }
 });

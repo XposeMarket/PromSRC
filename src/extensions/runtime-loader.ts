@@ -19,6 +19,7 @@ function resolveRuntimeEntrypoint(sourcePath: string, entrypoint: string): strin
 
 function readDefinitionFromModule(mod: any): PrometheusExtensionDefinition | null {
   const candidates = [
+    mod,
     mod?.default,
     mod?.prometheusExtension,
     mod?.extension,

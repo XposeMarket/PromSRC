@@ -35,7 +35,12 @@ import {
   ensureAgentWorkspace,
   resolveAgentWorkspace,
 } from '../../config/config';
-import { getValidToken as getOpenAiCodexToken, loadTokens as loadOpenAiCodexTokens } from '../../auth/openai-oauth.js';
+import {
+  buildCodexCloudflareHeaders,
+  getValidToken as getOpenAiCodexToken,
+  loadTokens as loadOpenAiCodexTokens,
+  refreshTokens as refreshOpenAiCodexTokens,
+} from '../../auth/openai-oauth.js';
 import { getValidXAIToken, isXAIConnected } from '../../auth/xai-oauth.js';
 import { getVault } from '../../security/vault';
 import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/meet-prompt';
@@ -5760,6 +5765,7 @@ RULES:
       }
 
       // If model dumped massive reasoning with no usable reply, generate a fallback
+      const emptyModelFinalFallback = 'ERROR: The model returned an empty response. Please retry the message or switch models.';
       let finalText = sanitizeFinalReply(
         String(reply || rawAssistantText || ''),
         { preflightReason: preflightReasonForTurn },
@@ -5808,7 +5814,7 @@ RULES:
               : `Completed ${allToolResults.length} step${allToolResults.length !== 1 ? 's' : ''}.`;
           }
         } else {
-          finalText = 'Hey! How can I help?';
+          finalText = emptyModelFinalFallback;
         }
       }
       if (greetingLikeTurn && finalText.length > 220) {
@@ -5817,9 +5823,9 @@ RULES:
       if (grokGreetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
       }
-      finalText = sanitizeFinalReply(finalText, { preflightReason: preflightReasonForTurn }) || 'Hey! How can I help?';
+      finalText = sanitizeFinalReply(finalText, { preflightReason: preflightReasonForTurn }) || emptyModelFinalFallback;
       if (isGrokGeneration) {
-        finalText = trimGrokRunawayRepetition(finalText) || 'Hey! How can I help?';
+        finalText = trimGrokRunawayRepetition(finalText) || emptyModelFinalFallback;
       }
       console.log(`[v2] FINAL: ${finalText.slice(0, 150)}`);
       if (progressState.items.length >= 2) {
@@ -5930,7 +5936,6 @@ RULES:
       const finalCanvasFiles = Array.from(turnCanvasFiles);
       const collectProductCarousel = (): { title: string; items: any[] } | undefined => {
         for (const result of allToolResults as any[]) {
-          if (result?.name !== 'show_product_carousel') continue;
           const sources = [result?.extra, result?.data, result].filter((s) => s && typeof s === 'object');
           for (const source of sources) {
             if (source?.productCarousel && typeof source.productCarousel === 'object') return source.productCarousel;
@@ -12809,9 +12814,18 @@ router.post('/api/voice-agent/input', async (req, res) => {
 // ============================================================================
 
 const REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
-const DEFAULT_REALTIME_AGENT_MODEL = 'gpt-realtime';
+const DEFAULT_REALTIME_AGENT_MODEL = 'gpt-realtime-2';
 const DEFAULT_REALTIME_AGENT_VOICE = 'marin';
+const DEFAULT_REALTIME_AGENT_TRANSCRIPTION_MODEL = 'gpt-4o-transcribe';
 const REALTIME_AGENT_INSTRUCTIONS_MAX = 18000;
+const realtimeAgentCallTokens = new Map<string, {
+  clientSecret: string;
+  sourceToken: string;
+  auth: RealtimeAgentAuthCandidate['auth'];
+  model: string;
+  createdAt: number;
+  expiresAt: number;
+}>();
 
 function getRealtimeAgentApiKey(): string {
   const cfg = getConfig().getConfig() as any;
@@ -12828,7 +12842,40 @@ function getRealtimeAgentApiKey(): string {
   ).trim();
 }
 
-type RealtimeAgentAuthCandidate = { token: string; auth: 'api_key' | 'openai_codex_oauth' };
+type RealtimeAgentAuthCandidate = { token: string; auth: 'api_key' | 'openai_codex_oauth_api_key' | 'openai_codex_oauth' };
+
+function getJwtExpiryMs(token: string): number {
+  const parts = String(token || '').split('.');
+  if (parts.length < 2) return 0;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+    const exp = Number(payload?.exp || 0);
+    return Number.isFinite(exp) && exp > 0 ? exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function loadRealtimeAgentOpenAiCodexTokens(configDir: string) {
+  let tokens = loadOpenAiCodexTokens(configDir);
+  if (!tokens) return null;
+  const hasApiKey = !!String(tokens.api_key || '').trim();
+  const idTokenExpiryMs = getJwtExpiryMs(String(tokens.id_token || ''));
+  const idTokenExpired = !idTokenExpiryMs || Date.now() > idTokenExpiryMs - 60_000;
+  if (!hasApiKey && idTokenExpired) {
+    try {
+      tokens = await refreshOpenAiCodexTokens(configDir);
+      console.log('[voice-agent-realtime] refreshed Codex OAuth for realtime auth', {
+        hasExchangedApiKey: !!String(tokens?.api_key || '').trim(),
+      });
+    } catch (err: any) {
+      console.warn('[voice-agent-realtime] Codex OAuth refresh for realtime auth failed', {
+        message: String(err?.message || err || ''),
+      });
+    }
+  }
+  return loadOpenAiCodexTokens(configDir) || tokens;
+}
 
 // Resolve every usable OpenAI credential for the Realtime client_secret mint, in
 // priority order. This mirrors realtime.router's getRealtimeAuthCandidates so the
@@ -12836,14 +12883,23 @@ type RealtimeAgentAuthCandidate = { token: string; auth: 'api_key' | 'openai_cod
 // OAuth image gen) does — a raw API key OR the connected Codex OAuth account.
 async function getRealtimeAgentAuthCandidates(): Promise<RealtimeAgentAuthCandidate[]> {
   const candidates: RealtimeAgentAuthCandidate[] = [];
+  const seen = new Set<string>();
+  const push = (token: string, auth: RealtimeAgentAuthCandidate['auth']) => {
+    const value = String(token || '').trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    candidates.push({ token: value, auth });
+  };
   const apiKey = getRealtimeAgentApiKey();
-  if (apiKey) candidates.push({ token: apiKey, auth: 'api_key' });
+  push(apiKey, 'api_key');
 
   try {
     const configDir = getConfig().getConfigDir();
     if (loadOpenAiCodexTokens(configDir) !== null) {
+      const tokens = await loadRealtimeAgentOpenAiCodexTokens(configDir);
+      push(String(tokens?.api_key || '').trim(), 'openai_codex_oauth_api_key');
       const token = await getOpenAiCodexToken(configDir);
-      if (token) candidates.push({ token, auth: 'openai_codex_oauth' });
+      push(token, 'openai_codex_oauth');
     }
   } catch {
     // Fall through — the caller reports when no usable auth was found.
@@ -13023,7 +13079,13 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
     const originalPrompt = String(body.originalUserPrompt || '').trim();
-    const contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+    let contextBlockResult: { contextBlock: string; elapsedMs?: number; cacheHit?: boolean };
+    try {
+      contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+    } catch (err: any) {
+      console.warn('[voice-agent-realtime] context block failed; starting with worker packet only:', err?.message || err);
+      contextBlockResult = { contextBlock: '' };
+    }
     const voiceAgentMemory = loadVoiceAgentMemory(getConfig().getWorkspacePath());
     const runtimeBody = body?.voiceRuntime && typeof body.voiceRuntime === 'object'
       ? body.voiceRuntime
@@ -13054,7 +13116,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
         audio: {
           input: {
             noise_reduction: { type: 'near_field' },
-            transcription: { model: 'gpt-realtime-whisper' },
+            transcription: { model: DEFAULT_REALTIME_AGENT_TRANSCRIPTION_MODEL },
             turn_detection: {
               type: 'server_vad',
               threshold: 0.5,
@@ -13070,32 +13132,76 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
         tool_choice: 'auto',
       },
     };
+    const noSpeedSessionConfig = JSON.parse(JSON.stringify(sessionConfig));
+    try { delete noSpeedSessionConfig.session.audio.output.speed; } catch {}
+    const leanSessionConfig: any = {
+      session: {
+        type: 'realtime',
+        model,
+        audio: {
+          input: {
+            noise_reduction: { type: 'near_field' },
+            transcription: { model: DEFAULT_REALTIME_AGENT_TRANSCRIPTION_MODEL },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 600,
+              create_response: !(wakeGateActive && !!wakePhrase),
+            },
+          },
+          output: { voice },
+        },
+        instructions: clampRealtimeInstructions(instructions, 9000),
+      },
+    };
+    const sessionConfigVariants = [
+      { name: 'full', config: sessionConfig },
+      { name: 'no_speed', config: noSpeedSessionConfig },
+      { name: 'lean', config: leanSessionConfig },
+    ];
 
     // Try each credential in turn. 401/403 means "wrong key" — fall through to the
     // next candidate (e.g. API key absent → Codex OAuth). Any other failure is real.
-    const serialized = JSON.stringify(sessionConfig);
     let data: any = null;
     let usedAuth: RealtimeAgentAuthCandidate['auth'] | null = null;
-    let lastFailure: { status: number; data: any } | null = null;
+    let usedSourceToken = '';
+    let usedVariant = '';
+    let lastFailure: { status: number; data: any; variant: string; auth: RealtimeAgentAuthCandidate['auth'] } | null = null;
     for (const candidate of authCandidates) {
-      const upstream = await fetch(REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${candidate.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: serialized,
-      });
-      const text = await upstream.text();
-      let parsed: any = null;
-      try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
-      if (upstream.ok) {
-        data = parsed;
-        usedAuth = candidate.auth;
-        break;
+      for (const variant of sessionConfigVariants) {
+        const upstream = await fetch(REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${candidate.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(variant.config),
+        });
+        const text = await upstream.text();
+        let parsed: any = null;
+        try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+        if (upstream.ok) {
+          data = parsed;
+          usedAuth = candidate.auth;
+          usedSourceToken = candidate.token;
+          usedVariant = variant.name;
+          break;
+        }
+        lastFailure = { status: upstream.status, data: parsed, variant: variant.name, auth: candidate.auth };
+        if (upstream.status !== 401 && upstream.status !== 403) {
+          console.warn('[voice-agent-realtime] client_secret variant failed', {
+            status: upstream.status,
+            auth: candidate.auth,
+            variant: variant.name,
+            error: parsed?.error?.message || parsed?.error || parsed?.raw || '',
+          });
+        }
+        const isAuthFailure = upstream.status === 401 || upstream.status === 403;
+        if (isAuthFailure) break;
       }
-      lastFailure = { status: upstream.status, data: parsed };
-      if (upstream.status !== 401 && upstream.status !== 403) break;
+      if (data) break;
+      if (lastFailure?.status !== 401 && lastFailure?.status !== 403) continue;
     }
 
     if (!data) {
@@ -13104,6 +13210,8 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
         success: false,
         error: lastFailure?.data?.error?.message || lastFailure?.data?.error || `OpenAI Realtime returned ${lastFailure?.status || 502}`,
         details: lastFailure?.data,
+        variant: lastFailure?.variant || null,
+        auth: lastFailure?.auth || null,
       });
       return;
     }
@@ -13112,19 +13220,124 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       res.status(502).json({ ok: false, success: false, error: 'Realtime client_secret was not returned.', details: data });
       return;
     }
+    const callToken = crypto.randomUUID();
+    const expiresAtRaw = Number(data?.client_secret?.expires_at || data?.expires_at || 0);
+    const expiresAtMs = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0
+      ? (expiresAtRaw < 10_000_000_000 ? expiresAtRaw * 1000 : expiresAtRaw)
+      : Date.now() + 10 * 60 * 1000;
+    realtimeAgentCallTokens.set(callToken, {
+      clientSecret,
+      sourceToken: usedSourceToken,
+      auth: usedAuth || 'openai_codex_oauth',
+      model,
+      createdAt: Date.now(),
+      expiresAt: expiresAtMs,
+    });
+    console.log('[voice-agent-realtime] client_secret ready', {
+      auth: usedAuth,
+      variant: usedVariant,
+      model,
+      voice,
+      instructionsLength: instructions.length,
+      toolCount: tools.length,
+    });
     res.json({
       ok: true,
       success: true,
       clientSecret,
+      callToken,
       auth: usedAuth,
+      variant: usedVariant,
       model,
       voice,
       speed,
       contextPacket,
+      instructions,
+      tools,
       instructionsLength: instructions.length,
       toolCount: tools.length,
       expiresAt: data?.client_secret?.expires_at || data?.expires_at || null,
       sessionConfig: { type: 'realtime', model, voice, speed },
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/voice-agent/realtime-call', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const callToken = String(body.callToken || body.call_token || '').trim();
+    let sdp = String(body.sdp || '');
+    if (!sdp.endsWith('\r\n')) sdp = `${sdp.replace(/\s+$/g, '')}\r\n`;
+    const diagnostics = {
+      sdpLength: sdp.length,
+      startsWithV: sdp.startsWith('v='),
+      hasAudio: /\r?\nm=audio\s/i.test(sdp),
+      firstLine: sdp.split(/\r?\n/, 1)[0] || '',
+    };
+    if (!callToken) {
+      res.status(400).json({ ok: false, success: false, error: 'Realtime call token is required.', ...diagnostics });
+      return;
+    }
+    const entry = realtimeAgentCallTokens.get(callToken);
+    if (!entry || Date.now() > entry.expiresAt) {
+      realtimeAgentCallTokens.delete(callToken);
+      res.status(401).json({ ok: false, success: false, error: 'Realtime call token is expired. Restart realtime voice.', ...diagnostics });
+      return;
+    }
+    if (!diagnostics.startsWithV || !diagnostics.hasAudio) {
+      res.status(400).json({ ok: false, success: false, error: 'Valid Realtime SDP audio offer is required.', ...diagnostics });
+      return;
+    }
+
+    const callUrlNoModel = 'https://api.openai.com/v1/realtime/calls';
+    const callUrlWithModel = `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(entry.model)}`;
+    const attempts = [
+      { label: 'ephemeral', token: entry.clientSecret, url: callUrlNoModel, auth: 'ephemeral' },
+      { label: 'ephemeral_model', token: entry.clientSecret, url: callUrlWithModel, auth: 'ephemeral' },
+      { label: `source_${entry.auth}`, token: entry.sourceToken, url: callUrlWithModel, auth: entry.auth },
+    ].filter(attempt => attempt.token);
+
+    let lastFailure: { status: number; label: string; error: string } | null = null;
+    for (const attempt of attempts) {
+      const upstream = await fetch(attempt.url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${attempt.token}`,
+          'Content-Type': 'application/sdp',
+          ...(attempt.auth === 'openai_codex_oauth' ? buildCodexCloudflareHeaders(attempt.token) : {}),
+        },
+        body: sdp,
+      });
+      const answer = await upstream.text();
+      if (upstream.ok) {
+        console.log('[voice-agent-realtime] call exchange ready', {
+          auth: entry.auth,
+          attempt: attempt.label,
+          model: entry.model,
+          ...diagnostics,
+        });
+        res.type('application/sdp').send(answer);
+        return;
+      }
+      lastFailure = { status: upstream.status, label: attempt.label, error: answer.slice(0, 500) };
+      console.warn('[voice-agent-realtime] call exchange failed', {
+        auth: entry.auth,
+        attempt: attempt.label,
+        status: upstream.status,
+        model: entry.model,
+        error: answer.slice(0, 500),
+        ...diagnostics,
+      });
+      if (upstream.status !== 500 && upstream.status !== 502 && upstream.status !== 503) continue;
+    }
+    res.status(lastFailure?.status || 502).json({
+      ok: false,
+      success: false,
+      error: lastFailure?.error || `Realtime call exchange failed (${lastFailure?.status || 502})`,
+      attempt: lastFailure?.label || null,
+      ...diagnostics,
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
@@ -13232,7 +13445,13 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
     const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
     const originalPrompt = String(body.originalUserPrompt || '').trim();
-    const contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+    let contextBlockResult: { contextBlock: string; elapsedMs?: number; cacheHit?: boolean };
+    try {
+      contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+    } catch (err: any) {
+      console.warn('[xai-realtime] context block failed; starting with worker packet only:', err?.message || err);
+      contextBlockResult = { contextBlock: '' };
+    }
     const voiceAgentMemory = loadVoiceAgentMemory(getConfig().getWorkspacePath());
     const wakePhrase = cleanVoiceWakePhrase(body?.voiceRuntime?.wakePhrase || body?.voice_runtime?.wakePhrase || '');
 

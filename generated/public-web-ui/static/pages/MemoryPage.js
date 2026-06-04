@@ -75,6 +75,7 @@ const state = {
   realEdges: [],
   renderNodes: [],
   renderEdges: [],
+  typeGroupCards: [],
   nodeById: new Map(),
   recordNodeById: new Map(),
   visibleAdjacency: new Map(),
@@ -106,6 +107,18 @@ function flameNodePath(ctx, cx, cy, r) {
   ctx.bezierCurveTo(cx + s * 0.58, cy - s * 0.55, cx + s * 0.82, cy + s * 0.12, cx + s * 0.42, cy + s * 0.58);
   ctx.bezierCurveTo(cx + s * 0.22, cy + s * 0.88, cx - s * 0.22, cy + s * 0.88, cx - s * 0.42, cy + s * 0.58);
   ctx.bezierCurveTo(cx - s * 0.82, cy + s * 0.12, cx - s * 0.58, cy - s * 0.55, cx, cy - s * 1.05);
+}
+function roundedRectPath(ctx, x, y, width, height, radius = 8) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
 }
 function sourceColor(type) { return TYPE_COLORS[type] || TYPE_COLORS.unknown; }
 function alpha(color, opacity) {
@@ -480,23 +493,18 @@ function layoutPrometheus(nodes) {
   if (!nodes.length) return;
   const count = nodes.length;
 
-  // Filled flame silhouette — nodes fill the interior of a flame shape.
-  // Tip points up (negative y). t=0 at tip, t=1 at base.
-  const H = Math.max(180, Math.min(500, 110 + Math.sqrt(count) * 22));
-  const W = H * 0.64;
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const spacing = clamp(520 / Math.max(cols, rows), 9, 24);
+  const sortedNodes = [...nodes].sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
 
-  // Half-width of flame at normalized height t: 0 at tip, widens quickly, slight flare at base
-  const flameHalfW = (t) => W * Math.pow(t, 0.42) * (0.88 + 0.22 * Math.pow(1 - t, 1.6));
-
-  nodes.forEach((node) => {
-    // Deterministic per-node "random" using hash — same result every layout
-    const r1 = (hashString(`${node.id}:flm:t`) % 10000) / 10000;
-    const r2 = (hashString(`${node.id}:flm:x`) % 10000) / 10000;
-    // Skew t toward base so the wider sections are proportionally denser
-    const t = Math.pow(r1, 0.6);
-    const halfW = flameHalfW(t);
-    node.baseY = -H + t * H * 1.9;
-    node.baseX = (r2 * 2 - 1) * halfW;
+  sortedNodes.forEach((node, index) => {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const jitterX = ((hashString(`${node.id}:grid:x`) % 1000) / 1000 - 0.5) * spacing * 0.24;
+    const jitterY = ((hashString(`${node.id}:grid:y`) % 1000) / 1000 - 0.5) * spacing * 0.24;
+    node.baseX = (col - (cols - 1) / 2) * spacing + jitterX;
+    node.baseY = (row - (rows - 1) / 2) * spacing + jitterY;
     node.sleeping = false;
   });
 
@@ -550,7 +558,7 @@ function applyImageShapeToNodes(nodes, points) {
   return true;
 }
 
-function buildTypeHubs(nodes) {
+function layoutByTypeGroups(nodes) {
   const grouped = new Map();
   nodes.forEach((node) => {
     const categoryId = node.categoryId || 'misc';
@@ -558,54 +566,57 @@ function buildTypeHubs(nodes) {
     grouped.get(categoryId).push(node);
   });
 
-  const hubs = [];
-  const hubEdges = [];
-  const entries = Array.from(grouped.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  const spreadScale = entries.length > 6 ? 1.14 : 1;
+  const categoryOrder = Object.keys(CATEGORY_META);
+  const entries = Array.from(grouped.entries()).sort((a, b) => {
+    const ai = categoryOrder.indexOf(a[0]);
+    const bi = categoryOrder.indexOf(b[0]);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi) || a[0].localeCompare(b[0]);
+  });
+  const groupCols = Math.ceil(Math.sqrt(entries.length * 1.35));
+  const groupRows = Math.ceil(entries.length / Math.max(1, groupCols));
+  const gapX = 360;
+  const gapY = 300;
+  const cards = [];
+
   entries.forEach(([categoryId, items], index) => {
     const meta = CATEGORY_META[categoryId] || CATEGORY_META.misc;
-    const angle = (Math.PI * 2 * index) / Math.max(1, entries.length);
-    const hub = {
-      id: `hub:${categoryId}`,
-      label: meta.label,
-      sourceType: categoryId,
-      sourceTypeLabel: meta.label,
-      categoryId,
-      color: meta.color,
-      radius: clamp(18 + items.length * 0.45, 18, 30),
-      degree: items.length,
-      summary: `${items.length} records grouped under ${meta.label}.`,
-      virtual: true,
-      interactive: false,
-      isHub: true,
-      visible: true,
-      matched: true,
-      highlighted: false,
-      baseX: Math.cos(angle) * 420 * spreadScale,
-      baseY: Math.sin(angle) * 260 * spreadScale,
-      x: 0,
-      y: 0,
-      vx: 0,
-      vy: 0,
-      sleeping: false,
-    };
-    resetNodePhysics(hub);
-    hubs.push(hub);
+    const groupCol = index % groupCols;
+    const groupRow = Math.floor(index / groupCols);
+    const centerX = (groupCol - (groupCols - 1) / 2) * gapX;
+    const centerY = (groupRow - (groupRows - 1) / 2) * gapY;
+    const cols = Math.ceil(Math.sqrt(items.length));
+    const rows = Math.ceil(items.length / Math.max(1, cols));
+    const spacing = clamp(260 / Math.max(cols, rows), 8, 18);
+    const clusterWidth = Math.max(120, (cols - 1) * spacing + 64);
+    const clusterHeight = Math.max(96, (rows - 1) * spacing + 64);
 
     items.sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
     items.forEach((node, itemIndex) => {
-      const ring = Math.floor(itemIndex / 14);
-      const step = itemIndex % 14;
-      const localAngle = (Math.PI * 2 * step) / 14 + (hashString(node.id) % 360) * (Math.PI / 180);
-      const spread = 84 + ring * 42 + (hashString(`${node.id}:type`) % 14);
-      node.baseX = hub.baseX + Math.cos(localAngle) * spread;
-      node.baseY = hub.baseY + Math.sin(localAngle) * (spread * 0.76);
+      const col = itemIndex % cols;
+      const row = Math.floor(itemIndex / cols);
+      const jitterX = ((hashString(`${node.id}:type:x`) % 1000) / 1000 - 0.5) * spacing * 0.85;
+      const jitterY = ((hashString(`${node.id}:type:y`) % 1000) / 1000 - 0.5) * spacing * 0.85;
+      node.baseX = centerX + (col - (cols - 1) / 2) * spacing + jitterX;
+      node.baseY = centerY + (row - (rows - 1) / 2) * spacing + jitterY;
       resetNodePhysics(node);
-      hubEdges.push({ id: `hub-edge:${hub.id}:${node.id}`, source: hub.id, target: node.id, weight: 1, type: 'type_group', visible: true, virtual: true });
+    });
+    resolveClusterOverlap(items.map((node) => node.id), 6);
+
+    cards.push({
+      id: `type-card:${categoryId}`,
+      label: meta.label,
+      count: items.length,
+      color: meta.color,
+      x: centerX,
+      y: centerY - clusterHeight / 2 - 46,
+      width: clamp(meta.label.length * 8 + 86, 128, 220),
+      height: 32,
+      clusterWidth,
+      clusterHeight,
     });
   });
 
-  return { hubs, hubEdges };
+  return cards;
 }
 
 function fitGraphToViewport() {
@@ -622,6 +633,12 @@ function fitGraphToViewport() {
     minY = Math.min(minY, node.baseY);
     maxY = Math.max(maxY, node.baseY);
   });
+  state.typeGroupCards.forEach((card) => {
+    minX = Math.min(minX, card.x - card.width / 2);
+    maxX = Math.max(maxX, card.x + card.width / 2);
+    minY = Math.min(minY, card.y - card.height / 2);
+    maxY = Math.max(maxY, card.y + card.height / 2);
+  });
   const graphWidth = Math.max(1, maxX - minX + 280);
   const graphHeight = Math.max(1, maxY - minY + 280);
   const scale = clamp(Math.min(width / graphWidth, height / graphHeight), 0.05, 1.08);
@@ -635,8 +652,13 @@ function rebuildRenderGraph(relayout = true) {
   const nodeMap = new Map(visibleNodes.map((node) => [node.id, node]));
   const filteredEdges = state.realEdges.filter((edge) => edge.visible && nodeMap.has(edge.source) && nodeMap.has(edge.target));
   state.visibleAdjacency = buildAdjacency(filteredEdges);
+  state.typeGroupCards = [];
 
-  if (state.shapeMode === 'prometheus') {
+  if (state.controls.organizeByType) {
+    state.typeGroupCards = layoutByTypeGroups(visibleNodes);
+    state.renderNodes = [...visibleNodes];
+    state.renderEdges = [];
+  } else if (state.shapeMode === 'prometheus') {
     if (relayout) layoutPrometheus(visibleNodes);
     state.renderNodes = [...visibleNodes];
     state.renderEdges = [...filteredEdges];
@@ -650,10 +672,6 @@ function rebuildRenderGraph(relayout = true) {
     }
     state.renderNodes = [...visibleNodes];
     state.renderEdges = [...filteredEdges];
-  } else if (state.controls.organizeByType) {
-    const { hubs, hubEdges } = buildTypeHubs(visibleNodes);
-    state.renderNodes = [...hubs, ...visibleNodes];
-    state.renderEdges = [...hubEdges];
   } else {
     if (relayout) layoutByComponents(visibleNodes, filteredEdges);
     state.renderNodes = [...visibleNodes];
@@ -661,9 +679,7 @@ function rebuildRenderGraph(relayout = true) {
   }
 
   state.nodeById = new Map(state.renderNodes.map((node) => [node.id, node]));
-  if (!state.controls.organizeByType) {
-    state.renderNodes.forEach((node) => { if (!node.isHub) node.interactive = true; });
-  }
+  state.renderNodes.forEach((node) => { if (!node.isHub) node.interactive = true; });
   wakeSimulation(relayout ? 1 : 0.55);
 }
 
@@ -797,6 +813,36 @@ function draw() {
   state.ctx.scale(state.transform.scale, state.transform.scale);
   const isOrganized = state.controls.organizeByType;
 
+  if (isOrganized) {
+    state.ctx.save();
+    state.ctx.textAlign = 'center';
+    state.ctx.textBaseline = 'middle';
+    state.typeGroupCards.forEach((card) => {
+      const x = card.x - card.width / 2;
+      const y = card.y - card.height / 2;
+      state.ctx.beginPath();
+      roundedRectPath(state.ctx, x, y, card.width, card.height, 8);
+      state.ctx.fillStyle = alpha('#07111f', 0.46);
+      state.ctx.fill();
+      state.ctx.lineWidth = 1;
+      state.ctx.strokeStyle = alpha(card.color, 0.42);
+      state.ctx.stroke();
+
+      state.ctx.beginPath();
+      state.ctx.arc(x + 17, card.y, 4.2, 0, Math.PI * 2);
+      state.ctx.fillStyle = alpha(card.color, 0.95);
+      state.ctx.fill();
+
+      state.ctx.font = '700 11px Manrope, sans-serif';
+      state.ctx.fillStyle = alpha('#f2f7ff', 0.9);
+      state.ctx.fillText(card.label, card.x + 5, card.y - 4);
+      state.ctx.font = '600 8px Manrope, sans-serif';
+      state.ctx.fillStyle = alpha('#c8d4e6', 0.72);
+      state.ctx.fillText(`${card.count} nodes`, card.x + 5, card.y + 8);
+    });
+    state.ctx.restore();
+  }
+
   for (const edge of state.renderEdges) {
     if (!edge.visible) continue;
     const a = state.nodeById.get(edge.source);
@@ -823,22 +869,23 @@ function draw() {
     const isHovered = node.id === state.hoverNodeId;
     const opacity = node.highlighted ? 0.98 : state.controls.search && !node.matched ? 0.24 : 0.84;
     const nodeR = node.radius + (isSelected ? 2.4 : isHovered ? 1.2 : 0);
+    const nodeColor = isOrganized ? (CATEGORY_META[node.categoryId]?.color || node.color) : node.color;
     state.ctx.beginPath();
-    state.ctx.fillStyle = node.isHub ? alpha(node.color, 0.94) : alpha(node.color, opacity);
+    state.ctx.fillStyle = alpha(nodeColor, opacity);
     flameNodePath(state.ctx, node.x, node.y, nodeR);
     state.ctx.fill();
-    if (isSelected || isHovered || node.isHub) {
-      state.ctx.lineWidth = node.isHub ? 2.2 : isSelected ? 2.2 : 1.2;
-      state.ctx.strokeStyle = node.isHub ? alpha('#ffffff', 0.92) : isSelected ? '#ffffff' : alpha('#ffffff', 0.76);
+    if (isSelected || isHovered) {
+      state.ctx.lineWidth = isSelected ? 2.2 : 1.2;
+      state.ctx.strokeStyle = isSelected ? '#ffffff' : alpha('#ffffff', 0.76);
       state.ctx.stroke();
     }
     if (isSelected) {
       state.ctx.save();
       state.ctx.shadowBlur = 14;
-      state.ctx.shadowColor = node.color;
+      state.ctx.shadowColor = nodeColor;
       state.ctx.beginPath();
       flameNodePath(state.ctx, node.x, node.y, nodeR * 0.55);
-      state.ctx.fillStyle = alpha(node.color, 0.45);
+      state.ctx.fillStyle = alpha(nodeColor, 0.45);
       state.ctx.fill();
       state.ctx.restore();
     }
@@ -1790,7 +1837,7 @@ function toggleDefaultShape() {
   if (saved && activeSavedLayout) {
     localStorage.removeItem(DEFAULT_LAYOUT_KEY);
     localStorage.removeItem(LEGACY_DEFAULT_SHAPE_KEY);
-    showToast('Default shape cleared', 'Page will start with flame layout on next load.', 'success', 2200);
+    showToast('Default shape cleared', 'Page will start with the square layout on next load.', 'success', 2200);
   } else if (canSaveImage) {
     try {
       localStorage.setItem(DEFAULT_LAYOUT_KEY, JSON.stringify({ mode: 'image', points: state.imagePoints }));

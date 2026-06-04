@@ -149,6 +149,44 @@ Operational debugging facts:
 - If Prometheus responds but no realtime audio is heard, inspect `speakWithRealtimeVoice(...)`, `response.create`, `output_modalities`, data-channel errors, and browser autoplay/audio device behavior
 - `/api/realtime/status` and `/api/realtime/client-secret` can validate OAuth/API-key configuration without exposing client secrets
 
+## 12A-CRITICAL) OpenAI Realtime "Internal Server Error" / no voice on Codex OAuth — root cause + fix (2026-06-03)
+
+THE SHARP EDGE THAT COST DAYS. Symptom: OpenAI Realtime voice (the true voice-agent WebRTC path) gives no transcription, no audio, and a red "Internal Server Error" toast on mobile/desktop. Logs show `[voice-agent-realtime] client_secret ready`, then `call exchange failed ... status 500` for every attempt (`ephemeral`, `ephemeral_model`, `source_openai_codex_oauth`). xAI realtime works fine the whole time.
+
+What it is NOT: NOT the camera change, NOT the SDP (mDNS `.local` candidates / ICE timing), NOT tool count / instruction size, NOT missing headers, NOT browser-vs-server, NOT the WebRTC transceiver setup. Old and new client code make the identical call to `https://api.openai.com/v1/realtime/calls`. Verified by reproducing with real browser SDPs.
+
+What it IS: OpenAI's realtime CALL endpoint requires a real platform credential. The raw Codex OAuth bearer has NO platform API access (`GET /v1/models` with it → 403; `/v1/realtime/calls` → 500). The `client_secrets` MINT endpoint is lenient and returns a secret anyway, so it LOOKS configured — that is the trap.
+
+The working "loophole" = `tryExchangeForApiKey()` in `src/auth/openai-oauth.ts`: it exchanges the OAuth **id_token** for a real platform **api_key** (stored as `tokens.api_key`, used via realtime auth candidate `openai_codex_oauth_api_key`). OpenAI DOES accept that key for realtime. When realtime works, logs show `auth: 'openai_codex_oauth_api_key'` (NOT `openai_codex_oauth`).
+
+Why it broke: the exchange needs a singular `organization_id` claim in the id_token. Two failure layers were found and fixed:
+1. A REFRESH-derived id_token never carries `organization_id` (only the `organizations` array). So once the cached api_key was lost, every refresh failed the exchange → fell back to raw bearer → 500.
+2. A FRESH-LOGIN id_token also lacked `organization_id` for a MULTI-ORG account, because the OAuth authorize sent `codex_cli_simplified_flow=true`, which skips org binding. FIX: removed `codex_cli_simplified_flow` from both authorize param blocks in `startOAuthFlow` so login binds an `organization_id`. After that, a fresh Disconnect→Connect mints the api_key (verify: `GET /v1/models` → 200), and it persists across refreshes (`refreshTokens` keeps `existing.api_key` when the refresh-exchange fails).
+
+Recovery runbook when realtime 500s on OAuth:
+- Confirm: `auth` in the `client_secret ready` log. If `openai_codex_oauth` (not `..._api_key`), there is no usable api_key.
+- Check token: decode `tokens.id_token` auth namespace (`https://api.openai.com/auth`). If `organization_id` is missing, the exchange will fail.
+- Fix: ensure `codex_cli_simplified_flow` is NOT in the authorize params, restart gateway, Disconnect→Connect (fresh login), then the callback auto-mints `tokens.api_key`. `scripts/mint-realtime-key.ts` exchanges the current LOGIN id_token and saves the key (must NOT refresh first — refresh strips `organization_id`).
+- If a fresh login STILL lacks `organization_id` (multi-org edge): pick/confirm one org in the consent screen, or set a real `OPENAI_API_KEY`, or use xAI realtime.
+
+## 12A-2) SECOND BUG: mic connects but no transcription/audio — iOS dual-getUserMedia (2026-06-03)
+
+After the auth fix (`auth: openai_codex_oauth_api_key`, call returns 201), a SEPARATE bug remained: the session fully connects (`session.created`/`session.updated`, mic track live, remote track received, soundwave visualizer animates to the user's voice) but speaking produces NO `input_audio_buffer.speech_started` → no transcription, no response. The user sees the mic "working" (soundwaves move) but Prometheus is deaf.
+
+Ruled OUT as causes (all verified working via live browser tests with the real key): `gpt-realtime-2` model, voice `cedar`, `output_modalities:['audio']`, `server_vad`, `gpt-4o-transcribe`, and audio OUTPUT (text item + `response.create` → `response.output_audio.done` plays). The WebRTC mic m-line is answered `sendrecv` even with the extra recvonly transceiver. So model/voice/config/output/SDP are NOT the cause.
+
+ROOT CAUSE (confirmed): iOS Safari does not tolerate TWO concurrent `getUserMedia` mic captures. The soundwave visualizer + xAI realtime share ONE warm mic (`__pmVoice.warmMicStream` via `_ensureMobileXaiRealtimeMic()`), but `_startMobileRealtimeAgentSession` (OpenAI WebRTC path) did its OWN `navigator.mediaDevices.getUserMedia(...)` — a SECOND capture. On iOS the second capture comes back live-but-SILENT, so the visualizer (warm mic) animates while OpenAI's PeerConnection receives silence → VAD never fires. xAI was immune precisely because it reuses the warm mic. This is why "soundwaves react but nothing happens" and why xAI worked while OpenAI did not.
+
+FIX (applied in `web-ui/src/mobile/mobile-pages.js`):
+- `_startMobileRealtimeAgentSession` now gets its mic from `await _ensureMobileXaiRealtimeMic()` (the shared warm mic) instead of its own `getUserMedia`.
+- The conn is tagged `sharedMic: true`.
+- `_stopMobileRealtimeAgentSession` must NOT `.stop()` a shared mic (it would kill the visualizer / other providers) — it only re-enables `micTrack.enabled = true`; it stops the stream only when the mic is exclusively owned (`!sharedMic`).
+- Rule: any mobile realtime/voice provider that needs the mic MUST reuse `_ensureMobileXaiRealtimeMic()` / `__pmVoice.warmMicStream`. Never call a fresh `getUserMedia` for a second concurrent capture on iOS.
+
+PTT caveat: gating the shared mic via `micTrack.enabled` also pauses the visualizer on release. Acceptable with one active provider; if PTT misbehaves, gate via a sending-flag (like xAI's `xaiCapture.sending`) instead of toggling `enabled`. Always-listening was the verified-good path to test first.
+
+Also still true (session config): the backend `/api/voice-agent/realtime-bootstrap` bakes `server_vad` for ALL modes (it never receives `listenMode`); clients MUST re-assert per-mode `session.update` after the data channel opens (always_listening → server_vad with `create_response`; push_to_talk → `turn_detection: null` + manual commit/response on release). Do NOT bake session-level `output_modalities` into the mint.
+
 ## 12B) Voice Agent, Mobile Dictation Handoff, and Live Worker Steering
 
 2026-05-22 voice refactor correction:

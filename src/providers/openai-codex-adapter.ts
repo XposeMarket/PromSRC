@@ -25,6 +25,7 @@ function envMs(name: string, fallback: number, minimum: number): number {
 }
 const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 240_000, 30_000);
 const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 75_000, 15_000);
+const DEFAULT_CODEX_INSTRUCTIONS = 'You are Prometheus, a helpful AI assistant. Answer the user directly and follow the conversation context.';
 
 // Models available via Codex OAuth (latest first; includes standard GPT and Codex variants)
 export const CODEX_MODELS = [
@@ -242,7 +243,8 @@ export class OpenAICodexAdapter implements LLMProvider {
     const systemMsg = messages.find(m => m.role === 'system');
     // Codex auto-caches on a stable instructions+input prefix; strip the cache
     // sentinel so it never reaches the model (it has no API role here).
-    const instructions = systemMsg ? stripCacheMarker(contentToString(systemMsg.content)) : '';
+    const instructions = (systemMsg ? stripCacheMarker(contentToString(systemMsg.content)) : '').trim()
+      || DEFAULT_CODEX_INSTRUCTIONS;
 
     const hasTools = Array.isArray(options?.tools) && options!.tools!.length > 0;
     const _cfgRootCodex = getConfig().getConfig() as any;
@@ -287,7 +289,7 @@ export class OpenAICodexAdapter implements LLMProvider {
         tool_choice: toolChoice,
         parallel_tool_calls: true,
       };
-      if (instructions) body.instructions = instructions;
+      body.instructions = instructions;
       // Reasoning effort support (Codex reasoning models).
       // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
       const cfgRoot = getConfig().getConfig() as any;

@@ -16,6 +16,7 @@
  */
 
 import { state, THEME_KEY } from './state.js';
+import { runIfNeeded as runOnboardingIfNeeded } from './onboarding/onboarding-controller.js';
 
 export function getInitialTheme() {
   try {
@@ -398,3 +399,7 @@ window.addEventListener('resize', () => {
     _syncPageViewPositions();
   } catch {}
 })();
+
+window.runPrometheusOnboarding = () => runOnboardingIfNeeded().catch((err) => {
+  console.warn('[onboarding] manual start failed:', err);
+});

@@ -210,6 +210,8 @@ Realtime/mobile audio details:
 - Realtime SDP exchange can go through the gateway `POST /api/realtime/call` or direct client-secret flow through `POST /api/realtime/client-secret`.
 - Server TTS playback uses Web Audio when possible and falls back to an HTML audio element.
 - `service-worker.js` never caches voice/realtime API calls.
+- REALTIME AUTH GOTCHA (bug 1): OpenAI Realtime 500s ("Internal Server Error", no transcription/audio) when minting works but the call fails. Cause: the realtime CALL endpoint rejects the raw Codex OAuth bearer; it needs a real platform api_key minted by exchanging the OAuth id_token, which needs an `organization_id` claim (fresh login only, and `startOAuthFlow` must NOT send `codex_cli_simplified_flow=true`). Working logs show `auth: 'openai_codex_oauth_api_key'`. Full runbook: §12A-CRITICAL of `workspace/self/06-image-voice.md`. xAI realtime is independent and unaffected.
+- REALTIME MIC GOTCHA (bug 2, iOS): after auth is fixed, if the session connects and soundwaves animate but there is still no transcription/audio, the OpenAI WebRTC path is doing its OWN `getUserMedia` — a SECOND concurrent iOS mic capture that comes back live-but-silent, so OpenAI's VAD hears nothing. Fix/rule: mobile realtime mic MUST reuse the shared warm mic (`_ensureMobileXaiRealtimeMic()` / `__pmVoice.warmMicStream`), exactly like xAI; tag the conn `sharedMic: true` and do NOT `.stop()` the shared stream on teardown (only re-enable its track). Never open a second concurrent `getUserMedia` on iOS. Details: §12A-2 of `workspace/self/06-image-voice.md`.
 
 Voice Agent and interruptions:
 

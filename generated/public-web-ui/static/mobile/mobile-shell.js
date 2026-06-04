@@ -109,6 +109,10 @@ function _currentDrawerSessionChannel() {
   return channel || 'mobile';
 }
 
+function _isDrawerSideChatSession(session) {
+  const id = String(session?.id || '').trim();
+  return /^side_/i.test(id) || session?.sideChat === true || !!String(session?.parentSessionId || '').trim();
+}
 
 async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset = false } = {}) {
   const state = _drawerPageStateFor(channel);
@@ -135,7 +139,7 @@ async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset 
         page = { sessions: [], total: 0, offset, hasMore: false };
       }
 
-      const incoming = Array.isArray(page?.sessions) ? page.sessions : [];
+      const incoming = (Array.isArray(page?.sessions) ? page.sessions : []).filter((session) => !_isDrawerSideChatSession(session));
       const seen = new Set(reset ? [] : state.sessions.map((s) => String(s?.id || '')));
       const merged = reset ? [] : state.sessions.slice();
       for (const session of incoming) {
@@ -576,6 +580,7 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
       matches = [];
     }
     if (seq !== _drawerSearchSeq || query !== _drawerSearch) return;
+    matches = (Array.isArray(matches) ? matches : []).filter((session) => !_isDrawerSideChatSession(session));
     if (!matches.length) matches = await _localSessionSearchFallback(loadSessions, query);
     if (seq !== _drawerSearchSeq || query !== _drawerSearch) return;
 
@@ -606,7 +611,7 @@ async function _localSessionSearchFallback(loadSessions, query) {
     ...(Array.isArray(data?.mobile) ? data.mobile : []),
     ...(Array.isArray(data?.channels) ? data.channels.flatMap(c => Array.isArray(c.sessions) ? c.sessions : []) : []),
   ];
-  return all.filter((s) => {
+  return all.filter((s) => !_isDrawerSideChatSession(s)).filter((s) => {
     const title = String(s?.title || '').toLowerCase();
     const preview = String(s?.preview || '').toLowerCase();
     return title.includes(q) || preview.includes(q);

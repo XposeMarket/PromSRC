@@ -102,7 +102,7 @@ export function showMigrationPanel(opts = {}) {
 
     function renderSources() {
       if (!sources.length) {
-        statusEl.textContent = 'No Hermes, OpenClaw, or LocalClaw setup was found on this machine.';
+        statusEl.textContent = 'No Hermes, OpenClaw, or LocalClaw setup was found on this machine. Continuing...';
         sourcesEl.innerHTML = `
           <div style="border:1px dashed var(--line,#ddd);border-radius:10px;padding:12px;background:#fff;font-size:13px;color:var(--muted,#666)">
             You can run this later from Settings → Migration if you install or locate an older setup.
@@ -111,6 +111,10 @@ export function showMigrationPanel(opts = {}) {
         footEl.textContent = 'You can continue onboarding now.';
         previewBtn.disabled = true;
         importBtn.disabled = true;
+        setTimeout(async () => {
+          await markDone(true, '');
+          dismiss('skipped-no-sources');
+        }, 900);
         return;
       }
 

@@ -27,6 +27,7 @@ let subagentChatQueueByAgent = {}; // agentId -> [{ content }]
 let subagentChatQueueDrainTimers = {}; // agentId -> timer id
 let subagentChatPendingFilesByAgent = {}; // agentId -> staged files before send
 let subagentChatFileStagingPromisesByAgent = {}; // agentId -> Promise[]
+let subagentChatApprovalsByAgent = {}; // agentId -> inline approval cards shown in direct chat
 
 const SUBAGENT_CHAT_TEXT_EXTENSIONS = new Set([
   'txt','md','csv','json','js','ts','jsx','tsx','html','htm','css','scss','less',
@@ -42,6 +43,162 @@ function subagentChatJsArg(value) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function getSubagentChatSessionId(agentId) {
+  return `subagent_chat_${String(agentId || '').trim()}`;
+}
+
+function normalizeSubagentChatApproval(input = {}, fallback = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const id = String(source.id || source.approvalId || fallback.id || fallback.approvalId || '').trim();
+  const toolArgs = source.toolArgs && typeof source.toolArgs === 'object' ? source.toolArgs : (fallback.toolArgs || {});
+  const sessionId = String(source.sourceSessionId || source.sessionId || fallback.sourceSessionId || fallback.sessionId || '').trim();
+  const toolName = String(source.toolName || fallback.toolName || '').trim();
+  const approvalKind = String(source.approvalKind || fallback.approvalKind || '').trim();
+  const command = String(source.command || toolArgs.command || fallback.command || '').trim();
+  const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
+  const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
+  const isCommand = toolName === 'run_command';
+  const title = isDevSource ? 'Dev source edit approval'
+    : isFinalAction ? 'Final action approval'
+      : isCommand ? 'Command approval'
+        : toolName ? `${toolName.replace(/_/g, ' ')} approval` : 'Approval required';
+  return {
+    ...fallback,
+    ...source,
+    id,
+    sessionId,
+    sourceSessionId: sessionId,
+    toolName,
+    toolArgs,
+    approvalKind,
+    title,
+    action: String(source.action || source.summary || fallback.action || fallback.summary || '').trim(),
+    reason: String(source.reason || fallback.reason || '').trim(),
+    command,
+    summary: String(source.reason || source.summary || source.action || fallback.summary || fallback.action || '').trim(),
+    riskScore: Number.isFinite(Number(source.riskScore)) ? Number(source.riskScore) : Number(fallback.riskScore || 0),
+    affectedSystems: Array.isArray(source.affectedSystems) ? source.affectedSystems : (Array.isArray(fallback.affectedSystems) ? fallback.affectedSystems : []),
+    scopedAction: String(source.scopedAction || fallback.scopedAction || '').trim(),
+    scopedTarget: String(source.scopedTarget || fallback.scopedTarget || '').trim(),
+    commandBoundary: source.commandBoundary || fallback.commandBoundary || null,
+    devSourceEdit: source.devSourceEdit || fallback.devSourceEdit || null,
+    finalAction: source.finalAction || fallback.finalAction || null,
+    status: String(source.status || fallback.status || 'pending').toLowerCase(),
+    agentId: String(source.agentId || fallback.agentId || '').trim(),
+  };
+}
+
+function subagentApprovalRiskLevel(score) {
+  const n = Number(score || 0);
+  if (n >= 7) return 'high';
+  if (n >= 4) return 'medium';
+  return 'low';
+}
+
+function renderSubagentInlineApprovalCard(input = {}) {
+  const approval = normalizeSubagentChatApproval(input);
+  if (!approval.id) return '';
+  const status = String(approval.status || 'pending').toLowerCase();
+  const pending = status === 'pending';
+  const statusLabel = status === 'rejected' ? 'denied' : status;
+  const idArg = subagentChatJsArg(approval.id);
+  const approveEndpoint = subagentChatJsArg(`/api/approvals/${approval.id}/approve`);
+  const denyEndpoint = subagentChatJsArg(`/api/approvals/${approval.id}/deny`);
+  const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
+  const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
+  const technicalText = approval.command || approval.scopedAction || approval.action;
+  const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+  const boundary = approval.commandBoundary || null;
+  const boundaryScope = String(boundary?.scope || '').trim();
+  const boundaryPaths = Array.isArray(boundary?.externalPaths) ? boundary.externalPaths.filter(Boolean) : [];
+  return `<div class="chat-approval-card chat-approval-card-${subagentApprovalRiskLevel(approval.riskScore)} chat-approval-card-${escHtml(statusLabel)}" data-approval-id="${escHtml(approval.id)}">
+    <div class="chat-approval-head">
+      <div>
+        <div class="chat-approval-kicker">${pending ? 'Approval needed' : 'Approval result'}</div>
+        <div class="chat-approval-title">${escHtml(approval.title)}</div>
+      </div>
+      <div class="chat-approval-badges">
+        <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
+        ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
+      </div>
+    </div>
+    ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
+    ${boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? `<br>${escHtml(String(boundary.reason))}` : ''}</div>` : ''}
+    ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
+    ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
+    ${technicalText ? `<details class="chat-approval-technical"><summary>Technical details</summary><pre class="chat-approval-command">${escHtml(technicalText)}</pre></details>` : ''}
+    ${pending
+      ? `<div class="chat-approval-actions">
+          <button class="chat-approval-btn chat-approval-approve" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'approve', ${approveEndpoint})">Approve</button>
+          <button class="chat-approval-btn chat-approval-deny" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'deny', ${denyEndpoint})">Reject</button>
+          ${isDevSource || isFinalAction ? '' : `<button class="chat-approval-link" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'approve_session', ${approveEndpoint}, 'session')">Trust this session</button>
+          <button class="chat-approval-link" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'approve_always', ${approveEndpoint}, 'always')">Always allow</button>`}
+        </div>`
+      : `<div class="chat-approval-resolved">This request was ${escHtml(statusLabel)}.</div>`}
+  </div>`;
+}
+
+function approvalBelongsToSubagentChat(agentId, approvalInput = {}) {
+  const approval = normalizeSubagentChatApproval(approvalInput);
+  if (!agentId || !approval.id) return false;
+  const sid = String(approval.sessionId || approval.sourceSessionId || '').trim();
+  return sid === getSubagentChatSessionId(agentId) || String(approval.agentId || '').trim() === String(agentId || '').trim();
+}
+
+function upsertSubagentChatApproval(agentId, approvalInput = {}) {
+  if (!approvalBelongsToSubagentChat(agentId, approvalInput)) return false;
+  const approval = normalizeSubagentChatApproval(approvalInput);
+  const list = Array.isArray(subagentChatApprovalsByAgent[agentId]) ? subagentChatApprovalsByAgent[agentId] : [];
+  const idx = list.findIndex((item) => String(item?.id || '') === approval.id);
+  if (idx >= 0) list[idx] = { ...list[idx], ...approval };
+  else list.push(approval);
+  subagentChatApprovalsByAgent[agentId] = list.slice(-8);
+  if (activeSubagentId === agentId && subagentDetailTab === 'chat') renderSubagentBoard(agentId);
+  return true;
+}
+
+function updateSubagentChatApprovalStatus(id, status, event = {}) {
+  const approvalId = String(id || '').trim();
+  if (!approvalId) return false;
+  let changed = false;
+  Object.entries(subagentChatApprovalsByAgent).forEach(([agentId, list]) => {
+    const idx = Array.isArray(list) ? list.findIndex((item) => String(item?.id || '') === approvalId) : -1;
+    if (idx < 0) return;
+    list[idx] = normalizeSubagentChatApproval({ ...list[idx], ...(event.approval || event), id: approvalId, status });
+    subagentChatApprovalsByAgent[agentId] = list;
+    changed = true;
+    if (activeSubagentId === agentId && subagentDetailTab === 'chat') renderSubagentBoard(agentId);
+  });
+  return changed;
+}
+
+function renderSubagentChatApprovals(agentId) {
+  const list = (Array.isArray(subagentChatApprovalsByAgent[agentId]) ? subagentChatApprovalsByAgent[agentId] : [])
+    .filter((item) => item && item.id && String(item.status || 'pending') === 'pending');
+  if (!list.length) return '';
+  return `<div class="chat-live-approvals">${list.map(renderSubagentInlineApprovalCard).join('')}</div>`;
+}
+
+async function resolveSubagentInlineApproval(id, action, endpoint, grantScope = '') {
+  if (typeof window.resolveInlineApproval === 'function') {
+    await window.resolveInlineApproval(id, action, endpoint, grantScope);
+  } else {
+    await api(endpoint, { method: 'POST', body: JSON.stringify(grantScope ? { grantScope } : {}) });
+  }
+  updateSubagentChatApprovalStatus(id, action === 'deny' ? 'rejected' : 'approved', { approvalId: id });
+  if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
+}
+
+async function restoreSubagentChatApprovals(agentId) {
+  if (!agentId) return;
+  try {
+    const data = await api('/api/approvals?status=pending');
+    (Array.isArray(data?.approvals) ? data.approvals : []).forEach((approval) => upsertSubagentChatApproval(agentId, approval));
+  } catch (err) {
+    console.warn('[Subagents] could not restore chat approvals:', err);
+  }
 }
 
 function getSubagentPendingFiles(agentId) {
@@ -201,6 +358,42 @@ function renderSubagentChatAttachmentStaging(agentId) {
     const preview = f.isImage && f.dataUrl ? `<img src="${f.dataUrl}" style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0" alt="">` : `<span class="pill-icon">${getSubagentFileIcon(f.ext)}</span>`;
     return `<div class="chat-file-pill">${preview}<span class="pill-name" title="${escHtml(f.name)}">${escHtml(f.name)}</span><span class="pill-ext">${escHtml(f.ext || 'file')}</span><button class="pill-remove" onclick="removeSubagentChatFile(${subagentChatJsArg(agentId)}, ${idx})" title="Remove">&times;</button></div>`;
   }).join('');
+  refreshSubagentChatComposerState(agentId);
+}
+
+function refreshSubagentChatComposerState(agentId) {
+  if (activeSubagentId !== agentId || subagentDetailTab !== 'chat') return;
+  const busy = isSubagentChatBusy(agentId);
+  const input = document.getElementById('subagent-chat-input');
+  const hasOutbound = !!(String(input?.value || subagentChatDraft || '').trim() || getSubagentPendingFiles(agentId).length);
+  const abortMode = busy && !hasOutbound;
+  const btn = document.getElementById('subagent-chat-send-button');
+  if (btn) {
+    btn.textContent = abortMode ? 'Stop' : busy ? 'Queue' : 'Send';
+    btn.title = abortMode ? 'Stop the active subagent chat turn' : busy ? 'Queue this message for the subagent' : 'Send message';
+    btn.setAttribute('aria-label', abortMode ? 'Stop' : busy ? 'Queue message' : 'Send');
+    btn.onclick = () => abortMode ? abortSubagentChat(agentId) : sendSubagentChat(agentId);
+    btn.style.background = abortMode ? '#e05c5c' : 'var(--brand)';
+    btn.style.boxShadow = abortMode ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)';
+  }
+  const badge = document.getElementById('subagent-chat-queue-badge');
+  if (badge) {
+    const queuedCount = getSubagentChatQueue(agentId).length;
+    badge.style.display = queuedCount ? 'inline-flex' : 'none';
+    badge.textContent = `${queuedCount} queued`;
+  }
+  if (input) {
+    input.placeholder = busy
+      ? `Queue a message for ${getActiveSubagentName(agentId)}...`
+      : `Message ${getActiveSubagentName(agentId)}...`;
+  }
+}
+
+function resizeSubagentChatInput() {
+  const input = document.getElementById('subagent-chat-input');
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(180, Math.max(64, input.scrollHeight))}px`;
 }
 
 function removeSubagentChatFile(agentId, idx) {
@@ -943,6 +1136,7 @@ async function switchSubagentTab(tab, agentId) {
     try {
       const d = await api(`/api/agents/${encodeURIComponent(agentId)}/chat?limit=100`);
       subagentChatHistory = preserveSubagentProcessMetadata(normalizeSubagentChatMessages(d.messages || []));
+      await restoreSubagentChatApprovals(agentId);
     } catch {}
   }
 
@@ -956,10 +1150,16 @@ async function switchSubagentTab(tab, agentId) {
       if (inp) {
         inp.value = subagentChatDraft;
         inp.focus();
-        inp.addEventListener('input', () => { subagentChatDraft = inp.value; });
+        inp.addEventListener('input', () => {
+          subagentChatDraft = inp.value;
+          resizeSubagentChatInput();
+          refreshSubagentChatComposerState(agentId);
+        });
+        resizeSubagentChatInput();
       }
       renderSubagentChatAttachmentStaging(agentId);
       bindSubagentChatAttachmentListeners(agentId);
+      refreshSubagentChatComposerState(agentId);
     });
   }
 }
@@ -1193,6 +1393,7 @@ function renderSubagentChatTab(agent) {
   const isSending = !!(liveStream && liveStream.completed !== true);
   const queuedCount = getSubagentChatQueue(agent.id).length;
   const emoji = agentEmoji(agent);
+  const approvalsHtml = renderSubagentChatApprovals(agent.id);
   const renderedMessages = subagentChatHistory.map(m => {
     const isUser = m.role === 'user';
     const rawSource = String(m.metadata?.source || '');
@@ -1230,7 +1431,7 @@ function renderSubagentChatTab(agent) {
   return `
     <div id="subagent-chat-tab-shell" class="panel-chat-shell" style="position:relative;display:flex;flex-direction:column;height:100%;gap:0">
       <div id="subagent-chat-messages" style="flex:1;display:flex;flex-direction:column;align-items:center;width:100%;gap:18px;overflow-y:auto;padding:16px 0 8px">
-        ${subagentChatHistory.length === 0 ? `
+        ${subagentChatHistory.length === 0 && !approvalsHtml ? `
           <div style="text-align:center;color:var(--muted);padding:32px 16px;font-size:13px">
             <div style="font-size:32px;margin-bottom:10px">${emoji}</div>
             <div style="font-weight:700;margin-bottom:6px">Chat with ${escHtml(agent.name||agent.id)}</div>
@@ -1238,18 +1439,21 @@ function renderSubagentChatTab(agent) {
           </div>` : ''}
         ${renderedMessages}
         ${liveStream ? renderSubagentStreamingBubble(agent) : ''}
+        ${approvalsHtml}
       </div>
-      <div style="flex-shrink:0;border-top:1px solid var(--line);padding:10px 0 0;display:flex;gap:8px;align-items:flex-end">
+      <div style="flex-shrink:0;border-top:1px solid var(--line);padding:12px 0 0;display:flex;gap:10px;align-items:flex-end">
         <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openSubagentChatFilePicker()">
           <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
         </button>
         <input id="subagent-chat-file-input" type="file" multiple style="display:none" onchange="onSubagentChatFilesChosen(${subagentChatJsArg(agent.id)}, this)" />
-        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
-          ${queuedCount ? `<div style="align-self:flex-start;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700">${queuedCount} queued</div>` : ''}
+        <div id="subagent-chat-composer" style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <div id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-self:flex-start;align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800">${queuedCount} queued</div>
           <div id="subagent-chat-file-staging" class="chat-file-staging panel-chat-file-staging" style="display:none"></div>
-          <textarea id="subagent-chat-input" rows="2" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`} (Enter to send, Shift+Enter for newline)" style="width:100%;resize:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}"></textarea>
+          <div style="position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden">
+            <textarea id="subagent-chat-input" rows="3" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" style="width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:var(--text);outline:none;min-height:64px;box-sizing:border-box" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}"></textarea>
+          </div>
         </div>
-        <button onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;height:36px;min-width:58px">${isSending ? 'Stop' : 'Send'}</button>
+        <button id="subagent-chat-send-button" onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:12px;padding:10px 16px;font-size:12px;font-weight:800;cursor:pointer;height:42px;min-width:64px;box-shadow:${isSending ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)'}">${isSending ? 'Stop' : 'Send'}</button>
       </div>
     </div>`;
 }
@@ -1562,7 +1766,12 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
     const newInp = document.getElementById('subagent-chat-input');
     if (newInp) {
       newInp.focus();
-      newInp.oninput = () => { subagentChatDraft = newInp.value; };
+      newInp.oninput = () => {
+        subagentChatDraft = newInp.value;
+        resizeSubagentChatInput();
+        refreshSubagentChatComposerState(agentId);
+      };
+      resizeSubagentChatInput();
     }
   });
 }
@@ -2012,6 +2221,21 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
       }
       break;
     }
+    case 'approval_created': {
+      upsertSubagentChatApproval(agentId, event.approval || event);
+      break;
+    }
+    case 'approval_approved':
+    case 'approval_denied':
+    case 'approval_expired':
+    case 'approval_failed': {
+      const status = event.type === 'approval_approved' ? 'approved'
+        : event.type === 'approval_denied' ? 'rejected'
+          : event.type === 'approval_expired' ? 'expired'
+            : 'failed';
+      updateSubagentChatApprovalStatus(event.approvalId || event.id || event.approval?.id, status, event);
+      break;
+    }
     case 'final':
     case 'done': {
       const reply = String(event.reply || event.text || '').trim();
@@ -2127,6 +2351,20 @@ wsEventBus.on('subagent_chat_stream_event', (data) => {
   });
 });
 
+wsEventBus.on('approval_created', (msg = {}) => {
+  if (activeSubagentId) upsertSubagentChatApproval(activeSubagentId, msg.approval || msg);
+});
+
+['approval_approved', 'approval_denied', 'approval_expired', 'approval_failed'].forEach((eventName) => {
+  wsEventBus.on(eventName, (msg = {}) => {
+    const status = eventName === 'approval_approved' ? 'approved'
+      : eventName === 'approval_denied' ? 'rejected'
+        : eventName === 'approval_expired' ? 'expired'
+          : 'failed';
+    updateSubagentChatApprovalStatus(msg.approvalId || msg.id || msg.approval?.id, status, msg);
+  });
+});
+
 wsEventBus.on('agents_updated', () => { refreshSubagents(); });
 
 // ── Exports ───────────────────────────────────────────────────────────────────
@@ -2138,6 +2376,7 @@ window.closeSubagentDetail = closeSubagentDetail;
 window.switchSubagentTab = switchSubagentTab;
 window.sendSubagentChat = sendSubagentChat;
 window.abortSubagentChat = abortSubagentChat;
+window.resolveSubagentInlineApproval = resolveSubagentInlineApproval;
 window.openSubagentChatFilePicker = openSubagentChatFilePicker;
 window.onSubagentChatFilesChosen = onSubagentChatFilesChosen;
 window.removeSubagentChatFile = removeSubagentChatFile;

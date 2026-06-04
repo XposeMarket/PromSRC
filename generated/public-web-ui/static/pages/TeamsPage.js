@@ -91,6 +91,187 @@ let teamMemberStreamsByTeam = {};   // teamId -> { streamId -> live member room 
 let teamChatMentionState = null;
 let teamRunStartPendingByTeam = {}; // teamId -> true while Start Run is waiting for manager stream
 let teamRunAbortInFlightByTeam = {}; // teamId -> true while Pause is requesting abort
+let teamChatApprovalsByTeam = {}; // teamId -> inline approval cards shown in team chat
+
+function encodeTeamInlineJsString(value) {
+  return JSON.stringify(String(value ?? ''))
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function normalizeTeamChatApproval(input = {}, fallback = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const id = String(source.id || source.approvalId || fallback.id || fallback.approvalId || '').trim();
+  const toolArgs = source.toolArgs && typeof source.toolArgs === 'object' ? source.toolArgs : (fallback.toolArgs || {});
+  const sessionId = String(source.sourceSessionId || source.sessionId || fallback.sourceSessionId || fallback.sessionId || '').trim();
+  const toolName = String(source.toolName || fallback.toolName || '').trim();
+  const approvalKind = String(source.approvalKind || fallback.approvalKind || '').trim();
+  const command = String(source.command || toolArgs.command || fallback.command || '').trim();
+  const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
+  const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
+  const isCommand = toolName === 'run_command';
+  const title = isDevSource ? 'Dev source edit approval'
+    : isFinalAction ? 'Final action approval'
+      : isCommand ? 'Command approval'
+        : toolName ? `${toolName.replace(/_/g, ' ')} approval` : 'Approval required';
+  return {
+    ...fallback,
+    ...source,
+    id,
+    sessionId,
+    sourceSessionId: sessionId,
+    toolName,
+    toolArgs,
+    approvalKind,
+    title,
+    action: String(source.action || source.summary || fallback.action || fallback.summary || '').trim(),
+    reason: String(source.reason || fallback.reason || '').trim(),
+    command,
+    summary: String(source.reason || source.summary || source.action || fallback.summary || fallback.action || '').trim(),
+    riskScore: Number.isFinite(Number(source.riskScore)) ? Number(source.riskScore) : Number(fallback.riskScore || 0),
+    affectedSystems: Array.isArray(source.affectedSystems) ? source.affectedSystems : (Array.isArray(fallback.affectedSystems) ? fallback.affectedSystems : []),
+    scopedAction: String(source.scopedAction || fallback.scopedAction || '').trim(),
+    scopedTarget: String(source.scopedTarget || fallback.scopedTarget || '').trim(),
+    commandBoundary: source.commandBoundary || fallback.commandBoundary || null,
+    devSourceEdit: source.devSourceEdit || fallback.devSourceEdit || null,
+    finalAction: source.finalAction || fallback.finalAction || null,
+    status: String(source.status || fallback.status || 'pending').toLowerCase(),
+    agentId: String(source.agentId || fallback.agentId || '').trim(),
+  };
+}
+
+function teamApprovalRiskLevel(score) {
+  const n = Number(score || 0);
+  if (n >= 7) return 'high';
+  if (n >= 4) return 'medium';
+  return 'low';
+}
+
+function renderTeamInlineApprovalCard(input = {}) {
+  const approval = normalizeTeamChatApproval(input);
+  if (!approval.id) return '';
+  const status = String(approval.status || 'pending').toLowerCase();
+  const pending = status === 'pending';
+  const statusLabel = status === 'rejected' ? 'denied' : status;
+  const idArg = encodeTeamInlineJsString(approval.id);
+  const approveEndpoint = encodeTeamInlineJsString(`/api/approvals/${approval.id}/approve`);
+  const denyEndpoint = encodeTeamInlineJsString(`/api/approvals/${approval.id}/deny`);
+  const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
+  const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
+  const technicalText = approval.command || approval.scopedAction || approval.action;
+  const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+  const boundary = approval.commandBoundary || null;
+  const boundaryScope = String(boundary?.scope || '').trim();
+  const boundaryPaths = Array.isArray(boundary?.externalPaths) ? boundary.externalPaths.filter(Boolean) : [];
+  return `<div class="chat-approval-card chat-approval-card-${teamApprovalRiskLevel(approval.riskScore)} chat-approval-card-${escHtml(statusLabel)}" data-approval-id="${escHtml(approval.id)}">
+    <div class="chat-approval-head">
+      <div>
+        <div class="chat-approval-kicker">${pending ? 'Approval needed' : 'Approval result'}</div>
+        <div class="chat-approval-title">${escHtml(approval.title)}</div>
+      </div>
+      <div class="chat-approval-badges">
+        <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
+        ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
+      </div>
+    </div>
+    ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
+    ${boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? `<br>${escHtml(String(boundary.reason))}` : ''}</div>` : ''}
+    ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
+    ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
+    ${technicalText ? `<details class="chat-approval-technical"><summary>Technical details</summary><pre class="chat-approval-command">${escHtml(technicalText)}</pre></details>` : ''}
+    ${pending
+      ? `<div class="chat-approval-actions">
+          <button class="chat-approval-btn chat-approval-approve" type="button" onclick="resolveTeamInlineApproval(${idArg}, 'approve', ${approveEndpoint})">Approve</button>
+          <button class="chat-approval-btn chat-approval-deny" type="button" onclick="resolveTeamInlineApproval(${idArg}, 'deny', ${denyEndpoint})">Reject</button>
+          ${isDevSource || isFinalAction ? '' : `<button class="chat-approval-link" type="button" onclick="resolveTeamInlineApproval(${idArg}, 'approve_session', ${approveEndpoint}, 'session')">Trust this session</button>
+          <button class="chat-approval-link" type="button" onclick="resolveTeamInlineApproval(${idArg}, 'approve_always', ${approveEndpoint}, 'always')">Always allow</button>`}
+        </div>`
+      : `<div class="chat-approval-resolved">This request was ${escHtml(statusLabel)}.</div>`}
+  </div>`;
+}
+
+function getTeamApprovalSessionIds(teamId) {
+  const set = new Set();
+  const roomState = teamRoomState || {};
+  Object.values(roomState.directThreads || {}).forEach((thread) => {
+    const sid = String(thread?.sessionId || '').trim();
+    if (sid) set.add(sid);
+  });
+  const cleanTeamId = String(teamId || '').trim();
+  if (cleanTeamId) {
+    set.add(`team_chat_${cleanTeamId}`);
+    set.add(`team_manager_${cleanTeamId}`);
+  }
+  return set;
+}
+
+function approvalBelongsToTeamChat(teamId, approvalInput = {}) {
+  const approval = normalizeTeamChatApproval(approvalInput);
+  if (!teamId || !approval.id) return false;
+  const sid = String(approval.sessionId || approval.sourceSessionId || '').trim();
+  if (sid && getTeamApprovalSessionIds(teamId).has(sid)) return true;
+  if (sid && (sid.startsWith(`team_dm_manager_${teamId}___`) || sid.startsWith(`team_dm_member_${teamId}___`))) return true;
+  const agentId = String(approval.agentId || '').trim();
+  const team = getTeamById(teamId);
+  if (agentId && team && (agentId === String(team.managerAgentId || '') || (team.subagentIds || []).includes(agentId))) return true;
+  return false;
+}
+
+function upsertTeamChatApproval(teamId, approvalInput = {}) {
+  if (!approvalBelongsToTeamChat(teamId, approvalInput)) return false;
+  const approval = normalizeTeamChatApproval(approvalInput);
+  const list = Array.isArray(teamChatApprovalsByTeam[teamId]) ? teamChatApprovalsByTeam[teamId] : [];
+  const idx = list.findIndex((item) => String(item?.id || '') === approval.id);
+  if (idx >= 0) list[idx] = { ...list[idx], ...approval };
+  else list.push(approval);
+  teamChatApprovalsByTeam[teamId] = list.slice(-8);
+  if (activeTeamId === teamId && teamBoardTab === 'chat') renderActiveTeamChat(teamId, { forceBottom: false });
+  return true;
+}
+
+function updateTeamChatApprovalStatus(id, status, event = {}) {
+  const approvalId = String(id || '').trim();
+  if (!approvalId) return false;
+  let changed = false;
+  Object.entries(teamChatApprovalsByTeam).forEach(([teamId, list]) => {
+    const idx = Array.isArray(list) ? list.findIndex((item) => String(item?.id || '') === approvalId) : -1;
+    if (idx < 0) return;
+    list[idx] = normalizeTeamChatApproval({ ...list[idx], ...(event.approval || event), id: approvalId, status });
+    teamChatApprovalsByTeam[teamId] = list;
+    changed = true;
+    if (activeTeamId === teamId && teamBoardTab === 'chat') renderActiveTeamChat(teamId, { forceBottom: false });
+  });
+  return changed;
+}
+
+function renderTeamChatApprovals(teamId) {
+  const list = (Array.isArray(teamChatApprovalsByTeam[teamId]) ? teamChatApprovalsByTeam[teamId] : [])
+    .filter((item) => item && item.id && String(item.status || 'pending') === 'pending');
+  if (!list.length) return '';
+  return `<div class="chat-live-approvals">${list.map(renderTeamInlineApprovalCard).join('')}</div>`;
+}
+
+async function resolveTeamInlineApproval(id, action, endpoint, grantScope = '') {
+  if (typeof window.resolveInlineApproval === 'function') {
+    await window.resolveInlineApproval(id, action, endpoint, grantScope);
+  } else {
+    await api(endpoint, { method: 'POST', body: JSON.stringify(grantScope ? { grantScope } : {}) });
+  }
+  updateTeamChatApprovalStatus(id, action === 'deny' ? 'rejected' : 'approved', { approvalId: id });
+  if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
+}
+
+async function restoreTeamChatApprovals(teamId) {
+  if (!teamId) return;
+  try {
+    const data = await api('/api/approvals?status=pending');
+    (Array.isArray(data?.approvals) ? data.approvals : []).forEach((approval) => upsertTeamChatApproval(teamId, approval));
+  } catch (err) {
+    console.warn('[Teams] could not restore chat approvals:', err);
+  }
+}
 
 function normalizeTeamChatMentionSearch(value) {
   return String(value || '')
@@ -599,6 +780,7 @@ function bindTeamChatInputListeners(input, teamId) {
     teamChatDraftByTeam[teamId] = input.value || '';
     resizeTeamChatInput();
     refreshTeamChatMentionState(teamId);
+    refreshTeamChatComposerState(teamId);
   });
   input.addEventListener('keydown', (event) => handleTeamChatInputKeydown(event, teamId));
   input.addEventListener('paste', (event) => handleTeamChatPaste(event, teamId));
@@ -1671,12 +1853,17 @@ function refreshTeamChatComposerState(teamId) {
   if (activeTeamId !== teamId || teamBoardTab !== 'chat') return;
   const busy = isTeamChatBusy(teamId);
   const queuedCount = getTeamChatQueue(teamId).length;
+  const input = document.getElementById('team-chat-input');
+  const hasOutbound = !!(String(input?.value || teamChatDraftByTeam[teamId] || '').trim() || getTeamChatFiles(teamId).length);
+  const abortMode = busy && !hasOutbound;
   const btn = document.getElementById('team-chat-send-button');
   if (btn) {
-    btn.textContent = busy ? 'Stop' : 'Send';
-    btn.onclick = () => busy ? abortTeamChat(teamId) : sendTeamChat(teamId);
-    btn.style.background = busy ? '#e05c5c' : 'var(--brand)';
-    btn.style.boxShadow = busy ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)';
+    btn.textContent = abortMode ? 'Stop' : busy ? 'Queue' : 'Send';
+    btn.title = abortMode ? 'Stop the active team chat turn' : busy ? 'Queue this message for the team' : 'Send message';
+    btn.setAttribute('aria-label', abortMode ? 'Stop' : busy ? 'Queue message' : 'Send');
+    btn.onclick = () => abortMode ? abortTeamChat(teamId) : sendTeamChat(teamId);
+    btn.style.background = abortMode ? '#e05c5c' : 'var(--brand)';
+    btn.style.boxShadow = abortMode ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)';
   }
   const badge = document.getElementById('team-chat-queue-badge');
   if (badge) {
@@ -1833,6 +2020,22 @@ function applyTeamChatStreamFrame(teamId, frame) {
         pushTeamChatProgressLine(`${action}: ${progressMsg}`);
         addTeamChatProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
       }
+      break;
+    }
+    case 'approval_created': {
+      markTeamChatManagerStarted(teamId);
+      upsertTeamChatApproval(teamId, event.approval || event);
+      break;
+    }
+    case 'approval_approved':
+    case 'approval_denied':
+    case 'approval_expired':
+    case 'approval_failed': {
+      const status = eventType === 'approval_approved' ? 'approved'
+        : eventType === 'approval_denied' ? 'rejected'
+          : eventType === 'approval_expired' ? 'expired'
+            : 'failed';
+      updateTeamChatApprovalStatus(event.approvalId || event.id || event.approval?.id, status, event);
       break;
     }
     case 'final':
@@ -2741,6 +2944,7 @@ async function loadTeamBoardData(teamId) {
     teamWorkspaceData = workspaceData || null;
     reconcileTeamDispatchStreamsWithMessages(teamId, teamChatMessages);
     activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
+    await restoreTeamChatApprovals(teamId);
   } catch (err) {
     console.error('[Teams] Load board data failed:', err);
   }
@@ -4109,11 +4313,12 @@ function _renderTeamChatMessagesInner(team) {
   const liveManagerStreams = getTeamManagerStreams(team.id);
   const liveMemberStreams = getTeamMemberStreams(team.id);
   const liveDispatches = getTeamDispatchStreams(team.id);
+  const approvalsHtml = renderTeamChatApprovals(team.id);
   const hasBackgroundManagerStream = liveManagerStreams.some((stream) => stream && stream.completed !== true);
   const showMoreBtn = hiddenCount > 0
     ? `<button onclick="showMoreTeamChat('${team.id}')" style="align-self:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;margin-bottom:4px">+ Show ${Math.min(20, hiddenCount)} earlier ${hiddenCount === 1 ? 'message' : 'messages'} (${hiddenCount} hidden)</button>`
     : '';
-  const empty = msgs.length === 0 && !hasBackgroundManagerStream && liveDispatches.length === 0 && liveManagerStreams.length === 0 && liveMemberStreams.length === 0
+  const empty = msgs.length === 0 && !approvalsHtml && !hasBackgroundManagerStream && liveDispatches.length === 0 && liveManagerStreams.length === 0 && liveMemberStreams.length === 0
     ? '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Team room is quiet. Type normally to message the whole team, or use @manager or @someone to address a participant directly.</div>'
     : '';
   return `
@@ -4121,6 +4326,7 @@ function _renderTeamChatMessagesInner(team) {
     ${empty}
     ${msgs.map((m) => renderTeamChatMessageBubble(m)).join('')}
     ${renderTeamChatStreamingBubble(team)}
+    ${approvalsHtml}
     ${liveManagerStreams.map((stream) => renderTeamManagerBackgroundStreamingBubble(stream)).join('')}
     ${liveMemberStreams.map((stream) => renderTeamMemberStreamingBubble(stream)).join('')}
     ${liveDispatches.map((stream) => renderTeamDispatchBubble(team.id, stream)).join('')}`;
@@ -5448,12 +5654,14 @@ function handleTeamWsEvent(msg) {
     if (badge) { badge.style.display = 'inline-block'; badge.textContent = '+'; }
     if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
     loadSessionApprovals();
+    if (activeTeamId) upsertTeamChatApproval(activeTeamId, msg.approval || msg);
   }
   if (msg.type === 'proposal_approved') {
     if (currentMode === 'proposals') loadProposals();
   }
   if (msg.type === 'approval_approved') {
     if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
+    updateTeamChatApprovalStatus(msg.approvalId || msg.id || msg.approval?.id, 'approved', msg);
   }
   if (msg.type === 'proposal_executing') {
     bgtToast(`⏳ Executing proposal`, msg.title || 'Proposal running...');
@@ -5575,6 +5783,7 @@ function handleTeamWsEvent(msg) {
   if (msg.type === 'approval_failed') {
     bgtToast(`❌ Command failed`, ((msg.summary || 'Approved command failed') + (msg.error ? `: ${msg.error}` : '')).slice(0, 100));
     if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
+    updateTeamChatApprovalStatus(msg.approvalId || msg.id || msg.approval?.id, 'failed', msg);
     const execSessionId = msg.sessionId || `approval_${msg.approvalId}`;
     const sessIdx = chatSessions.findIndex(s => s.id === execSessionId);
     const failMsg = `❌ **Approved command failed**\n\n${msg.error || 'An error occurred during execution.'}`;
@@ -5604,6 +5813,11 @@ function handleTeamWsEvent(msg) {
   }
   if (msg.type === 'approval_denied' || msg.type === 'approval_expired') {
     if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
+    updateTeamChatApprovalStatus(
+      msg.approvalId || msg.id || msg.approval?.id,
+      msg.type === 'approval_expired' ? 'expired' : 'rejected',
+      msg,
+    );
   }
   if (msg.type === 'team_run_aborted') {
     if (msg.teamId) {
@@ -5742,6 +5956,7 @@ window.renderTeamContextReferenceCards = renderTeamContextReferenceCards;
 window.getTeamChatSignature = getTeamChatSignature;
 window.renderActiveTeamChat = renderActiveTeamChat;
 window.showMoreTeamChat = showMoreTeamChat;
+window.resolveTeamInlineApproval = resolveTeamInlineApproval;
 window.toggleTeamChatProcess = function(id) {
   const el = document.getElementById(id);
   if (!el) return;

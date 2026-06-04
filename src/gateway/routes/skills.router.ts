@@ -33,6 +33,7 @@ router.get('/api/skills', async (req, res) => {
     ownership: s.ownership,
     manifestSource: s.manifestSource,
     resources: s.resources,
+    triggers: s.triggers,
     requiredTools: s.requiredTools,
     requires: s.requires,
     assignment: s.assignment,

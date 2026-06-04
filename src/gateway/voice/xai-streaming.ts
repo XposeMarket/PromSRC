@@ -225,3 +225,139 @@ export function attachXaiVoiceStreaming(server: HttpServer): AttachedXaiVoiceStr
     },
   };
 }
+
+export function attachOpenAiRealtimeProxy(server: HttpServer): AttachedXaiVoiceStreaming {
+  const proxyWss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', async (req, socket, head) => {
+    let pathname = '';
+    let searchParams = new URLSearchParams();
+    try {
+      const parsed = new URL(String(req.url || ''), 'http://localhost');
+      pathname = parsed.pathname;
+      searchParams = parsed.searchParams;
+    } catch {
+      return;
+    }
+    if (pathname !== '/api/voice-agent/openai-realtime-ws') return;
+
+    const auth = evaluateGatewayRequest({
+      headers: req.headers as Record<string, any>,
+      socket: { remoteAddress: req.socket.remoteAddress },
+      url: req.url || '',
+    });
+    if (!auth.ok) {
+      closeSocket(socket, 1008, auth.message || 'Gateway auth required');
+      return;
+    }
+    const account = getSessionStatus();
+    if (!account.authenticated || (!account.subscriptionActive && !account.isAdmin)) {
+      closeSocket(socket, 1008, 'Account login or active subscription required');
+      return;
+    }
+
+    const clientSecret = String(searchParams.get('client_secret') || '').trim();
+    if (!clientSecret) {
+      closeSocket(socket, 1008, 'OpenAI realtime client secret is required');
+      return;
+    }
+
+    proxyWss.handleUpgrade(req, socket, head, (client) => {
+      proxyWss.emit('connection', client, req, { clientSecret, searchParams });
+    });
+  });
+
+  proxyWss.on('connection', (client: WebSocket, _req: http.IncomingMessage, meta: any) => {
+    const clientSecret = String(meta?.clientSecret || '').trim();
+    const incoming = meta?.searchParams instanceof URLSearchParams ? meta.searchParams : new URLSearchParams();
+    const model = String(incoming.get('model') || 'gpt-realtime-2').trim();
+    const upstream = new WebSocket(
+      `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
+      ['realtime', `openai-insecure-api-key.${clientSecret}`],
+      {
+        headers: {
+          'User-Agent': 'Prometheus/openai-realtime-proxy',
+        },
+      },
+    );
+    const pending: Array<{ data: any; isBinary: boolean }> = [];
+    let upstreamOpen = false;
+    let closed = false;
+
+    const closeBoth = (code = 1000, reason = '') => {
+      if (closed) return;
+      closed = true;
+      try { if (client.readyState === WebSocket.OPEN) client.close(code, reason.slice(0, 120)); else client.terminate(); } catch {}
+      try { if (upstream.readyState === WebSocket.OPEN) upstream.close(code, reason.slice(0, 120)); else upstream.terminate(); } catch {}
+    };
+    const sendClient = (data: any, opts?: any) => {
+      if (client.readyState !== WebSocket.OPEN) return;
+      try { client.send(data, opts); } catch {}
+    };
+    const flush = () => {
+      if (!upstreamOpen || upstream.readyState !== WebSocket.OPEN) return;
+      while (pending.length) {
+        const item = pending.shift();
+        if (!item) continue;
+        try { upstream.send(item.data, { binary: item.isBinary }); } catch {}
+      }
+    };
+
+    upstream.on('open', () => {
+      upstreamOpen = true;
+      sendClient(JSON.stringify({ type: 'prometheus.openai_realtime_proxy.open', model }));
+      flush();
+    });
+    upstream.on('message', (data, isBinary) => {
+      sendClient(data, { binary: isBinary });
+    });
+    upstream.on('unexpected-response', (_request, response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk) => {
+        try { chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); } catch {}
+      });
+      response.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8').slice(0, 1200);
+        const statusCode = Number(response.statusCode || 0) || 0;
+        const statusMessage = String(response.statusMessage || '').slice(0, 160);
+        const payload = {
+          type: 'prometheus.openai_realtime_proxy.unexpected_response',
+          statusCode,
+          statusMessage,
+          body,
+          model,
+        };
+        console.warn('[openai-realtime-proxy] upstream unexpected response', payload);
+        sendClient(JSON.stringify(payload));
+        closeBoth(1011, `OpenAI realtime upstream ${statusCode || 'failed'}`);
+      });
+    });
+    upstream.on('close', (code, reason) => {
+      const text = Buffer.isBuffer(reason) ? reason.toString('utf8') : String(reason || '');
+      sendClient(JSON.stringify({ type: 'prometheus.openai_realtime_proxy.closed', code, reason: text }));
+      closeBoth(Number(code || 1000), text);
+    });
+    upstream.on('error', (err: any) => {
+      sendClient(JSON.stringify({ type: 'prometheus.openai_realtime_proxy.error', message: err?.message || String(err) }));
+      closeBoth(1011, 'OpenAI realtime upstream failed');
+    });
+
+    client.on('message', (data, isBinary) => {
+      if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
+        try { upstream.send(data, { binary: isBinary }); } catch {}
+      } else {
+        pending.push({ data, isBinary });
+        if (pending.length > 500) pending.splice(0, pending.length - 500);
+      }
+    });
+    client.on('close', () => closeBoth(1000, 'client closed'));
+    client.on('error', () => closeBoth(1011, 'client error'));
+  });
+
+  proxyWss.on('error', (err) => console.warn('[openai-realtime-proxy] websocket error:', err));
+  return {
+    close: () => {
+      try { proxyWss.close(); } catch {}
+    },
+  };
+}

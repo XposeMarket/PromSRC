@@ -248,6 +248,8 @@ Risk tier rules:
 function brainDreamProposalSubmitRules(): string {
   if (isPublicBrainProfile()) {
     return `For each proposal passing the gate:
+- This automated cron Dream is explicitly authorized and expected to call write_proposal. Do not downgrade executable proposals into "candidates", "recommendations", "suggested scope", or "proposal recommended" text.
+- A proposal is not submitted until write_proposal returns a prop_* ID. If you list a proposal in the Dream/proposals.md output, it must either include the returned prop_* ID or be clearly listed under Deferred Ideas with the failed gate reason.
 - For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files as resource refs, execution_steps, executor_prompt, and requires_build=false
 - For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false
 - Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
@@ -255,6 +257,8 @@ function brainDreamProposalSubmitRules(): string {
   }
 
   return `For each proposal passing the gate:
+- This automated cron Dream is explicitly authorized and expected to call write_proposal. Do not downgrade executable proposals into "candidates", "recommendations", "suggested scope", or "proposal recommended" text.
+- A proposal is not submitted until write_proposal returns a prop_* ID. If you list a proposal in the Dream/proposals.md output, it must either include the returned prop_* ID or be clearly listed under Deferred Ideas with the failed gate reason.
 - For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files as resource refs, execution_steps, executor_prompt, and requires_build=false
 - For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false
 - For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files, execution_steps, executor_prompt, risk_tier, and requires_build=true when build verification is needed
@@ -588,7 +592,20 @@ export class BrainRunner {
   }
 
   private _isDreamCompletedForDate(dateStr: string): boolean {
-    return this._hasDreamArtifactForDate(dateStr);
+    return this._hasDreamArtifactForDate(dateStr) && !this._hasCandidateOnlyProposalSummaryForDate(dateStr);
+  }
+
+  private _hasCandidateOnlyProposalSummaryForDate(dateStr: string): boolean {
+    const proposalsFilePath = path.join(getBrainDir(), 'proposals.md');
+    try {
+      if (!fs.existsSync(proposalsFilePath)) return false;
+      const text = fs.readFileSync(proposalsFilePath, 'utf-8');
+      const dateHeader = new RegExp(`#\\s+Brain\\s+(?:Proposals|Daily Summary)\\s+-\\s+${dateStr.replace(/-/g, '\\-')}\\b`, 'i');
+      if (!dateHeader.test(text)) return false;
+    } catch {
+      return false;
+    }
+    return !!this._detectProposalContractError(proposalsFilePath, []);
   }
 
   private _countThoughtsForDate(dateStr: string): number {
@@ -719,6 +736,31 @@ export class BrainRunner {
       for (const match of matches) ids.add(match);
     }
     return Array.from(ids);
+  }
+
+  private _detectProposalContractError(proposalsFilePath: string, proposalIds: string[]): string | null {
+    if (proposalIds.length > 0) return null;
+
+    let text = '';
+    try {
+      if (!fs.existsSync(proposalsFilePath)) return null;
+      text = fs.readFileSync(proposalsFilePath, 'utf-8');
+    } catch {
+      return null;
+    }
+
+    if (!text.trim() || /prop_[a-z0-9_]+/i.test(text)) return null;
+    if (/No proposals generated tonight|None\s+[-—]\s+no items passed|zero proposals pass/i.test(text)) return null;
+
+    const containsProposalSection = /^##\s+Proposals\b/im.test(text);
+    const containsNumberedCandidates = /^###\s*\d+[\).]\s+/m.test(text) || /^\d+\.\s+\*\*[^*]+/m.test(text);
+    const admitsUnsubmittedProposals = /proposal candidates|did not create executable\s+`?write_proposal`?|cron prompt prohibited|proposal recommended|recommended proposal/i.test(text);
+
+    if (admitsUnsubmittedProposals || (containsProposalSection && containsNumberedCandidates)) {
+      return 'Dream listed proposal candidates but did not call write_proposal, so no executable proposal records were created.';
+    }
+
+    return null;
   }
 
   // ─── Thought run ──────────────────────────────────────────────────────────
@@ -1097,11 +1139,13 @@ export class BrainRunner {
     const dreamFresh = artifactFresh(absOutFile);
     const proposalsFresh = artifactFresh(proposalsFilePath);
     const artifactsFresh = dreamFresh && proposalsFresh;
-    const success = artifactsFresh && !runFailed;
+    const proposalIds = this._extractProposalIds(toolResults).slice(-100);
+    const proposalContractError = this._detectProposalContractError(proposalsFilePath, proposalIds);
+    const success = artifactsFresh && !runFailed && !proposalContractError;
 
 	    const state = loadLatestState();
 	    if (success) {
-	      state.proposalDedupeIds = this._extractProposalIds(toolResults).slice(-100);
+	      state.proposalDedupeIds = proposalIds;
 	      state.lastDreamDate = dateStr;
 	      state.lastDreamCompletedAt = new Date().toISOString();
 	      state.lastDreamAttemptDate = dateStr;
@@ -1138,6 +1182,8 @@ export class BrainRunner {
       state.lastDreamStatus = 'failed';
       state.lastDreamError = runFailed
         ? String(resultText).slice(0, 500)
+        : proposalContractError
+          ? proposalContractError
         : `Expected dream artifacts missing/stale after recovery attempts: ${[
           dreamFresh ? null : outFile,
           proposalsFresh ? null : 'proposals.md',

@@ -50,6 +50,13 @@ export interface PrometheusToolExecutionResult {
 export interface PrometheusToolContext {
   extensionId: string;
   trustLevel: PrometheusExtensionTrustLevel;
+  /**
+   * Resolve a saved credential field for a connector from the secure vault.
+   * User-built connectors call this instead of ever hardcoding secrets in their
+   * index.js — the value is whatever the user entered in the Connections panel.
+   * `connectorId` defaults to the calling extension's id.
+   */
+  getCredential: (fieldKey: string, connectorId?: string) => string | undefined;
 }
 
 export interface PrometheusExtensionTool {

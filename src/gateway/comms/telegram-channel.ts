@@ -470,6 +470,10 @@ export class TelegramChannel {
   private polling: boolean = false;
   private lastUpdateId: number = 0;
   private botInfo: { id: number; first_name: string; username: string } | null = null;
+  // Monotonic counter for Bot API 9.5 sendMessageDraft draft_id values.
+  // Each DM response needs a distinct non-zero id so Telegram animates it
+  // as a fresh draft rather than continuing the previous one.
+  private draftIdCounter: number = 1;
   private abortController: AbortController | null = null;
   private workspaceRoot: string = process.env.PROMETHEUS_WORKSPACE_DIR || process.cwd();
   private progressMessageQueues = new Map<number, Promise<void>>();
@@ -1607,6 +1611,8 @@ export class TelegramChannel {
     generatedVideoKeys: Set<string>;
     sessionId: string;
     sendSSE: (type: string, data: any) => void;
+    /** True when chat.type === 'private' — enables Bot API 9.5 native draft streaming. */
+    isPrivateChat?: boolean;
   }): Promise<void> {
     const {
       userId, chatId, userName, text,
@@ -1614,6 +1620,7 @@ export class TelegramChannel {
       videoAttachment, imageAttachment, savedImageAttachment,
       presentedFiles, generatedImages, generatedVideos,
       sessionId, sendSSE,
+      isPrivateChat,
     } = args;
 
     const messageForModel = effectiveText;
@@ -1639,12 +1646,19 @@ export class TelegramChannel {
     // The humanDelay only fires between bubbles (on rotation), not between
     // edits to the same bubble — within-bubble pacing is governed entirely by
     // the model's actual token generation rate.
+    // Native draft streaming for DM chats (Bot API 9.5+, March 2026).
+    // Each response gets a fresh draft_id so Telegram animates it as a new
+    // preview rather than extending the last one.
+    const thisDraftId = isPrivateChat ? ++this.draftIdCounter : 0;
+
     let accumulatedReply = '';
     const stream = createTelegramStreamingMessage({
       apiCall: (method, body) => this.apiCall(method, body),
       chatId,
       maxChars: 4000,
       throttleMs: 150,
+      useDraftStreaming: isPrivateChat === true,
+      draftId: thisDraftId,
       renderText: (raw) => {
         const sanitized = sanitizeFinalReply(raw || '').trim();
         if (!sanitized) return { text: '' };
@@ -1667,6 +1681,19 @@ export class TelegramChannel {
       },
       warn: (msg) => { console.warn(`[Telegram] stream: ${msg}`); },
     });
+
+    // Typing heartbeat — mirrors hermes _keep_typing / openclaw pattern.
+    // Telegram's typing indicator expires after ~5s. During multi-step tool
+    // calls (file ops, browser, etc.) no stream.update() calls fire, so without
+    // this the chat goes silent for 30–60s while tools run. We refresh every 4s.
+    let typingHeartbeatStopped = false;
+    const typingHeartbeat = (async () => {
+      while (!typingHeartbeatStopped && !abortSignal.aborted) {
+        await sleep(4000);
+        if (typingHeartbeatStopped || abortSignal.aborted) break;
+        this.apiCall('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+      }
+    })();
 
 	    try {
 	      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_close, desktop_screenshot, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
@@ -1706,6 +1733,8 @@ export class TelegramChannel {
 		        }
 		      } catch { /* fall through to flush */ }
 		      await stream.end();
+		      typingHeartbeatStopped = true;
+		      await typingHeartbeat;
 		      if (turn.aborted) return;
 	      const result = turn.result;
 	      const responseText = sanitizeFinalReply(result.text || '') || 'No response generated.';
@@ -1776,6 +1805,7 @@ export class TelegramChannel {
       this.creativeProgressStarted.delete(sessionId);
       this.creativeProgressLastSentAt.delete(sessionId);
       console.error(`[Telegram] handleChat error:`, err.message);
+      typingHeartbeatStopped = true;
       try { stream.abort(); } catch { /* ignore */ }
       await this.sendMessage(chatId, `🔥 Error: ${err.message}`);
     } finally {
@@ -5862,6 +5892,7 @@ export class TelegramChannel {
 
     const userId = msg.from.id;
     const chatId = msg.chat.id;
+    const isPrivateChat = msg.chat.type === 'private';
     // For photo messages, use the caption as text (or empty string so AI still fires)
     const text = (msg.text || msg.caption || '').trim();
     const commandName = getTelegramCommandName(text, this.botInfo?.username);
@@ -7077,6 +7108,7 @@ export class TelegramChannel {
           generatedVideoKeys,
           sessionId,
           sendSSE,
+          isPrivateChat,
         });
       });
       this.inboundCoalescer.enqueue(debounceKey, effectiveText);
@@ -7102,6 +7134,7 @@ export class TelegramChannel {
       generatedVideoKeys,
       sessionId,
       sendSSE,
+      isPrivateChat,
     });
   }
 

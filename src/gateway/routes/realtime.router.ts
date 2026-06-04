@@ -1,6 +1,6 @@
 import express from 'express';
 import { getConfig } from '../../config/config.js';
-import { getValidToken, loadTokens } from '../../auth/openai-oauth.js';
+import { buildCodexCloudflareHeaders, getValidToken, loadTokens, refreshTokens } from '../../auth/openai-oauth.js';
 import { buildSystemPrompt, loadSkills } from '../../config/soul-loader.js';
 import { loadVoiceAgentMemory } from '../prompt-context.js';
 
@@ -8,7 +8,7 @@ export const router = express.Router();
 
 const DEFAULT_REALTIME_MODEL = 'gpt-realtime';
 const DEFAULT_REALTIME_VOICE = 'marin';
-const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = 'gpt-realtime-whisper';
+const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = 'gpt-4o-transcribe';
 const REALTIME_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
 const REALTIME_INSTRUCTIONS_MAX_CHARS = Number(process.env.OPENAI_REALTIME_INSTRUCTIONS_MAX_CHARS || 18000);
 const REALTIME_CONTEXT_PACK_CACHE_TTL_MS = Math.max(5_000, Number(process.env.OPENAI_REALTIME_CONTEXT_PACK_CACHE_TTL_MS || 60_000) || 60_000);
@@ -42,8 +42,42 @@ function getConfigDir(): string {
 
 type RealtimeAuthCandidate = {
   token: string;
-  auth: 'api_key' | 'openai_codex_oauth';
+  auth: 'api_key' | 'openai_codex_oauth_api_key' | 'openai_codex_oauth';
 };
+
+function getJwtExpiryMs(token: string): number {
+  const parts = String(token || '').split('.');
+  if (parts.length < 2) return 0;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+    const exp = Number(payload?.exp || 0);
+    return Number.isFinite(exp) && exp > 0 ? exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function loadRealtimeOpenAiCodexTokens() {
+  const configDir = getConfigDir();
+  let tokens = loadTokens(configDir);
+  if (!tokens) return null;
+  const hasApiKey = !!String(tokens.api_key || '').trim();
+  const idTokenExpiryMs = getJwtExpiryMs(String(tokens.id_token || ''));
+  const idTokenExpired = !idTokenExpiryMs || Date.now() > idTokenExpiryMs - 60_000;
+  if (!hasApiKey && idTokenExpired) {
+    try {
+      tokens = await refreshTokens(configDir);
+      console.log('[realtime] refreshed Codex OAuth for realtime auth', {
+        hasExchangedApiKey: !!String(tokens?.api_key || '').trim(),
+      });
+    } catch (err: any) {
+      console.warn('[realtime] Codex OAuth refresh for realtime auth failed', {
+        message: String(err?.message || err || ''),
+      });
+    }
+  }
+  return loadTokens(configDir) || tokens;
+}
 
 function hasOpenAICodexOAuth(): boolean {
   return loadTokens(getConfigDir()) !== null;
@@ -51,15 +85,22 @@ function hasOpenAICodexOAuth(): boolean {
 
 async function getRealtimeAuthCandidates(): Promise<RealtimeAuthCandidate[]> {
   const candidates: RealtimeAuthCandidate[] = [];
+  const seen = new Set<string>();
+  const push = (token: string, auth: RealtimeAuthCandidate['auth']) => {
+    const value = String(token || '').trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    candidates.push({ token: value, auth });
+  };
   const apiKey = getRealtimeApiKey();
-  if (apiKey) {
-    candidates.push({ token: apiKey, auth: 'api_key' });
-  }
+  push(apiKey, 'api_key');
 
   if (hasOpenAICodexOAuth()) {
     try {
+      const tokens = await loadRealtimeOpenAiCodexTokens();
+      push(String(tokens?.api_key || '').trim(), 'openai_codex_oauth_api_key');
       const token = await getValidToken(getConfigDir());
-      if (token) candidates.push({ token, auth: 'openai_codex_oauth' });
+      push(token, 'openai_codex_oauth');
     } catch {
       // Status/client-secret responses below will report that no usable auth was found.
     }
@@ -248,7 +289,7 @@ function buildRealtimeClientSecretBody(req: express.Request): any {
   return body;
 }
 
-async function createRealtimeClientSecret(req: express.Request): Promise<{ value: string; auth: RealtimeAuthCandidate['auth']; data: any }> {
+async function createRealtimeClientSecret(req: express.Request): Promise<{ value: string; auth: RealtimeAuthCandidate['auth']; data: any; sourceToken: string }> {
   const authCandidates = await getRealtimeAuthCandidates();
   if (!authCandidates.length) {
     throw Object.assign(new Error('OpenAI Realtime requires OPENAI_REALTIME_API_KEY, OPENAI_API_KEY, VOICE_TOOLS_OPENAI_KEY, or a connected OpenAI Codex OAuth account.'), { status: 400 });
@@ -271,7 +312,7 @@ async function createRealtimeClientSecret(req: express.Request): Promise<{ value
     if (upstream.ok) {
       const value = String(data?.client_secret?.value || data?.value || data?.client_secret || '').trim();
       if (!value) throw Object.assign(new Error('OpenAI Realtime client secret response did not include a token.'), { status: 502, details: data });
-      return { value, auth: candidate.auth, data };
+      return { value, auth: candidate.auth, data, sourceToken: candidate.token };
     }
 
     lastFailure = { status: upstream.status, data, auth: candidate.auth };
@@ -291,7 +332,9 @@ router.post('/api/realtime/client-secret', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
     const result = await createRealtimeClientSecret(req);
-    res.json({ success: true, auth: result.auth, ...result.data });
+    const mode = String(req.body?.mode || req.body?.type || '').trim().toLowerCase();
+    const resolvedModel = mode !== 'transcription' ? sanitizeRealtimeModel(req.body?.model) : '';
+    res.json({ success: true, auth: result.auth, model: resolvedModel || undefined, ...result.data });
   } catch (err: any) {
     res.status(Number(err?.status || 502)).json({
       success: false,
@@ -324,17 +367,46 @@ router.post('/api/realtime/call', async (req, res) => {
   }
   try {
     const secret = await createRealtimeClientSecret(req);
-    const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {
+    const callUrl = `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(sanitizeRealtimeModel(req.body?.model))}`;
+    const callRealtime = (token: string, auth?: RealtimeAuthCandidate['auth']) => fetch(callUrl, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${secret.value}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/sdp',
-        'Content-Length': String(Buffer.byteLength(sdp, 'utf8')),
+        ...(auth === 'openai_codex_oauth' ? buildCodexCloudflareHeaders(token) : {}),
       },
       body: sdp,
     });
+    let upstream = await callRealtime(secret.value, secret.auth);
     const answer = await upstream.text();
     if (!upstream.ok) {
+      // OpenAI occasionally returns a plain 500 when the SDP exchange uses the
+      // minted client secret, especially with Codex OAuth-backed Realtime auth.
+      // Retry with the source token on transient upstream failures.
+      const shouldRetryWithSourceToken =
+        secret.sourceToken
+        && secret.sourceToken !== secret.value
+        && (upstream.status === 500 || upstream.status === 502 || upstream.status === 503);
+      if (shouldRetryWithSourceToken) {
+        const retry = await callRealtime(secret.sourceToken, secret.auth);
+        const retryAnswer = await retry.text();
+        if (retry.ok) {
+          console.warn('[Realtime] /api/realtime/call recovered via source auth token', {
+            originalStatus: upstream.status,
+            auth: secret.auth,
+            ...sdpDiagnostics,
+          });
+          res.type('application/sdp').send(retryAnswer);
+          return;
+        }
+        console.warn('[Realtime] /api/realtime/call source-token retry failed', {
+          originalStatus: upstream.status,
+          retryStatus: retry.status,
+          auth: secret.auth,
+          ...sdpDiagnostics,
+          error: retryAnswer.slice(0, 500),
+        });
+      }
       console.warn('[Realtime] /api/realtime/call upstream failed', {
         status: upstream.status,
         auth: secret.auth,
@@ -360,3 +432,4 @@ router.post('/api/realtime/call', async (req, res) => {
     });
   }
 });
+

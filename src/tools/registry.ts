@@ -1,7 +1,7 @@
 import { ToolResult } from '../types.js';
 import { shellTool } from './shell.js';
 import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool } from './files.js';
-import { webSearchTool, webSearchSingleTool, webSearchMultiTool, webFetchTool } from './web.js';
+import { webSearchTool, webSearchSingleTool, webSearchMultiTool, webFetchTool, shoppingSearchProductsTool } from './web.js';
 import { allSkillTools } from './skills.js';
 import { timeNowTool } from './time.js';
 import { personaReadTool, personaUpdateTool } from './persona.js';
@@ -72,7 +72,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
   ],
   // Research worker: web search + read-only file access. No mutations, no browser UI.
   researcher: [
-    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'read_file', 'list_files', 'list_directory',
+    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'read_file', 'list_files', 'list_directory',
     'write_note', 'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'task_control',
   ],
   // Shell-only worker: run commands and read/write files.
@@ -84,7 +84,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
   ],
   // Read-only auditor: inspect files and memory, no writes.
   reader_only: [
-    'read_file', 'list_files', 'list_directory', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch',
+    'read_file', 'list_files', 'list_directory', 'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch',
     'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'task_control', 'source_stats', 'webui_source_stats',
   ],
   // Code writer: full file + shell access, no browser/desktop.
@@ -92,13 +92,13 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines',
     'find_replace', 'delete_file', 'list_files', 'list_directory', 'mkdir',
     'run_command', 'run_command_supervised', 'start_process', 'process_status', 'process_log', 'process_wait', 'process_kill', 'process_submit',
-    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'write_note',
+    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'write_note',
     'generate_image', 'generate_video', 'delivery_send', 'delivery_send_screenshot',
     'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'memory_index_refresh', 'task_control', 'grep_files', 'grep_file', 'search_files', 'file_stats', 'source_stats', 'webui_source_stats',
   ],
   // Data analyst: read files + web, no writes or shell mutations.
   analyst: [
-    'read_file', 'list_files', 'list_directory', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch',
+    'read_file', 'list_files', 'list_directory', 'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch',
     'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'write_note', 'task_control', 'delivery_send',
   ],
   // Browser automation agent: full browser + file access, no desktop.
@@ -111,7 +111,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_extract_structured', 'browser_element_watch',
     'browser_vision_screenshot', 'browser_vision_click', 'browser_vision_type',
     'browser_send_to_telegram', 'delivery_send', 'delivery_send_screenshot',
-    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
+    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
   // Scraper: browser + write output files.
@@ -122,7 +122,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_get_focused_item', 'browser_get_page_text', 'browser_send_to_telegram', 'delivery_send', 'delivery_send_screenshot',
     'browser_scroll_collect', 'browser_scroll_collect_v2', 'browser_snapshot_delta',
     'browser_extract_structured', 'browser_element_watch',
-    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
+    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
 };
@@ -192,6 +192,7 @@ const TOOL_PROFILE_TOOL_NAMES: Record<Exclude<ToolProfile, 'full'>, ReadonlySet<
     'manage_team_context_ref',
   ]),
   web: new Set([
+    'shopping_search_products',
     'web_search',
     'web_search_single',
     'web_search_multi',
@@ -265,6 +266,7 @@ class ToolRegistry {
     this.registerSafe(webSearchTool);
     this.registerSafe(webSearchSingleTool);
     this.registerSafe(webSearchMultiTool);
+    this.registerSafe(shoppingSearchProductsTool);
     this.registerSafe(webFetchTool);
     // Memory tools are provided by the subagent runtime executor
     // (memory_browse, memory_write, memory_read over USER.md/SOUL.md/MEMORY.md).

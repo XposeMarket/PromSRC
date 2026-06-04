@@ -112,6 +112,7 @@ interface OAuthFlowState {
 const FLOW_TTL_MS = 10 * 60 * 1000;
 const activeFlows = new Map<string, OAuthFlowState>();
 const nonTtlTokenMigrated = new Set<string>();
+const refreshInFlight = new Map<string, Promise<OAuthTokens>>();
 
 function setFlow(configDir: string, flow: OAuthFlowState) {
   activeFlows.set(path.resolve(configDir), flow);
@@ -199,41 +200,62 @@ function generateChallenge(verifier: string): string {
 // ─── Token refresh ──────────────────────────────────────────────────────────────
 
 export async function refreshTokens(configDir: string): Promise<OAuthTokens> {
-  const existing = loadTokens(configDir);
-  if (!existing?.refresh_token) throw new Error('No refresh token — please reconnect.');
+  const key = path.resolve(configDir);
+  const existingRefresh = refreshInFlight.get(key);
+  if (existingRefresh) return existingRefresh;
 
-  const res = await fetch(TOKEN_URL, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    new URLSearchParams({
-      grant_type:    'refresh_token',
-      refresh_token: existing.refresh_token,
-      client_id:     CLIENT_ID,
-    }).toString(),
-  });
+  const refreshPromise = (async () => {
+    const existing = loadTokens(configDir);
+    if (!existing?.refresh_token) throw new Error('No refresh token — please reconnect.');
 
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`Token refresh failed (${res.status}): ${txt.slice(0, 200)}`);
+    const res = await fetch(TOKEN_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    new URLSearchParams({
+        grant_type:    'refresh_token',
+        refresh_token: existing.refresh_token,
+        client_id:     CLIENT_ID,
+      }).toString(),
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      const latest = loadTokens(configDir);
+      if (
+        latest?.refresh_token
+        && latest.refresh_token !== existing.refresh_token
+        && Date.now() <= latest.expires_at - 5 * 60 * 1000
+      ) {
+        return latest;
+      }
+      throw new Error(`Token refresh failed (${res.status}): ${txt.slice(0, 200)}`);
+    }
+
+    const data = await res.json() as any;
+    const idToken = data.id_token || existing.id_token;
+    const apiKey  = idToken ? await tryExchangeForApiKey(idToken) : existing.api_key;
+
+    const claims = idToken ? decodeJwtClaims(idToken) : {};
+    const accountId = claims.chatgpt_account_id || claims.sub || existing.account_id;
+
+    const tokens: OAuthTokens = {
+      access_token:  data.access_token || existing.access_token,
+      api_key:       apiKey ?? existing.api_key,
+      refresh_token: data.refresh_token || existing.refresh_token,
+      expires_at:    Date.now() + (data.expires_in || 3600) * 1000,
+      account_id:    accountId,
+      id_token:      idToken,
+    };
+    saveTokens(configDir, tokens);
+    return tokens;
+  })();
+
+  refreshInFlight.set(key, refreshPromise);
+  try {
+    return await refreshPromise;
+  } finally {
+    refreshInFlight.delete(key);
   }
-
-  const data = await res.json() as any;
-  const idToken = data.id_token || existing.id_token;
-  const apiKey  = idToken ? await tryExchangeForApiKey(idToken) : existing.api_key;
-
-  const claims = idToken ? decodeJwtClaims(idToken) : {};
-  const accountId = claims.chatgpt_account_id || claims.sub || existing.account_id;
-
-  const tokens: OAuthTokens = {
-    access_token:  data.access_token || existing.access_token,
-    api_key:       apiKey ?? existing.api_key,
-    refresh_token: data.refresh_token || existing.refresh_token,
-    expires_at:    Date.now() + (data.expires_in || 3600) * 1000,
-    account_id:    accountId,
-    id_token:      idToken,
-  };
-  saveTokens(configDir, tokens);
-  return tokens;
 }
 
 // ─── Get valid token (auto-refresh) ────────────────────────────────────────────
@@ -273,12 +295,16 @@ export async function startOAuthFlow(configDir: string): Promise<OAuthFlowResult
     response_type:              'code',
     client_id:                  CLIENT_ID,
     redirect_uri:               CALLBACK_URL,
-    scope:                      'openid profile email offline_access',
+    scope:                      'openid profile email offline_access api.connectors.read api.connectors.invoke',
     code_challenge:             challenge,
     code_challenge_method:      'S256',
     state,
     id_token_add_organizations: 'true',
-    codex_cli_simplified_flow:  'true',
+    // NOTE: codex_cli_simplified_flow=true skips org binding, so multi-org
+    // accounts get an id_token with the `organizations` array but no singular
+    // `organization_id` claim — which makes the id_token -> openai-api-key
+    // exchange fail with "missing organization_id" and breaks Realtime. Omit it
+    // so the login flow binds an organization_id we can exchange for an api_key.
     originator:                 'codex_cli_rs',
   });
 
@@ -385,12 +411,16 @@ export function startOAuthFlowBackground(configDir: string): { authUrl: string }
     response_type:              'code',
     client_id:                  CLIENT_ID,
     redirect_uri:               CALLBACK_URL,
-    scope:                      'openid profile email offline_access',
+    scope:                      'openid profile email offline_access api.connectors.read api.connectors.invoke',
     code_challenge:             challenge,
     code_challenge_method:      'S256',
     state,
     id_token_add_organizations: 'true',
-    codex_cli_simplified_flow:  'true',
+    // NOTE: codex_cli_simplified_flow=true skips org binding, so multi-org
+    // accounts get an id_token with the `organizations` array but no singular
+    // `organization_id` claim — which makes the id_token -> openai-api-key
+    // exchange fail with "missing organization_id" and breaks Realtime. Omit it
+    // so the login flow binds an organization_id we can exchange for an api_key.
     originator:                 'codex_cli_rs',
   });
 

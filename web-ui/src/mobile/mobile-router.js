@@ -144,6 +144,7 @@ function render() {
     onNavigate: (route) => mobileNavigate(route),
     onNewChat: () => {
       try {
+        localStorage.removeItem('pm_mobile_last_chat_session');
         const chat = window.__pmChat;
         if (chat && typeof chat === 'object') {
           chat.activeSessionId = 'mobile_default';

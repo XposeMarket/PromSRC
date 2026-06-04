@@ -115,6 +115,10 @@ function registerConnectorTools(): void {
   }
 }
 
+export function resetPrometheusExtensionRuntimeLoaded(): void {
+  loaded = false;
+}
+
 export function ensurePrometheusExtensionRuntimeLoaded(): void {
   if (!loaded) {
     loadManifestRuntimeExtensions();

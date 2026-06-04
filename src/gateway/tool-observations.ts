@@ -77,7 +77,7 @@ function inferToolCategory(toolName: string): string {
   if (!name) return 'other';
   if (/^(shell|run_command|run_command_supervised|start_process|process_)/.test(name)) return 'shell_process';
   if (/^(read|write|edit|list|delete|rename|copy|mkdir|stat|append|apply_patch|grep_|search_files|file_|source_|webui_source_)/.test(name)) return 'file';
-  if (/^(web_search|web_fetch|download_)/.test(name)) return 'web';
+  if (/^(shopping_search_products|web_search|web_fetch|download_)/.test(name)) return 'web';
   if (/^browser_/.test(name)) return 'browser';
   if (/^desktop_/.test(name)) return 'desktop';
   if (/^(memory_|persona_|write_note|schedule_memory)/.test(name)) return 'memory';

@@ -1988,19 +1988,25 @@ function listRecentBrainThoughtFiles(limit = 8): string[] {
   const thoughtsDir = path.join(getBrainDir(), 'thoughts');
   if (!fs.existsSync(thoughtsDir)) return [];
 
-  const files: Array<{ file: string; sortKey: string }> = [];
+  const files: Array<{ file: string; sortKey: string; mtimeMs: number }> = [];
   for (const dateEntry of fs.readdirSync(thoughtsDir, { withFileTypes: true })) {
     if (!dateEntry.isDirectory()) continue;
     const dateDir = path.join(thoughtsDir, dateEntry.name);
     for (const thoughtEntry of fs.readdirSync(dateDir, { withFileTypes: true })) {
       if (!thoughtEntry.isFile() || !thoughtEntry.name.endsWith('-thought.md')) continue;
       const file = path.join(dateDir, thoughtEntry.name);
-      files.push({ file, sortKey: `${dateEntry.name}/${thoughtEntry.name}` });
+      let mtimeMs = 0;
+      try {
+        mtimeMs = fs.statSync(file).mtimeMs;
+      } catch {
+        mtimeMs = 0;
+      }
+      files.push({ file, sortKey: `${dateEntry.name}/${thoughtEntry.name}`, mtimeMs });
     }
   }
 
   return files
-    .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
+    .sort((a, b) => (b.mtimeMs - a.mtimeMs) || b.sortKey.localeCompare(a.sortKey))
     .slice(0, limit)
     .map((entry) => entry.file);
 }

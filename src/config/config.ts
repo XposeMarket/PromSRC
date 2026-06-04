@@ -67,6 +67,13 @@ const CONFIG_DIR =
       ? PROJECT_CONFIG_NEW
       : HOME_CONFIG;
 
+// Exposed as a plain const so early importers (e.g. the extension loader, which
+// runs while config.ts is still mid-initialization) can resolve the data dir
+// without depending on the ConfigManager singleton being constructed yet.
+export function getResolvedConfigDir(): string {
+  return CONFIG_DIR;
+}
+
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 // Workspace: env var → config-dir-relative default (cross-platform safe)

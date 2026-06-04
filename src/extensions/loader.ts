@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getConfig } from '../config/config.js';
 import { parseExtensionDescriptor } from './schema.js';
 import type { LoadedExtensionDescriptor } from './types.js';
 
@@ -26,6 +27,20 @@ function walkForDescriptorFiles(rootDir: string): string[] {
   }
 
   return files.sort((a, b) => a.localeCompare(b));
+}
+
+export function resolveUserPluginsDir(): string {
+  return path.join(getConfig().getConfigDir(), 'user-plugins');
+}
+
+export function loadUserExtensionDescriptors(): LoadedExtensionDescriptor[] {
+  const userDir = resolveUserPluginsDir();
+  const descriptorFiles = walkForDescriptorFiles(userDir);
+  return descriptorFiles.map((sourcePath) => {
+    const raw = JSON.parse(fs.readFileSync(sourcePath, 'utf-8'));
+    const descriptor = parseExtensionDescriptor(raw, sourcePath);
+    return { ...descriptor, sourcePath };
+  });
 }
 
 export function resolveBundledExtensionsDir(): string {

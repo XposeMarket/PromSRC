@@ -79,7 +79,9 @@ export async function runIfNeeded(opts = {}) {
   let safety = 0;
   while (current && current !== 'done' && safety++ < 8) {
     if      (current === 'tutorial')        await runTutorial(opts);
-    else if (current === 'migration')       await runMigration(opts);
+    else if (current === 'migration') {
+      if (!opts?.skipMigration) await runMigration(opts);
+    }
     else if (current === 'model')           await runModelSetup(opts);
     else if (current === 'meet')            await runMeetAndGreet(opts);
     else if (current === 'memory_confirm')  { await runMemoryConfirm(opts); break; }
@@ -89,7 +91,9 @@ export async function runIfNeeded(opts = {}) {
       // Walk the static sequence in dev test mode so we never miss a step
       // (status flags stay untouched, so we can't rely on the server to
       // advance us).
-      const order = ['tutorial', 'migration', 'model', 'meet', 'memory_confirm', 'done'];
+      const order = opts.skipMigration
+        ? ['tutorial', 'model', 'meet', 'memory_confirm', 'done']
+        : ['tutorial', 'migration', 'model', 'meet', 'memory_confirm', 'done'];
       const idx = order.indexOf(current);
       current = order[idx + 1] || 'done';
     } else {

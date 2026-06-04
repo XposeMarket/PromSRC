@@ -36,6 +36,7 @@ const CHAT_SESSIONS_KEY = window.CHAT_SESSIONS_KEY || 'prometheus_chat_sessions_
 const AGENT_SESSION_KEY = window.AGENT_SESSION_KEY || 'prometheus_agent_session_id';
 const ACTIVE_CHAT_SESSION_KEY = window.ACTIVE_CHAT_SESSION_KEY || 'prometheus_active_chat_session_id';
 const THEME_KEY = window.THEME_KEY || 'prometheus_theme';
+const SIDE_CHAT_STATE_KEY = 'prometheus_side_chats_v1';
 const MAX_QUEUED_PROMPTS = window.MAX_QUEUED_PROMPTS || 8;
 const AGENT_STATUS = window.AGENT_STATUS || { ACTIVE: 'active', COMPLETED: 'completed', PAUSED: 'paused' };
 const EMPTY_CHAT_STARTER_PROMPTS = [
@@ -191,6 +192,9 @@ if (window._chatSendLocks === undefined) window._chatSendLocks = {};
 if (window._localMainChatClientRequestIds === undefined) window._localMainChatClientRequestIds = {};
 if (window._editRerunAbortResetSessions === undefined) window._editRerunAbortResetSessions = new Set();
 if (window._voicePendingTurns === undefined) window._voicePendingTurns = [];
+if (window.sideChatLinks === undefined) window.sideChatLinks = [];
+if (window.activeSideChatId === undefined) window.activeSideChatId = '';
+if (window.sideChatSplitOpen === undefined) window.sideChatSplitOpen = false;
 if (window.currentProgressThinkingActive === undefined) window.currentProgressThinkingActive = false;
 if (window.currentProgressThinkingText === undefined) window.currentProgressThinkingText = '';
 window.editingUserMessageIndex = Number.isInteger(window.editingUserMessageIndex) ? window.editingUserMessageIndex : -1;
@@ -201,6 +205,284 @@ let voicePendingProcessing = false;
 function generateSessionId() {
   return (crypto?.randomUUID?.() || ('sess_' + Math.random().toString(36).slice(2)));
 }
+
+function generateSideChatId() {
+  return `side_${generateSessionId().replace(/^sess_/, '')}`;
+}
+
+function normalizeSideChatLink(link) {
+  const id = String(link?.id || link?.sessionId || '').trim();
+  const parentSessionId = String(link?.parentSessionId || '').trim();
+  if (!id || !parentSessionId) return null;
+  return {
+    id,
+    parentSessionId,
+    title: String(link?.title || 'Side chat').trim() || 'Side chat',
+    anchorIndex: Number.isInteger(link?.anchorIndex) ? link.anchorIndex : null,
+    anchorPreview: String(link?.anchorPreview || '').trim(),
+    createdAt: Number(link?.createdAt || Date.now()) || Date.now(),
+    updatedAt: Number(link?.updatedAt || link?.createdAt || Date.now()) || Date.now(),
+    closed: link?.closed === true,
+  };
+}
+
+function loadSideChatLinks() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SIDE_CHAT_STATE_KEY) || '[]');
+    window.sideChatLinks = Array.isArray(parsed)
+      ? parsed.map(normalizeSideChatLink).filter(Boolean)
+      : [];
+  } catch {
+    window.sideChatLinks = [];
+  }
+  return window.sideChatLinks;
+}
+
+function saveSideChatLinks() {
+  try {
+    localStorage.setItem(SIDE_CHAT_STATE_KEY, JSON.stringify((window.sideChatLinks || []).map(normalizeSideChatLink).filter(Boolean)));
+  } catch {}
+  updateSideChatChrome();
+}
+
+loadSideChatLinks();
+
+function getSideChatLinksForParent(parentSessionId = window.activeChatSessionId, options = {}) {
+  const parent = String(parentSessionId || '').trim();
+  if (!parent) return [];
+  const includeClosed = options.includeClosed === true;
+  return (window.sideChatLinks || [])
+    .filter((link) => String(link?.parentSessionId || '') === parent)
+    .filter((link) => includeClosed || link.closed !== true)
+    .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+}
+
+function getActiveSideChatLink() {
+  const activeId = String(window.activeSideChatId || '').trim();
+  if (!activeId) return null;
+  const link = (window.sideChatLinks || []).find((item) => String(item?.id || '') === activeId) || null;
+  if (!link) return null;
+  return String(link.parentSessionId || '') === String(window.activeChatSessionId || '') ? link : null;
+}
+
+function getSideChatSession() {
+  const link = getActiveSideChatLink();
+  return link ? getChatSessionById(link.id) : null;
+}
+
+function isSessionVisibleInChatSurface(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return false;
+  if (sid === String(window.activeChatSessionId || '').trim()) return true;
+  return window.sideChatSplitOpen && sid === String(window.activeSideChatId || '').trim();
+}
+
+function getSideChatParentSession(link = getActiveSideChatLink()) {
+  return link ? getChatSessionById(link.parentSessionId) : null;
+}
+
+function sideChatReferenceMessages(parentSession, anchorIndex = null) {
+  const history = Array.isArray(parentSession?.history) ? parentSession.history : [];
+  const selected = Number.isInteger(anchorIndex) && anchorIndex >= 0
+    ? history.slice(Math.max(0, anchorIndex - 4), anchorIndex + 1)
+    : history.slice(-8);
+  return selected
+    .filter((msg) => msg && !isInternalChatMessage(msg))
+    .map((msg) => {
+      const role = msg.role === 'user' ? 'User' : 'Prometheus';
+      const text = String(msg.content || '').replace(/\s+/g, ' ').trim();
+      return text ? `${role}: ${text.slice(0, 420)}` : '';
+    })
+    .filter(Boolean);
+}
+
+function buildSideChatBoundaryMessage(parentSession, options = {}) {
+  const parentTitle = String(parentSession?.title || 'Main chat').trim();
+  const anchorPreview = String(options.anchorPreview || '').trim();
+  const reference = sideChatReferenceMessages(parentSession, options.anchorIndex);
+  const lines = [
+    '[Side chat boundary]',
+    `Parent chat: ${parentTitle}`,
+    '',
+    'Inherited parent context is reference only.',
+    'Do not continue old plans, edits, tool calls, approvals, or implementation work from the parent unless the user explicitly asks in this side chat.',
+    'Default behavior: answer questions, explore lightly, and avoid mutating files, git, config, permissions, or workspace state.',
+    anchorPreview ? `Anchor: ${anchorPreview}` : '',
+    reference.length ? '' : '',
+    reference.length ? 'Reference snapshot:' : '',
+    ...reference.map((line) => `- ${line}`),
+    '[/Side chat boundary]',
+  ].filter((line) => line !== '');
+  return {
+    role: 'assistant',
+    content: lines.join('\n'),
+    timestamp: Date.now(),
+    channelLabel: 'side chat',
+    sideChatBoundary: true,
+  };
+}
+
+function makeSideChatTitle(seed = '') {
+  const text = String(seed || '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'Side chat';
+  return text.length > 42 ? `${text.slice(0, 39)}...` : text;
+}
+
+function updateSideChatChrome() {
+  const links = getSideChatLinksForParent(window.activeChatSessionId);
+  const btn = document.getElementById('side-chats-toggle-btn');
+  if (btn) {
+    const hasLinks = links.length > 0;
+    btn.style.display = hasLinks ? 'inline-flex' : 'none';
+    btn.classList.toggle('active', window.sideChatSplitOpen && !!getActiveSideChatLink());
+    btn.title = hasLinks ? `${links.length} linked side chat${links.length === 1 ? '' : 's'}` : 'Side chats';
+  }
+  document.body?.classList?.toggle('side-chat-split-active', window.sideChatSplitOpen && !!getActiveSideChatLink());
+}
+
+function showSideChatSplit(sideChatId = window.activeSideChatId) {
+  const link = (window.sideChatLinks || []).find((item) => String(item?.id || '') === String(sideChatId || '')) || getSideChatLinksForParent()[0] || null;
+  if (!link) {
+    window.sideChatSplitOpen = false;
+    window.activeSideChatId = '';
+    updateSideChatChrome();
+    renderChatMessages();
+    return false;
+  }
+  link.closed = false;
+  link.updatedAt = Date.now();
+  window.activeSideChatId = link.id;
+  window.sideChatSplitOpen = true;
+  saveSideChatLinks();
+  renderChatMessages();
+  return true;
+}
+
+function closeSideChatSplit() {
+  window.sideChatSplitOpen = false;
+  updateSideChatChrome();
+  renderChatMessages();
+}
+
+async function syncSessionHistoryToServerById(sessionId, history = [], options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sid)}/history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        history: historyForServer(history),
+        resetCompaction: options.resetCompaction === true,
+      }),
+    });
+  } catch (err) {
+    console.warn('[ChatPage] failed to sync side chat history:', err);
+  }
+}
+
+async function createSideChat(options = {}) {
+  ensureActiveChatSessionExists();
+  const parentSessionId = String(window.activeChatSessionId || '').trim();
+  const parent = getChatSessionById(parentSessionId);
+  if (!parent) return null;
+  const id = generateSideChatId();
+  const anchorIndex = Number.isInteger(options.anchorIndex) ? options.anchorIndex : null;
+  const anchorMsg = anchorIndex != null ? (parent.history || [])[anchorIndex] : null;
+  const initialText = String(options.initialText || '').trim();
+  const anchorPreview = String(options.anchorPreview || anchorMsg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  const side = {
+    ...createEmptyChatSession(id),
+    title: makeSideChatTitle(initialText || anchorPreview || 'Side chat'),
+    autoTitleLocked: true,
+    history: [buildSideChatBoundaryMessage(parent, { anchorIndex, anchorPreview })],
+    processLog: [],
+    creativeMode: normalizeCreativeMode(parent.creativeMode),
+    canvasProjectRoot: normalizeCanvasPath(parent.canvasProjectRoot) || null,
+    canvasProjectLabel: parent.canvasProjectLabel || null,
+    canvasProjectLink: normalizeCanvasProjectLink(parent.canvasProjectLink),
+    sideChat: true,
+    parentSessionId,
+  };
+  window.chatSessions.unshift(side);
+  window.sideChatLinks = [
+    {
+      id,
+      parentSessionId,
+      title: side.title,
+      anchorIndex,
+      anchorPreview,
+      createdAt: side.createdAt,
+      updatedAt: side.updatedAt,
+      closed: false,
+    },
+    ...(window.sideChatLinks || []),
+  ];
+  saveChatSessions();
+  saveSideChatLinks();
+  await syncSessionHistoryToServerById(id, side.history, { resetCompaction: true });
+  showSideChatSplit(id);
+  if (initialText) {
+    setTimeout(() => sendSideChatMessage(initialText), 0);
+  }
+  return side;
+}
+
+function openOrCreateSideChat(initialText = '') {
+  const existing = getSideChatLinksForParent()[0];
+  if (existing && !initialText) {
+    showSideChatSplit(existing.id);
+    return getChatSessionById(existing.id);
+  }
+  return createSideChat({ initialText });
+}
+
+function sideChatFromMessage(originalIndex, ev) {
+  if (ev) ev.stopPropagation();
+  const msg = (window.chatHistory || [])[originalIndex];
+  createSideChat({
+    anchorIndex: originalIndex,
+    anchorPreview: msg?.content || '',
+  });
+}
+
+async function sendSideChatMessage(message = null) {
+  const link = getActiveSideChatLink();
+  const side = getSideChatSession();
+  if (!link || !side) return;
+  const input = document.getElementById('side-chat-input');
+  const text = String(message == null ? input?.value || '' : message).trim();
+  if (!text) return;
+  if (input) {
+    input.value = '';
+    input.style.height = 'auto';
+  }
+  link.updatedAt = Date.now();
+  saveSideChatLinks();
+  await sendChat(makeQueuedChatTurn(text), {
+    clientRequestId: newChatClientRequestId(side.id),
+    sessionIdOverride: side.id,
+    sideChat: true,
+  });
+  window.activeSideChatId = side.id;
+  window.sideChatSplitOpen = true;
+  updateSideChatChrome();
+  renderChatMessages();
+}
+
+function handleSideChatInputKeydown(event) {
+  if (event?.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendSideChatMessage();
+  }
+}
+
+function handleSideChatInputResize(input) {
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(180, Math.max(42, input.scrollHeight))}px`;
+}
+
 function rememberActiveChatSessionId(id) {
   const sid = String(id || '').trim();
   if (!sid) return '';
@@ -494,6 +776,7 @@ function makeEmptyStreamState() {
     currentProgressThinkingActive: false,
     currentProgressThinkingText: '',
     liveTraceEntries: [],
+    finalResponseStarted: false,
     runtimeProgressState: { source: 'none', activeIndex: -1, items: [] },
     declaredPlanToolCounter: 0,
     declaredPlanToolActiveIndex: -1,
@@ -509,6 +792,8 @@ function makeEmptyStreamState() {
     abortRequestedAt: 0,
     abortRequestedSource: '',
     forceAppendAssistantAfterInterruption: false,
+    pendingInterruptionWorkflowGroupId: '',
+    pendingInterruptionWorkflowLabel: '',
   };
 }
 
@@ -4599,8 +4884,13 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
     workflowPart: 'interruption',
     workflowLabel: 'Steer',
   });
-  if (st) st.forceAppendAssistantAfterInterruption = true;
+  if (st) {
+    st.forceAppendAssistantAfterInterruption = true;
+    st.pendingInterruptionWorkflowGroupId = groupId;
+    st.pendingInterruptionWorkflowLabel = 'Response after steer';
+  }
   persistSession(sid);
+  syncSessionHistoryToServerById(sid, sess.history).catch(() => {});
   if (window.activeChatSessionId === sid) {
     window.chatHistory = sess.history;
     renderChatMessages();
@@ -5121,6 +5411,18 @@ function ensureActiveChatSessionExists() {
   return sess;
 }
 
+function setDraftChatSession(id = generateSessionId()) {
+  const nextId = String(id || '').trim() || generateSessionId();
+  window.activeChatSessionId = nextId;
+  setAgentSessionId(nextId);
+  window.chatHistory = [];
+  window.processLogEntries = [];
+  window.currentCreativeMode = null;
+  window.runtimeProgressState = null;
+  if (typeof resetSessionStreamState === 'function') resetSessionStreamState(nextId);
+  return nextId;
+}
+
 function isAssistantLikeMessage(msg) {
   return msg?.role === 'ai' || msg?.role === 'assistant';
 }
@@ -5384,7 +5686,11 @@ function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
       voiceInterruptionEventId: eventId || undefined,
     });
   }
-  if (!shouldAbort && st) st.forceAppendAssistantAfterInterruption = true;
+  if (!shouldAbort && st) {
+    st.forceAppendAssistantAfterInterruption = true;
+    st.pendingInterruptionWorkflowGroupId = groupId;
+    st.pendingInterruptionWorkflowLabel = asSteer ? 'Response after steer' : 'Interruption response';
+  }
   persistSession(sid);
   if (window.activeChatSessionId === sid) {
     window.chatHistory = sess.history;
@@ -5396,6 +5702,7 @@ function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
 const _MSG_ICON_COPY = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
 const _MSG_ICON_PEN = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22H21"/><path d="M15 2a2.121 2.121 0 0 1 3 3L5 17l-4 1 1-4z"/></svg>`;
 const _MSG_ICON_FORK = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="2"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/><path d="M12 6v5l-5.5 7M12 11l5.5 7"/></svg>`;
+const _MSG_ICON_SIDE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M12 5v14"/><path d="M7 9h2"/><path d="M15 9h2"/><path d="M15 13h2"/></svg>`;
 const _MSG_ICON_PREV = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>`;
 const _MSG_ICON_NEXT = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
 
@@ -5408,6 +5715,7 @@ function renderMessageActions(msg, originalIndex) {
   return `<div class="msg-actions">
     <button class="msg-action-btn" type="button" title="${copyTitle}" onclick="copyChatMessage(${originalIndex}, event)">${_MSG_ICON_COPY}</button>
     ${editOrFork}
+    <button class="msg-action-btn" type="button" title="Open side chat" onclick="sideChatFromMessage(${originalIndex}, event)">${_MSG_ICON_SIDE}</button>
     ${isUser ? renderPromptVariantNav(originalIndex) : ''}
   </div>`;
 }
@@ -5492,6 +5800,8 @@ function normalizeStoredSession(session) {
     creativeHtmlMotionClip: session?.creativeHtmlMotionClip || null,
     mainChatGoal: session?.mainChatGoal || null,
     mainChatGoalHistory: Array.isArray(session?.mainChatGoalHistory) ? session.mainChatGoalHistory : [],
+    sideChat: session?.sideChat === true,
+    parentSessionId: session?.parentSessionId || null,
   };
 }
 
@@ -5666,16 +5976,10 @@ async function loadChatSessions() {
   }
 
   const startupSessionId = generateSessionId();
-  window.activeChatSessionId = startupSessionId;
-  setAgentSessionId(startupSessionId);
-  if (!getChatSessionById(startupSessionId)) {
-    window.chatSessions.unshift(createEmptyChatSession(startupSessionId));
-  }
+  setDraftChatSession(startupSessionId);
   if (!window.agentSessionId || window.agentSessionId !== window.activeChatSessionId) setAgentSessionId(window.activeChatSessionId);
   saveChatSessions();
   syncActiveChat();
-  scheduleChatContextWindowRefresh(350);
-  if (window.activeChatSessionId) catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
 
   // Load terminal sessions from the server
   loadTerminalSessions();
@@ -6003,14 +6307,11 @@ function newChatSession() {
     else setMode('chat');
   }
   if (typeof window.setSidebarSegTab === 'function') window.setSidebarSegTab('chats');
-  window.activeChatSessionId = id;
-  setAgentSessionId(id);
-  if (!getChatSessionById(id)) {
-    window.chatSessions.unshift(createEmptyChatSession(id));
-  }
-  syncActiveChat();
+  setDraftChatSession(id);
   saveChatSessions();
-  scheduleChatContextWindowRefresh(150);
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  if (typeof window.renderChannelSessionsList === 'function') window.renderChannelSessionsList();
+  renderChatMessages();
   // New regular chat always exits project mode
   if (typeof window._maybeClearProjectState === 'function') {
     window._maybeClearProjectState(id);
@@ -8554,9 +8855,65 @@ function renderAssistantGeneratedVideos(message) {
     </div>`;
 }
 
-function pcScrollRight(btn) {
+function pcUpdateProductCarouselArrows(track) {
+  if (!track) return;
+  const carousel = track.closest('.product-carousel');
+  if (!carousel) return;
+  const maxScroll = Math.max(0, track.scrollWidth - track.clientWidth);
+  const canScrollLeft = track.scrollLeft > 4;
+  const canScrollRight = track.scrollLeft < maxScroll - 4;
+  const prev = carousel.querySelector('[data-carousel-prev]');
+  const next = carousel.querySelector('[data-carousel-next]');
+  if (prev) prev.classList.toggle('is-hidden', !canScrollLeft);
+  if (next) next.classList.toggle('is-hidden', maxScroll <= 4 || !canScrollRight);
+}
+
+function pcScroll(btn, direction = 1) {
   const track = btn.closest('.product-carousel')?.querySelector('[data-carousel]');
-  if (track) track.scrollBy({ left: 268, behavior: 'smooth' });
+  if (!track) return;
+  track.scrollBy({ left: 268 * direction, behavior: 'smooth' });
+  window.setTimeout(() => pcUpdateProductCarouselArrows(track), 260);
+}
+
+function pcScrollRight(btn) { pcScroll(btn, 1); }
+function pcScrollLeft(btn) { pcScroll(btn, -1); }
+
+function pcCleanText(value, max = 120) {
+  let text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/#{2,}/g, '')
+    .replace(/\b(?:Shop|Buy)\s+now\b.*$/i, '')
+    .trim();
+  if (!text) return '';
+  if (text.length > max) text = `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+  return text;
+}
+
+function pcCleanTitle(item) {
+  const raw = String(item?.title || 'Product')
+    .replace(/^\s*(?:Amazon\.com|Walmart\.com|Target|Best Buy|eBay)\s*:\s*/i, '')
+    .replace(/\s*[-|]\s*(?:Amazon\.com|Walmart\.com|Target|Best Buy|eBay).*$/i, '')
+    .trim();
+  return pcCleanText(raw || 'Product', 78);
+}
+
+function pcCleanDescription(item) {
+  const raw = String(item?.description || '')
+    .replace(/^\s*[-•]\s*/, '')
+    .replace(/\b(?:Customer Review|Ships from|Sold by|delivery|Keyboard shortcuts?|Image unavailable)\b.*$/i, '')
+    .trim();
+  return pcCleanText(raw, 96);
+}
+
+function pcMerchantLabel(item) {
+  const merchant = pcCleanText(item?.merchant, 24);
+  if (merchant) return merchant;
+  try {
+    const host = new URL(String(item?.productUrl || '')).hostname.replace(/^www\./, '');
+    return pcCleanText(host.split('.')[0], 24);
+  } catch {
+    return 'Product';
+  }
 }
 
 function renderProductCarousel(msg) {
@@ -8568,29 +8925,38 @@ function renderProductCarousel(msg) {
     const imgSrc = item.imagePath
       ? `/api/canvas/download?path=${encodeURIComponent(item.imagePath)}`
       : (item.imageUrl || '');
+    const titleText = pcCleanTitle(item);
+    const descText = pcCleanDescription(item);
+    const merchantText = pcMerchantLabel(item);
+    const tagText = String(item.tag || item.badge || '').trim();
+    const reviewValue = item.reviews ?? item.reviewCount;
     const stars = item.rating != null
-      ? `<span class="pc-rating">★ ${Number(item.rating).toFixed(1)}</span>`
+      ? `<span class="pc-rating">★ ${Number(item.rating).toFixed(1)}${reviewValue != null && Number.isFinite(Number(reviewValue)) && Number(reviewValue) > 0 ? ` (${Number(reviewValue).toLocaleString()})` : ''}</span>`
       : '';
-    const tag = item.tag ? `<span class="pc-tag">${escHtml(item.tag)}</span>` : '';
-    const price = item.price ? `<span class="pc-price">${escHtml(item.price)}</span>` : '';
-    const desc = item.description ? `<span class="pc-desc"> · ${escHtml(item.description)}</span>` : '';
+    const tag = tagText ? `<span class="pc-tag">${escHtml(tagText)}</span>` : '';
+    const price = item.price ? `<span class="pc-price">${escHtml(pcCleanText(item.price, 28))}</span>` : '';
+    const desc = descText ? `<span class="pc-desc">${escHtml(descText)}</span>` : '';
     const imgEl = imgSrc
-      ? `<img class="pc-img" src="${escHtml(imgSrc)}" alt="" loading="lazy">`
-      : `<div class="pc-img pc-img-placeholder"></div>`;
+      ? `<img class="pc-img" src="${escHtml(imgSrc)}" alt="" loading="lazy" onerror="this.closest('.pc-img-wrap')?.classList.add('pc-img-missing');this.remove()">`
+      : '';
     return `<a class="pc-card" href="${escHtml(item.productUrl)}" target="_blank" rel="noopener noreferrer">
-        <div class="pc-img-wrap">${imgEl}${tag}</div>
-        <strong class="pc-title">${escHtml(item.title)}</strong>
-        <div class="pc-meta">${price}${desc}</div>
-        ${stars}
+        <div class="pc-img-wrap${imgSrc ? '' : ' pc-img-missing'}">${imgEl}<div class="pc-img-placeholder"><span>${escHtml(merchantText)}</span></div>${tag}</div>
+        <div class="pc-card-body">
+          <div class="pc-merchant">${escHtml(merchantText)}</div>
+          <strong class="pc-title">${escHtml(titleText)}</strong>
+          ${(price || stars) ? `<div class="pc-stats">${price}${stars}</div>` : ''}
+          ${desc ? `<div class="pc-meta">${desc}</div>` : ''}
+        </div>
       </a>`;
   }).join('');
-  const arrowBtn = items.length > 2
-    ? `<button class="pc-arrow" onclick="pcScrollRight(this)" aria-label="Scroll right">›</button>`
+  const arrowBtns = items.length > 2
+    ? `<button class="pc-arrow pc-prev is-hidden" data-carousel-prev onclick="pcScrollLeft(this)" aria-label="Scroll left">‹</button>
+       <button class="pc-arrow pc-next" data-carousel-next onclick="pcScrollRight(this)" aria-label="Scroll right">›</button>`
     : '';
   return `<div class="product-carousel">
     ${title ? `<div class="pc-heading">${escHtml(title)}</div>` : ''}
-    <div class="pc-track" data-carousel>${cards}</div>
-    ${arrowBtn}
+    <div class="pc-track" data-carousel onscroll="pcUpdateProductCarouselArrows(this)" onmouseenter="pcUpdateProductCarouselArrows(this)" onfocus="pcUpdateProductCarouselArrows(this)">${cards}</div>
+    ${arrowBtns}
   </div>`;
 }
 
@@ -8777,23 +9143,54 @@ function renderUserMessageContent(msg) {
 
 function renderLiveTurnTrace(entries) {
   const list = (Array.isArray(entries) ? entries : [])
-    .filter((entry) => entry && String(entry.text || '').trim())
-    .slice(-18);
+    .filter((entry) => entry && String(entry.text || '').trim());
   if (!list.length) return '';
   return `<div class="live-turn-trace">
     ${list.map((entry) => {
       const type = String(entry.type || 'info').toLowerCase();
-      const label = type === 'assistant' ? 'Prometheus' : type === 'preamble' ? 'Preamble' : type === 'think' ? 'Reasoning' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
       const text = String(entry.text || '').trim();
-      const body = type === 'assistant'
-        ? `<div class="live-turn-md">${renderMd(text)}</div>`
-        : `<div class="live-turn-text">${escHtml(text)}</div>`;
+      if (type === 'preamble' || type === 'think' || type === 'assistant') {
+        return `<div class="live-turn-prose live-turn-${escHtml(type)}">
+          <div class="live-turn-md">${renderMd(text)}</div>
+        </div>`;
+      }
+      const label = type === 'assistant' ? 'Prometheus' : type === 'preamble' ? 'Preamble' : type === 'think' ? 'Reasoning' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+      const body = `<div class="live-turn-text">${escHtml(text)}</div>`;
       return `<div class="live-turn-segment live-turn-${escHtml(type)}">
         <span>${escHtml(label)}</span>
         ${body}
       </div>`;
     }).join('')}
   </div>`;
+}
+
+function liveTraceEntriesToProcessEntries(entries, existingEntries = []) {
+  const existingKeys = new Set((Array.isArray(existingEntries) ? existingEntries : [])
+    .map((entry) => `${String(entry?.type || '').toLowerCase()}|${String(entry?.content || entry?.text || '').replace(/\s+/g, ' ').trim()}`));
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => {
+      const type = String(entry?.type || 'info').toLowerCase();
+      const text = String(entry?.text || '').trim();
+      if (!text) return null;
+      if (type !== 'preamble' && type !== 'think') return null;
+      const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+      if (existingKeys.has(key)) return null;
+      existingKeys.add(key);
+      return {
+        id: String(entry.id || `trace_proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`),
+        type,
+        content: text,
+        text,
+        ts: entry.ts || new Date().toLocaleTimeString(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function mergeLiveTraceProcessEntries(traceEntries, processEntries) {
+  const base = Array.isArray(processEntries) ? processEntries.slice() : [];
+  const liveProcessEntries = liveTraceEntriesToProcessEntries(traceEntries, base);
+  return liveProcessEntries.length ? [...liveProcessEntries, ...base] : base;
 }
 
 function normalizeEmptyChatBrainCard(card) {
@@ -8811,8 +9208,10 @@ function normalizeEmptyChatBrainCard(card) {
   };
 }
 
-async function loadEmptyChatBrainCards() {
-  if (emptyChatBrainCardsLoaded || emptyChatBrainCardsLoading) return;
+async function loadEmptyChatBrainCards(options = {}) {
+  const force = options?.force === true;
+  if (!force && (emptyChatBrainCardsLoaded || emptyChatBrainCardsLoading)) return;
+  if (emptyChatBrainCardsLoading) return;
   emptyChatBrainCardsLoading = true;
   try {
     const data = await api('/api/brain/pulse-cards');
@@ -8832,6 +9231,11 @@ async function loadEmptyChatBrainCards() {
   if (document.getElementById('chat-view')?.classList.contains('chat-empty')) {
     renderChatMessages();
   }
+}
+
+function refreshEmptyChatBrainCards() {
+  emptyChatBrainCardsLoaded = false;
+  loadEmptyChatBrainCards({ force: true });
 }
 
 function getEmptyChatStarterCards() {
@@ -8859,6 +9263,207 @@ function applyEmptyChatStarterPrompt(index) {
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
   handleSlashCommandInput(input);
+  handleSkillTriggerInput(input);
+}
+
+function renderVisibleChatHistoryHtml(history = [], options = {}) {
+  const visibleHistory = collapseDuplicateAssistantMessageEntries((history || [])
+    .map((msg, originalIndex) => ({ msg, originalIndex })))
+    .filter((entry) => !isInternalChatMessage(entry.msg))
+    .filter((entry) => !(options.hideSideChatBoundary !== false && entry.msg?.sideChatBoundary === true));
+
+  return visibleHistory.map(({ msg, originalIndex }) => {
+    const isSyntheticTimerTrigger =
+      String(msg?.channelLabel || '').toLowerCase() === 'timer'
+      && msg.role === 'user'
+      && /^\s*\[Timer fired\]/i.test(String(msg?.content || ''));
+    if (isSyntheticTimerTrigger) return '';
+    const isTelegramMsg = String(msg?.channel || '').toLowerCase() === 'telegram';
+    const isTimerMsg = String(msg?.channelLabel || '').toLowerCase() === 'timer' || /^\s*\[Timer fired\]/i.test(String(msg?.content || ''));
+    const isGoalMsg = String(msg?.channelLabel || '').toLowerCase() === 'goal';
+    const isSideBoundary = msg?.sideChatBoundary === true;
+    const channelTag = isTelegramMsg
+      ? '<span class="msg-channel-tag">(telegram)</span>'
+      : (isTimerMsg ? '<span class="msg-channel-tag">(timer)</span>' : (isGoalMsg ? '<span class="msg-channel-tag">(goal)</span>' : (isSideBoundary ? '<span class="msg-channel-tag">(side)</span>' : '')));
+    const displayRole = isTimerMsg ? 'assistant' : msg.role;
+    const isUser = displayRole === 'user';
+    const isWorkerHandoff = isUser && isVoiceAgentWorkerHandoffMessage(msg);
+    const isEditingThisUserMessage = !options.readonly && isUser && window.editingUserMessageIndex === originalIndex;
+    const userContentHtml = isEditingThisUserMessage
+      ? renderUserEditComposer(msg, originalIndex)
+      : (isGoalMsg
+        ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
+        : `${isWorkerHandoff ? '<div class="msg-role voice-handoff-role">Voice Agent to Worker</div>' : ''}${renderUserMessageContent(msg)}`);
+    const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
+    const assistantContentHtml = !isUser
+      ? `${assistantApprovalHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
+      : userContentHtml;
+    const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
+    const actionsHtml = options.readonly || isSideBoundary ? '' : renderMessageActions(msg, originalIndex);
+    return `
+    <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}">
+      <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
+        ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
+        <div class="msg-bubble-stack">
+          ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
+          <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${msg.approvalRequest && !msg.content ? ' msg-body-approval-only' : ''}">
+                ${!isUser ? renderAssistantWorkTimer(msg) : ''}
+                ${!isUser && !(msg.approvalRequest && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
+                ${assistantContentHtml}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedVideos(msg) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFileChanges(msg.fileChanges) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
+              </div>
+              ${msg.approvalRequest && !msg.content ? '' : actionsHtml}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderSessionThinkingHtml(sessionId) {
+  if (!isSessionThinking(sessionId)) return '';
+  const st = getSessionStreamState(sessionId) || {};
+  const startupProgressPattern = /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i;
+  const progressLines = (Array.isArray(st.currentProgressLines) ? st.currentProgressLines : [])
+    .filter((line) => !startupProgressPattern.test(String(line || '').trim()));
+  const progressHtml = progressLines.length
+    ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
+        ${progressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
+      </div>`
+    : '';
+  const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || []);
+  const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
+  const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
+  const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
+  const showLiveTrace = !answerStarted && !!liveTraceHtml;
+  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml;
+  const currentProcessOpen = !!st.currentTurnProcessOpen;
+  const sess = getChatSessionById(sessionId);
+  const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
+  const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
+  const currentTurnEntries = mergeLiveTraceProcessEntries(st.liveTraceEntries, rawCurrentTurnEntries);
+  const currentProcessHtml = currentProcessOpen ? formatProcessLines(currentTurnEntries) : '';
+  const activeModelBadgeHtml = st.activeModelBadge
+    ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span>`
+    : '';
+  const processActionHtml = !thinkingOnly ? `
+    <div class="msg-actions live-msg-actions">
+      <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
+    </div>
+  ` : '';
+  const processPanelHtml = !thinkingOnly
+    ? `<div id="current-turn-process" style="display:${currentProcessOpen ? 'block' : 'none'};margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">${currentProcessHtml}</div>`
+    : '';
+  return `
+    <div class="msg-shell ai">
+      <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="${sessionId === window.activeChatSessionId ? 'thinking-msg' : `thinking-msg-${escHtml(sessionId)}`}">
+        <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
+        <div class="msg-bubble-stack">
+          <div class="msg-body">
+            ${renderAssistantWorkTimer(null, { active: true, startedAt: Number(st.turnStartedAt || 0) })}
+            ${!thinkingOnly ? `<div class="msg-role">Prom${activeModelBadgeHtml}</div>` : ''}
+            ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
+            ${showAnswerText
+              ? `<div id="streaming-text-content">${renderAssistantContent(st.streamingAIText)}</div>`
+              : (showLiveTrace || progressHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)
+            }
+            ${liveApprovalsHtml}
+            ${processPanelHtml}
+          </div>
+          ${processActionHtml}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderSideChatPaneHtml() {
+  const link = getActiveSideChatLink();
+  const side = getSideChatSession();
+  if (!link || !side) return '';
+  const title = side.title || link.title || 'Side chat';
+  const parent = getSideChatParentSession(link);
+  const parentTitle = parent?.title || 'Main chat';
+  const historyHtml = renderVisibleChatHistoryHtml(side.history || [], { sessionId: side.id, readonly: true, hideSideChatBoundary: true });
+  const thinkingHtml = renderSessionThinkingHtml(side.id);
+  return `
+    <section class="side-chat-pane" aria-label="Side chat">
+      <div class="side-chat-header">
+        <div class="side-chat-title-wrap">
+          <div class="side-chat-kicker">Side chat · ${escHtml(parentTitle)}</div>
+          <div class="side-chat-title">${escHtml(title)}</div>
+        </div>
+        <button class="side-chat-close" type="button" onclick="closeSideChatSplit()" title="Close side chat" aria-label="Close side chat">×</button>
+      </div>
+      <div class="side-chat-messages" id="side-chat-messages">
+        ${historyHtml || '<div class="side-chat-empty">Start a side chat from the composer or message action.</div>'}
+        ${thinkingHtml}
+      </div>
+      <div class="side-chat-composer chat-input-area">
+        <div class="chat-input-row">
+          <button class="chat-attach-btn" type="button" onclick="showToast('Side chat attachments are coming next.', 'For now, attach files in the main composer before opening side context.', 'info')" title="Attach file(s)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <button class="chat-voice-btn" type="button" onclick="showToast('Side chat dictation is coming next.', 'Use the main composer mic for voice input right now.', 'info')" title="Dictate message" aria-label="Dictate message">
+            <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+          </button>
+          <button class="chat-command-chip" type="button" style="display:none" aria-hidden="true"></button>
+          <textarea id="side-chat-input" rows="1" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" oninput="handleSideChatInputResize(this)" onkeydown="handleSideChatInputKeydown(event)"></textarea>
+          <button class="send-btn" type="button" onclick="sendSideChatMessage()" title="Send side chat">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
+          </button>
+        </div>
+        <div class="agent-toggle side-chat-composer-footer" style="margin-bottom:0;margin-top:6px">
+          <div class="chat-hint" style="margin:0;flex:1"></div>
+          <div class="chat-model-switcher-wrap">
+            <button type="button" style="background:none;border:none;padding:0;cursor:default;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Side chat model">
+              <span>${escHtml(document.getElementById('chat-model-name')?.textContent || 'gpt-5.5')}</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+              <span style="color:var(--muted)">via <span>${escHtml(document.getElementById('chat-provider-name')?.textContent || 'ChatGPT')}</span></span>
+            </button>
+            <button class="chat-context-window-btn" type="button" onclick="showToast('Side chat context is inherited from the parent chat.', '', 'info')" title="Context window" aria-label="Context window">
+              <span class="chat-context-window-dot"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>`;
+}
+
+// ── Streaming render coalescer ──────────────────────────────────────────────
+// During an active turn, token/live-trace appends arrive faster than is useful
+// to repaint. State (streamingAIText, liveTraceEntries) is still updated
+// immediately on every token; only the *visible* render is coalesced to a steady
+// cadence so the final answer streams in a few words at a time (like Telegram's
+// bubble edits) instead of flickering per token. Timers are keyed per session id
+// so a background/non-viewed session can never repaint the foreground — the
+// render fns themselves also guard on visibility. Every finalization path must
+// flush so the complete final answer always lands.
+const STREAM_RENDER_THROTTLE_MS = 90;
+const _streamRenderTimers = new Map(); // sessionId -> timeout handle
+
+function scheduleStreamingRenderFor(sessionId, renderFn) {
+  const key = String(sessionId || '');
+  if (!key || typeof renderFn !== 'function') { try { renderFn?.(); } catch {} return; }
+  if (_streamRenderTimers.has(key)) return; // leading-guard coalesce
+  const handle = setTimeout(() => {
+    _streamRenderTimers.delete(key);
+    try { renderFn(); } catch {}
+  }, STREAM_RENDER_THROTTLE_MS);
+  if (handle && typeof handle.unref === 'function') handle.unref();
+  _streamRenderTimers.set(key, handle);
+}
+
+function flushStreamingRenderFor(sessionId, renderFn) {
+  const key = String(sessionId || '');
+  const handle = _streamRenderTimers.get(key);
+  if (handle) { clearTimeout(handle); _streamRenderTimers.delete(key); }
+  if (typeof renderFn === 'function') { try { renderFn(); } catch {} }
 }
 
 function renderChatMessages() {
@@ -8866,13 +9471,15 @@ function renderChatMessages() {
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
   syncAssistantWorkTimer();
+  updateSideChatChrome();
 
   const visibleHistory = collapseDuplicateAssistantMessageEntries((window.chatHistory || [])
     .map((msg, originalIndex) => ({ msg, originalIndex })))
     .filter((entry) => !isInternalChatMessage(entry.msg));
   const voicePendingHtml = renderVoicePendingTurns();
+  const sideActive = window.sideChatSplitOpen && !!getActiveSideChatLink();
 
-  if (visibleHistory.length === 0 && !voicePendingHtml) {
+  if (!sideActive && visibleHistory.length === 0 && !voicePendingHtml) {
     if (chatView) chatView.classList.add('chat-empty');
     container.innerHTML = `
       <div class="chat-welcome" id="chat-welcome">
@@ -8887,92 +9494,32 @@ function renderChatMessages() {
   }
 
   if (chatView) chatView.classList.remove('chat-empty');
-  container.innerHTML = visibleHistory.map(({ msg, originalIndex }) => {
-    const isSyntheticTimerTrigger =
-      String(msg?.channelLabel || '').toLowerCase() === 'timer'
-      && msg.role === 'user'
-      && /^\s*\[Timer fired\]/i.test(String(msg?.content || ''));
-    if (isSyntheticTimerTrigger) return '';
-    const isTelegramMsg = String(msg?.channel || '').toLowerCase() === 'telegram';
-    const isTimerMsg = String(msg?.channelLabel || '').toLowerCase() === 'timer' || /^\s*\[Timer fired\]/i.test(String(msg?.content || ''));
-    const isGoalMsg = String(msg?.channelLabel || '').toLowerCase() === 'goal';
-    const channelTag = isTelegramMsg
-      ? '<span class="msg-channel-tag">(telegram)</span>'
-      : (isTimerMsg ? '<span class="msg-channel-tag">(timer)</span>' : (isGoalMsg ? '<span class="msg-channel-tag">(goal)</span>' : ''));
-    const displayRole = isTimerMsg ? 'assistant' : msg.role;
-    const isUser = displayRole === 'user';
-    const isWorkerHandoff = isUser && isVoiceAgentWorkerHandoffMessage(msg);
-    const isEditingThisUserMessage = isUser && window.editingUserMessageIndex === originalIndex;
-    const userContentHtml = isEditingThisUserMessage
-      ? renderUserEditComposer(msg, originalIndex)
-      : (isGoalMsg
-        ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
-        : `${isWorkerHandoff ? '<div class="msg-role voice-handoff-role">Voice Agent to Worker</div>' : ''}${renderUserMessageContent(msg)}`);
-    const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
-    const assistantContentHtml = !isUser
-      ? `${assistantApprovalHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
-      : userContentHtml;
-    const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
-    return `
-    <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}">
-      <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
-        ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
-        <div class="msg-bubble-stack">
-          ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
-          <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${msg.approvalRequest && !msg.content ? ' msg-body-approval-only' : ''}">
-                ${!isUser ? renderAssistantWorkTimer(msg) : ''}
-		            ${!isUser && !(msg.approvalRequest && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
-		            ${assistantContentHtml}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedVideos(msg) : ''}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFileChanges(msg.fileChanges) : ''}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
-		          </div>
-              ${msg.approvalRequest && !msg.content ? '' : renderMessageActions(msg, originalIndex)}
-        </div>
-	      </div>
-	    </div>`;
-  }).join('') + voicePendingHtml;
-
-  if (isSessionThinking(window.activeChatSessionId)) {
-    const progressHtml = window.currentProgressLines.length
-      ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
-          ${window.currentProgressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
-        </div>`
-	      : '';
-    const liveTraceHtml = renderLiveTurnTrace(window.liveTraceEntries || []);
-    const liveApprovalsHtml = renderStreamingApprovals(window.pendingApprovals || []);
-	    const thinkingOnly = !window.streamingAIText && !progressHtml && !liveTraceHtml && !liveApprovalsHtml;
-    const currentProcessOpen = !!window.currentTurnProcessOpen;
-    const currentTurnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
-    const currentProcessHtml = currentProcessOpen ? formatProcessLines(currentTurnEntries) : '';
-    const activeStreamState = getSessionStreamState(window.activeChatSessionId) || {};
-	    container.innerHTML += `
-      <div class="msg-shell ai">
-        <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
-          <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
-          <div class="msg-body">
-            ${renderAssistantWorkTimer(null, { active: true, startedAt: Number(activeStreamState.turnStartedAt || 0) })}
-            ${!thinkingOnly ? `<div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>` : ''}
-	            ${liveTraceHtml || progressHtml}
-            ${window.streamingAIText && !liveTraceHtml
-              ? `<div id="streaming-text-content" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word">${renderMd(window.streamingAIText)}</div>`
-              : (liveTraceHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)
-            }
-            ${liveApprovalsHtml}
-            ${!thinkingOnly ? `<div style="margin-top:8px">
-              <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
-              <div id="current-turn-process" style="display:${currentProcessOpen ? 'block' : 'none'};margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">${currentProcessHtml}</div>
-            </div>` : ''}
+  const mainHtml = renderVisibleChatHistoryHtml(window.chatHistory || []) + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId);
+  if (sideActive) {
+    container.classList.add('side-chat-split-shell');
+    container.innerHTML = `
+      <section class="side-chat-main-pane" aria-label="Main chat">
+        <div class="side-chat-pane-header">
+          <div>
+            <div class="side-chat-kicker">Main chat</div>
+            <div class="side-chat-title">${escHtml(getChatSessionById(window.activeChatSessionId)?.title || 'Current chat')}</div>
           </div>
         </div>
-      </div>`;
+        <div class="side-chat-main-messages">${mainHtml}</div>
+      </section>
+      ${renderSideChatPaneHtml()}
+    `;
+    if (!window.chatMessagesUserScrolledUp) {
+      const mainPane = container.querySelector('.side-chat-main-messages');
+      const sidePane = container.querySelector('#side-chat-messages');
+      if (mainPane) mainPane.scrollTop = mainPane.scrollHeight;
+      if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
+    }
+    return;
   }
 
+  container.classList.remove('side-chat-split-shell');
+  container.innerHTML = mainHtml;
   if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
 }
 
@@ -9580,6 +10127,7 @@ function stabilizeChatHistoryOrder(history) {
 
 function assistantContentMergeKey(msg) {
   if (!isAssistantLikeMessage(msg)) return '';
+  if (msg?.workflowGroupId || msg?.workflowPart) return '';
   const content = String(msg?.content || '').replace(/\s+/g, ' ').trim();
   return content ? `assistant|${content}` : '';
 }
@@ -10293,6 +10841,7 @@ function isFailedTurnReply(text) {
 }
 
 const CHAT_SLASH_COMMANDS = [
+  { command: '/side', label: 'Open a linked side chat', placeholder: 'Optional first side-chat message...' },
   { command: '/goal', label: 'Start goal mode in this chat', placeholder: 'Describe the goal Prometheus should keep working toward...' },
   { command: '/goal status', label: 'Show the active goal state', placeholder: 'Optional note for the status check...' },
   { command: '/goal pause', label: 'Pause the active goal runner', placeholder: 'Optional reason...' },
@@ -10304,6 +10853,182 @@ const CHAT_SLASH_COMMANDS = [
 ];
 let activeSlashCommand = null;
 let slashCommandSelectionIndex = 0;
+let skillTriggerPillExpanded = false;
+let skillTriggerSelectedId = '';
+let skillTriggerLastKey = '';
+let skillTriggerCacheLoadPromise = null;
+
+const SKILL_TRIGGER_STOPWORDS = new Set([
+  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
+  'me', 'my', 'our', 'this', 'that', 'please',
+]);
+
+function normalizeSkillMatchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeSkillMatchTextLoose(value) {
+  return normalizeSkillMatchText(value)
+    .split(' ')
+    .filter((word) => word && !SKILL_TRIGGER_STOPWORDS.has(word))
+    .join(' ');
+}
+
+function skillTriggerMatchesText(trigger, rawText, words) {
+  const normalizedTrigger = normalizeSkillMatchText(trigger);
+  if (!normalizedTrigger) return false;
+  const normalizedText = normalizeSkillMatchText(rawText);
+  if (normalizedTrigger.includes(' ')) {
+    if (normalizedText.includes(normalizedTrigger)) return true;
+    const looseTrigger = normalizeSkillMatchTextLoose(trigger);
+    const looseText = normalizeSkillMatchTextLoose(rawText);
+    return looseTrigger.length >= 4 && looseText.includes(looseTrigger);
+  }
+  return words.some((word) => {
+    const normalizedWord = normalizeSkillMatchText(word);
+    if (normalizedWord === normalizedTrigger) return true;
+    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
+    return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
+  });
+}
+
+function getInstalledSkillCache() {
+  return Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [];
+}
+
+function ensureSkillTriggerCacheLoaded() {
+  if (getInstalledSkillCache().length || skillTriggerCacheLoadPromise) return;
+  const loader = typeof window.loadInstalledSkills === 'function'
+    ? window.loadInstalledSkills()
+    : fetch('/api/skills')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then((data) => {
+        const skills = Array.isArray(data?.skills) ? data.skills : [];
+        window.prometheusSkillsCache = skills;
+        window.dispatchEvent(new CustomEvent('prometheus:skills-cache-updated', { detail: { skills } }));
+      });
+  skillTriggerCacheLoadPromise = Promise.resolve(loader)
+    .catch((err) => console.warn('[skills] composer trigger cache load failed:', err))
+    .finally(() => { skillTriggerCacheLoadPromise = null; });
+}
+
+function getComposerSkillMatches(value) {
+  const text = String(value || '').toLowerCase();
+  const words = text.split(/\W+/).filter((word) => word.length > 2);
+  if (!text.trim()) return [];
+  return getInstalledSkillCache()
+    .filter((skill) => Array.isArray(skill?.triggers) && skill.triggers.length)
+    .filter((skill) => skill.triggers.some((trigger) => skillTriggerMatchesText(trigger, text, words)))
+    .slice(0, 8);
+}
+
+function renderSkillTriggerIcon() {
+  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.7 5.2L19 10l-5.3 1.8L12 17l-1.7-5.2L5 10l5.3-1.8L12 3z"/><path d="M19 16l.7 2.1L22 19l-2.3.9L19 22l-.7-2.1L16 19l2.3-.9L19 16z"/></svg>`;
+}
+
+function hideSkillTriggerPill() {
+  const pill = document.getElementById('chat-skill-trigger-pill');
+  if (!pill) return;
+  pill.style.display = 'none';
+  pill.classList.remove('expanded', 'pop');
+  pill.innerHTML = '';
+  skillTriggerPillExpanded = false;
+  skillTriggerSelectedId = '';
+  skillTriggerLastKey = '';
+}
+
+function openSkillTriggerDescription(id) {
+  skillTriggerSelectedId = String(id || '');
+  skillTriggerPillExpanded = true;
+  const input = document.getElementById('chat-input');
+  renderSkillTriggerPill(input ? input.value : '');
+}
+
+function toggleSkillTriggerPill() {
+  skillTriggerPillExpanded = !skillTriggerPillExpanded;
+  if (!skillTriggerPillExpanded) skillTriggerSelectedId = '';
+  const input = document.getElementById('chat-input');
+  renderSkillTriggerPill(input ? input.value : '');
+}
+
+function renderSkillTriggerPill(value = '') {
+  const pill = document.getElementById('chat-skill-trigger-pill');
+  if (!pill) return;
+  const matches = getComposerSkillMatches(value);
+  if (!matches.length) {
+    hideSkillTriggerPill();
+    return;
+  }
+
+  const nextKey = matches.map((skill) => String(skill.id || skill.name || '')).join('|');
+  const shouldPop = pill.style.display === 'none' || nextKey !== skillTriggerLastKey;
+  skillTriggerLastKey = nextKey;
+  if (skillTriggerSelectedId && !matches.some((skill) => String(skill.id || '') === skillTriggerSelectedId)) {
+    skillTriggerSelectedId = '';
+  }
+  const selectedSkill = matches.find((skill) => String(skill.id || '') === skillTriggerSelectedId) || null;
+  const visibleNames = matches.slice(0, 4);
+  const overflow = Math.max(0, matches.length - visibleNames.length);
+
+  pill.classList.toggle('expanded', skillTriggerPillExpanded);
+  pill.innerHTML = `
+    <button type="button" class="skill-trigger-summary" aria-expanded="${skillTriggerPillExpanded ? 'true' : 'false'}">
+      <span class="skill-trigger-icon">${renderSkillTriggerIcon()}</span>
+      <span class="skill-trigger-label">Related Skills</span>
+      <span class="skill-trigger-count">${matches.length}</span>
+      <span class="skill-trigger-preview">${visibleNames.map((skill) => `<span>${escHtml(skill.name || skill.id || 'Skill')}</span>`).join('')}${overflow ? `<span>+${overflow}</span>` : ''}</span>
+    </button>
+    <button type="button" class="skill-trigger-close" aria-label="Dismiss related skills">x</button>
+    ${skillTriggerPillExpanded ? `
+      <div class="skill-trigger-expanded" role="list">
+        ${matches.map((skill) => `
+          <button type="button" class="skill-trigger-item${String(skill.id || '') === skillTriggerSelectedId ? ' active' : ''}" data-skill-id="${escHtml(skill.id || '')}" role="listitem">
+            <span class="skill-trigger-item-title">${escHtml(skill.name || skill.id || 'Skill')}</span>
+          </button>
+        `).join('')}
+      </div>
+      <div class="skill-trigger-description">
+        ${selectedSkill ? `
+          <strong>${escHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
+          <span>${escHtml(selectedSkill.description || 'No description available.')}</span>
+        ` : '<span>Select a skill to preview its description.</span>'}
+      </div>
+    ` : ''}
+  `;
+
+  pill.querySelector('.skill-trigger-summary')?.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    toggleSkillTriggerPill();
+  });
+  pill.querySelector('.skill-trigger-close')?.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    hideSkillTriggerPill();
+  });
+  pill.querySelectorAll('.skill-trigger-item').forEach((button) => {
+    button.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      openSkillTriggerDescription(button.getAttribute('data-skill-id') || '');
+    });
+  });
+
+  pill.style.display = 'flex';
+  if (shouldPop) {
+    pill.classList.remove('pop');
+    void pill.offsetWidth;
+    pill.classList.add('pop');
+  }
+}
+
+function handleSkillTriggerInput(input) {
+  if (!input) return;
+  ensureSkillTriggerCacheLoaded();
+  renderSkillTriggerPill(input.value);
+}
 
 function getChatInputDefaultPlaceholder() {
   return window.useAgentMode
@@ -10421,13 +11146,23 @@ function getChatComposerValue() {
 }
 
 function handleImmediateChatSlashCommand(message) {
-  const command = String(message || '').trim().toLowerCase();
-  if (command !== '/new') return false;
+  const raw = String(message || '').trim();
+  const command = raw.toLowerCase();
   const input = document.getElementById('chat-input');
-  clearChatComposerAfterSend(input);
-  newChatSession();
-  showToast('New chat started', 'A fresh chat is ready.', 'success');
-  return true;
+  if (command === '/new') {
+    clearChatComposerAfterSend(input);
+    newChatSession();
+    showToast('New chat started', 'A fresh chat is ready.', 'success');
+    return true;
+  }
+  if (command === '/side' || command.startsWith('/side ')) {
+    const initialText = raw.slice('/side'.length).trim();
+    clearChatComposerAfterSend(input);
+    openOrCreateSideChat(initialText);
+    showToast('Side chat opened', initialText ? 'Sending your first side-chat message.' : 'Split view is ready.', 'success');
+    return true;
+  }
+  return false;
 }
 
 function handleSlashCommandInput(input) {
@@ -10457,6 +11192,7 @@ function clearChatComposerAfterSend(input) {
     input.style.height = 'auto';
   }
   clearActiveSlashCommand({ focus: false });
+  hideSkillTriggerPill();
 }
 
 window.clearActiveSlashCommand = clearActiveSlashCommand;
@@ -10476,8 +11212,8 @@ function persistSession(id) {
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   if (typeof window.updateStats === 'function') window.updateStats([]);
-  // Re-render messages only if user is currently viewing this session
-  if (window.activeChatSessionId === id) {
+  // Re-render messages only if user is currently viewing this session.
+  if (isSessionVisibleInChatSurface(id)) {
     renderChatMessages();
     scheduleChatContextWindowRefresh(500);
   }
@@ -10508,8 +11244,13 @@ async function sendChat(queuedMessage = null, options = {}) {
   const message = String(raw || '').trim();
   if (!message) return;
   if (!queuedTurn && handleImmediateChatSlashCommand(message)) return;
-  ensureActiveChatSessionExists();
-  const thisSessionId = window.activeChatSessionId; // capture at send time — stable through async closure
+  const forcedSessionId = String(options.sessionIdOverride || '').trim();
+  if (!forcedSessionId) ensureActiveChatSessionExists();
+  const thisSessionId = forcedSessionId || window.activeChatSessionId; // capture at send time — stable through async closure
+  if (forcedSessionId && !getChatSessionById(forcedSessionId)) {
+    window.chatSessions.unshift(createEmptyChatSession(forcedSessionId));
+    saveChatSessions();
+  }
   const sendLock = (!queuedTurn && !Number.isInteger(options.reuseExistingUserIndex))
     ? acquireChatSendLock(thisSessionId, message)
     : { key: '', at: Date.now() };
@@ -10520,8 +11261,8 @@ async function sendChat(queuedMessage = null, options = {}) {
   let streamState = getSessionStreamState(thisSessionId) || resetSessionStreamState(thisSessionId);
   const addProcessEntry = (type, content, extra) => addSessionProcessEntry(thisSessionId, type, content, extra);
   const renderIfViewingThisSession = () => {
-    if (window.activeChatSessionId !== thisSessionId) return;
-    applyStreamStateToWindow(thisSessionId);
+    if (!isSessionVisibleInChatSurface(thisSessionId)) return;
+    if (window.activeChatSessionId === thisSessionId) applyStreamStateToWindow(thisSessionId);
     renderChatMessages();
   };
   const pushProgressLine = (line) => {
@@ -10533,7 +11274,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (last === txt) return;
     streamState.currentProgressLines.push(txt);
     if (streamState.currentProgressLines.length > 8) streamState.currentProgressLines = streamState.currentProgressLines.slice(-8);
-    renderIfViewingThisSession();
+    scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
   };
   const appendThinkingProgressChunk = (chunk) => {
     const text = String(chunk || '');
@@ -10554,7 +11295,7 @@ async function sendChat(queuedMessage = null, options = {}) {
       streamState.currentProgressLines.push(thinkLine);
       if (streamState.currentProgressLines.length > 8) streamState.currentProgressLines = streamState.currentProgressLines.slice(-8);
     }
-    renderIfViewingThisSession();
+    scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
   };
   const appendLiveTrace = (type, text, { append = false } = {}) => {
     const content = String(text || '');
@@ -10572,12 +11313,19 @@ async function sendChat(queuedMessage = null, options = {}) {
         id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type: normalizedType,
         text: trimmed,
+        ts: new Date().toLocaleTimeString(),
       });
-      if (streamState.liveTraceEntries.length > 28) {
-        streamState.liveTraceEntries = streamState.liveTraceEntries.slice(-28);
-      }
     }
-    renderIfViewingThisSession();
+    scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
+  };
+  const movePreToolAnswerTextIntoPreamble = () => {
+    if (sawToolActivityThisTurn) return;
+    const text = String(streamState.streamingAIText || '').trim();
+    if (!text) return;
+    appendLiveTrace('preamble', text);
+    streamState.streamingAIText = '';
+    streamState.finalResponseStarted = false;
+    if (window.activeChatSessionId === thisSessionId) window.streamingAIText = '';
   };
   const sessionHistoryRef = thisSession ? (thisSession.history || (thisSession.history = [])) : window.chatHistory;
   if (thisSession && window.activeChatSessionId === thisSessionId) {
@@ -10682,7 +11430,12 @@ async function sendChat(queuedMessage = null, options = {}) {
       workEndedAt,
       workDurationMs: Math.max(0, Number(message.workDurationMs ?? (workEndedAt - workStartedAt)) || 0),
     };
-    const existingIndex = sessionHistoryRef.findIndex((candidate, idx) => (
+    if (shouldAppendAfterInterruption) {
+      assistantMessage.workflowGroupId = assistantMessage.workflowGroupId || streamState.pendingInterruptionWorkflowGroupId || '';
+      assistantMessage.workflowPart = assistantMessage.workflowPart || 'interruption_response';
+      assistantMessage.workflowLabel = assistantMessage.workflowLabel || streamState.pendingInterruptionWorkflowLabel || 'Response after steer';
+    }
+    const existingIndex = shouldAppendAfterInterruption ? -1 : sessionHistoryRef.findIndex((candidate, idx) => (
       idx > userTurnIndex
       && isAssistantLikeMessage(candidate)
       && String(candidate.content || '').trim() === String(assistantMessage.content || '').trim()
@@ -10696,7 +11449,12 @@ async function sendChat(queuedMessage = null, options = {}) {
     } else {
       sessionHistoryRef.push(assistantMessage);
     }
-    if (shouldAppendAfterInterruption) streamState.forceAppendAssistantAfterInterruption = false;
+    if (shouldAppendAfterInterruption) {
+      streamState.forceAppendAssistantAfterInterruption = false;
+      streamState.pendingInterruptionWorkflowGroupId = '';
+      streamState.pendingInterruptionWorkflowLabel = '';
+      syncSessionHistoryToServerById(thisSessionId, sessionHistoryRef).catch(() => {});
+    }
     return assistantMessage;
   };
   if (options.voicePendingTurnId) removeVoicePendingTurnInternal(options.voicePendingTurnId);
@@ -10962,7 +11720,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 		      generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
 		      mode: window.useAgentMode ? 'agentic' : 'chat',
 		      thinking: streamedThinking || undefined,
-		      processEntries: turnEntries,
+		      processEntries: mergeLiveTraceProcessEntries(streamState.liveTraceEntries, turnEntries),
 		    });
 		  };
 	  try {
@@ -11011,7 +11769,10 @@ async function sendChat(queuedMessage = null, options = {}) {
           case 'agent_mode':
             window.lastAgentMode = event.mode || '-';
             window.lastTurnKind = event.turnKind || window.lastTurnKind;
-            if (event.mode === 'execute') sawExecuteModeThisTurn = true;
+            if (event.mode === 'execute') {
+              sawExecuteModeThisTurn = true;
+              movePreToolAnswerTextIntoPreamble();
+            }
             addProcessEntry(
               'info',
               `Agent mode: ${event.mode || 'unknown'}${event.turnKind ? ` (${event.turnKind})` : ''}${event.switched_from ? ` | switched_from=${event.switched_from}` : ''}${event.route_target ? ` | route_target=${event.route_target}` : ''}${event.trigger ? ` | trigger=${event.trigger}` : ''}`
@@ -11037,13 +11798,19 @@ async function sendChat(queuedMessage = null, options = {}) {
           case 'token': {
             const chunk = String(event.text || '');
             if (chunk) {
-              streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
-              if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
               if (voiceLatencyTurnStartedAt && !voiceLatencyFirstTokenLogged) {
                 voiceLatencyFirstTokenLogged = true;
                 logDesktopVoiceLatency(thisSessionId, 'worker first token', voiceLatencyTurnStartedAt, { textLen: chunk.length });
               }
-              appendLiveTrace('assistant', chunk, { append: true });
+              const treatAsLiveWorkflowProse = window.useAgentMode && sawExecuteModeThisTurn && !streamState.finalResponseStarted;
+              if (treatAsLiveWorkflowProse) {
+                appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', chunk, { append: true });
+              } else {
+                streamState.finalResponseStarted = true;
+                streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
+                if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
+                scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
+              }
             }
             break;
           }
@@ -11055,7 +11822,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
 	              if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
 	              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
-	                appendLiveTrace('preamble', chunk, { append: true });
+	                appendLiveTrace('think', chunk, { append: true });
 	              }
 	            }
 	            break;
@@ -11066,6 +11833,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (thoughtText) {
 	              collectTurnThinking(thoughtText);
 	              logThinkingToProcess(thoughtText);
+	              appendLiveTrace('think', thoughtText);
 	            }
 	            break;
 	          }
@@ -11075,6 +11843,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              const thinkingText = String(event.thinking).trim();
 	              collectTurnThinking(thinkingText);
 	              logThinkingToProcess(thinkingText);
+	              appendLiveTrace('think', thinkingText);
 	            }
 	            break;
 
@@ -11082,12 +11851,15 @@ async function sendChat(queuedMessage = null, options = {}) {
             const modelEvent = event.event && typeof event.event === 'object' ? event.event : {};
             const modelType = String(modelEvent.type || '').trim();
             if (modelType === 'tool_call_start') {
+              movePreToolAnswerTextIntoPreamble();
+              sawToolActivityThisTurn = true;
               const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
               appendLiveTrace('tool', `Preparing ${name}...`);
             } else if (modelType === 'tool_call_delta') {
               // Arguments can stream token-by-token; keep the UI calm and let the
               // final normalized tool event show the complete call.
             } else if (modelType === 'tool_call_done') {
+              sawToolActivityThisTurn = true;
               const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
               appendLiveTrace('tool', `Prepared ${name}`);
             }
@@ -11156,6 +11928,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             const args = (event.args && typeof event.args === 'object') ? event.args : null;
             const displayAction = formatToolCallForLog(action, args, streamState);
             const syntheticTag = event.synthetic ? ' [synthetic]' : '';
+            movePreToolAnswerTextIntoPreamble();
             sawToolActivityThisTurn = true;
             if (action === 'context_compaction') {
               pushProgressLine('Compacting thread context...');
@@ -11199,6 +11972,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             const action = String(event.action || '').trim();
             const stepNum = Number(event.stepNum || 0);
             const stepPrefix = getDeclaredPlanToolPrefix(stepNum);
+            movePreToolAnswerTextIntoPreamble();
             sawToolActivityThisTurn = true;
             const text = String(event.result || '');
 	            const ok = event.error === true ? false : !/^ERROR:/i.test(text);
@@ -11261,6 +12035,8 @@ async function sendChat(queuedMessage = null, options = {}) {
             const action = String(event.action || '').trim();
             const message = String(event.message || '').trim();
             if (action && message) {
+              movePreToolAnswerTextIntoPreamble();
+              sawToolActivityThisTurn = true;
               const progressText = formatToolProgressForLog(action, message);
               pushProgressLine(progressText);
               appendLiveTrace('tool', progressText);
@@ -11543,13 +12319,27 @@ async function sendChat(queuedMessage = null, options = {}) {
           }
 
 	          case 'done':
-	            finalReply = event.reply || '';
+	            finalReply = event.reply || finalReply || '';
 	            if (finalReply) partialContent = finalReply;
 	            if (event.thinking) collectTurnThinking(event.thinking);
 	            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
 	            finalFileChanges = event.fileChanges || null;
 	            finalProductCarousel = event.productCarousel || null;
 	            streamState.activeModelBadge = null; // clear badge when turn completes
+	            break;
+
+	          case 'final':
+	            finalReply = String(event.text || event.reply || '');
+	            if (finalReply) {
+	              partialContent = finalReply;
+	              streamState.finalResponseStarted = true;
+	              streamState.streamingAIText = finalReply;
+	              if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
+	              scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
+	            }
+	            if (Array.isArray(event.artifacts)) finalArtifacts = event.artifacts;
+	            if (event.fileChanges) finalFileChanges = event.fileChanges;
+	            if (event.productCarousel) finalProductCarousel = event.productCarousel;
 	            break;
 
           case 'turn_execution_created':
@@ -11566,7 +12356,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	      const mergedThinking = persistTurnThinkingToProcess();
 	      await applyDesignAssistantOps(finalReply);
 	      applyCreativeAssistantOps(finalReply);
-	      const turnEntries = getTurnEntries();
+	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
 	      appendAssistantTurnForUser({
 	        role: 'ai',
 	        content: finalReply,
@@ -11581,7 +12371,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        processEntries: turnEntries
 	      });
 	    } else {
-	      const turnEntries = getTurnEntries();
+	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
 	      appendAssistantTurnForUser({
 	        role: 'ai',
 	        content: 'No response received.',
@@ -11606,7 +12396,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (wasAborted) {
       saveInterruptedAssistantTurn();
     } else {
-      const turnEntries = getTurnEntries();
+      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
       streamState.lastHeartbeat = { ...streamState.lastHeartbeat, state: 'stalled', level: 'hard', message: String(err.message || 'connection_error'), current_step: 'error' };
       if (window.activeChatSessionId === thisSessionId) {
         window.lastHeartbeat = streamState.lastHeartbeat;
@@ -11623,6 +12413,11 @@ async function sendChat(queuedMessage = null, options = {}) {
     }
     persistSession(thisSessionId);
   }
+
+  // Finalization flush: cancel any pending coalesced streaming render and paint
+  // the final state immediately so the complete answer is never truncated by an
+  // un-fired throttle timer. Runs for done/abort/error/stop (all converge here).
+  flushStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
 
   // Per-session cleanup
   delete window._sessionThinking[thisSessionId];
@@ -11802,9 +12597,14 @@ document.getElementById('chat-input').addEventListener('keydown', e => {
 document.getElementById('chat-input').addEventListener('input', function() {
   resizeChatInput(this);
   handleSlashCommandInput(this);
+  handleSkillTriggerInput(this);
 });
 document.getElementById('chat-input').addEventListener('blur', () => {
   setTimeout(hideSlashCommandPopover, 120);
+});
+window.addEventListener('prometheus:skills-cache-updated', () => {
+  const input = document.getElementById('chat-input');
+  if (input) handleSkillTriggerInput(input);
 });
 
 document.addEventListener('keydown', handleRealtimeSpaceKeydown, true);
@@ -16027,7 +16827,38 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
   }
 }
 
-function sendVoiceAgentRealtimeFunctionOutput(callId, output, options = {}) {
+// Downscale/recompress a data URL so a full-res screenshot reliably fits in ONE
+// realtime data-channel (SCTP) message. Without this a 1-3MB PNG send can fail
+// silently and the voice agent gets only the text metadata.
+async function downscaleDataUrlForRealtime(dataUrl, maxDim = 1280, quality = 0.82) {
+  const src = String(dataUrl || '');
+  if (!src.startsWith('data:image')) return src;
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error('image decode failed'));
+      im.src = src;
+    });
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (!w || !h) return src;
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    if (scale >= 1 && src.length < 600000) return src;
+    const cw = Math.max(1, Math.round(w * scale));
+    const ch = Math.max(1, Math.round(h * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return src;
+    ctx.drawImage(img, 0, 0, cw, ch);
+    return canvas.toDataURL('image/jpeg', quality);
+  } catch {
+    return src;
+  }
+}
+
+async function sendVoiceAgentRealtimeFunctionOutput(callId, output, options = {}) {
   const dc = voiceAgentRealtimeConnection?.dc;
   if (!dc || dc.readyState !== 'open' || !callId) return;
   try {
@@ -16045,28 +16876,32 @@ function sendVoiceAgentRealtimeFunctionOutput(callId, output, options = {}) {
     if (canSendPreviewImage) {
       const source = String(preview?.source || '').trim() || 'screen';
       const dimensions = preview?.width && preview?.height ? ` ${preview.width}x${preview.height}` : '';
-      dc.send(JSON.stringify({
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: `Fresh ${source} screenshot after the tool call${dimensions}. Use this visual context for the next realtime browser/desktop step.`,
-            },
-            {
-              type: 'input_image',
-              image_url: previewDataUrl,
-            },
-          ],
-        },
-      }));
+      // Inject the ACTUAL screenshot pixels (downscaled to fit the data channel).
+      const imageUrl = await downscaleDataUrlForRealtime(previewDataUrl, 1280, 0.82);
+      if (dc.readyState === 'open') {
+        dc.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: `Fresh ${source} screenshot after the tool call${dimensions}. Look at this image directly and use it as visual context for the next realtime browser/desktop step.`,
+              },
+              {
+                type: 'input_image',
+                image_url: imageUrl,
+              },
+            ],
+          },
+        }));
+      }
     }
     // Trigger the model to continue/respond to the tool result when the tool
     // result needs a spoken answer. Worker dispatch already has its own visible
     // worker turn, so creating another response here causes duplicate acks.
-    if (options.createResponse !== false) dc.send(JSON.stringify({ type: 'response.create' }));
+    if (options.createResponse !== false && dc.readyState === 'open') dc.send(JSON.stringify({ type: 'response.create' }));
   } catch (err) {
     console.warn('[voice-agent-realtime] sendFunctionCallOutput failed', err);
   }
@@ -33911,6 +34746,12 @@ window.copyGeneratedImagePath = copyGeneratedImagePath;
 window.copyGeneratedImageToClipboard = copyGeneratedImageToClipboard;
 window.copyChatMessage = copyChatMessage;
 window.forkConversationFromAssistantMessage = forkConversationFromAssistantMessage;
+window.sideChatFromMessage = sideChatFromMessage;
+window.showSideChatSplit = showSideChatSplit;
+window.closeSideChatSplit = closeSideChatSplit;
+window.sendSideChatMessage = sendSideChatMessage;
+window.handleSideChatInputKeydown = handleSideChatInputKeydown;
+window.handleSideChatInputResize = handleSideChatInputResize;
 window.startEditUserMessage = startEditUserMessage;
 window.cancelEditUserMessage = cancelEditUserMessage;
 window.submitEditedUserMessage = submitEditedUserMessage;
@@ -34184,6 +35025,10 @@ wsEventBus.on('boot_greeting', (msg) => {
     syncActiveChat();
     renderChatMessages();
   }
+});
+
+wsEventBus.on('brain_thought_done', () => {
+  refreshEmptyChatBrainCards();
 });
 
 wsEventBus.on('main_chat_goal_updated', async (msg) => {
@@ -34489,10 +35334,8 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false 
     id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: normalizedType,
     text: trimmed,
+    ts: new Date().toLocaleTimeString(),
   });
-  if (streamState.liveTraceEntries.length > 28) {
-    streamState.liveTraceEntries = streamState.liveTraceEntries.slice(-28);
-  }
 }
 
 async function refreshSessionFromServer(sessionId) {
@@ -34675,6 +35518,14 @@ function handleMainChatStreamEvent(msg = {}) {
     renderProgressPanel();
     renderChatMessages();
   };
+  const movePreToolAnswerTextIntoPreamble = () => {
+    if (streamState.toolActivityStarted) return;
+    const text = String(streamState.streamingAIText || '').trim();
+    if (!text) return;
+    appendLiveTraceToStreamState(streamState, 'preamble', text);
+    streamState.streamingAIText = '';
+    streamState.finalResponseStarted = false;
+  };
 
   if (evt.type === 'session_title') {
     applyServerSessionTitle(sid, evt.title);
@@ -34728,10 +35579,19 @@ function handleMainChatStreamEvent(msg = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
-      streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
-      appendLiveTraceToStreamState(streamState, 'assistant', chunk, { append: true });
-      renderIfViewing();
+      if (streamState.agentExecutionMode === 'execute' && !streamState.finalResponseStarted) {
+        appendLiveTraceToStreamState(streamState, streamState.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
+      } else {
+        streamState.finalResponseStarted = true;
+        streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
+      }
+      scheduleStreamingRenderFor(sid, renderIfViewing);
     }
+  } else if (evt.type === 'agent_mode') {
+    streamState.agentExecutionMode = String(evt.mode || streamState.agentExecutionMode || '').trim();
+    if (streamState.agentExecutionMode === 'execute') movePreToolAnswerTextIntoPreamble();
+    if (evt.mode) addSessionProcessEntry(sid, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`);
+    renderIfViewing();
   } else if (evt.type === 'thinking_delta') {
     const chunk = String(evt.thinking || evt.text || '');
     if (chunk) {
@@ -34739,14 +35599,15 @@ function handleMainChatStreamEvent(msg = {}) {
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
       streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
       if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
-        appendLiveTraceToStreamState(streamState, 'preamble', chunk, { append: true });
+        appendLiveTraceToStreamState(streamState, 'think', chunk, { append: true });
       }
-      renderIfViewing();
+      scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
     const text = String(evt.thinking || evt.text || '').trim();
     if (text) {
       addSessionProcessEntry(sid, 'think', text);
+      appendLiveTraceToStreamState(streamState, 'think', text);
       renderIfViewing();
     }
   } else if (evt.type === 'ui_preflight' || evt.type === 'info') {
@@ -34763,6 +35624,8 @@ function handleMainChatStreamEvent(msg = {}) {
   } else if (evt.type === 'tool_call') {
     const action = String(evt.action || '').trim();
     if (action) {
+      movePreToolAnswerTextIntoPreamble();
+      streamState.toolActivityStarted = true;
       const args = evt.args && typeof evt.args === 'object' ? evt.args : {};
       const text = formatToolCallForLog(action, args, streamState);
       addSessionProcessEntry(sid, action.startsWith('skill_') ? 'skill' : 'tool', text, evt.actor ? { actor: evt.actor, ...args } : args);
@@ -34770,6 +35633,8 @@ function handleMainChatStreamEvent(msg = {}) {
       renderIfViewing();
     }
   } else if (evt.type === 'tool_result') {
+    movePreToolAnswerTextIntoPreamble();
+    streamState.toolActivityStarted = true;
     const action = String(evt.action || '').trim();
     const resultText = String(evt.result || '');
     const ok = evt.error === true ? false : !/^ERROR:/i.test(resultText);
@@ -34778,6 +35643,8 @@ function handleMainChatStreamEvent(msg = {}) {
     appendLiveTraceToStreamState(streamState, ok ? 'result' : 'error', action ? `${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}` : text);
     renderIfViewing();
   } else if (evt.type === 'tool_progress') {
+    movePreToolAnswerTextIntoPreamble();
+    streamState.toolActivityStarted = true;
     const action = String(evt.action || evt.name || '').trim();
     const message = String(evt.message || evt.progress || evt.status || '').trim();
     const ratio = Number.isFinite(Number(evt.ratio)) ? ` ${Math.round(Number(evt.ratio) * 100)}%` : '';
@@ -34831,7 +35698,7 @@ function handleMainChatStreamEvent(msg = {}) {
           canvasFiles: Array.isArray(evt.canvasFiles) && evt.canvasFiles.length ? evt.canvasFiles : undefined,
           fileChanges: evt.fileChanges || undefined,
           productCarousel: evt.productCarousel || undefined,
-          processEntries: sess.processLog.slice(Number(streamState.currentTurnStartIndex || 0)),
+          processEntries: mergeLiveTraceProcessEntries(streamState.liveTraceEntries, sess.processLog.slice(Number(streamState.currentTurnStartIndex || 0))),
         });
       }
       applyAutoSessionTitleOnce(sess, sess.history);
@@ -34840,13 +35707,20 @@ function handleMainChatStreamEvent(msg = {}) {
     window._sessionStreamState[sid] = makeEmptyStreamState();
     if (sid !== window.activeChatSessionId) sess.unread = true;
     setTimeout(() => refreshSessionFromServer(sid).catch(() => {}), 900);
-    renderIfViewing();
+    flushStreamingRenderFor(sid, renderIfViewing);
+  } else if (evt.type === 'final') {
+    const text = String(evt.text || evt.reply || '').trim();
+    if (text) {
+      streamState.finalResponseStarted = true;
+      streamState.streamingAIText = text;
+      scheduleStreamingRenderFor(sid, renderIfViewing);
+    }
   } else if (evt.type === 'error') {
     const text = String(evt.message || 'Unknown error').trim();
     addSessionProcessEntry(sid, 'error', text);
     delete window._sessionThinking[sid];
     if (sid !== window.activeChatSessionId) sess.unread = true;
-    renderIfViewing();
+    flushStreamingRenderFor(sid, renderIfViewing);
   }
 
   sess.updatedAt = Date.now();

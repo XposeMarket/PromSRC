@@ -895,10 +895,29 @@ export function getFileWebMemoryTools(): any[] {
 	        },
 	      },
 	    },
-	    {
-	      type: 'function',
-	      function: {
-	        name: 'web_search',
+    {
+      type: 'function',
+      function: {
+        name: 'shopping_search_products',
+        description: 'Fast product search for shopping/product carousel requests using existing web_search providers plus short metadata fetches. No shopping API keys required. Use this FIRST when the user asks for products, shopping comparisons, prices, ratings, or a product carousel; use browser tools only if this result is missing details or needs visual verification.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'Product search query, e.g. "cordless stick vacuum under $300".' },
+            merchant: { type: 'string', description: 'Optional store/domain such as Amazon, Walmart, Target, Best Buy, ebay.com.' },
+            max_results: { type: 'number', description: 'Number of product cards to return. Default 8, max 12.' },
+            provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Default multi.' },
+            include_metadata: { type: 'boolean', description: 'Default true. Briefly fetch top result pages for Open Graph images/titles/prices without browser automation.' },
+            metadata_timeout_ms: { type: 'number', description: 'Per-page metadata timeout in ms. Default 1800, max 5000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'web_search',
         description: 'Search the web for current information. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, or provider:"multi" to force all configured engines. Use web_fetch on result URLs to read full page content.',
         parameters: {
           type: 'object', required: ['query'],
@@ -1437,13 +1456,17 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'analyze_video',
-        description: 'Analyze a local video by extracting sampled frames and optional audio transcript, then using the active vision-capable model to summarize what happens in the clip.',
+        description: 'Analyze a local video with Python/FFmpeg. Use analysis_mode="quick" for a contact-sheet overview, "detail" for budgeted chronological frame batches, or "both" when the user needs both broad and detailed review.',
         parameters: {
           type: 'object', required: ['file_path'],
           properties: {
             file_path: { type: 'string', description: 'Workspace-relative or absolute path to the video file' },
             prompt: { type: 'string', description: 'Optional analysis prompt or focus instruction' },
-            sample_count: { type: 'number', description: 'How many visual samples to extract (default 6, max 8)' },
+            analysis_mode: { type: 'string', enum: ['quick', 'detail', 'both'], description: 'quick creates one overview contact sheet; detail creates duration-aware chronological batches; both does both. Default quick.' },
+            sample_count: { type: 'number', description: 'Backward-compatible quick sample count (default 6, max 24)' },
+            quick_sample_count: { type: 'number', description: 'Frames for the quick contact sheet (default 16, max 24)' },
+            detail_frame_budget: { type: 'number', description: 'Optional detail frame budget across the full duration. Choose a sane value based on video length; do not request every frame for long clips.' },
+            max_detail_frames: { type: 'number', description: 'Hard cap for automatic detail extraction when detail_frame_budget is omitted (default 42, max 72)' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory for extracted artifacts' },
             extract_audio: { type: 'boolean', description: 'If true, extract audio when ffmpeg is available (default true)' },
             transcribe: { type: 'boolean', description: 'If true, attempt local whisper transcription when available (default true)' },

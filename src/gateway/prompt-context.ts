@@ -657,7 +657,8 @@ export function readMemorySnippets(workspacePath: string, categories: string[]):
 // These constants are consumed by buildPersonalityContext. Exported so
 // consumers can extend or inspect them without importing server-v2.
 export const TOOL_BLOCKS: Record<string, string> = {
-  web: `WEB: web_search_multi(query,max_results?)→all configured providers, including xAI X Search when connected. web_search_single(query,provider?,max_results?)→one provider (default Settings preferred; provider=tinyfish|tavily|google|brave|ddg|xai). web_search(query,max_results?,multi_engine?,provider?)→legacy combined tool. web_fetch(url)→full page text. Search first, then fetch.
+  web: `WEB: shopping_search_products(query,merchant?,max_results?,provider?,include_metadata?)→fast normalized product cards and product carousel using existing web search/fetch only, no shopping API key. web_search_multi(query,max_results?)→all configured providers, including xAI X Search when connected. web_search_single(query,provider?,max_results?)→one provider (default Settings preferred; provider=tinyfish|tavily|google|brave|ddg|xai). web_search(query,max_results?,multi_engine?,provider?)→legacy combined tool. web_fetch(url)→full page text. Search first, then fetch.
+Product/shopping rule: for product carousels, shopping comparisons, prices, ratings, or store-specific product lists, call shopping_search_products first. Use browser/page extraction only when this result is incomplete or needs visual/login verification.
 Strategy: for complex topics call web_search 2–3× with different query angles; scan snippets; web_fetch the 1–3 most relevant URLs.
 Use web_search_single with provider:"tavily" to test Tavily-only; use web_search_single with provider:"google" to test Google-only; use provider:"xai" for X-backed social search. Use web_search_multi for broad coverage.
 Site search: web_search("site:reddit.com keyword"). Fallback: web_fetch a direct URL (reuters.com, apnews.com, bbc.com).
@@ -873,6 +874,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
 
 [SEARCH] Providers: ${searchProviders}.
 WHEN: freshness (today/latest/current/price), high-stakes facts, named entity lookup, uncertainty ("not sure if…"). Skip for timeless well-known facts.
+SHOPPING: for products, shopping comparisons, prices, ratings, or product carousels, call shopping_search_products first. It uses the existing web search/fetch stack and emits carousel-ready product cards without requiring shopping API keys. Use browser tools only to fill missing fields, inspect a JS-heavy page, or verify a specific product visually.
 HOW: complex topics → call web_search 2–3× with different angles (not the same query twice). Scan snippets → web_fetch the 1–3 most relevant URLs. Add site:domain.com to target a source.
 FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
 ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.

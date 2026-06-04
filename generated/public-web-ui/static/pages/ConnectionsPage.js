@@ -59,6 +59,7 @@ function normalizeCredentialInfo(item) {
 
 function normalizeConnectorCatalogItem(item) {
   const authType = item?.setup?.authType || item?.state?.authType || 'none';
+  const trustLevel = item?.trustLevel || 'bundled';
   return {
     id: item.id,
     name: item.name,
@@ -71,6 +72,8 @@ function normalizeConnectorCatalogItem(item) {
     browserCheck: item?.setup?.browserLogin?.checkUrl || null,
     aiTools: Array.isArray(item?.ownership?.tools) ? item.ownership.tools : [],
     credInfo: normalizeCredentialInfo(item),
+    trustLevel,
+    isUserPlugin: trustLevel === 'third_party' || trustLevel === 'local' || trustLevel === 'marketplace',
     state: item?.state || {},
   };
 }
@@ -180,6 +183,7 @@ function renderConnectionsGrid() {
     card.innerHTML = `
       <div class="conn-card-logo">${buildConnectorLogoMarkup(connector, 24, 8)}</div>
       <div class="conn-card-name">${escHtml(connector.name)}</div>
+      ${connector.isUserPlugin ? '<div title="Custom plugin" style="position:absolute;top:6px;left:6px;font-size:8px;font-weight:800;color:var(--brand);background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:1px 4px;letter-spacing:.04em">CUSTOM</div>' : ''}
       ${isConnected ? '<div style="width:7px;height:7px;border-radius:50%;background:var(--ok);position:absolute;top:8px;right:8px"></div>' : ''}
     `;
     card.onclick = () => openConnectorView(connector.id);
@@ -243,6 +247,18 @@ function openConnectorView(id) {
   }
 
   renderConnectorActions(connector, isConnected);
+  if (connector.isUserPlugin) {
+    const actionsEl = document.getElementById('cv-actions');
+    if (actionsEl) {
+      actionsEl.insertAdjacentHTML(
+        'beforeend',
+        `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:8px">This is a custom plugin you (or Prometheus) added.</div>
+          <button class="cv-btn-disconnect" onclick="removeUserPlugin('${escHtml(id)}')">Remove plugin</button>
+        </div>`,
+      );
+    }
+  }
   loadConnectorActivity(id, isConnected);
 
   const view = document.getElementById('connector-view');
@@ -1056,6 +1072,307 @@ async function loadConnectorActivity(id, isConnected) {
 
 const escapeHtml = escHtml;
 
+// ──────────────────────────────────────────────────────────────────────────
+// Add-plugin modal: Build with Prometheus / REST wizard / MCP / From URL
+// ──────────────────────────────────────────────────────────────────────────
+
+// Lives on window so inline oninput handlers in the rendered rows mutate the
+// same array the build step reads.
+window.pamRestTools = window.pamRestTools || [];
+
+function openAddPluginModal() {
+  const modal = document.getElementById('plugin-add-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  switchAddTab('ai');
+}
+
+function closeAddPluginModal() {
+  const modal = document.getElementById('plugin-add-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function switchAddTab(tab) {
+  document.querySelectorAll('.pam-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  const body = document.getElementById('pam-body');
+  if (!body) return;
+  if (tab === 'ai') body.innerHTML = renderAiTab();
+  else if (tab === 'rest') { window.pamRestTools = [{ name: '', method: 'GET', pathTpl: '' }]; body.innerHTML = renderRestTab(); pamRenderToolRows(); }
+  else if (tab === 'mcp') body.innerHTML = renderMcpTab();
+  else if (tab === 'url') body.innerHTML = renderUrlTab();
+}
+
+function renderAiTab() {
+  return `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="pam-hint">Describe the service you want to connect. Prometheus will research the API, build the connector, and install it — then you just enter your credentials here.</div>
+      <textarea id="pam-ai-prompt" class="pam-input" rows="3" placeholder="e.g. Connect to my Airtable account so you can read and create records"></textarea>
+      <button class="pam-btn" onclick="buildWithPrometheus()">Ask Prometheus to build it</button>
+    </div>
+  `;
+}
+
+function buildWithPrometheus() {
+  const val = String(document.getElementById('pam-ai-prompt')?.value || '').trim();
+  if (!val) { showToast('Describe it first', 'Tell Prometheus what to connect to.', 'warning'); return; }
+  const prompt = `Use the connector-builder skill to add a new connector/plugin: ${val}. Research the API, write the manifest and index.js, install it via the extensions API, and verify with connector_list. Then tell me what credential to enter in the Connections panel.`;
+  closeAddPluginModal();
+  if (typeof window.sendChat === 'function') {
+    window.sendChat(prompt);
+  } else {
+    const input = document.getElementById('chat-input');
+    if (input) { input.value = prompt; input.focus(); }
+  }
+}
+
+function renderRestTab() {
+  return `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="pam-hint">For any service with a REST API and an API key. Define the endpoints you want as tools.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><label class="pam-label">Connector name</label><input id="pam-rest-name" class="pam-input" placeholder="Airtable"/></div>
+        <div><label class="pam-label">Category</label><input id="pam-rest-category" class="pam-input" placeholder="Database"/></div>
+      </div>
+      <div><label class="pam-label">Base URL</label><input id="pam-rest-base" class="pam-input" placeholder="https://api.airtable.com/v0"/></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div><label class="pam-label">Auth header</label><input id="pam-rest-header" class="pam-input" value="Authorization"/></div>
+        <div><label class="pam-label">Value prefix</label><input id="pam-rest-prefix" class="pam-input" value="Bearer "/></div>
+        <div><label class="pam-label">Key field label</label><input id="pam-rest-keylabel" class="pam-input" value="API Key"/></div>
+      </div>
+      <div>
+        <label class="pam-label">Tools (one per endpoint)</label>
+        <div id="pam-rest-tools"></div>
+        <button onclick="pamAddToolRow()" style="margin-top:6px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer;font-family:inherit">+ Add tool</button>
+      </div>
+      <button class="pam-btn" onclick="buildRestConnector()">Install connector</button>
+      <div id="pam-rest-status" class="pam-hint"></div>
+    </div>
+  `;
+}
+
+function pamRenderToolRows() {
+  const wrap = document.getElementById('pam-rest-tools');
+  if (!wrap) return;
+  wrap.innerHTML = window.pamRestTools.map((t, i) => `
+    <div style="display:grid;grid-template-columns:1.2fr 0.7fr 1.4fr auto;gap:6px;margin-bottom:6px">
+      <input class="pam-input" placeholder="tool name" value="${escHtml(t.name)}" oninput="window.pamRestTools[${i}].name=this.value"/>
+      <select class="pam-input" onchange="window.pamRestTools[${i}].method=this.value">
+        ${['GET', 'POST', 'PUT', 'DELETE'].map((m) => `<option ${t.method === m ? 'selected' : ''}>${m}</option>`).join('')}
+      </select>
+      <input class="pam-input" placeholder="/path/{id}" value="${escHtml(t.pathTpl)}" oninput="window.pamRestTools[${i}].pathTpl=this.value"/>
+      <button onclick="pamRemoveToolRow(${i})" style="background:none;border:1px solid var(--line);border-radius:6px;color:var(--muted);cursor:pointer;padding:0 8px">×</button>
+    </div>
+  `).join('');
+}
+
+function pamAddToolRow() {
+  window.pamRestTools.push({ name: '', method: 'GET', pathTpl: '' });
+  pamRenderToolRows();
+}
+
+function pamRemoveToolRow(i) {
+  window.pamRestTools.splice(i, 1);
+  if (window.pamRestTools.length === 0) window.pamRestTools.push({ name: '', method: 'GET', pathTpl: '' });
+  pamRenderToolRows();
+}
+
+function pamSlug(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64);
+}
+
+function buildRestConnector() {
+  const name = String(document.getElementById('pam-rest-name')?.value || '').trim();
+  const base = String(document.getElementById('pam-rest-base')?.value || '').trim().replace(/\/+$/, '');
+  const category = String(document.getElementById('pam-rest-category')?.value || 'General').trim();
+  const header = String(document.getElementById('pam-rest-header')?.value || 'Authorization').trim();
+  const prefix = String(document.getElementById('pam-rest-prefix')?.value || '').replace(/"/g, '');
+  const keyLabel = String(document.getElementById('pam-rest-keylabel')?.value || 'API Key').trim();
+  const statusEl = document.getElementById('pam-rest-status');
+
+  const id = pamSlug(name);
+  if (!id || !base) { if (statusEl) statusEl.textContent = 'Name and Base URL are required.'; return; }
+  const tools = window.pamRestTools.filter((t) => pamSlug(t.name) && t.pathTpl);
+  if (tools.length === 0) { if (statusEl) statusEl.textContent = 'Add at least one tool with a name and path.'; return; }
+
+  const toolNames = tools.map((t) => `${id}_${pamSlug(t.name)}`);
+  const manifest = {
+    id,
+    kind: 'connector',
+    name,
+    description: `${name} REST connector (custom).`,
+    category,
+    runtime: { binding: `user/${id}`, entrypoint: './index.js' },
+    ui: { color: '#4F46E5' },
+    ownership: { tools: toolNames },
+    contracts: { tools: toolNames },
+    setup: {
+      authType: 'api_key',
+      fields: [{ key: 'apiKey', label: keyLabel, input: 'password', secret: true, required: true }],
+    },
+  };
+
+  // Build index.js: one fetch-based tool per endpoint. Path templates use {param}
+  // which become required string params and are substituted at call time.
+  const toolDefs = tools.map((t, idx) => {
+    const tname = toolNames[idx];
+    const params = (t.pathTpl.match(/\{(\w+)\}/g) || []).map((m) => m.slice(1, -1));
+    const propsObj = {};
+    params.forEach((p) => { propsObj[p] = { type: 'string', description: p }; });
+    const hasBody = t.method === 'POST' || t.method === 'PUT';
+    if (hasBody) propsObj.body = { type: 'object', description: 'Request body' };
+    const required = JSON.stringify(params);
+    const properties = JSON.stringify(propsObj);
+    let pathExpr = JSON.stringify(t.pathTpl);
+    params.forEach((p) => {
+      pathExpr = pathExpr.replace(`{${p}}`, '" + encodeURIComponent(args["' + p + '"]) + "');
+    });
+    return `
+    api.registerTool({
+      name: ${JSON.stringify(tname)},
+      description: ${JSON.stringify(`[${name}] ${t.method} ${t.pathTpl}`)},
+      parameters: { type: 'object', required: ${required}, properties: ${properties} },
+      connectorId: ${JSON.stringify(id)},
+      execute: async (args, ctx) => {
+        const key = ctx.getCredential('apiKey');
+        if (!key) return { result: ${JSON.stringify(`${name} not connected. Enter your ${keyLabel} in Connections.`)}, error: true };
+        const url = ${JSON.stringify(base)} + (${pathExpr});
+        const init = { method: ${JSON.stringify(t.method)}, headers: { ${JSON.stringify(header)}: ${JSON.stringify(prefix)} + key, 'Content-Type': 'application/json' } };
+        ${hasBody ? "if (args.body) init.body = JSON.stringify(args.body);" : ''}
+        const res = await fetch(url, init);
+        const text = await res.text();
+        if (!res.ok) return { result: ${JSON.stringify(name)} + ' ' + res.status + ': ' + text.slice(0, 400), error: true };
+        return { result: text.slice(0, 8000), error: false };
+      },
+    });`;
+  }).join('\n');
+
+  const indexJs = `module.exports = {
+  id: ${JSON.stringify(id)},
+  register(api) {${toolDefs}
+  },
+};
+`;
+
+  if (statusEl) statusEl.textContent = 'Installing...';
+  installUserPluginManifest(manifest, indexJs, statusEl);
+}
+
+function renderMcpTab() {
+  return `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="pam-hint">For services with a published MCP server. The server's tools appear automatically once connected.</div>
+      <div><label class="pam-label">Display name</label><input id="pam-mcp-name" class="pam-input" placeholder="Airtable (MCP)"/></div>
+      <div><label class="pam-label">Launch command</label><input id="pam-mcp-cmd" class="pam-input" placeholder="npx -y airtable-mcp-server"/></div>
+      <div>
+        <label class="pam-label">Credential env var (optional)</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <input id="pam-mcp-envname" class="pam-input" placeholder="AIRTABLE_API_KEY"/>
+          <input id="pam-mcp-keylabel" class="pam-input" placeholder="API Key label"/>
+        </div>
+      </div>
+      <button class="pam-btn" onclick="buildMcpConnector()">Install MCP server</button>
+      <div id="pam-mcp-status" class="pam-hint"></div>
+    </div>
+  `;
+}
+
+function buildMcpConnector() {
+  const name = String(document.getElementById('pam-mcp-name')?.value || '').trim();
+  const cmd = String(document.getElementById('pam-mcp-cmd')?.value || '').trim();
+  const envName = String(document.getElementById('pam-mcp-envname')?.value || '').trim();
+  const keyLabel = String(document.getElementById('pam-mcp-keylabel')?.value || 'API Key').trim();
+  const statusEl = document.getElementById('pam-mcp-status');
+
+  const id = pamSlug(name);
+  if (!id || !cmd) { if (statusEl) statusEl.textContent = 'Name and launch command are required.'; return; }
+  const parts = cmd.split(/\s+/);
+  const manifest = {
+    id,
+    kind: 'mcp_preset',
+    name,
+    description: `${name} via MCP (custom).`,
+    category: 'MCP',
+    runtime: { binding: 'mcp' },
+    mcpPreset: {
+      transport: 'stdio',
+      command: parts[0],
+      args: parts.slice(1),
+    },
+  };
+  if (envName) {
+    manifest.setup = { authType: 'api_key', fields: [{ key: 'apiKey', label: keyLabel, input: 'password', secret: true, required: true }] };
+    manifest.mcpPreset.envTemplate = { [envName]: `{{credential:${id}:apiKey}}` };
+  } else {
+    manifest.setup = { authType: 'none' };
+  }
+
+  if (statusEl) statusEl.textContent = 'Installing...';
+  installUserPluginManifest(manifest, null, statusEl);
+}
+
+function renderUrlTab() {
+  return `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="pam-hint">Paste a URL to a prometheus.extension.json manifest (raw file). Prometheus validates it before installing.</div>
+      <input id="pam-url-input" class="pam-input" placeholder="https://raw.githubusercontent.com/user/repo/main/prometheus.extension.json"/>
+      <button class="pam-btn" onclick="installFromUrl()">Fetch & install</button>
+      <div id="pam-url-status" class="pam-hint"></div>
+    </div>
+  `;
+}
+
+async function installFromUrl() {
+  const url = String(document.getElementById('pam-url-input')?.value || '').trim();
+  const statusEl = document.getElementById('pam-url-status');
+  if (!url) { if (statusEl) statusEl.textContent = 'Paste a manifest URL first.'; return; }
+  if (statusEl) statusEl.textContent = 'Fetching...';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const manifest = await res.json();
+    let indexJs = null;
+    if (manifest?.runtime?.entrypoint) {
+      const base = url.replace(/[^/]*$/, '');
+      const entryUrl = base + String(manifest.runtime.entrypoint).replace(/^\.\//, '');
+      try { const r = await fetch(entryUrl); if (r.ok) indexJs = await r.text(); } catch { /* optional */ }
+    }
+    installUserPluginManifest(manifest, indexJs, statusEl);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Failed: ' + (e?.message || e);
+  }
+}
+
+async function installUserPluginManifest(manifest, indexJs, statusEl) {
+  try {
+    const body = { manifest };
+    if (indexJs) body.indexJs = indexJs;
+    const res = await api('/api/extensions/install', { method: 'POST', body: JSON.stringify(body) });
+    if (res?.success === false) throw new Error(res.error || 'Install failed');
+    if (statusEl) statusEl.textContent = `Installed. ${res?.reload?.tools || 0} tools registered.`;
+    showToast('Plugin installed', `${manifest.name} is ready. Enter credentials to activate it.`, 'success');
+    closeAddPluginModal();
+    await loadConnectionsState();
+    if (getConnectorById(manifest.id)) openConnectorView(manifest.id);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Failed: ' + (e?.message || e);
+    showToast('Install failed', e?.message || String(e), 'error');
+  }
+}
+
+async function removeUserPlugin(id) {
+  if (!confirm('Remove this custom plugin? Its tools will be unloaded.')) return;
+  try {
+    await api('/api/extensions/remove', { method: 'POST', body: JSON.stringify({ id }) });
+    showToast('Plugin removed', 'The custom plugin was uninstalled.', 'success');
+    closeConnectorView();
+    await loadConnectionsState();
+  } catch (e) {
+    showToast('Remove failed', e?.message || String(e), 'error');
+  }
+}
+
 loadConnectionsState();
 
 window.loadConnectionsState = loadConnectionsState;
@@ -1085,3 +1402,13 @@ window.syncObsidianConnectorVault = syncObsidianConnectorVault;
 window.removeObsidianConnectorVault = removeObsidianConnectorVault;
 window.escapeHtml = escapeHtml;
 window.CONNECTORS = CONNECTORS;
+window.openAddPluginModal = openAddPluginModal;
+window.closeAddPluginModal = closeAddPluginModal;
+window.switchAddTab = switchAddTab;
+window.buildWithPrometheus = buildWithPrometheus;
+window.pamAddToolRow = pamAddToolRow;
+window.pamRemoveToolRow = pamRemoveToolRow;
+window.buildRestConnector = buildRestConnector;
+window.buildMcpConnector = buildMcpConnector;
+window.installFromUrl = installFromUrl;
+window.removeUserPlugin = removeUserPlugin;

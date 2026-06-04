@@ -97,6 +97,8 @@ extraMetadata:
 directories:
   output: release-public
 
+afterPack: scripts/stamp-windows-icon.js
+
 # Lock the installer filename so the local artifact matches the URL recorded
 # in latest.yml (electron-builder hyphenates spaces when publishing). Keeping
 # both sides identical lets the auto-updater find the file whether it's served
@@ -110,6 +112,9 @@ win:
         - x64
   icon: assets/Prometheus.ico
   verifyUpdateCodeSignature: false
+  # Disabled to avoid electron-builder's winCodeSign symlink extraction failure
+  # on normal Windows shells. The afterPack hook stamps Prometheus.ico into the
+  # exe directly with rcedit so shell/taskbar icons do not fall back to Electron.
   signAndEditExecutable: false
 
 nsis:

@@ -449,6 +449,11 @@ function escapeAttr(value) {
   return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+function visualIframeResizeHandler(maxHeight = 10000) {
+  const boundedMaxHeight = Math.max(280, Number(maxHeight) || 10000);
+  return `(function(f){try{var d=f.contentDocument,w=f.contentWindow;if(!d||!w)return;var de=d.documentElement,b=d.body,last=0,stable=0,polls=0,raf=0,minH=280;if(f._pmVisualResizeTimer)clearInterval(f._pmVisualResizeTimer);if(f._pmVisualResizeObserver)try{f._pmVisualResizeObserver.disconnect()}catch(e){}function measure(){var prevH=f.style.height,prevMin=f.style.minHeight;f.style.height=minH+'px';f.style.minHeight=minH+'px';void f.offsetHeight;var h=Math.max(de?de.scrollHeight:0,b?b.scrollHeight:0,de?de.offsetHeight:0,b?b.offsetHeight:0,minH);f.style.height=prevH;f.style.minHeight=prevMin;return Math.min(Math.max(minH,Math.ceil(h)+16),${boundedMaxHeight})}function apply(){raf=0;var h=measure();if(Math.abs(h-last)<2){stable++;return}stable=0;last=h;f.style.height=h+'px';f.style.minHeight=h+'px'}function queue(){if(!raf)raf=w.requestAnimationFrame?w.requestAnimationFrame(apply):setTimeout(apply,16)}if('ResizeObserver'in w){var ro=new w.ResizeObserver(queue);if(b)ro.observe(b);if(de)ro.observe(de);f._pmVisualResizeObserver=ro}queue();f._pmVisualResizeTimer=setInterval(function(){polls++;queue();if((stable>=3&&polls>=4)||polls>=12){clearInterval(f._pmVisualResizeTimer);f._pmVisualResizeTimer=null}},250);setTimeout(queue,60);setTimeout(queue,250);setTimeout(queue,1000);}catch(e){}})(this)`;
+}
+
 function buildPartialHtmlPreviewCode(partialCode) {
   let code = String(partialCode || '');
   const completedStyles = [...code.matchAll(/<style\b[^>]*>[\s\S]*?<\/style\s*>/ig)].map((match) => match[0]).join('');
@@ -490,7 +495,7 @@ function buildPartialHtmlSrcdoc(partialCode, isDark) {
   const bg = isDark ? 'rgba(15,23,42,0.16)' : 'rgba(248,250,252,0.62)';
   const emptyState = `<div style="min-height:280px;display:flex;align-items:center;justify-content:center;color:${mutedColor};font:12px system-ui,sans-serif;background:${bg}">Assembling visual canvas...<\/div>`;
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>*{box-sizing:border-box}html,body{margin:0;min-height:280px;background:transparent!important;color:${textColor};font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}body{min-height:280px}script{display:none!important}<\/style>
+<style>*{box-sizing:border-box}html,body{margin:0;min-height:280px;background:transparent!important;color:${textColor};font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{min-height:280px}script{display:none!important}<\/style>
 <\/head><body>${previewCode || emptyState}<\/body><\/html>`;
 }
 
@@ -502,7 +507,7 @@ export function buildVisualIframe(lang, code) {
   const escapedLang = lang.replace(/"/g, '');
   const escapedCode = escapeAttr(code);
   const minHeight = 280;
-  const onloadHandler = "(function(f){try{var h=f.contentDocument.documentElement.scrollHeight;if(h>60)f.style.minHeight=Math.min(h+16,700)+'px'}catch(e){}})(this)";
+  const onloadHandler = visualIframeResizeHandler();
   return `<div class="visual-block" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
   <iframe
     id="${id}"
@@ -520,23 +525,8 @@ export function buildVisualIframe(lang, code) {
 function buildPartialVisual(lang, partialCode) {
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
-  // HTML is browser-forgiving — render partial code live for piece-by-piece effect
-  if (lang === 'html' && partialCode.trim().length > 10) {
-    const srcdoc = buildPartialHtmlSrcdoc(partialCode, isDark);
-    const encoded = escapeAttr(srcdoc);
-    const overlayBg = isDark ? 'rgba(18,25,38,0.80)' : 'rgba(248,250,252,0.82)';
-    const overlayText = isDark ? '#94a3b8' : '#64748b';
-    const onloadHandler = "(function(f){try{var h=f.contentDocument.documentElement.scrollHeight;if(h>60)f.style.minHeight=Math.min(h+16,700)+'px'}catch(e){}})(this)";
-    return `<div class="visual-block" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line);position:relative">
-  <style>@keyframes vis-blink{0%,100%{opacity:.25}50%{opacity:1}}</style>
-  <iframe srcdoc="${encoded}" sandbox="allow-scripts allow-same-origin" style="width:100%;min-height:280px;border:none;display:block;background:transparent" loading="eager" onload="${onloadHandler}"></iframe>
-  <div style="position:absolute;top:8px;right:8px;background:${overlayBg};border:1px solid rgba(99,102,241,.35);border-radius:6px;padding:3px 10px;font-size:10px;color:${overlayText};font-family:sans-serif;display:flex;align-items:center;gap:6px;backdrop-filter:blur(4px);pointer-events:none">
-    <span style="width:6px;height:6px;border-radius:50%;background:#6366f1;display:inline-block;animation:vis-blink .75s ease-in-out infinite"></span>Building…
-  </div>
-</div>`;
-  }
-
-  // mermaid / chart / svg — partial syntax errors badly, show a spinner skeleton instead
+  // Partial fenced visuals are rebuilt on every streaming token. Keep them as a
+  // stable placeholder until the closing fence arrives, then mount the iframe.
   const bg = isDark ? 'rgba(30,41,59,0.8)' : '#f8fafc';
   const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
   const textColor = isDark ? '#94a3b8' : '#64748b';

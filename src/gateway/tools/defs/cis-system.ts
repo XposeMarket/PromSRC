@@ -1328,12 +1328,13 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'show_product_carousel',
-        description: 'Display product cards in a horizontal scrollable carousel in the chat UI. Call this AFTER you have already extracted product data from the page using browser tools. You decide which products to show (aim for 3–8, curated by relevance/quality). Each item needs at minimum a title and productUrl. Use imageUrl for images you found on the page, or imagePath for images you downloaded to the workspace.',
+        description: 'Display normalized product cards in a horizontal scrollable carousel in the chat UI. Prefer already-structured shopping/product search results from APIs, search indexes, connectors, or cached provider output. Use browser/page extraction only as a fallback for missing fields or deeper verification. You decide which products to show (aim for 3-8, curated by relevance/quality). Each item needs at minimum a title and productUrl. Use imageUrl for provider/page images, or imagePath for images downloaded to the workspace.',
         parameters: {
           type: 'object',
           required: ['title', 'items'],
           properties: {
             title: { type: 'string', description: 'Carousel heading shown above the cards, e.g. "Electric Toothbrushes on Amazon"' },
+            source: { type: 'string', description: 'Optional source label for the carousel data, e.g. "shopping_search", "web_search", "browser_extract", "cache", or the provider name.' },
             items: {
               type: 'array',
               description: 'Product cards to display (3–8 recommended). You curate this list — do not dump all results.',
@@ -1346,11 +1347,14 @@ export function getCisSystemTools(): any[] {
                   description: { type: 'string', description: 'One short line about the product, e.g. "Top-rated for overall cleaning and durability."' },
                   rating:      { type: 'number', description: '0–5 star rating as a number' },
                   reviews:     { type: 'number', description: 'Number of reviews' },
+                  reviewCount: { type: 'number', description: 'Alias for reviews when product/search providers return reviewCount' },
                   tag:         { type: 'string', description: 'Optional badge label, e.g. "Best overall", "Best budget", "Editor\'s pick"' },
+                  badge:       { type: 'string', description: 'Alias for tag when provider output calls the badge a badge' },
                   imageUrl:    { type: 'string', description: 'Direct image URL from the page (preferred if available)' },
                   imagePath:   { type: 'string', description: 'Workspace-relative path if you downloaded the image with browser tools' },
                   productUrl:  { type: 'string', description: 'URL to the product page — used as the card link' },
                   merchant:    { type: 'string', description: 'Store name, e.g. "Amazon", "Best Buy"' },
+                  confidence:  { type: 'number', description: 'Optional provider/model confidence from 0-1 when available' },
                 },
               },
             },

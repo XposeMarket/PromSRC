@@ -1,5 +1,5 @@
 // src/gateway/routes/account.router.ts
-// Supabase account auth: login, status, logout, token refresh, subscription check.
+// Supabase account auth: login, status, logout, token refresh, purchase/access check.
 // Session is kept in-memory and persisted encrypted in the vault so it survives
 // gateway restarts without requiring re-login.
 
@@ -28,14 +28,16 @@ interface AuthSession {
   refreshToken: string;
   expiresAt: number;    // unix seconds
   isAdmin: boolean;
-  subscriptionActive: boolean;
+  subscriptionActive: boolean; // Backward-compatible alias for purchased access.
+  purchaseActive: boolean;
+  accessActive: boolean;
   subscriptionCheckedAt?: number;
 }
 
 let _session: AuthSession | null = null;
-const SUBSCRIPTION_REFRESH_TTL_MS = 5 * 60 * 1000;
+const ACCESS_REFRESH_TTL_MS = 5 * 60 * 1000;
 const AUTH_SESSION_VAULT_KEY = 'account.supabase.session';
-type SubscriptionRefreshResult = 'active' | 'inactive' | 'unknown';
+type AccessRefreshResult = 'active' | 'inactive' | 'unknown';
 
 function getConfigDir(): string {
   return getConfig().getConfigDir();
@@ -78,6 +80,7 @@ function normalizeSession(input: any): AuthSession | null {
   if (!userId || !email || !accessToken) return null;
   const expiresAtRaw = Number(input?.expiresAt);
   const subscriptionCheckedAtRaw = Number(input?.subscriptionCheckedAt);
+  const purchasedAccess = input?.purchaseActive === true || input?.accessActive === true || input?.subscriptionActive === true;
   return {
     userId,
     email,
@@ -87,7 +90,9 @@ function normalizeSession(input: any): AuthSession | null {
       ? Math.floor(expiresAtRaw)
       : deriveAccessTokenExpiry(accessToken),
     isAdmin: input?.isAdmin === true,
-    subscriptionActive: input?.subscriptionActive === true,
+    subscriptionActive: purchasedAccess,
+    purchaseActive: purchasedAccess,
+    accessActive: purchasedAccess,
     subscriptionCheckedAt: Number.isFinite(subscriptionCheckedAtRaw)
       ? subscriptionCheckedAtRaw
       : undefined,
@@ -176,7 +181,7 @@ async function sbFetch(urlPath: string, opts: RequestInit = {}, token?: string, 
   return body;
 }
 
-async function checkSubscription(userId: string, accessToken: string, isAdmin: boolean, timeoutMs = 10000): Promise<boolean | null> {
+async function checkPurchasedAccess(userId: string, accessToken: string, isAdmin: boolean, timeoutMs = 10000): Promise<boolean | null> {
   if (isAdmin) return true;
   try {
     const data = await sbFetch(
@@ -224,20 +229,24 @@ function buildAuthenticatedResponse(session: AuthSession, extras: Record<string,
     email: session.email,
     userId: session.userId,
     isAdmin: session.isAdmin,
-    subscriptionActive: session.subscriptionActive,
+    subscriptionActive: session.accessActive,
+    purchaseActive: session.purchaseActive,
+    accessActive: session.accessActive,
     expiresAt: session.expiresAt,
     ...extras,
   };
 }
 
-function buildInactiveSubscriptionResponse(session: AuthSession) {
+function buildInactiveAccessResponse(session: AuthSession) {
   return {
     authenticated: false,
     email: session.email,
     userId: session.userId,
     isAdmin: false,
     subscriptionActive: false,
-    reason: 'subscription_inactive',
+    purchaseActive: false,
+    accessActive: false,
+    reason: 'purchase_inactive',
   };
 }
 
@@ -262,7 +271,7 @@ async function buildVerifiedSession(accessToken: string, refreshToken: string = 
   const cleanRefreshToken = String(refreshToken || '').trim();
   const { userId, email } = await getAuthenticatedUser(cleanAccessToken);
   const isAdmin = await checkIsAdmin(userId, cleanAccessToken);
-  const subscriptionActive = Boolean(await checkSubscription(userId, cleanAccessToken, isAdmin, 10000));
+  const purchaseActive = Boolean(await checkPurchasedAccess(userId, cleanAccessToken, isAdmin, 10000));
   return {
     userId,
     email,
@@ -270,7 +279,9 @@ async function buildVerifiedSession(accessToken: string, refreshToken: string = 
     refreshToken: cleanRefreshToken,
     expiresAt: deriveAccessTokenExpiry(cleanAccessToken),
     isAdmin,
-    subscriptionActive,
+    subscriptionActive: purchaseActive,
+    purchaseActive,
+    accessActive: purchaseActive,
     subscriptionCheckedAt: Date.now(),
   };
 }
@@ -301,32 +312,36 @@ async function refreshVerifiedSession(refreshToken: string): Promise<AuthSession
   }
 }
 
-async function refreshSubscriptionIfNeeded(force: boolean = false, timeoutMs = 10000): Promise<SubscriptionRefreshResult> {
+async function refreshAccessIfNeeded(force: boolean = false, timeoutMs = 10000): Promise<AccessRefreshResult> {
   if (!_session) return 'inactive';
   if (_session.isAdmin) {
     _session.subscriptionActive = true;
+    _session.purchaseActive = true;
+    _session.accessActive = true;
     _session.subscriptionCheckedAt = Date.now();
     persistSession();
     return 'active';
   }
 
   const lastCheckedAt = Number(_session.subscriptionCheckedAt || 0);
-  if (!force && Date.now() - lastCheckedAt < SUBSCRIPTION_REFRESH_TTL_MS) {
-    return _session.subscriptionActive ? 'active' : 'inactive';
+  if (!force && Date.now() - lastCheckedAt < ACCESS_REFRESH_TTL_MS) {
+    return hasAccountAccess(_session) ? 'active' : 'inactive';
   }
 
-  const subscriptionActive = await checkSubscription(
+  const purchaseActive = await checkPurchasedAccess(
     _session.userId,
     _session.accessToken,
     _session.isAdmin,
     timeoutMs,
   );
-  if (subscriptionActive === null) return 'unknown';
+  if (purchaseActive === null) return 'unknown';
 
-  _session.subscriptionActive = subscriptionActive;
+  _session.subscriptionActive = purchaseActive;
+  _session.purchaseActive = purchaseActive;
+  _session.accessActive = purchaseActive;
   _session.subscriptionCheckedAt = Date.now();
   persistSession();
-  return subscriptionActive ? 'active' : 'inactive';
+  return purchaseActive ? 'active' : 'inactive';
 }
 
 async function resolveStrictSessionStatus(timeoutMs = 10000): Promise<Record<string, any>> {
@@ -348,24 +363,24 @@ async function resolveStrictSessionStatus(timeoutMs = 10000): Promise<Record<str
     _session = refreshed;
     persistSession();
     if (!hasAccountAccess(_session)) {
-      const response = buildInactiveSubscriptionResponse(_session);
+      const response = buildInactiveAccessResponse(_session);
       clearSession();
       return response;
     }
   }
 
-  const subscriptionState = await refreshSubscriptionIfNeeded(true, timeoutMs);
+  const accessState = await refreshAccessIfNeeded(true, timeoutMs);
   const activeSession = _session;
   if (!activeSession) {
     return { authenticated: false, reason: 'not_authenticated' };
   }
 
-  if (subscriptionState === 'inactive') {
-    const response = buildInactiveSubscriptionResponse(activeSession);
+  if (accessState === 'inactive') {
+    const response = buildInactiveAccessResponse(activeSession);
     clearSession();
     return response;
   }
-  if (subscriptionState === 'unknown') {
+  if (accessState === 'unknown') {
     return buildRetryableAuthenticatedResponse(activeSession);
   }
 
@@ -406,8 +421,8 @@ export async function refreshPersistedSession(): Promise<void> {
     return;
   }
 
-  const subscriptionState = await refreshSubscriptionIfNeeded(true);
-  if (subscriptionState === 'inactive') clearSession();
+  const accessState = await refreshAccessIfNeeded(true);
+  if (accessState === 'inactive') clearSession();
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -457,9 +472,9 @@ router.get('/api/account/status', async (req, res) => {
     }).catch(() => {});
     return res.json(buildRetryableAuthenticatedResponse(_session, 'session_refresh_pending'));
   } else {
-    // Token valid — background-refresh subscription if TTL lapsed
-    refreshSubscriptionIfNeeded(false).then((subscriptionState) => {
-      if (subscriptionState === 'inactive') clearSession();
+    // Token valid - background-refresh access if TTL lapsed
+    refreshAccessIfNeeded(false).then((accessState) => {
+      if (accessState === 'inactive') clearSession();
     }).catch(() => {});
   }
 
@@ -481,7 +496,7 @@ router.post('/api/account/login', async (req, res) => {
     const nextSession = await buildVerifiedSession(accessToken, refreshToken);
     if (!hasAccountAccess(nextSession)) {
       clearSession();
-      return res.json(buildInactiveSubscriptionResponse(nextSession));
+      return res.json(buildInactiveAccessResponse(nextSession));
     }
     _session = nextSession;
     persistSession();
@@ -520,7 +535,7 @@ router.post('/api/account/login/password', async (req, res) => {
 
     if (!hasAccountAccess(nextSession)) {
       clearSession();
-      return res.json(buildInactiveSubscriptionResponse(nextSession));
+      return res.json(buildInactiveAccessResponse(nextSession));
     }
 
     _session = nextSession;
@@ -553,31 +568,33 @@ router.post('/api/account/refresh', async (_req, res) => {
   persistSession();
   if (!hasAccountAccess(_session)) {
     clearSession();
-    return res.status(401).json({ error: 'No active subscription found' });
+    return res.status(401).json({ error: 'No Prometheus purchase found' });
   }
 
   res.json(buildAuthenticatedResponse(_session));
 });
 
-// Helper for other routes to check if current session has an active subscription
+// Helper for other routes to check if current session has purchased access
 export function getCurrentUserId(): string | null {
   if (!_session) return null;
   if (_session.expiresAt < Math.floor(Date.now() / 1000)) return null;
   return _session.userId || null;
 }
 
-export function getSessionStatus(): { authenticated: boolean; subscriptionActive: boolean; isAdmin: boolean } {
-  if (!_session) return { authenticated: false, subscriptionActive: false, isAdmin: false };
+export function getSessionStatus(): { authenticated: boolean; subscriptionActive: boolean; purchaseActive: boolean; accessActive: boolean; isAdmin: boolean } {
+  if (!_session) return { authenticated: false, subscriptionActive: false, purchaseActive: false, accessActive: false, isAdmin: false };
   const expired = _session.expiresAt < Math.floor(Date.now() / 1000);
   // Do not hard-fail protected local routes during the short window where an
   // access token is expired but a persisted refresh token is available. The
   // account status route already refreshes in the background; returning false
   // here made Creative tools intermittently report "Account login required"
   // even for valid signed-in users.
-  if (expired && !_session.refreshToken) return { authenticated: false, subscriptionActive: false, isAdmin: false };
+  if (expired && !_session.refreshToken) return { authenticated: false, subscriptionActive: false, purchaseActive: false, accessActive: false, isAdmin: false };
   return {
     authenticated: true,
-    subscriptionActive: _session.subscriptionActive,
+    subscriptionActive: _session.accessActive,
+    purchaseActive: _session.purchaseActive,
+    accessActive: _session.accessActive,
     isAdmin: _session.isAdmin,
   };
 }
@@ -588,8 +605,8 @@ export function requireAccountAccess(_req: any, res: any, next: any): void {
     res.status(401).json({ error: 'Account login required', reason: 'not_authenticated' });
     return;
   }
-  if (!status.subscriptionActive && !status.isAdmin) {
-    res.status(402).json({ error: 'Active subscription required', reason: 'subscription_inactive' });
+  if (!status.accessActive && !status.purchaseActive && !status.subscriptionActive && !status.isAdmin) {
+    res.status(402).json({ error: 'Prometheus purchase required', reason: 'purchase_inactive' });
     return;
   }
   next();

@@ -45,8 +45,13 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 32 | Prometheus Mobile App Maintenance Reference | [16-mobile-app.md](16-mobile-app.md) |
 | 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
 | 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
+| 35 | Onboarding System, Replay, Dev Test, Migration Boundary | [19-onboarding-system.md](19-onboarding-system.md) |
 
 Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.
+
+> CRITICAL realtime gotchas (two stacked bugs, both fixed 2026-06-03 — see §12A-CRITICAL and §12A-2 of [06-image-voice.md](06-image-voice.md)):
+> 1. AUTH/500: OpenAI Realtime 500s ("Internal Server Error") on Codex OAuth because the realtime CALL endpoint needs a real platform api_key (raw OAuth bearer gets 403 on `/v1/models`). The api_key is minted by exchanging the OAuth **id_token**, which needs an `organization_id` claim — only on a FRESH LOGIN that does NOT send `codex_cli_simplified_flow=true` in `startOAuthFlow`. Working logs show `auth: 'openai_codex_oauth_api_key'`.
+> 2. NO INPUT (after auth fixed): session connects + soundwaves animate but no transcription/audio because the OpenAI WebRTC path did its OWN `getUserMedia` — a SECOND iOS mic capture that comes back silent. Fix: reuse the shared warm mic (`_ensureMobileXaiRealtimeMic()`/`__pmVoice.warmMicStream`) like xAI does; never open a second concurrent `getUserMedia` on iOS.
 
 ## Operational Runbooks
 

@@ -226,7 +226,7 @@ router.get('/api/pairing/certificate', (_req, res) => {
 router.post('/api/pairing/claim', (req, res) => {
   try {
     const account = getSessionStatus();
-    if (!account.authenticated || (!account.subscriptionActive && !account.isAdmin)) {
+    if (!account.authenticated || (!account.accessActive && !account.purchaseActive && !account.subscriptionActive && !account.isAdmin)) {
       return res.status(401).json({ success: false, error: 'Prometheus account login required before pairing.' });
     }
 

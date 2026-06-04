@@ -1,3 +1,4 @@
+import { resolveConnectorCredential } from './credential-access.js';
 import { listExtensionDescriptors } from './registry.js';
 import type {
   PrometheusConnectorRuntime,
@@ -173,9 +174,12 @@ export class PrometheusExtensionRuntimeRegistry {
       return { result: `Extension tool not found: ${name}`, error: true };
     }
     const extension = this.extensions.get(tool.extensionId);
+    const connectorScope = String((tool as any).connectorId || tool.extensionId);
     return tool.execute(args || {}, {
       extensionId: tool.extensionId,
       trustLevel: extension?.trustLevel || 'local',
+      getCredential: (fieldKey: string, connectorId?: string) =>
+        resolveConnectorCredential(connectorId || connectorScope, fieldKey),
     });
   }
 

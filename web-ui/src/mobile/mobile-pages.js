@@ -80,6 +80,8 @@ function _notifyMobileChatVoiceUpdate(sessionId, detail = {}) {
 // Persistent in-tab thread. Survives navigation between mobile pages.
 const PM_MOBILE_ACTIVE_RUN_KEY = 'pm_mobile_active_chat_run';
 const PM_MOBILE_ACTIVE_RUNS_KEY = 'pm_mobile_active_chat_runs';
+const PM_MOBILE_LAST_CHAT_SESSION_KEY = 'pm_mobile_last_chat_session';
+const PM_MOBILE_SIDE_CHAT_LINKS_KEY = 'prometheus_side_chat_links_v1';
 
 const __pmChat = (window.__pmChat = window.__pmChat || {
   activeSessionId: MOBILE_CHAT_SESSION_ID,
@@ -104,6 +106,25 @@ function _activeMobileThread() {
   if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
   __pmChat.thread = __pmChat.threads[sid];
   return __pmChat.thread;
+}
+
+function _rememberMobileLastChatSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID) return;
+  try { localStorage.setItem(PM_MOBILE_LAST_CHAT_SESSION_KEY, sid); } catch {}
+}
+
+function _readMobileLastChatSession() {
+  try {
+    const sid = String(localStorage.getItem(PM_MOBILE_LAST_CHAT_SESSION_KEY) || '').trim();
+    return sid && sid !== MOBILE_CHAT_SESSION_ID ? sid : '';
+  } catch {
+    return '';
+  }
+}
+
+function _clearMobileLastChatSession() {
+  try { localStorage.removeItem(PM_MOBILE_LAST_CHAT_SESSION_KEY); } catch {}
 }
 
 function _markMobileSessionRunning(sessionId, running) {
@@ -155,6 +176,7 @@ async function enrichMobileSessionGroupsForDrawer(loadSessions) {
 }
 
 function _startMobileNewChat(navigate) {
+  _clearMobileLastChatSession();
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
   __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
   __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
@@ -173,6 +195,7 @@ function _startMobileNewChat(navigate) {
 }
 
 function _startMobileNewVoiceDraft() {
+  _clearMobileLastChatSession();
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
   __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
   __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
@@ -202,7 +225,8 @@ function _isMobileRestartContextPacketText(value) {
 }
 
 function _isMobileInternalServerMessage(m) {
-  return _isMobileRestartContextPacketText(m?.content) && !Array.isArray(m?.fileChanges?.files);
+  return m?.sideChatBoundary === true
+    || (_isMobileRestartContextPacketText(m?.content) && !Array.isArray(m?.fileChanges?.files));
 }
 
 function _mapServerHistoryToMobile(history) {
@@ -236,6 +260,7 @@ function _mapServerMessageToMobile(m, index = -1) {
     files: Array.isArray(m?.canvasFiles) ? m.canvasFiles : [],
     fileChanges: m?.fileChanges && typeof m.fileChanges === 'object' ? m.fileChanges : undefined,
     productCarousel: m?.productCarousel && typeof m.productCarousel === 'object' ? m.productCarousel : undefined,
+    sideChatBoundary: m?.sideChatBoundary === true,
     voiceAgentWorkerHandoff: m?.voiceAgentWorkerHandoff === true,
     source: String(m?.source || ''),
     channelLabel: String(m?.channelLabel || ''),
@@ -255,6 +280,9 @@ function _cloneMobileMessageForBranch(msg) {
   const clone = JSON.parse(JSON.stringify(msg));
   delete clone.streaming;
   delete clone.liveTraceEntries;
+  delete clone.finalResponseStarted;
+  delete clone.toolActivityStarted;
+  delete clone.agentExecutionMode;
   delete clone._editingDraft;
   return clone;
 }
@@ -400,6 +428,85 @@ function _makeMobileUserMessage(text, attachments = []) {
   };
 }
 
+function _generateMobileSideChatId() {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `side_mobile_${Date.now().toString(36)}_${rand}`;
+}
+
+function _normalizeMobileSideChatLink(link) {
+  const id = String(link?.id || '').trim();
+  const parentSessionId = String(link?.parentSessionId || '').trim();
+  if (!id || !parentSessionId) return null;
+  return {
+    id,
+    parentSessionId,
+    title: String(link?.title || 'Side chat').trim() || 'Side chat',
+    anchorPreview: String(link?.anchorPreview || '').trim(),
+    createdAt: Number(link?.createdAt || Date.now()),
+    updatedAt: Number(link?.updatedAt || Date.now()),
+    closed: link?.closed === true,
+  };
+}
+
+function _loadMobileSideChatLinks() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PM_MOBILE_SIDE_CHAT_LINKS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.map(_normalizeMobileSideChatLink).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function _saveMobileSideChatLinks(links) {
+  try {
+    localStorage.setItem(PM_MOBILE_SIDE_CHAT_LINKS_KEY, JSON.stringify((Array.isArray(links) ? links : []).map(_normalizeMobileSideChatLink).filter(Boolean)));
+  } catch {}
+}
+
+function _getMobileSideChatLinksForParent(parentSessionId) {
+  const parent = String(parentSessionId || '').trim();
+  if (!parent) return [];
+  return _loadMobileSideChatLinks()
+    .filter((link) => link.parentSessionId === parent && link.closed !== true)
+    .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+}
+
+function _makeMobileSideChatTitle(seed = '') {
+  const text = String(seed || '').replace(/\s+/g, ' ').trim();
+  return text ? `Side chat - ${text.slice(0, 52)}` : 'Side chat';
+}
+
+function _mobileSideReferenceSnapshot(parentThread = []) {
+  const visible = (Array.isArray(parentThread) ? parentThread : [])
+    .filter((msg, index) => msg && !_isMobileHiddenVoiceDraftMessage(msg, index))
+    .filter((msg) => msg.role === 'user' || msg.role === 'ai')
+    .slice(-8);
+  return visible.map((msg) => {
+    const label = msg.role === 'user' ? 'User' : 'Prometheus';
+    return `${label}: ${_mobileMessageCopyText(msg).replace(/\s+/g, ' ').trim().slice(0, 420)}`;
+  }).filter(Boolean);
+}
+
+function _buildMobileSideChatBoundaryMessage(parentSessionId, parentThread = [], parentTitle = 'Mobile chat') {
+  const reference = _mobileSideReferenceSnapshot(parentThread);
+  return {
+    role: 'ai',
+    time: _nowTime(),
+    timestamp: Date.now(),
+    sideChatBoundary: true,
+    content: [
+      '[Side chat boundary]',
+      `Parent chat: ${parentTitle || parentSessionId}`,
+      'Inherited parent context is reference only.',
+      'Do not continue old plans, edits, tool calls, approvals, or implementation work from the parent unless the user explicitly asks in this side chat.',
+      reference.length ? 'Reference snapshot:' : '',
+      ...reference.map((line) => `- ${line}`),
+      '[/Side chat boundary]',
+    ].filter(Boolean).join('\n'),
+    body: { sender: 'Prometheus', text: '' },
+  };
+}
+
 function _formatChatTime(value) {
   try {
     const d = new Date(Number(value || Date.now()));
@@ -511,6 +618,14 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
       runtimeId: data?.runtimeId || data?.activeRun?.id || '',
     });
     const entries = Array.isArray(latestAi.processEntries) ? latestAi.processEntries.slice() : [];
+    if (latestAi.streaming) {
+      latestAi.streaming = false;
+      latestAi.workEndedAt = Number(latestAi.workEndedAt || Date.now()) || Date.now();
+      latestAi.workDurationMs = Math.max(0, latestAi.workEndedAt - _mobileAssistantWorkStartedAt(latestAi));
+      latestAi.time = _nowTime();
+      latestAi.timestamp = Number(latestAi.timestamp || Date.now()) || Date.now();
+      latestAi.content = String(latestAi.body?.text || latestAi.content || '');
+    }
     if (entries.length) {
       thread.push({
         role: 'ai',
@@ -535,6 +650,26 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     workflowPart: 'interruption',
     workflowLabel: 'Steer',
   });
+  if (latestAi) {
+    const continuationTurn = {
+      role: 'ai',
+      time: '',
+      timestamp: Date.now(),
+      streaming: true,
+      workStartedAt: Date.now(),
+      body: { sender: 'Prometheus', text: '' },
+      content: '',
+      processEntries: [],
+      liveTraceEntries: [],
+      agentExecutionMode: 'execute',
+      _clientRequestId: latestAi._clientRequestId || data?.clientRequestId || '',
+      workflowGroupId,
+      workflowPart: 'interruption_response',
+      workflowLabel: 'Response after steer',
+    };
+    thread.push(continuationTurn);
+    _setMobileSteerContinuationTurn(latestAi, continuationTurn);
+  }
   _persistMobileThreadSnapshot(sid);
   const threadEl = document.getElementById('pm-chat-thread');
   const bodyEl = document.getElementById('pm-chat-body');
@@ -685,11 +820,25 @@ function _mergeMobileAssistantTurnDetails(target, source) {
     target.content = target.body.text;
   }
   if (!target.time && source.time) target.time = source.time;
-  if (!target.workStartedAt && source.workStartedAt) target.workStartedAt = source.workStartedAt;
+  const targetStartedAt = Number(target.workStartedAt || target.startedAt || 0);
+  const sourceStartedAt = Number(source.workStartedAt || source.startedAt || 0);
+  if (Number.isFinite(sourceStartedAt) && sourceStartedAt > 0) {
+    target.workStartedAt = Number.isFinite(targetStartedAt) && targetStartedAt > 0
+      ? Math.min(targetStartedAt, sourceStartedAt)
+      : sourceStartedAt;
+  }
   if (!target.workEndedAt && source.workEndedAt) target.workEndedAt = source.workEndedAt;
-  if (!Number.isFinite(Number(target.workDurationMs)) && Number.isFinite(Number(source.workDurationMs))) target.workDurationMs = Number(source.workDurationMs);
+  if (Number.isFinite(Number(source.workDurationMs))) {
+    target.workDurationMs = Number.isFinite(Number(target.workDurationMs))
+      ? Math.max(Number(target.workDurationMs), Number(source.workDurationMs))
+      : Number(source.workDurationMs);
+  }
   target.timestamp = Math.min(Number(target.timestamp || Date.now()), Number(source.timestamp || Date.now()));
-  target.streaming = !!(target.streaming || source.streaming);
+  target.streaming = target.streaming === true || (
+    source.streaming === true
+    && !target.workEndedAt
+    && !Number.isFinite(Number(target.workDurationMs))
+  );
   return target;
 }
 
@@ -890,9 +1039,10 @@ function _voiceAgentProcessEntriesFromResult(sessionId, result) {
   return out;
 }
 
-function _renderMobileProcess(entries) {
+function _renderMobileProcess(entries, options = {}) {
   const list = Array.isArray(entries) ? entries : [];
   if (!list.length) return '';
+  const forceClosed = options.collapsed === true;
   const recent = list.slice(-5);
   const full = list.map((entry) => `
     <div class="pm-process-row ${escapeHtml(entry.type)}">
@@ -901,7 +1051,7 @@ function _renderMobileProcess(entries) {
     </div>
   `).join('');
   return `
-    <details class="pm-process-stream"${list.length <= 2 ? ' open' : ''}>
+    <details class="pm-process-stream"${!forceClosed && list.length <= 2 ? ' open' : ''}>
       <summary><span>Process</span><em>${list.length} event${list.length === 1 ? '' : 's'}</em></summary>
       <div class="pm-process-latest">${recent.map((entry) => `<b>${escapeHtml(entry.text)}</b>`).join('')}</div>
       <div class="pm-process-full">${full}</div>
@@ -913,6 +1063,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false } = {}) {
   if (!message) return;
   const content = String(text || '');
   if (!content) return;
+  if (_isMobileStartupStatusText(content)) return;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
@@ -922,21 +1073,85 @@ function _appendMobileLiveTrace(message, type, text, { append = false } = {}) {
     const trimmed = content.trim();
     if (!trimmed) return;
     if (last && last.type === normalizedType && String(last.text || '').trim() === trimmed) return;
-    message.liveTraceEntries.push({ type: normalizedType, text: trimmed });
-    if (message.liveTraceEntries.length > 24) message.liveTraceEntries = message.liveTraceEntries.slice(-24);
+    message.liveTraceEntries.push({ type: normalizedType, text: trimmed, time: _nowTime() });
   }
 }
 
+function _isMobileStartupStatusText(value) {
+  return /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i
+    .test(String(value || '').trim());
+}
+
+function _mergeMobileLiveTraceIntoProcess(message) {
+  if (!message) return;
+  const traces = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
+  if (!traces.length) return;
+  if (!Array.isArray(message.processEntries)) message.processEntries = [];
+  const existing = new Set(message.processEntries.map((entry) =>
+    `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+  ));
+  for (const trace of traces) {
+    const type = String(trace?.type || 'info').toLowerCase();
+    const text = String(trace?.text || '').trim();
+    if (!text || (type !== 'preamble' && type !== 'think')) continue;
+    const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+    if (existing.has(key)) continue;
+    existing.add(key);
+    message.processEntries.unshift({
+      id: `trace_proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      type,
+      text,
+      time: String(trace?.time || _nowTime()),
+    });
+  }
+}
+
+function _mobileProcessEntriesWithLiveTrace(message, entries) {
+  const out = Array.isArray(entries) ? entries.map((entry) => ({ ...entry })) : [];
+  const traces = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+  if (!traces.length) return out;
+  const existing = new Set(out.map((entry) =>
+    `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+  ));
+  const liveEntries = [];
+  for (const trace of traces) {
+    const type = String(trace?.type || 'info').toLowerCase();
+    const text = String(trace?.text || '').trim();
+    if (!text || (type !== 'preamble' && type !== 'think')) continue;
+    const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+    if (existing.has(key)) continue;
+    existing.add(key);
+    liveEntries.push({
+      id: `trace_proc_preview_${liveEntries.length}`,
+      type,
+      text,
+      time: String(trace?.time || _nowTime()),
+    });
+  }
+  return liveEntries.length ? [...liveEntries, ...out] : out;
+}
+
+function _moveMobilePreToolAnswerIntoPreamble(message) {
+  if (!message || message.toolActivityStarted) return;
+  const text = String(message.body?.text || message.content || '').trim();
+  if (!text) return;
+  _appendMobileLiveTrace(message, 'preamble', text);
+  if (message.body) message.body.text = '';
+  message.content = '';
+  message.finalResponseStarted = false;
+}
+
 function _renderMobileLiveTrace(entries) {
-  const list = (Array.isArray(entries) ? entries : []).filter((entry) => String(entry?.text || '').trim()).slice(-18);
+  const list = (Array.isArray(entries) ? entries : []).filter((entry) => String(entry?.text || '').trim());
   if (!list.length) return '';
   return `<div class="pm-live-trace">${list.map((entry) => {
     const type = String(entry.type || 'info').toLowerCase();
-    const label = type === 'assistant' ? 'Prometheus' : type === 'think' ? 'Reasoning' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
     const text = String(entry.text || '').trim();
-    const body = type === 'assistant'
-      ? `<div class="pm-live-md">${_renderMobileMarkdown(text)}</div>`
-      : `<div class="pm-live-text">${escapeHtml(text)}</div>`;
+    if (type === 'preamble' || type === 'think' || type === 'assistant') {
+      return `<div class="pm-live-prose ${escapeHtml(type)}"><div class="pm-live-md">${_renderMobileMarkdown(text)}</div></div>`;
+    }
+    const label = type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+    const body = `<div class="pm-live-text">${escapeHtml(text)}</div>`;
     return `<div class="pm-live-segment ${escapeHtml(type)}"><span>${escapeHtml(label)}</span>${body}</div>`;
   }).join('')}</div>`;
 }
@@ -1074,7 +1289,8 @@ function _mergeMobileProductCarouselIntoMessage(message, carousel) {
 function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   const next = Array.isArray(nextThread) ? nextThread : [];
   const local = Array.isArray(localThread) ? localThread : [];
-  if (!next.length || !local.length) return next;
+  if (!local.length) return next;
+  if (!next.length) return local;
   next.forEach((msg, index) => {
     if (!msg || msg.role !== 'ai') return;
     const localSameSlot = local[index]?.role === 'ai' ? local[index] : null;
@@ -1085,6 +1301,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
     ));
     const localCandidate = localSameSlot || localBySource;
     if (localCandidate) {
+      _mergeMobileAssistantTurnDetails(msg, localCandidate);
       _mergeMobileMediaIntoMessage(msg, _collectMessageMedia(localCandidate));
       _mergeMobileProductCarouselIntoMessage(msg, localCandidate.productCarousel);
     }
@@ -1092,8 +1309,30 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   const localLatest = _findLatestAssistantTurn(local);
   const nextLatest = _findLatestAssistantTurn(next);
   if (localLatest && nextLatest) {
+    _mergeMobileAssistantTurnDetails(nextLatest, localLatest);
     _mergeMobileMediaIntoMessage(nextLatest, _collectMessageMedia(localLatest));
     _mergeMobileProductCarouselIntoMessage(nextLatest, localLatest.productCarousel);
+  }
+  const hasMatchingTurn = (candidate) => {
+    if (!candidate || typeof candidate !== 'object') return true;
+    const role = String(candidate.role || '');
+    const clientRequestId = String(candidate._clientRequestId || '').trim();
+    const text = _mobileMessageCopyText(candidate).replace(/\s+/g, ' ').trim();
+    return next.some((msg) => {
+      if (!msg || String(msg.role || '') !== role) return false;
+      if (clientRequestId && String(msg._clientRequestId || '').trim() === clientRequestId) return true;
+      const msgText = _mobileMessageCopyText(msg).replace(/\s+/g, ' ').trim();
+      return !!text && !!msgText && msgText === text;
+    });
+  };
+  for (const msg of local) {
+    if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) continue;
+    if (_isMobileHiddenVoiceDraftMessage(msg, -1)) continue;
+    const isPendingAssistant = msg.role === 'ai' && (msg.streaming || String(msg._clientRequestId || '').trim());
+    const isPendingUser = msg.role === 'user' && !hasMatchingTurn(msg);
+    if ((isPendingAssistant || isPendingUser) && !hasMatchingTurn(msg)) {
+      next.push(msg);
+    }
   }
   return next;
 }
@@ -1638,11 +1877,15 @@ function _renderMobileProductCarousel(message) {
   const cards = items.map((item) => {
     const productUrl = String(item?.productUrl || '').trim();
     const imgSrc = _productCarouselImageUrl(item);
-    const tag = String(item?.tag || '').trim();
+    const tag = String(item?.tag || item?.badge || '').trim();
     const price = String(item?.price || '').trim();
     const desc = String(item?.description || '').trim();
     const rating = item?.rating != null && Number.isFinite(Number(item.rating))
       ? Number(item.rating).toFixed(1)
+      : '';
+    const reviewValue = item?.reviews ?? item?.reviewCount;
+    const reviewLabel = reviewValue != null && Number.isFinite(Number(reviewValue)) && Number(reviewValue) > 0
+      ? ` (${Number(reviewValue).toLocaleString()})`
       : '';
     const body = `
       <div class="pm-product-img-wrap">
@@ -1651,7 +1894,7 @@ function _renderMobileProductCarousel(message) {
       </div>
       <strong class="pm-product-title">${escapeHtml(String(item?.title || 'Product'))}</strong>
       ${(price || desc) ? `<div class="pm-product-meta">${price ? `<span>${escapeHtml(price)}</span>` : ''}${desc ? `<em>${escapeHtml(desc)}</em>` : ''}</div>` : ''}
-      ${rating ? `<div class="pm-product-rating">Rating ${escapeHtml(rating)}</div>` : ''}
+      ${rating ? `<div class="pm-product-rating">Rating ${escapeHtml(rating)}${escapeHtml(reviewLabel)}</div>` : ''}
     `;
     return productUrl
       ? `<a class="pm-product-card" href="${escapeHtml(productUrl)}" target="_blank" rel="noopener noreferrer">${body}</a>`
@@ -1682,10 +1925,14 @@ function _renderChatMessageHtml(m, index = -1) {
   if (m.approvalRequest) {
     inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
   }
-  if (m.streaming && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length) {
+  const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
+  const hasLiveTrace = m.streaming && !answerStarted && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length;
+  if (hasLiveTrace) {
     inner += _renderMobileLiveTrace(m.liveTraceEntries);
+  } else if (m.streaming && !answerStarted) {
+    inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
   }
-  if (b.text && !(m.streaming && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length)) {
+  if (b.text) {
     inner += `<div class="markdown-body">${_renderMobileMarkdown(b.text)}</div>`;
     // rendered above with the shared desktop Markdown renderer
   }
@@ -1730,7 +1977,7 @@ function _renderChatMessageHtml(m, index = -1) {
   inner += _renderMobileProductCarousel(m);
   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
   inner += _renderMobileFileChanges(m.fileChanges);
-  inner += _renderMobileProcess(m.processEntries || b.processEntries);
+  inner += _renderMobileProcess(_mobileProcessEntriesWithLiveTrace(m, m.processEntries || b.processEntries), { collapsed: m.streaming && answerStarted });
   return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
     ${m.workflowLabel ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
     <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
@@ -2149,6 +2396,7 @@ function _scrollChat(bodyEl) {
 }
 
 const PM_CHAT_SLASH_COMMANDS = [
+  { command: '/side', label: 'Open a linked side chat', placeholder: 'Optional first side-chat message...' },
   { command: '/goal', label: 'Start goal mode in this chat', placeholder: 'Describe the goal Prometheus should keep working toward...' },
   { command: '/goal status', label: 'Show the active goal state', placeholder: 'Optional note for the status check...' },
   { command: '/goal pause', label: 'Pause the active goal runner', placeholder: 'Optional reason...' },
@@ -2167,6 +2415,142 @@ const PM_CHAT_SLASH_COMMANDS = [
 
 let pmActiveSlashCommand = null;
 let pmSlashCommandSelectionIndex = 0;
+let pmSkillTriggerExpanded = false;
+let pmSkillTriggerSelectedId = '';
+let pmSkillTriggerLastKey = '';
+
+const PM_SKILL_TRIGGER_STOPWORDS = new Set([
+  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
+  'me', 'my', 'our', 'this', 'that', 'please',
+]);
+
+function _pmNormalizeSkillText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _pmNormalizeSkillTextLoose(value) {
+  return _pmNormalizeSkillText(value)
+    .split(' ')
+    .filter((word) => word && !PM_SKILL_TRIGGER_STOPWORDS.has(word))
+    .join(' ');
+}
+
+function _pmSkillTriggerMatchesText(trigger, rawText, words) {
+  const normalizedTrigger = _pmNormalizeSkillText(trigger);
+  if (!normalizedTrigger) return false;
+  const normalizedText = _pmNormalizeSkillText(rawText);
+  if (normalizedTrigger.includes(' ')) {
+    if (normalizedText.includes(normalizedTrigger)) return true;
+    const looseTrigger = _pmNormalizeSkillTextLoose(trigger);
+    const looseText = _pmNormalizeSkillTextLoose(rawText);
+    return looseTrigger.length >= 4 && looseText.includes(looseTrigger);
+  }
+  return words.some((word) => {
+    const normalizedWord = _pmNormalizeSkillText(word);
+    if (normalizedWord === normalizedTrigger) return true;
+    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
+    return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
+  });
+}
+
+function _pmComposerSkillMatches(value) {
+  const text = String(value || '').toLowerCase();
+  if (!text.trim()) return [];
+  const words = text.split(/\W+/).filter((word) => word.length > 2);
+  return (Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [])
+    .filter((skill) => Array.isArray(skill?.triggers) && skill.triggers.length)
+    .filter((skill) => skill.triggers.some((trigger) => _pmSkillTriggerMatchesText(trigger, text, words)))
+    .slice(0, 8);
+}
+
+function _pmSkillTriggerIcon() {
+  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.7 5.2L19 10l-5.3 1.8L12 17l-1.7-5.2L5 10l5.3-1.8L12 3z"/><path d="M19 16l.7 2.1L22 19l-2.3.9L19 22l-.7-2.1L16 19l2.3-.9L19 16z"/></svg>`;
+}
+
+function _pmHideSkillTriggerPill(page) {
+  const pill = page?.querySelector?.('#pm-skill-trigger-pill') || document.getElementById('pm-skill-trigger-pill');
+  if (!pill) return;
+  pill.hidden = true;
+  pill.classList.remove('expanded', 'pop');
+  pill.innerHTML = '';
+  pmSkillTriggerExpanded = false;
+  pmSkillTriggerSelectedId = '';
+  pmSkillTriggerLastKey = '';
+}
+
+function _pmRenderSkillTriggerPill(page, input) {
+  const pill = page?.querySelector?.('#pm-skill-trigger-pill');
+  if (!pill) return;
+  const matches = _pmComposerSkillMatches(input?.value || '');
+  if (!matches.length) {
+    _pmHideSkillTriggerPill(page);
+    return;
+  }
+  const nextKey = matches.map((skill) => String(skill.id || skill.name || '')).join('|');
+  const shouldPop = pill.hidden || nextKey !== pmSkillTriggerLastKey;
+  pmSkillTriggerLastKey = nextKey;
+  if (pmSkillTriggerSelectedId && !matches.some((skill) => String(skill.id || '') === pmSkillTriggerSelectedId)) {
+    pmSkillTriggerSelectedId = '';
+  }
+  const visibleNames = matches.slice(0, 3);
+  const overflow = Math.max(0, matches.length - visibleNames.length);
+  const selectedSkill = matches.find((skill) => String(skill.id || '') === pmSkillTriggerSelectedId) || null;
+
+  pill.classList.toggle('expanded', pmSkillTriggerExpanded);
+  pill.innerHTML = `
+    <button type="button" class="pm-skill-trigger-summary" aria-expanded="${pmSkillTriggerExpanded ? 'true' : 'false'}">
+      <span class="pm-skill-trigger-icon">${_pmSkillTriggerIcon()}</span>
+      <span class="pm-skill-trigger-label">Related Skills</span>
+      <span class="pm-skill-trigger-count">${matches.length}</span>
+      <span class="pm-skill-trigger-preview">${visibleNames.map((skill) => `<span>${escapeHtml(skill.name || skill.id || 'Skill')}</span>`).join('')}${overflow ? `<span>+${overflow}</span>` : ''}</span>
+    </button>
+    <button type="button" class="pm-skill-trigger-close" aria-label="Dismiss related skills">x</button>
+    ${pmSkillTriggerExpanded ? `
+      <div class="pm-skill-trigger-row">
+        ${matches.map((skill) => `
+          <button type="button" class="pm-skill-trigger-item${String(skill.id || '') === pmSkillTriggerSelectedId ? ' active' : ''}" data-skill-id="${escapeHtml(skill.id || '')}">
+            ${escapeHtml(skill.name || skill.id || 'Skill')}
+          </button>
+        `).join('')}
+      </div>
+      <div class="pm-skill-trigger-desc">
+        ${selectedSkill ? `
+          <strong>${escapeHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
+          <span>${escapeHtml(selectedSkill.description || 'No description available.')}</span>
+        ` : '<span>Select a skill to preview its description.</span>'}
+      </div>
+    ` : ''}
+  `;
+  pill.querySelector('.pm-skill-trigger-summary')?.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    pmSkillTriggerExpanded = !pmSkillTriggerExpanded;
+    if (!pmSkillTriggerExpanded) pmSkillTriggerSelectedId = '';
+    _pmRenderSkillTriggerPill(page, input);
+  });
+  pill.querySelector('.pm-skill-trigger-close')?.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    _pmHideSkillTriggerPill(page);
+  });
+  pill.querySelectorAll('.pm-skill-trigger-item').forEach((button) => {
+    button.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      pmSkillTriggerExpanded = true;
+      pmSkillTriggerSelectedId = button.getAttribute('data-skill-id') || '';
+      _pmRenderSkillTriggerPill(page, input);
+    });
+  });
+  pill.hidden = false;
+  if (shouldPop) {
+    pill.classList.remove('pop');
+    void pill.offsetWidth;
+    pill.classList.add('pop');
+  }
+}
 
 function _pmSortedSlashCommands() {
   return PM_CHAT_SLASH_COMMANDS.slice().sort((a, b) => b.command.length - a.command.length);
@@ -2396,10 +2780,12 @@ function _wireMobileFileChangeRows(root = document) {
 
 export function renderChatPage(page, { navigate, sessionId = null }) {
   _installMobileApprovalBridge();
-  // When no explicit session ID is in the URL, always open a fresh new chat.
-  // Using activeSessionId here caused hot-restart notifications to hijack the
-  // chat tab and open an old session instead of the blank new-chat state.
-  let requestedSession = String(sessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  // When the Chat tab is opened without a session in the URL, return to the last
+  // chat the user explicitly opened. New Chat clears this key, so notifications
+  // cannot hijack an intentional blank draft.
+  const rememberedSession = sessionId ? '' : _readMobileLastChatSession();
+  let requestedSession = String(sessionId || rememberedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
   if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
   _activeMobileThread();
@@ -2419,6 +2805,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     <form class="pm-composer" id="pm-composer">
       <input id="pm-file-input" type="file" multiple accept="image/*,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-chat-slash-popover" id="pm-chat-slash-popover" hidden></div>
+      <div class="pm-skill-trigger-pill" id="pm-skill-trigger-pill" hidden aria-live="polite"></div>
       <div class="pm-attach-tray" id="pm-attach-tray" hidden></div>
       <button type="button" class="pm-command-chip" id="pm-chat-command-chip" hidden aria-label="Clear slash command">
         <span class="pm-command-chip-token"></span>
@@ -2431,10 +2818,58 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
       </div>
       <div class="pm-chat-voice-shell" id="pm-chat-voice-shell" hidden>
+        <button type="button" class="pm-chat-voice-camera" id="pm-chat-voice-camera" aria-label="Send camera snapshot">${ICONS.image}</button>
         <button type="button" class="pm-chat-voice-close" id="pm-chat-voice-close" aria-label="Exit voice mode">&times;</button>
         <div class="pm-chat-voice-inline" id="pm-chat-voice-inline" hidden></div>
       </div>
     </form>
+    <div class="pm-attach-sheet" id="pm-attach-sheet" hidden>
+      <div class="pm-attach-sheet-scrim" id="pm-attach-sheet-scrim"></div>
+      <section class="pm-attach-sheet-panel" aria-label="Attach">
+        <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="camera">
+          <span>${ICONS.image}</span>
+          <strong>Camera</strong>
+        </button>
+        <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="files">
+          <span>${ICONS.paperclip}</span>
+          <strong>Files</strong>
+        </button>
+      </section>
+    </div>
+    <div class="pm-camera-capture" id="pm-camera-capture" hidden>
+      <video class="pm-camera-video" id="pm-camera-video" autoplay muted playsinline></video>
+      <div class="pm-camera-status" id="pm-camera-status">Opening camera...</div>
+      <div class="pm-camera-record-timer" id="pm-camera-record-timer" hidden>0.0s</div>
+      <div class="pm-camera-topbar">
+        <button type="button" class="pm-camera-icon" id="pm-camera-close" aria-label="Close camera">&times;</button>
+        <button type="button" class="pm-camera-icon" id="pm-camera-flip" aria-label="Flip camera">${ICONS.refresh}</button>
+      </div>
+      <div class="pm-camera-controls">
+        <button type="button" class="pm-camera-shutter" id="pm-camera-shutter" aria-label="Capture image"></button>
+      </div>
+    </div>
+    <div class="pm-mobile-side-sheet" id="pm-mobile-side-sheet" role="dialog" aria-modal="true" aria-label="Side chat">
+      <div class="pm-mobile-side-scrim" id="pm-mobile-side-scrim"></div>
+      <section class="pm-mobile-side-panel" id="pm-mobile-side-panel">
+        <div class="pm-mobile-side-handle" id="pm-mobile-side-handle"></div>
+        <header class="pm-mobile-side-header">
+          <button type="button" class="pm-mobile-side-close" id="pm-mobile-side-close" aria-label="Close side chat">&times;</button>
+          <div class="pm-mobile-side-title-wrap">
+            <strong id="pm-mobile-side-title">Side Chat</strong>
+            <span id="pm-mobile-side-subtitle">Prometheus · Mobile</span>
+          </div>
+        </header>
+        <div class="pm-mobile-side-thread" id="pm-mobile-side-thread"></div>
+        <form class="pm-composer pm-mobile-side-composer" id="pm-mobile-side-composer">
+          <div class="pm-composer-row">
+            <button type="button" class="pm-icon-btn" id="pm-mobile-side-attach" aria-label="Attach files">${ICONS.paperclip}</button>
+            <textarea class="pm-composer-input" id="pm-mobile-side-input" rows="1" placeholder="Follow up" aria-label="Side chat message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+            <button type="button" class="pm-icon-btn" id="pm-mobile-side-mic" aria-label="Voice input">${ICONS.micSmall}</button>
+            <button type="submit" class="pm-send" id="pm-mobile-side-send" aria-label="Send side chat">${ICONS.send}</button>
+          </div>
+        </form>
+      </section>
+    </div>
   `;
   wireHeaderActions(page, {
     onNewChat: () => _startMobileNewChat(navigate),
@@ -2449,10 +2884,39 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const micBtn = page.querySelector('#pm-chat-mic-btn');
   const chatVoiceShell = page.querySelector('#pm-chat-voice-shell');
   const chatVoiceClose = page.querySelector('#pm-chat-voice-close');
+  const chatVoiceCamera = page.querySelector('#pm-chat-voice-camera');
   const chatVoiceHost = page.querySelector('#pm-chat-voice-inline');
   const fileInput = page.querySelector('#pm-file-input');
   const attachTray = page.querySelector('#pm-attach-tray');
+  const attachSheet = page.querySelector('#pm-attach-sheet');
+  const attachSheetScrim = page.querySelector('#pm-attach-sheet-scrim');
+  const cameraCapture = page.querySelector('#pm-camera-capture');
+  const cameraVideo = page.querySelector('#pm-camera-video');
+  const cameraStatus = page.querySelector('#pm-camera-status');
+  const cameraRecordTimer = page.querySelector('#pm-camera-record-timer');
+  const cameraClose = page.querySelector('#pm-camera-close');
+  const cameraFlip = page.querySelector('#pm-camera-flip');
+  const cameraShutter = page.querySelector('#pm-camera-shutter');
   const commandChip = page.querySelector('#pm-chat-command-chip');
+  const sideSheet = page.querySelector('#pm-mobile-side-sheet');
+  const sidePanel = page.querySelector('#pm-mobile-side-panel');
+  const sideThreadEl = page.querySelector('#pm-mobile-side-thread');
+  const sideComposer = page.querySelector('#pm-mobile-side-composer');
+  const sideInput = page.querySelector('#pm-mobile-side-input');
+  const sideSendBtn = page.querySelector('#pm-mobile-side-send');
+  const sideTitleEl = page.querySelector('#pm-mobile-side-title');
+  const sideSubtitleEl = page.querySelector('#pm-mobile-side-subtitle');
+  const sideCloseBtn = page.querySelector('#pm-mobile-side-close');
+  const sideScrim = page.querySelector('#pm-mobile-side-scrim');
+  const sideHandle = page.querySelector('#pm-mobile-side-handle');
+  const sideAttachBtn = page.querySelector('#pm-mobile-side-attach');
+  const sideMicBtn = page.querySelector('#pm-mobile-side-mic');
+  const sideState = {
+    link: null,
+    thread: [],
+    busy: false,
+    abort: null,
+  };
 
   _pmRefreshSlashChrome(page, input);
   _installMobileTimestampReveal(threadEl);
@@ -2470,6 +2934,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     input.value = '';
     input.style.height = '';
     input.style.overflowY = 'hidden';
+    _pmHideSkillTriggerPill(page);
     requestAnimationFrame(resizeComposerInput);
   };
   requestAnimationFrame(resizeComposerInput);
@@ -2495,6 +2960,324 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       });
     });
     updateComposerSubmitState();
+  }
+
+  function openAttachSheet() {
+    if (!attachSheet) {
+      fileInput?.click();
+      return;
+    }
+    attachSheet.hidden = false;
+    requestAnimationFrame(() => attachSheet.classList.add('open'));
+  }
+
+  function closeAttachSheet() {
+    if (!attachSheet) return;
+    attachSheet.classList.remove('open');
+    setTimeout(() => {
+      if (!attachSheet.classList.contains('open')) attachSheet.hidden = true;
+    }, 180);
+  }
+
+  let cameraStream = null;
+  let cameraFacingMode = 'environment';
+  let cameraOpening = false;
+  let cameraCaptureOptions = { target: 'chat', onCapture: null, onVideoCapture: null };
+  let cameraRecorder = null;
+  let cameraRecordingChunks = [];
+  let cameraRecordingStartedAt = 0;
+  let cameraRecordingTimer = null;
+  let cameraRecordingMaxTimer = null;
+  let cameraHoldTimer = null;
+  let cameraPointerActive = false;
+  let cameraSuppressClick = false;
+  const CAMERA_RECORD_HOLD_MS = 420;
+  const CAMERA_RECORD_MAX_MS = 12000;
+
+  function setCameraStatus(text = '') {
+    if (cameraStatus) cameraStatus.textContent = text;
+  }
+
+  function cameraVideoMimeType() {
+    const candidates = _isIosSafariBrowser()
+      ? ['video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+      : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+    return candidates.find(type => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+  }
+
+  function cameraVideoExtension(mimeType = '') {
+    return String(mimeType || '').toLowerCase().includes('mp4') ? 'mp4' : 'webm';
+  }
+
+  function setCameraRecordingUi(recording) {
+    cameraCapture?.classList.toggle('recording', !!recording);
+    if (cameraRecordTimer) cameraRecordTimer.hidden = !recording;
+    if (!recording && cameraRecordTimer) cameraRecordTimer.textContent = '0.0s';
+  }
+
+  function updateCameraRecordingTimer() {
+    if (!cameraRecordTimer || !cameraRecordingStartedAt) return;
+    const elapsed = Math.max(0, Date.now() - cameraRecordingStartedAt);
+    cameraRecordTimer.textContent = `${(elapsed / 1000).toFixed(1)}s`;
+  }
+
+  function clearCameraRecordingTimers() {
+    if (cameraRecordingTimer) clearInterval(cameraRecordingTimer);
+    if (cameraRecordingMaxTimer) clearTimeout(cameraRecordingMaxTimer);
+    cameraRecordingTimer = null;
+    cameraRecordingMaxTimer = null;
+  }
+
+  async function extractCameraVideoFrames(blob, options = {}) {
+    const maxFrames = Math.max(1, Math.min(12, Number(options.maxFrames || 12) || 12));
+    const quality = Math.max(0.45, Math.min(0.88, Number(options.quality || 0.72) || 0.72));
+    const url = URL.createObjectURL(blob);
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'metadata';
+    video.src = url;
+    const waitFor = (eventName) => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Timed out reading video ${eventName}.`)), 4500);
+      video.addEventListener(eventName, () => { clearTimeout(timeout); resolve(true); }, { once: true });
+      video.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Could not read recorded video.')); }, { once: true });
+    });
+    try {
+      await waitFor('loadedmetadata');
+      const duration = Math.min(12, Math.max(0.1, Number(video.duration || 0) || 0.1));
+      const count = Math.max(1, Math.min(maxFrames, Math.ceil(duration)));
+      const canvas = document.createElement('canvas');
+      // Downscale frames (longest side <= 640) so up to 12 of them fit in one
+      // realtime data-channel message without exceeding the SCTP size limit.
+      const rawW = Math.max(1, Number(video.videoWidth || cameraVideo?.videoWidth || 640) || 640);
+      const rawH = Math.max(1, Number(video.videoHeight || cameraVideo?.videoHeight || 480) || 480);
+      const frameScale = Math.min(1, 640 / Math.max(rawW, rawH));
+      const width = Math.max(1, Math.round(rawW * frameScale));
+      const height = Math.max(1, Math.round(rawH * frameScale));
+      canvas.width = width;
+      canvas.height = height;
+      const ctx2d = canvas.getContext('2d');
+      if (!ctx2d) throw new Error('Could not sample video frames.');
+      const frames = [];
+      for (let i = 0; i < count; i += 1) {
+        const rawT = count === 1 ? Math.min(0.08, duration / 2) : (duration * i) / Math.max(1, count - 1);
+        const t = Math.min(Math.max(0.05, rawT), Math.max(0.05, duration - 0.05));
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timed out sampling video frame.')), 3500);
+          video.addEventListener('seeked', () => { clearTimeout(timeout); resolve(true); }, { once: true });
+          video.currentTime = Math.max(0, t);
+        });
+        ctx2d.drawImage(video, 0, 0, width, height);
+        frames.push({
+          dataUrl: canvas.toDataURL('image/jpeg', quality),
+          at: t,
+          width,
+          height,
+          mimeType: 'image/jpeg',
+          name: `video-frame-${i + 1}.jpg`,
+        });
+      }
+      return { frames, durationMs: Math.round(duration * 1000), width, height };
+    } finally {
+      try { URL.revokeObjectURL(url); } catch {}
+    }
+  }
+
+  async function handleCameraVideoBlob(blob, mimeType = '') {
+    const type = mimeType || blob?.type || 'video/webm';
+    const file = new File([blob], `prometheus-camera-video-${Date.now()}.${cameraVideoExtension(type)}`, { type });
+    const target = String(cameraCaptureOptions?.target || 'chat');
+    if (target === 'voice' && typeof cameraCaptureOptions?.onVideoCapture === 'function') {
+      const onVideoCapture = cameraCaptureOptions.onVideoCapture;
+      // ~1 frame/sec across the clip (12s cap → up to 12 frames) so the voice
+      // agent gets a temporal sequence it can "watch".
+      const sampled = await extractCameraVideoFrames(blob, { maxFrames: 12, quality: 0.72 });
+      stopCameraCapture();
+      await onVideoCapture({ file, blob, mimeType: type, ...sampled });
+      pmToast('Video frames sent to voice.', 'success');
+      return;
+    }
+    const normalized = await _normalizeMobileFile(file);
+    getPendingAttachments().push(normalized);
+    renderPendingAttachments();
+    stopCameraCapture();
+    pmToast('Video attached.', 'success');
+  }
+
+  function stopCameraRecording() {
+    if (!cameraRecorder) return;
+    try {
+      if (cameraRecorder.state !== 'inactive') cameraRecorder.stop();
+    } catch {}
+  }
+
+  function startCameraRecording() {
+    if (!cameraStream || cameraRecorder || typeof MediaRecorder === 'undefined') {
+      if (typeof MediaRecorder === 'undefined') pmToast('Video recording is not available in this browser.', 'error');
+      return;
+    }
+    const mimeType = cameraVideoMimeType();
+    try {
+      cameraRecordingChunks = [];
+      cameraRecorder = new MediaRecorder(cameraStream, mimeType ? { mimeType } : undefined);
+      cameraRecorder.addEventListener('dataavailable', (event) => {
+        if (event.data && event.data.size > 0) cameraRecordingChunks.push(event.data);
+      });
+      cameraRecorder.addEventListener('stop', () => {
+        const chunks = cameraRecordingChunks.slice();
+        const finalType = mimeType || cameraRecorder?.mimeType || chunks[0]?.type || 'video/webm';
+        cameraRecorder = null;
+        cameraRecordingChunks = [];
+        clearCameraRecordingTimers();
+        setCameraRecordingUi(false);
+        cameraSuppressClick = true;
+        if (!chunks.length) {
+          setCameraStatus('');
+          pmToast('No video was recorded.', 'info');
+          return;
+        }
+        setCameraStatus('Processing video...');
+        handleCameraVideoBlob(new Blob(chunks, { type: finalType }), finalType)
+          .catch((err) => {
+            setCameraStatus('');
+            pmToast(err?.message || 'Could not process video.', 'error');
+          });
+      });
+      cameraRecorder.start(250);
+      cameraRecordingStartedAt = Date.now();
+      setCameraRecordingUi(true);
+      updateCameraRecordingTimer();
+      cameraRecordingTimer = setInterval(updateCameraRecordingTimer, 100);
+      cameraRecordingMaxTimer = setTimeout(stopCameraRecording, CAMERA_RECORD_MAX_MS);
+      setCameraStatus('Recording...');
+    } catch (err) {
+      cameraRecorder = null;
+      clearCameraRecordingTimers();
+      setCameraRecordingUi(false);
+      pmToast(err?.message || 'Could not start video recording.', 'error');
+    }
+  }
+
+  function stopCameraCapture() {
+    if (cameraHoldTimer) clearTimeout(cameraHoldTimer);
+    cameraHoldTimer = null;
+    if (cameraRecorder && cameraRecorder.state !== 'inactive') {
+      try { cameraRecorder.stop(); } catch {}
+    }
+    cameraRecorder = null;
+    cameraRecordingChunks = [];
+    cameraRecordingStartedAt = 0;
+    clearCameraRecordingTimers();
+    setCameraRecordingUi(false);
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((track) => {
+        try { track.stop(); } catch {}
+      });
+      cameraStream = null;
+    }
+    if (cameraVideo) cameraVideo.srcObject = null;
+    if (cameraCapture) {
+      cameraCapture.classList.remove('open');
+      setTimeout(() => {
+        if (!cameraCapture.classList.contains('open')) cameraCapture.hidden = true;
+      }, 180);
+    }
+    cameraOpening = false;
+    cameraCaptureOptions = { target: 'chat', onCapture: null, onVideoCapture: null };
+  }
+
+  async function openCameraCapture(options = {}) {
+    const target = String(options.target || 'chat').trim() || 'chat';
+    closeAttachSheet();
+    if (!navigator.mediaDevices?.getUserMedia) {
+      pmToast('Camera preview is not available in this browser.', 'error');
+      return;
+    }
+    if (!cameraCapture || !cameraVideo) return;
+    stopCameraCapture();
+    cameraCaptureOptions = {
+      target,
+      onCapture: typeof options.onCapture === 'function' ? options.onCapture : null,
+      onVideoCapture: typeof options.onVideoCapture === 'function' ? options.onVideoCapture : null,
+    };
+    cameraOpening = true;
+    cameraCapture.hidden = false;
+    setCameraStatus('Opening camera...');
+    requestAnimationFrame(() => cameraCapture.classList.add('open'));
+    try {
+      const constraints = {
+        video: {
+          facingMode: { ideal: cameraFacingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 960 },
+        },
+        audio: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      cameraStream = stream;
+      cameraVideo.srcObject = stream;
+      cameraVideo.muted = true;
+      cameraVideo.setAttribute('playsinline', '');
+      await cameraVideo.play();
+      setCameraStatus('');
+    } catch (err) {
+      stopCameraCapture();
+      pmToast(err?.message || 'Could not open camera.', 'error');
+    } finally {
+      cameraOpening = false;
+    }
+  }
+
+  async function flipCameraCapture() {
+    if (cameraOpening) return;
+    const options = cameraCaptureOptions || { target: 'chat', onCapture: null };
+    cameraFacingMode = cameraFacingMode === 'environment' ? 'user' : 'environment';
+    await openCameraCapture(options);
+  }
+
+  function canvasToBlob(canvas, type = 'image/jpeg', quality = 0.9) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Could not capture camera frame.'));
+      }, type, quality);
+    });
+  }
+
+  async function captureCameraFrame() {
+    if (!cameraVideo || !cameraStream) return;
+    const width = Number(cameraVideo.videoWidth || 0);
+    const height = Number(cameraVideo.videoHeight || 0);
+    if (!width || !height) {
+      pmToast('Camera is still warming up.', 'info');
+      return;
+    }
+    try {
+      setCameraStatus('Capturing...');
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Could not prepare camera capture.');
+      ctx.drawImage(cameraVideo, 0, 0, width, height);
+      const blob = await canvasToBlob(canvas);
+      const file = new File([blob], `prometheus-camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      const normalized = await _normalizeMobileFile(file);
+      const target = String(cameraCaptureOptions?.target || 'chat');
+      if (target === 'voice' && typeof cameraCaptureOptions?.onCapture === 'function') {
+        const onCapture = cameraCaptureOptions.onCapture;
+        stopCameraCapture();
+        await onCapture(normalized, { file, dataUrl: normalized.dataUrl, blob });
+      } else {
+        getPendingAttachments().push(normalized);
+        renderPendingAttachments();
+        stopCameraCapture();
+      }
+      pmToast(target === 'voice' ? 'Snapshot sent to voice.' : 'Snapshot attached.', 'success');
+    } catch (err) {
+      setCameraStatus('');
+      pmToast(err?.message || 'Could not capture image.', 'error');
+    }
   }
 
   _renderThread(threadEl);
@@ -2583,20 +3366,35 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       const activeThread = _activeMobileThread();
       let aiTurn = _findLatestAssistantTurn(activeThread);
       if (status?.active) {
-        if (!aiTurn || !aiTurn.streaming || fullRefresh || force) {
-          if (aiTurn?.streaming && (fullRefresh || force)) {
-            const existingIndex = activeThread.indexOf(aiTurn);
-            if (existingIndex >= 0) activeThread.splice(existingIndex, 1);
-          }
-          aiTurn = { role: 'ai', streaming: true, time: '', timestamp: Date.now(), workStartedAt: Date.now(), body: { sender: '', text: '' }, content: '' };
+        let hasLocalLiveHistory = !!(aiTurn?.streaming && (
+          String(aiTurn.body?.text || aiTurn.content || '').trim()
+          || (Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.length)
+          || (Array.isArray(aiTurn.liveTraceEntries) && aiTurn.liveTraceEntries.length)
+        ));
+        if (!aiTurn || !aiTurn.streaming) {
+          const recoveredStartedAt = Number(status?.run?.startedAt || remembered?.startedAt || 0);
+          const startedAt = Number.isFinite(recoveredStartedAt) && recoveredStartedAt > 0 ? recoveredStartedAt : Date.now();
+          aiTurn = {
+            role: 'ai',
+            streaming: true,
+            time: '',
+            timestamp: startedAt,
+            workStartedAt: startedAt,
+            body: { sender: '', text: '' },
+            content: '',
+            processEntries: [],
+            liveTraceEntries: [],
+          };
           activeThread.push(aiTurn);
+          hasLocalLiveHistory = false;
         }
         aiTurn.streaming = true;
-        const lastSeq = (fullRefresh || force) ? 0 : Math.max(
+        const rememberedLastSeq = Math.max(
           Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
           Number(remembered?.lastSeq || 0) || 0,
         );
-        if ((fullRefresh || force) && __pmChat.activeRuns?.[requestedSession]) {
+        const lastSeq = (fullRefresh || force) && !hasLocalLiveHistory ? 0 : rememberedLastSeq;
+        if ((fullRefresh || force) && !hasLocalLiveHistory && __pmChat.activeRuns?.[requestedSession]) {
           __pmChat.activeRuns[requestedSession] = { ...__pmChat.activeRuns[requestedSession], lastSeq: 0, streamId: '' };
         }
         const replay = await loadMobileChatStreamReplay(requestedSession, lastSeq).catch(() => null);
@@ -2776,6 +3574,326 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     });
   }
 
+  function resizeSideInput() {
+    if (!sideInput) return;
+    const maxHeight = Number(sideInput.dataset.maxHeight || 148);
+    sideInput.style.height = 'auto';
+    const nextHeight = Math.min(sideInput.scrollHeight || 0, maxHeight);
+    sideInput.style.height = `${Math.max(0, nextHeight)}px`;
+    sideInput.style.overflowY = sideInput.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  function renderMobileSideSheet() {
+    if (!sideThreadEl) return;
+    const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
+      .filter((msg, index) => msg && msg.sideChatBoundary !== true && !_isMobileHiddenVoiceDraftMessage(msg, index));
+    sideThreadEl.innerHTML = visible.length
+      ? visible.map((msg, index) => _renderChatMessageHtml(msg, index)).join('')
+      : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>';
+    _wireMobileProcessRunActions(sideThreadEl);
+    _wireMobileMediaCards(sideThreadEl);
+    _wireMobileFileChangeRows(sideThreadEl);
+    requestAnimationFrame(() => {
+      if (sideThreadEl) sideThreadEl.scrollTop = sideThreadEl.scrollHeight;
+    });
+  }
+
+  // Coalesce side-sheet streaming renders to a steady cadence (mirrors the main
+  // thread's _scheduleThreadRender). Token text still accumulates immediately on
+  // sideState.thread; only the full innerHTML rebuild is throttled. Finalization
+  // must flush so the complete final answer always lands.
+  let _sideRenderTimer = null;
+  function scheduleSideRenderSoon() {
+    if (_sideRenderTimer) return; // leading-guard coalesce
+    _sideRenderTimer = setTimeout(() => {
+      _sideRenderTimer = null;
+      renderMobileSideSheet();
+    }, 90);
+  }
+  function flushSideRender() {
+    if (_sideRenderTimer) { clearTimeout(_sideRenderTimer); _sideRenderTimer = null; }
+    renderMobileSideSheet();
+  }
+
+  function setMobileSideBusy(busy) {
+    sideState.busy = !!busy;
+    if (!sideSendBtn) return;
+    const shouldAbort = sideState.busy && !String(sideInput?.value || '').trim();
+    sideSendBtn.disabled = false;
+    sideSendBtn.classList.toggle('is-abort', shouldAbort);
+    sideSendBtn.title = shouldAbort ? 'Stop side chat' : 'Send side chat';
+    sideSendBtn.setAttribute('aria-label', shouldAbort ? 'Stop side chat' : 'Send side chat');
+    sideSendBtn.innerHTML = shouldAbort
+      ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>`
+      : ICONS.send;
+  }
+
+  async function ensureMobileSideParentSession() {
+    if (requestedSession !== MOBILE_CHAT_SESSION_ID) return requestedSession;
+    const sid = createMobileChatSessionId();
+    const currentThread = Array.isArray(__pmChat.threads[requestedSession]) ? __pmChat.threads[requestedSession] : [];
+    __pmChat.threads[sid] = currentThread;
+    __pmChat.attachments[sid] = getPendingAttachments().slice();
+    __pmChat.activeSessionId = sid;
+    _rememberMobileLastChatSession(sid);
+    __pmChat.threads[requestedSession] = [];
+    __pmChat.attachments[requestedSession] = [];
+    requestedSession = sid;
+    try {
+      await createMobileChatSession(sid, { title: 'Mobile chat' });
+      if (currentThread.length) await updateMobileChatSessionHistory(sid, _mobileHistoryForServer(currentThread), { resetCompaction: true });
+    } catch (err) {
+      console.warn('[mobile side chat] failed to create parent session:', err);
+    }
+    try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(sid)}`); } catch {}
+    invalidateMobileDrawerSessions('mobile');
+    return sid;
+  }
+
+  async function loadMobileSideThread(link) {
+    const sid = String(link?.id || '').trim();
+    if (!sid) return [];
+    if (Array.isArray(__pmChat.threads[sid]) && __pmChat.threads[sid].length) return __pmChat.threads[sid];
+    const session = await loadMobileChatSession(sid).catch(() => null);
+    const history = Array.isArray(session?.history) ? session.history : [];
+    const mapped = _mapServerHistoryToMobile(history);
+    __pmChat.threads[sid] = mapped;
+    return mapped;
+  }
+
+  async function createMobileSideChat(initialText = '') {
+    const parentSessionId = await ensureMobileSideParentSession();
+    const parentThread = Array.isArray(__pmChat.threads[parentSessionId]) ? __pmChat.threads[parentSessionId] : [];
+    const sideId = _generateMobileSideChatId();
+    const title = _makeMobileSideChatTitle(initialText || 'Side chat');
+    const boundary = _buildMobileSideChatBoundaryMessage(parentSessionId, parentThread, requestedSession === MOBILE_CHAT_SESSION_ID ? 'New Chat' : 'Mobile chat');
+    const sideThread = [boundary];
+    const link = {
+      id: sideId,
+      parentSessionId,
+      title,
+      anchorPreview: String(initialText || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      closed: false,
+    };
+    __pmChat.threads[sideId] = sideThread;
+    const links = _loadMobileSideChatLinks().filter((item) => item.id !== sideId);
+    _saveMobileSideChatLinks([link, ...links]);
+    try {
+      await createMobileChatSession(sideId, { title });
+      await updateMobileChatSessionHistory(sideId, _mobileHistoryForServer(sideThread), { resetCompaction: true });
+    } catch (err) {
+      console.warn('[mobile side chat] failed to persist side session:', err);
+    }
+    invalidateMobileDrawerSessions('mobile');
+    return { link, thread: sideThread };
+  }
+
+  async function openMobileSideChat(initialText = '') {
+    const parentSessionId = await ensureMobileSideParentSession();
+    const existing = _getMobileSideChatLinksForParent(parentSessionId)[0];
+    const result = existing
+      ? { link: existing, thread: await loadMobileSideThread(existing) }
+      : await createMobileSideChat(initialText);
+    sideState.link = result.link;
+    sideState.thread = Array.isArray(result.thread) ? result.thread : [];
+    setMobileSideBusy(false);
+    if (sideTitleEl) sideTitleEl.textContent = result.link?.title || 'Side Chat';
+    if (sideSubtitleEl) sideSubtitleEl.textContent = `Prometheus · ${String(parentSessionId).startsWith('mobile_') ? 'Mobile' : 'Chat'}`;
+    sideSheet?.classList.add('open');
+    renderMobileSideSheet();
+    resizeSideInput();
+    if (initialText) {
+      sideInput.value = '';
+      setTimeout(() => sendMobileSideMessage(initialText), 0);
+    } else {
+      setTimeout(() => sideInput?.focus?.(), 40);
+    }
+  }
+
+  function closeMobileSideChatSheet() {
+    sideSheet?.classList.remove('open');
+  }
+
+  function applyMobileSideStreamEvent(aiTurn, evt) {
+    if (!aiTurn || !evt?.type) return '';
+    switch (String(evt.type || '')) {
+      case 'token':
+        if (evt.text) {
+          const chunk = String(evt.text);
+          if (aiTurn.agentExecutionMode === 'execute' && !aiTurn.finalResponseStarted) {
+            _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
+          } else {
+            aiTurn.finalResponseStarted = true;
+            aiTurn.body.text += chunk;
+            aiTurn.content = String(aiTurn.body.text || '');
+          }
+        }
+        scheduleSideRenderSoon();
+        return 'streaming';
+      case 'agent_mode':
+        aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
+        if (aiTurn.agentExecutionMode === 'execute') _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
+        scheduleSideRenderSoon();
+        return 'streaming';
+      case 'thinking_delta': {
+        const text = String(evt.thinking || evt.text || '');
+        if (text) {
+          _appendMobileProcess(aiTurn, 'think', text.trim().slice(0, 220));
+          _appendMobileLiveTrace(aiTurn, 'think', text, { append: true });
+        }
+        scheduleSideRenderSoon();
+        return 'streaming';
+      }
+      case 'info':
+      case 'ui_preflight':
+      case 'heartbeat':
+      case 'tool_progress':
+        if (evt.message) {
+          if (String(evt.type || '') === 'tool_progress') _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+          if (String(evt.type || '') === 'tool_progress') aiTurn.toolActivityStarted = true;
+          _appendMobileProcess(aiTurn, 'info', String(evt.message), evt);
+          _appendMobileLiveTrace(aiTurn, String(evt.type || '') === 'tool_progress' ? 'tool' : 'info', String(evt.message));
+        }
+        renderMobileSideSheet();
+        return 'streaming';
+      case 'tool_call':
+        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        aiTurn.toolActivityStarted = true;
+        _appendMobileProcess(aiTurn, 'tool', _mobileToolLabel(evt), evt);
+        _appendMobileLiveTrace(aiTurn, 'tool', _mobileToolLabel(evt));
+        renderMobileSideSheet();
+        return 'streaming';
+      case 'tool_result':
+        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        aiTurn.toolActivityStarted = true;
+        _collectMediaFromToolEvent(aiTurn, evt);
+        _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`, evt);
+        _appendMobileLiveTrace(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`);
+        renderMobileSideSheet();
+        return 'streaming';
+      case 'final':
+        _collectMediaFromToolEvent(aiTurn, evt);
+        if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
+        if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+        if (evt.text) {
+          aiTurn.finalResponseStarted = true;
+          aiTurn.body.text = String(evt.text);
+        }
+        aiTurn.content = String(aiTurn.body.text || '');
+        flushSideRender();
+        return 'final';
+      case 'done':
+        _collectMediaFromToolEvent(aiTurn, evt);
+        if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
+        if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+        if (evt.reply && !String(aiTurn.body.text || '').trim()) {
+          aiTurn.finalResponseStarted = true;
+          aiTurn.body.text = String(evt.reply);
+        }
+        aiTurn.content = String(aiTurn.body.text || '');
+        flushSideRender();
+        return 'done';
+      case 'error':
+        _appendMobileProcess(aiTurn, 'error', String(evt.message || 'Chat error'), evt);
+        aiTurn.body.text = (aiTurn.body.text ? `${aiTurn.body.text}\n\n` : '') + `Warning: ${String(evt.message || 'Chat error')}`;
+        aiTurn.content = aiTurn.body.text;
+        flushSideRender();
+        return 'error';
+      default:
+        return '';
+    }
+  }
+
+  async function sendMobileSideMessage(text = '') {
+    const link = sideState.link;
+    const sideId = String(link?.id || '').trim();
+    const msg = String(text || sideInput?.value || '').trim();
+    if (!sideId) return;
+    if (sideState.busy && !msg) {
+      try { sideState.abort?.abort?.(); } catch {}
+      return;
+    }
+    if (!msg || sideState.busy) return;
+    if (sideInput) {
+      sideInput.value = '';
+      resizeSideInput();
+    }
+    const thread = Array.isArray(sideState.thread) ? sideState.thread : (sideState.thread = []);
+    thread.push(_makeMobileUserMessage(msg));
+    const aiTurn = {
+      role: 'ai',
+      streaming: true,
+      time: '',
+      timestamp: Date.now(),
+      workStartedAt: Date.now(),
+      body: { sender: '', text: '' },
+      content: '',
+      processEntries: [],
+      liveTraceEntries: [],
+      agentExecutionMode: 'execute',
+    };
+    thread.push(aiTurn);
+    setMobileSideBusy(true);
+    renderMobileSideSheet();
+    const clientRequestId = _newMobileClientRequestId(sideId);
+    let sideTurnFinished = false;
+    const stream = streamChat({ message: msg, sessionId: sideId, clientRequestId }, {
+      onEvent: (evt) => {
+        const applied = applyMobileSideStreamEvent(aiTurn, evt);
+        if (applied === 'done' || applied === 'error') finishMobileSideTurn();
+      },
+      onError: (err) => {
+        if (err?.name === 'AbortError') return;
+        aiTurn.body.text = (aiTurn.body.text ? `${aiTurn.body.text}\n\n` : '') + `Warning: ${err?.message || 'Chat error'}`;
+        aiTurn.content = aiTurn.body.text;
+        finishMobileSideTurn();
+        pmToast(err?.message || 'Side chat failed', 'error');
+      },
+      onDone: () => finishMobileSideTurn(),
+    });
+    sideState.abort = { abort: () => {
+      try { stream.abort(); } catch {}
+      aiTurn.streaming = false;
+      aiTurn.body.text = String(aiTurn.body.text || '').trim()
+        ? `[Stopped by user]\n\n${aiTurn.body.text}`
+        : '[Generation stopped by user.]';
+      aiTurn.content = aiTurn.body.text;
+      finishMobileSideTurn();
+    } };
+
+    function finishMobileSideTurn() {
+      if (sideTurnFinished) {
+        setMobileSideBusy(false);
+        sideState.abort = null;
+        return;
+      }
+      sideTurnFinished = true;
+      aiTurn.streaming = false;
+      aiTurn.workEndedAt = Number(aiTurn.workEndedAt || Date.now()) || Date.now();
+      aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
+      aiTurn.time = _nowTime();
+      aiTurn.timestamp = Number(aiTurn.timestamp || Date.now()) || Date.now();
+      aiTurn.content = String(aiTurn.body?.text || '');
+      _mergeMobileLiveTraceIntoProcess(aiTurn);
+      setMobileSideBusy(false);
+      sideState.abort = null;
+      const links = _loadMobileSideChatLinks();
+      const idx = links.findIndex((item) => item.id === sideId);
+      if (idx >= 0) {
+        links[idx] = { ...links[idx], title: links[idx].title || _makeMobileSideChatTitle(msg), updatedAt: Date.now(), closed: false };
+        _saveMobileSideChatLinks(links);
+      }
+      updateMobileChatSessionHistory(sideId, _mobileHistoryForServer(thread), { resetCompaction: true }).catch((err) => {
+        console.warn('[mobile side chat] failed to persist completed side turn:', err);
+      });
+      renderMobileSideSheet();
+      invalidateMobileDrawerSessions('mobile');
+    }
+  }
+
   // ----- Mobile keyboard (visualViewport) controller -----
   // Goal: keep the chat shell (and tab bar) visually still, and float ONLY the
   // composer above the on-screen keyboard.
@@ -2893,6 +4011,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     const sid = String(sessionId || __pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID).trim();
     if (sid && requestedSession === MOBILE_CHAT_SESSION_ID && sid !== MOBILE_CHAT_SESSION_ID) {
       requestedSession = sid;
+      _rememberMobileLastChatSession(sid);
       try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(sid)}`); } catch {}
       invalidateMobileDrawerSessions('mobile');
     }
@@ -2948,6 +4067,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         inlineChatSessionId: __pmVoice.targetSessionId,
         inlineChatSessionLabel: __pmVoice.targetSessionLabel,
         autoStart,
+        openCameraCapture,
+        cameraButton: chatVoiceCamera,
       }).catch((err) => {
         console.warn('[mobile chat] inline voice mount failed:', err);
         pmToast('Could not start voice mode.', 'error');
@@ -3009,6 +4130,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       __pmChat.threads[sid] = forkedThread;
       __pmChat.attachments[sid] = [];
       __pmChat.activeSessionId = sid;
+      _rememberMobileLastChatSession(sid);
       __pmChat.editingMessageIndex = -1;
       navigate?.(`#mobile/chat/${encodeURIComponent(sid)}`);
       pmToast('Conversation forked', 'success');
@@ -3143,15 +4265,27 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   }
 
   function applyMobileChatStreamEvent(aiTurn, evt) {
+    aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || !evt?.type) return '';
     if (!noteChatStreamSeq(evt)) return 'duplicate';
     switch (evt.type) {
       case 'token':
         if (evt.text) {
-          aiTurn.body.text += String(evt.text);
-          aiTurn.content = String(aiTurn.body.text || '');
-          _appendMobileLiveTrace(aiTurn, 'assistant', String(evt.text), { append: true });
+          const chunk = String(evt.text);
+          if (aiTurn.agentExecutionMode === 'execute' && !aiTurn.finalResponseStarted) {
+            _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
+          } else {
+            aiTurn.finalResponseStarted = true;
+            aiTurn.body.text += chunk;
+            aiTurn.content = String(aiTurn.body.text || '');
+          }
         }
+        renderThreadSoon();
+        return 'streaming';
+      case 'agent_mode':
+        aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
+        if (aiTurn.agentExecutionMode === 'execute') _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
         renderThreadSoon();
         return 'streaming';
       case 'thinking_delta': {
@@ -3168,10 +4302,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       case 'heartbeat':
         if (evt.message) {
           _appendMobileProcess(aiTurn, 'info', String(evt.message));
+          _appendMobileLiveTrace(aiTurn, 'info', String(evt.message));
           renderThreadSoon();
         }
         return 'streaming';
       case 'tool_call': {
+        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
         _appendMobileProcess(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`, evt);
@@ -3180,6 +4317,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         return 'streaming';
       }
       case 'tool_result': {
+        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
         _collectMediaFromToolEvent(aiTurn, evt);
@@ -3189,6 +4328,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         return 'streaming';
       }
       case 'tool_progress': {
+        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        aiTurn.toolActivityStarted = true;
         const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
         _appendMobileProcess(aiTurn, 'info', progressText, evt);
         _appendMobileLiveTrace(aiTurn, 'tool', progressText);
@@ -3216,6 +4357,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         const modelEvent = evt.event && typeof evt.event === 'object' ? evt.event : {};
         const eventType = String(modelEvent.type || '').trim();
         if (eventType === 'tool_call_start' || eventType === 'tool_call_done') {
+          _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+          aiTurn.toolActivityStarted = true;
           const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
           _appendMobileLiveTrace(aiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
           renderThreadSoon();
@@ -3236,14 +4379,20 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
-        if (evt.text) aiTurn.body.text = String(evt.text);
+        if (evt.text) {
+          aiTurn.finalResponseStarted = true;
+          aiTurn.body.text = String(evt.text);
+        }
         renderThreadSoon();
         return 'final';
       case 'done':
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
-        if (evt.reply && !String(aiTurn.body.text || '').trim()) aiTurn.body.text = String(evt.reply);
+        if (evt.reply && !String(aiTurn.body.text || '').trim()) {
+          aiTurn.finalResponseStarted = true;
+          aiTurn.body.text = String(evt.reply);
+        }
         return 'done';
       case 'error':
         _appendMobileProcess(aiTurn, 'error', String(evt.message || 'Chat error'), evt);
@@ -3263,6 +4412,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     aiTurn.time = _nowTime();
     aiTurn.timestamp = Number(aiTurn.timestamp || Date.now()) || Date.now();
     aiTurn.content = String(aiTurn.body?.text || '');
+    _mergeMobileLiveTraceIntoProcess(aiTurn);
     if (__pmChat.activeRuns?.[requestedSession]) __pmChat.activeRuns[requestedSession].abort = null;
     __pmChat.abort = null;
     _clearMobileActiveRun(requestedSession);
@@ -3573,8 +4723,25 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
 
   async function sendMessage(text, options = {}) {
     const busySessionId = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
-    const files = Array.isArray(options.attachments) ? options.attachments.slice() : getPendingAttachments().slice();
     const msg = String(text || '').trim();
+    const stagedVoiceImages = (
+      !Array.isArray(options.attachments)
+      && Array.isArray(__pmRealtimeAgent?.pendingImages)
+      && __pmRealtimeAgent.pendingImages.length
+      && String(__pmRealtimeAgent.conn?.provider || 'openai_realtime') !== 'xai'
+    )
+      ? __pmRealtimeAgent.pendingImages.map((img, index) => ({
+          kind: 'image',
+          name: String(img?.name || `Voice snapshot ${index + 1}`).trim(),
+          mimeType: String(img?.mimeType || 'image/jpeg').trim(),
+          dataUrl: String(img?.dataUrl || '').trim(),
+          base64: String(img?.base64 || String(img?.dataUrl || '').replace(/^data:[^;]+;base64,/, '')).trim(),
+          sizeLabel: '',
+        })).filter((img) => img.dataUrl && img.base64)
+      : [];
+    const files = Array.isArray(options.attachments)
+      ? options.attachments.slice()
+      : getPendingAttachments().slice().concat(stagedVoiceImages);
     if (!msg && files.length === 0) return;
     const fromQueue = options.fromQueue === true;
     if (!fromQueue && (__pmChat.activeRuns?.[busySessionId]?.busy || __pmChat.activeRuns?.[requestedSession]?.busy)) {
@@ -3601,6 +4768,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       __pmChat.threads[actualSessionId] = Array.isArray(__pmChat.threads[requestedSession]) ? __pmChat.threads[requestedSession] : [];
       __pmChat.attachments[actualSessionId] = files.slice();
       __pmChat.activeSessionId = actualSessionId;
+      _rememberMobileLastChatSession(actualSessionId);
       __pmChat.threads[requestedSession] = [];
       __pmChat.attachments[requestedSession] = [];
       try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(actualSessionId)}`); } catch {}
@@ -3615,6 +4783,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     }
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
+    if (stagedVoiceImages.length) {
+      _flushMobileRealtimeAgentPendingImages('typed_chat_send', {
+        promptText: msg,
+        createResponse: __pmVoice?.settings?.voiceMode === 'openai_realtime',
+      }).catch(() => {});
+    }
 
     if (!Array.isArray(options.attachments)) {
       __pmChat.attachments[actualSessionId] = [];
@@ -3649,6 +4823,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       body: { sender: '', text: '' },
       content: '',
       processEntries: [],
+      liveTraceEntries: [],
+      agentExecutionMode: 'execute',
       _clientRequestId: clientRequestId,
     };
     activeThread.push(aiTurn);
@@ -3665,19 +4841,21 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     const finishAiTurn = () => {
       if (turnFinished) return;
       turnFinished = true;
+      const targetAiTurn = _mobileStreamTargetTurn(aiTurn);
       if (stoppedByUser) {
-        _appendMobileProcess(aiTurn, 'warn', 'Generation stopped by user. Gateway abort requested; process log preserved.');
-        const streamed = String(aiTurn.body.text || '').trim();
-        aiTurn.body.text = streamed
+        _appendMobileProcess(targetAiTurn, 'warn', 'Generation stopped by user. Gateway abort requested; process log preserved.');
+        const streamed = String(targetAiTurn.body.text || '').trim();
+        targetAiTurn.body.text = streamed
           ? `[Stopped by user]\n\n${streamed}`
           : '[Generation stopped by user. Gateway abort requested and process log preserved.]';
       }
-      aiTurn.streaming = false;
-      aiTurn.workEndedAt = Number(aiTurn.workEndedAt || Date.now()) || Date.now();
-      aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
-      aiTurn.time = _nowTime();
-      aiTurn.timestamp = Number(aiTurn.timestamp || Date.now()) || Date.now();
-      aiTurn.content = String(aiTurn.body?.text || '');
+      targetAiTurn.streaming = false;
+      targetAiTurn.workEndedAt = Number(targetAiTurn.workEndedAt || Date.now()) || Date.now();
+      targetAiTurn.workDurationMs = Math.max(0, targetAiTurn.workEndedAt - _mobileAssistantWorkStartedAt(targetAiTurn));
+      targetAiTurn.time = _nowTime();
+      targetAiTurn.timestamp = Number(targetAiTurn.timestamp || Date.now()) || Date.now();
+      targetAiTurn.content = String(targetAiTurn.body?.text || '');
+      _mergeMobileLiveTraceIntoProcess(targetAiTurn);
       if (Number.isFinite(Number(options.reuseExistingUserIndex)) && !stoppedByUser) {
         const userIndex = Number(options.reuseExistingUserIndex);
         const userMsg = _activeMobileThread()[userIndex];
@@ -3722,17 +4900,18 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       },
       onError: (err) => {
         if (stoppedByUser || err?.name === 'AbortError') return;
+        const targetAiTurn = _mobileStreamTargetTurn(aiTurn);
         const message = err?.message || 'Chat error';
         if (err?.mobileStreamDisconnected) {
-          aiTurn.body.text = aiTurn.body.text || "Connection dropped, but Prometheus may still be working. I'll keep checking and recover the result here.";
-          aiTurn.streaming = true;
-          _appendMobileProcess(aiTurn, 'warn', message);
+          targetAiTurn.body.text = targetAiTurn.body.text || "Connection dropped, but Prometheus may still be working. I'll keep checking and recover the result here.";
+          targetAiTurn.streaming = true;
+          _appendMobileProcess(targetAiTurn, 'warn', message);
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
           pmToast('Connection dropped - recovery mode is on.', 'warn');
           scheduleMobileRunRecovery(2500, { force: true });
         } else {
-          aiTurn.body.text = (aiTurn.body.text ? aiTurn.body.text + '\n\n' : '') + `Warning: ${message}`;
-          _appendMobileProcess(aiTurn, 'error', message);
+          targetAiTurn.body.text = (targetAiTurn.body.text ? targetAiTurn.body.text + '\n\n' : '') + `Warning: ${message}`;
+          _appendMobileProcess(targetAiTurn, 'error', message);
           _clearMobileActiveRun(actualSessionId);
           pmToast(message, 'error');
           finishAiTurn();
@@ -3787,7 +4966,22 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       : null;
     if (!aiTurn) aiTurn = _findLatestAssistantTurn(activeThread);
     if (!aiTurn || !aiTurn.streaming) {
-      aiTurn = { role: 'ai', streaming: true, time: '', timestamp: Date.now(), workStartedAt: Date.now(), body: { sender: '', text: '' }, content: '', processEntries: [], _clientRequestId: incomingClientRequestId };
+      const rememberedRun = _readMobileActiveRun(requestedSession);
+      const recoveredStartedAt = Number(rememberedRun?.startedAt || msg.startedAt || msg.at || 0);
+      const startedAt = Number.isFinite(recoveredStartedAt) && recoveredStartedAt > 0 ? recoveredStartedAt : Date.now();
+      aiTurn = {
+        role: 'ai',
+        streaming: true,
+        time: '',
+        timestamp: startedAt,
+        workStartedAt: startedAt,
+        body: { sender: '', text: '' },
+        content: '',
+        processEntries: [],
+        liveTraceEntries: [],
+        agentExecutionMode: 'execute',
+        _clientRequestId: incomingClientRequestId,
+      };
       activeThread.push(aiTurn);
     }
     aiTurn.streaming = true;
@@ -3896,10 +5090,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   wsEventBus?.on?.('main_chat_stream_event', onMainChatStreamEvent);
   wsEventBus?.on?.('voice_interruption', onVoiceInterruptionEvent);
   wsEventBus?.on?.('voice_agent_tool_event', onVoiceAgentToolEvent);
+  const refreshSkillTriggerPill = () => _pmRenderSkillTriggerPill(page, input);
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
     window.removeEventListener('focus', runRecoveryOnReturn);
+    window.removeEventListener('prometheus:skills-cache-updated', refreshSkillTriggerPill);
     wsEventBus?.off?.('ws:open', runRecoveryOnWsOpen);
 
     document.removeEventListener('visibilitychange', runRecoveryOnVisibility);
@@ -3927,6 +5123,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = _pmGetComposerValue(input);
+    if (/^\/side(\s|$)/i.test(text.trim())) {
+      const initial = text.trim().slice('/side'.length).trim();
+      resetComposerInput();
+      _pmClearActiveSlashCommand(page, input, { focus: false });
+      updateComposerSubmitState();
+      openMobileSideChat(initial).catch((err) => {
+        console.warn('[mobile side chat] open failed:', err);
+        pmToast(`Side chat failed: ${err.message || err}`, 'error');
+      });
+      return;
+    }
     if (/^\/browse(\s|$)/i.test(text.trim())) {
       const path = text.trim().slice('/browse'.length).trim();
       resetComposerInput();
@@ -4009,6 +5216,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   input?.addEventListener('input', () => {
     resizeComposerInput();
     _pmHandleSlashInput(page, input);
+    _pmRenderSkillTriggerPill(page, input);
     updateComposerSubmitState();
   });
   input?.addEventListener('keydown', (e) => {
@@ -4047,8 +5255,129 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   });
   input?.addEventListener('blur', () => setTimeout(() => _pmHideSlashPopover(page), 120));
   commandChip?.addEventListener('click', () => _pmClearActiveSlashCommand(page, input));
+  window.addEventListener('prometheus:skills-cache-updated', refreshSkillTriggerPill);
 
-  attachBtn?.addEventListener('click', () => fileInput?.click());
+  sideComposer?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    sendMobileSideMessage().catch((err) => {
+      console.warn('[mobile side chat] send failed:', err);
+      pmToast(`Side chat failed: ${err.message || err}`, 'error');
+    });
+  });
+  sideInput?.addEventListener('input', () => {
+    resizeSideInput();
+    setMobileSideBusy(sideState.busy);
+  });
+  sideInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      if (typeof sideComposer?.requestSubmit === 'function') sideComposer.requestSubmit();
+      else sideComposer?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+    if (event.key === 'Escape') closeMobileSideChatSheet();
+  });
+  sideCloseBtn?.addEventListener('click', closeMobileSideChatSheet);
+  sideScrim?.addEventListener('click', closeMobileSideChatSheet);
+  sideAttachBtn?.addEventListener('click', () => pmToast('Side chat attachments are coming next. Attach files in the main chat first.', 'info'));
+  sideMicBtn?.addEventListener('click', () => pmToast('Side chat dictation is coming next. Use the main mic for now.', 'info'));
+
+  let sideDragY = null;
+  sideHandle?.addEventListener('touchstart', (event) => {
+    sideDragY = event.touches?.[0]?.clientY ?? null;
+    if (sidePanel) sidePanel.style.transition = 'none';
+  }, { passive: true });
+  sideHandle?.addEventListener('touchmove', (event) => {
+    if (sideDragY == null || !sidePanel) return;
+    const dy = (event.touches?.[0]?.clientY ?? sideDragY) - sideDragY;
+    if (dy > 0) sidePanel.style.transform = `translateY(${dy}px)`;
+  }, { passive: true });
+  sideHandle?.addEventListener('touchend', (event) => {
+    if (sideDragY == null || !sidePanel) return;
+    const dy = (event.changedTouches?.[0]?.clientY ?? sideDragY) - sideDragY;
+    sidePanel.style.transition = '';
+    sidePanel.style.transform = '';
+    if (dy > 80) closeMobileSideChatSheet();
+    sideDragY = null;
+  }, { passive: true });
+
+  attachBtn?.addEventListener('click', openAttachSheet);
+  attachSheetScrim?.addEventListener('click', closeAttachSheet);
+  attachSheet?.querySelectorAll('[data-pm-attach-action]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const action = String(btn.getAttribute('data-pm-attach-action') || '');
+      if (action === 'camera') openCameraCapture();
+      else if (action === 'files') {
+        closeAttachSheet();
+        fileInput?.click();
+      }
+    });
+  });
+  cameraClose?.addEventListener('click', stopCameraCapture);
+  cameraFlip?.addEventListener('click', () => { flipCameraCapture().catch(() => {}); });
+  function clearCameraHoldTimer() {
+    if (cameraHoldTimer) clearTimeout(cameraHoldTimer);
+    cameraHoldTimer = null;
+  }
+  function beginCameraShutterPress(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!cameraStream || cameraOpening || cameraPointerActive) return;
+    cameraPointerActive = true;
+    cameraSuppressClick = false;
+    clearCameraHoldTimer();
+    cameraHoldTimer = setTimeout(() => {
+      cameraHoldTimer = null;
+      if (!cameraPointerActive) return;
+      cameraSuppressClick = true;
+      startCameraRecording();
+    }, CAMERA_RECORD_HOLD_MS);
+  }
+  function endCameraShutterPress(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!cameraPointerActive) return;
+    cameraPointerActive = false;
+    if (cameraRecorder && cameraRecorder.state !== 'inactive') {
+      clearCameraHoldTimer();
+      stopCameraRecording();
+      return;
+    }
+    if (cameraHoldTimer) {
+      clearCameraHoldTimer();
+      captureCameraFrame().catch(() => {});
+      return;
+    }
+    setTimeout(() => { cameraSuppressClick = false; }, 250);
+  }
+  function cancelCameraShutterPress(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    cameraPointerActive = false;
+    clearCameraHoldTimer();
+    if (cameraRecorder && cameraRecorder.state !== 'inactive') stopCameraRecording();
+  }
+  cameraShutter?.addEventListener('contextmenu', (event) => event.preventDefault());
+  cameraShutter?.addEventListener('selectstart', (event) => event.preventDefault());
+  cameraShutter?.addEventListener('click', (event) => {
+    if (cameraSuppressClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      cameraSuppressClick = false;
+    }
+  });
+  cameraShutter?.addEventListener('pointerdown', beginCameraShutterPress);
+  cameraShutter?.addEventListener('pointerup', endCameraShutterPress);
+  cameraShutter?.addEventListener('pointercancel', cancelCameraShutterPress);
+  cameraShutter?.addEventListener('pointerleave', cancelCameraShutterPress);
+  cameraShutter?.addEventListener('touchstart', beginCameraShutterPress, { passive: false });
+  cameraShutter?.addEventListener('touchend', endCameraShutterPress, { passive: false });
+  cameraShutter?.addEventListener('touchcancel', cancelCameraShutterPress, { passive: false });
+  window.addEventListener('pagehide', stopCameraCapture, { once: true });
+  if (__pmChat.cameraVisibilityHandler) document.removeEventListener('visibilitychange', __pmChat.cameraVisibilityHandler);
+  __pmChat.cameraVisibilityHandler = () => {
+    if (document.visibilityState === 'hidden') stopCameraCapture();
+  };
+  document.addEventListener('visibilitychange', __pmChat.cameraVisibilityHandler);
   fileInput?.addEventListener('change', async () => {
     const files = Array.from(fileInput.files || []).slice(0, 8);
     fileInput.value = '';
@@ -4925,10 +6254,30 @@ function _isUsableRealtimeOfferSdp(sdp) {
 }
 
 function _localRealtimeOfferSdp(pc) {
-  return String(pc?.localDescription?.sdp || '').trim();
+  return String(pc?.localDescription?.sdp || '');
+}
+
+function _realtimeSdpPostBody(sdp) {
+  const text = String(sdp || '').replace(/\s+$/g, '');
+  return text ? `${text}\r\n` : '';
 }
 
 async function _waitForLocalRealtimeOfferSdp(pc) {
+  if (pc?.iceGatheringState !== 'complete') {
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 2500);
+      const done = () => {
+        clearTimeout(timeout);
+        try { pc.removeEventListener('icegatheringstatechange', onChange); } catch {}
+        resolve();
+      };
+      const onChange = () => {
+        if (pc.iceGatheringState === 'complete') done();
+      };
+      try { pc.addEventListener('icegatheringstatechange', onChange); } catch { clearTimeout(timeout); resolve(); }
+      if (pc.iceGatheringState === 'complete') done();
+    });
+  }
   for (let i = 0; i < 20; i++) {
     const sdp = _localRealtimeOfferSdp(pc);
     if (_isUsableRealtimeOfferSdp(sdp)) return sdp;
@@ -4980,7 +6329,8 @@ async function _exchangeRealtimeSdpDirect({ sdp, mode, language, voice, speed, i
   }
   const clientSecret = _extractRealtimeClientSecret(tokenData);
   if (!clientSecret) throw new Error('Realtime client secret was missing from the gateway response.');
-  const sdpResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+  const _directModel1 = String(tokenData?.model || 'gpt-realtime').trim();
+  const sdpResponse = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(_directModel1)}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${clientSecret}`,
@@ -5368,6 +6718,7 @@ async function _ensureRealtimeSpeechConnection() {
     }
     const clientSecret = _extractRealtimeClientSecret(tokenData);
     if (!clientSecret) throw new Error('Realtime client secret was missing from the gateway response.');
+    const _realtimeSpeechModel = String(tokenData?.model || 'gpt-realtime').trim();
 
     const pc = new RTCPeerConnection();
   const audio = document.getElementById('pm-mobile-realtime-audio') || __pmVoice.audioEl || document.createElement('audio');
@@ -5415,7 +6766,7 @@ async function _ensureRealtimeSpeechConnection() {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const sdpResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+    const sdpResponse = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(_realtimeSpeechModel)}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${clientSecret}`,
@@ -5471,6 +6822,12 @@ const __pmRealtimeAgent = {
   quiet: { active: false, wakePhrase: '', wakeNormalized: '', pendingActivate: false, suppressResponse: false },
   contextRefreshTimer: null,
   pendingCreateResponse: null,
+  // Camera/photo staging: a captured image is held here (NOT sent to the model)
+  // and shown in the chat bubble. It is flushed to the model as an attachment to
+  // the user's NEXT spoken turn (flush on speech_started / PTT release), so the
+  // user can "take a pic, then say 'look at this'".
+  pendingImages: [],                 // [{ dataUrl, name, mimeType, base64 }]
+  stagedImageTurn: null,             // the chat bubble holding staged image(s)
   // Per-response tracking for explicit realtime worker hand-offs. Transcript-
   // claim recovery is intentionally disabled: realtime must call the function.
   turn: {
@@ -5536,7 +6893,7 @@ function _sendMobileRealtimeAgentCreateResponseFlag(enabled) {
           audio: {
             input: {
               turn_detection: turnDetection,
-              transcription: { model: 'gpt-realtime-whisper' },
+              transcription: { model: 'gpt-4o-transcribe' },
             },
           },
         },
@@ -5979,7 +7336,7 @@ function _handleMobileRealtimeAgentQuietTranscript(transcript) {
 
 function _isMobileRealtimeAgentMode() {
   const mode = String(__pmVoice?.settings?.voiceMode || '').trim();
-  if (mode === 'openai_realtime') return __pmVoice?.settings?.voiceAgentRealtimeAgent !== false;
+  if (mode === 'openai_realtime') return true;
   if (mode === 'xai') return __pmVoice?.settings?.voiceAgentXaiRealtime === true;
   return false;
 }
@@ -5992,15 +7349,29 @@ function _wantsMobileXaiRealtime() {
 async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
   if (_wantsMobileXaiRealtime()) return _startMobileXaiRealtimeSession(sessionId, options);
   const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  const listenMode = String(options.listenMode || 'push_to_talk').trim();
   if (
     __pmRealtimeAgent.conn?.dc?.readyState === 'open'
     && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid
-  ) return __pmRealtimeAgent.conn;
+  ) {
+    __pmRealtimeAgent.conn.listenMode = listenMode;
+    __pmRealtimeAgent.listenMode = listenMode;
+    if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
+    _voiceDebug('realtime-agent-reuse', {
+      sessionId: sid,
+      listenMode,
+      dcState: __pmRealtimeAgent.conn.dc?.readyState || '',
+      pcState: __pmRealtimeAgent.conn.pc?.connectionState || '',
+      iceState: __pmRealtimeAgent.conn.pc?.iceConnectionState || '',
+      micEnabled: __pmRealtimeAgent.conn.micTrack?.enabled === true,
+      micTrackState: __pmRealtimeAgent.conn.micTrack?.readyState || '',
+    });
+    return __pmRealtimeAgent.conn;
+  }
   if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
     _mobileRealtimeAgentDisableAlwaysListening();
   }
   if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
-  const listenMode = String(options.listenMode || 'push_to_talk').trim();
   __pmRealtimeAgent.listenMode = listenMode;
 
   __pmRealtimeAgent.connecting = (async () => {
@@ -6021,6 +7392,14 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       }),
     });
     if (!bootstrap?.success) throw new Error(bootstrap?.error || 'Voice agent realtime bootstrap failed');
+    _voiceDebug('realtime-agent-bootstrap-ready', {
+      sessionId: sid,
+      listenMode,
+      model: bootstrap.model,
+      auth: bootstrap.auth,
+      variant: bootstrap.variant,
+      toolCount: bootstrap.toolCount,
+    });
 
     const pc = new RTCPeerConnection();
     let audio = document.getElementById('pm-voice-agent-realtime-audio');
@@ -6033,13 +7412,32 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       document.body.appendChild(audio);
     }
     pc.ontrack = (event) => {
+      _voiceDebug('realtime-agent-remote-track', {
+        sessionId: sid,
+        kind: event.track?.kind || '',
+        streamCount: event.streams?.length || 0,
+        trackState: event.track?.readyState || '',
+      });
       audio.srcObject = event.streams[0];
       audio.play?.().catch(() => {});
     };
 
-    const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    // Reuse the shared warm mic — the SAME stream xAI realtime + the soundwave
+    // visualizer use. iOS Safari starves a SECOND concurrent getUserMedia capture
+    // (a fresh getUserMedia here gave OpenAI a live-but-silent track), which is why
+    // soundwaves animate but VAD/transcription got nothing. xAI works because it
+    // shares this mic via _ensureMobileXaiRealtimeMic().
+    const micStream = await _ensureMobileXaiRealtimeMic();
     const micTrack = micStream.getAudioTracks()[0];
     micTrack.enabled = listenMode === 'always_listening';
+    _voiceDebug('realtime-agent-mic-ready', {
+      sessionId: sid,
+      listenMode,
+      micEnabled: micTrack.enabled,
+      micTrackState: micTrack.readyState,
+      label: micTrack.label || '',
+      settings: micTrack.getSettings?.() || {},
+    });
     pc.addTrack(micTrack, micStream);
     try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
 
@@ -6052,27 +7450,102 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
 
     const dcOpen = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Realtime data channel did not open.')), 12000);
-      dc.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
-      dc.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Realtime data channel failed.')); }, { once: true });
+      dc.addEventListener('open', () => {
+        clearTimeout(timeout);
+        _voiceDebug('realtime-agent-dc-open', { sessionId: sid, listenMode, readyState: dc.readyState });
+        resolve(true);
+      }, { once: true });
+      dc.addEventListener('error', () => {
+        clearTimeout(timeout);
+        _voiceDebug('realtime-agent-dc-error', { sessionId: sid, listenMode, readyState: dc.readyState });
+        reject(new Error('Realtime data channel failed.'));
+      }, { once: true });
     });
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${bootstrap.clientSecret}`, 'Content-Type': 'application/sdp' },
-      body: offer.sdp,
+    const offerSdpRaw = await _waitForLocalRealtimeOfferSdp(pc);
+    const offerSdp = _realtimeSdpPostBody(offerSdpRaw || offer?.sdp || '');
+    if (!_isUsableRealtimeOfferSdp(offerSdp)) {
+      throw new Error(`Realtime agent SDP offer was invalid before OpenAI exchange (${offerSdp.length} bytes, local=${String(offerSdpRaw || '').length}, offer=${String(offer?.sdp || '').length}, ice=${pc.iceGatheringState}).`);
+    }
+    _voiceDebug('realtime-agent-offer-ready', {
+      sessionId: sid,
+      listenMode,
+      sdpLength: offerSdp.length,
+      hasAudio: /\r?\nm=audio\s/i.test(offerSdp),
+      iceGatheringState: pc.iceGatheringState,
+      micTrackState: micTrack.readyState,
+      micEnabled: micTrack.enabled,
     });
-    const answerSdp = await sdpResp.text();
-    if (!sdpResp.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResp.status})`);
+    let answerSdp = '';
+    const model = String(bootstrap.model || _realtimeSpeechModel || 'gpt-realtime-2').trim();
+    const clientSecret = String(bootstrap.clientSecret || '').trim();
+    if (clientSecret) {
+      try {
+        const directResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${clientSecret}`,
+            'Content-Type': 'application/sdp',
+          },
+          body: offerSdp,
+        });
+        answerSdp = await directResponse.text();
+        if (!directResponse.ok) {
+          _voiceDebug('realtime-agent-direct-call-failed', {
+            sessionId: sid,
+            status: directResponse.status,
+            model,
+            error: String(answerSdp || '').slice(0, 500),
+            sdpLength: offerSdp.length,
+          });
+          answerSdp = '';
+        }
+      } catch (err) {
+        _voiceDebug('realtime-agent-direct-call-failed', {
+          sessionId: sid,
+          status: 0,
+          model,
+          error: err?.message || String(err),
+          sdpLength: offerSdp.length,
+        });
+      }
+    }
+    if (!answerSdp) {
+      try {
+        answerSdp = await mobileGatewayTextFetch('/api/voice-agent/realtime-call', {
+          method: 'POST',
+          body: JSON.stringify({
+            callToken: bootstrap.callToken,
+            sdp: offerSdp,
+          }),
+        });
+      } catch (err) {
+        _voiceDebug('realtime-agent-gateway-call-failed', {
+          sessionId: sid,
+          model,
+          error: err?.message || String(err),
+          sdpLength: offerSdp.length,
+        });
+        try { pc.close(); } catch {}
+        try { if (audio) audio.srcObject = null; } catch {}
+        try { micStream.getTracks?.().forEach((track) => track.stop()); } catch {}
+        return _startMobileOpenAiRealtimeWebSocketSession(sid, { listenMode, bootstrap });
+      }
+    }
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
 
-    // always_listening -> server VAD auto-commits + auto-replies.
-    // push_to_speak    -> turn_detection disabled; audio only flows while the mic
-    //                     track is enabled (button held) and we manually commit +
-    //                     create_response on release. Stops the realtime session
-    //                     from "staying on" / auto-replying when PTT is selected.
+    // The backend bootstrap bakes server_vad turn detection into the minted
+    // client secret for ALL modes (it never receives listenMode). Re-assert the
+    // correct per-mode session config at runtime, exactly as the known-good
+    // (pre-camera) path did, or push-to-talk fights server VAD and never
+    // produces a clean turn:
+    //   always_listening -> server VAD auto-commits + auto-replies.
+    //   push_to_speak    -> turn_detection disabled; audio only flows while the
+    //                       mic track is enabled (button held), and we manually
+    //                       commit + create_response on release.
     try {
       dc.send(JSON.stringify({
         type: 'session.update',
@@ -6089,20 +7562,39 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
                     create_response: !__pmRealtimeAgent.quiet.active,
                   }
                 : null,
-              transcription: { model: 'gpt-realtime-whisper' },
+              transcription: { model: 'gpt-4o-transcribe' },
             },
           },
         },
       }));
-    } catch {}
+      _voiceDebug('realtime-agent-session-update', { sessionId: sid, listenMode, quietActive: __pmRealtimeAgent.quiet.active });
+    } catch (err) {
+      _voiceDebug('realtime-agent-session-update-failed', { message: err?.message || String(err) });
+    }
 
-    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode };
+    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true };
     if (__pmRealtimeAgent.quiet.active) _sendMobileRealtimeAgentCreateResponseFlag(false);
+    const logState = (reason) => _voiceDebug('realtime-agent-pc-state', {
+      sessionId: sid,
+      listenMode,
+      reason,
+      connectionState: pc.connectionState,
+      iceConnectionState: pc.iceConnectionState,
+      iceGatheringState: pc.iceGatheringState,
+      signalingState: pc.signalingState,
+      dcState: dc.readyState,
+      micEnabled: micTrack.enabled,
+      micTrackState: micTrack.readyState,
+    });
+    pc.addEventListener('connectionstatechange', () => logState('connectionstatechange'));
+    pc.addEventListener('iceconnectionstatechange', () => logState('iceconnectionstatechange'));
+    pc.addEventListener('signalingstatechange', () => logState('signalingstatechange'));
     pc.addEventListener('connectionstatechange', () => {
       if (['closed', 'failed', 'disconnected'].includes(pc.connectionState) && __pmRealtimeAgent.conn?.pc === pc) {
         __pmRealtimeAgent.conn = null;
       }
     });
+    logState('ready');
     _voiceDebug('realtime-agent-ready', { sessionId: sid, listenMode });
     return __pmRealtimeAgent.conn;
   })().finally(() => {
@@ -6116,6 +7608,8 @@ function _stopMobileRealtimeAgentSession() {
   __pmRealtimeAgent.conn = null;
   __pmRealtimeAgent.connecting = null;
   __pmRealtimeAgent.listenMode = 'idle';
+  __pmRealtimeAgent.pendingImages = [];
+  __pmRealtimeAgent.stagedImageTurn = null;
   __pmRealtimeAgent.functionCallBuffers.clear();
   _clearMobileRealtimeAgentPendingCreateResponse();
   _stopMobileRealtimeAgentContextRefreshLoop();
@@ -6123,12 +7617,17 @@ function _stopMobileRealtimeAgentSession() {
   try { conn?.dc?.close(); } catch {}
   try { conn?.pc?.close(); } catch {}
   try { if (conn?.audio) conn.audio.srcObject = null; } catch {}
-  try { conn?.micStream?.getTracks().forEach((t) => t.stop()); } catch {}
+  // Shared warm mic (sharedMic) must stay live for the visualizer / xAI / other
+  // providers — just re-enable its track. Only fully stop a mic we exclusively own.
+  try {
+    if (conn?.sharedMic) { if (conn?.micTrack) conn.micTrack.enabled = true; }
+    else { conn?.micStream?.getTracks().forEach((t) => t.stop()); }
+  } catch {}
 }
 
 function _setMobileRealtimeAgentMicEnabled(enabled) {
   const conn = __pmRealtimeAgent.conn;
-  if (conn?.provider === 'xai' && conn?.xaiCapture) {
+  if ((conn?.provider === 'xai' || conn?.provider === 'openai_ws') && conn?.xaiCapture) {
     const wasSending = conn.xaiCapture.sending === true;
     if (enabled && !wasSending) {
       conn.xaiCapture.appends = 0;
@@ -6260,6 +7759,203 @@ async function _ensureMobileXaiRealtimeMic() {
   });
   if (__pmVoice) __pmVoice.warmMicPromise = promise;
   return promise;
+}
+
+async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {}) {
+  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  const bootstrap = options.bootstrap || {};
+  const clientSecret = String(bootstrap.clientSecret || '').trim();
+  if (!clientSecret) throw new Error('OpenAI realtime WebSocket fallback is missing the client secret.');
+  _voiceDebug('openai-realtime-ws-start', { sessionId: sid, listenMode, model: bootstrap.model });
+
+  const micStream = await _ensureMobileXaiRealtimeMic();
+  const micTrack = micStream.getAudioTracks()[0];
+  micTrack.enabled = true;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const captureCtx = new AudioCtx({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+  const source = captureCtx.createMediaStreamSource(micStream);
+  const processor = captureCtx.createScriptProcessor(2048, 1, 1);
+  const mutedGain = captureCtx.createGain();
+  mutedGain.gain.value = 0;
+  const openAiCapture = {
+    sending: listenMode === 'push_to_talk' || listenMode === 'always_listening',
+    appends: 0,
+    nonSilent: 0,
+    peakMax: 0,
+    sampleRate: Math.round(captureCtx.sampleRate || MOBILE_XAI_REALTIME_SAMPLE_RATE),
+    pending: [],
+    ws: null,
+    ready: false,
+  };
+  const flushPendingOpenAiRealtimeAudio = () => {
+    const ws = openAiCapture.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    while (openAiCapture.pending.length) {
+      const audio = openAiCapture.pending.shift();
+      if (!audio) continue;
+      try { ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio })); } catch {}
+    }
+  };
+  processor.onaudioprocess = (event) => {
+    if (!openAiCapture.sending) return;
+    const input = event.inputBuffer.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < input.length; i += 64) {
+      const a = Math.abs(input[i] || 0);
+      if (a > peak) peak = a;
+    }
+    if (peak > openAiCapture.peakMax) openAiCapture.peakMax = peak;
+    if (peak > 0.003) openAiCapture.nonSilent += 1;
+    const rate = openAiCapture.sampleRate || MOBILE_XAI_REALTIME_SAMPLE_RATE;
+    const pcm = _mobileXaiRealtimeDownsampleFloat32(input, captureCtx.sampleRate || rate, rate);
+    if (pcm.length > 0) {
+      const audio = _mobileInt16ToBase64(pcm);
+      openAiCapture.appends += 1;
+      const ws = openAiCapture.ws;
+      if (openAiCapture.ready && ws?.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio })); } catch {}
+      } else {
+        openAiCapture.pending.push(audio);
+        if (openAiCapture.pending.length > 240) openAiCapture.pending.splice(0, openAiCapture.pending.length - 240);
+      }
+    }
+  };
+  source.connect(processor);
+  processor.connect(mutedGain);
+  mutedGain.connect(captureCtx.destination);
+  await captureCtx.resume?.();
+
+  const modelCandidates = [String(bootstrap.model || 'gpt-realtime-2').trim() || 'gpt-realtime-2'];
+  const protocolCandidates = [[]];
+  let ws = null;
+  let model = '';
+  let lastWsError = '';
+  for (const modelCandidate of modelCandidates) {
+    for (const protocols of protocolCandidates) {
+      model = modelCandidate;
+      const protocolLabel = 'gateway-proxy';
+      _voiceDebug('openai-realtime-ws-attempt', { sessionId: sid, listenMode, model, protocols: protocolLabel });
+      let candidate = null;
+      try {
+        candidate = new WebSocket(
+          buildMobileGatewayWsUrl('/api/voice-agent/openai-realtime-ws', {
+            model,
+            client_secret: clientSecret,
+          }),
+          protocols,
+        );
+        candidate.binaryType = 'arraybuffer';
+        await new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = (ok, value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            ok ? resolve(value) : reject(value);
+          };
+          const timeout = setTimeout(() => finish(false, new Error('OpenAI realtime WebSocket did not open.')), 12000);
+          candidate.addEventListener('open', () => {
+            _voiceDebug('openai-realtime-ws-open', { sessionId: sid, listenMode, protocol: candidate.protocol, model, protocols: protocolLabel });
+            finish(true, true);
+          }, { once: true });
+          candidate.addEventListener('close', (ev) => {
+            _voiceDebug('openai-realtime-ws-attempt-closed', { code: ev.code, reason: ev.reason, protocol: candidate.protocol, model, protocols: protocolLabel });
+            finish(false, new Error(`OpenAI realtime WebSocket closed before open (code ${ev.code}${ev.reason ? `: ${ev.reason}` : ''}).`));
+          }, { once: true });
+          candidate.addEventListener('error', () => {
+            finish(false, new Error('OpenAI realtime WebSocket failed.'));
+          }, { once: true });
+        });
+        ws = candidate;
+        break;
+      } catch (err) {
+        lastWsError = err?.message || String(err);
+        try { candidate?.close?.(); } catch {}
+      }
+    }
+    if (ws) break;
+  }
+  if (!ws) throw new Error(lastWsError || 'OpenAI realtime WebSocket failed.');
+  openAiCapture.ws = ws;
+  const playback = _createMobileXaiPlayback();
+
+  ws.addEventListener('close', (ev) => {
+    _voiceDebug('openai-realtime-ws-closed', { code: ev.code, reason: ev.reason, protocol: ws.protocol, model });
+  });
+
+  const dcShim = {
+    get readyState() { return ws.readyState === WebSocket.OPEN ? 'open' : 'closed'; },
+    send: (payload) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(payload); } catch {} },
+    close: () => { try { ws.close(); } catch {} },
+  };
+
+  ws.addEventListener('message', (msgEvent) => {
+    let event = null;
+    try { event = JSON.parse(typeof msgEvent.data === 'string' ? msgEvent.data : ''); } catch { return; }
+    if (!event) return;
+    const type = String(event.type || '');
+    if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
+      if (__pmRealtimeAgent) __pmRealtimeAgent.activeResponse = true;
+      if (__pmRealtimeAgent?.quiet?.active || __pmRealtimeAgent?.quiet?.suppressResponse) {
+        __pmRealtimeAgent.quiet.suppressResponse = true;
+        _voiceDebug('openai-realtime-ws-quiet-audio-suppressed', { type });
+        return;
+      }
+      __pmVoice.realtimeSpeechActiveResponse = true;
+      const b64 = event.delta || event.audio;
+      if (b64) { try { playback.enqueue(_mobileBase64ToInt16(b64)); } catch {} }
+      return;
+    }
+    if (type === 'input_audio_buffer.speech_started') { try { playback.interrupt(); } catch {} }
+    if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
+      const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 300);
+      _voiceDebug('openai-realtime-ws-error', { type, msg });
+      try { pmToast(`OpenAI realtime error: ${msg}`, 'error'); } catch {}
+    }
+    _handleMobileRealtimeAgentEvent(event, sid).catch(() => {});
+  });
+
+  const turnDetection = listenMode === 'always_listening'
+    ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: !__pmRealtimeAgent.quiet.active }
+    : null;
+  try {
+    ws.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        instructions: bootstrap.instructions,
+        tools: Array.isArray(bootstrap.tools) ? bootstrap.tools : [],
+        tool_choice: 'auto',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: openAiCapture.sampleRate || MOBILE_XAI_REALTIME_SAMPLE_RATE },
+            noise_reduction: { type: 'near_field' },
+            transcription: { model: 'gpt-4o-transcribe' },
+            turn_detection: turnDetection,
+          },
+          output: { voice: bootstrap.voice || 'marin' },
+        },
+      },
+    }));
+    openAiCapture.ready = true;
+    flushPendingOpenAiRealtimeAudio();
+  } catch {}
+
+  __pmRealtimeAgent.conn = {
+    provider: 'openai_ws', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture: openAiCapture,
+    cleanup: () => {
+      try { processor.disconnect(); } catch {}
+      try { source.disconnect(); } catch {}
+      try { mutedGain.disconnect(); } catch {}
+      try { captureCtx.close?.(); } catch {}
+      try { playback.close(); } catch {}
+      try { ws.close(); } catch {}
+    },
+  };
+  ws.addEventListener('close', () => { if (__pmRealtimeAgent.conn?.ws === ws) __pmRealtimeAgent.conn = null; });
+  _voiceDebug('openai-realtime-ws-ready', { sessionId: sid, listenMode, model });
+  return __pmRealtimeAgent.conn;
 }
 
 async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
@@ -6498,7 +8194,13 @@ function _finalizeMobileRealtimeAgentChatTurn(sessionId, role, text) {
 
 async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   const type = String(event?.type || '');
-  _voiceDebug('realtime-agent-event', { type, info: type === 'error' ? (event?.error?.message || event?.error) : (event?.transcript ?? undefined) });
+  _voiceDebug('realtime-agent-event', {
+    type,
+    info: type === 'error' ? (event?.error?.message || event?.error) : (event?.transcript ?? event?.delta ?? undefined),
+    itemType: event?.item?.type || '',
+    responseStatus: event?.response?.status || '',
+    keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 12) : [],
+  });
   if (type === 'response.created') {
     __pmRealtimeAgent.activeResponse = true;
     if (__pmRealtimeAgent.quiet.active) {
@@ -6561,7 +8263,20 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       // Surface what the user said in the main chat thread (display-only).
       try {
         const sid = sessionId;
-        _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
+        const staged = __pmRealtimeAgent.stagedImageTurn;
+        if (staged && Array.isArray(__pmChat.threads?.[sid]) && __pmChat.threads[sid].includes(staged)) {
+          // The user just spoke about a staged photo — attach the transcript to the
+          // photo bubble so the image + caption show as one user message.
+          staged.body = staged.body || { text: '', attachments: [] };
+          staged.body.text = transcript;
+          staged.content = transcript;
+          staged.streaming = false;
+          staged.staged = false;
+          staged.time = _nowTime();
+          __pmRealtimeAgent.stagedImageTurn = null;
+        } else {
+          _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
+        }
         _persistMobileThreadSnapshot(sid);
         _renderRecent();
         _renderMobileChatSessionNow(sid);
@@ -6635,6 +8350,16 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       _activateMobileRealtimeAgentQuietMode();
     }
     _maybeRecoverMobileHallucinatedHandoff();
+    return;
+  }
+  if (type === 'input_audio_buffer.speech_started' || type === 'input_audio_buffer.speech_stopped' || type === 'input_audio_buffer.committed') {
+    // Flush any staged photo into the conversation the moment the user starts
+    // speaking (server-VAD/always-listening), BEFORE the model's auto-response, so
+    // the image is attached to this spoken turn.
+    if (type === 'input_audio_buffer.speech_started' && __pmRealtimeAgent.pendingImages.length) {
+      _flushMobileRealtimeAgentPendingImages('speech_started').catch(() => {});
+    }
+    _voiceDebug('realtime-agent-audio-buffer-event', { type, itemId: event?.item_id || '', previousItemId: event?.previous_item_id || '' });
     return;
   }
   if (type === 'error') {
@@ -6920,13 +8645,55 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
   }
 }
 
-function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = {}) {
+// Downscale/recompress a data URL so a full-res screenshot or photo reliably fits
+// in ONE realtime data-channel (SCTP) message. Without this, a 1-3MB PNG send can
+// fail silently and the voice agent is left with only the text metadata.
+async function _downscaleDataUrlForRealtime(dataUrl, maxDim = 960, quality = 0.74, maxChars = 180000) {
+  const src = String(dataUrl || '');
+  if (!src.startsWith('data:image')) return src;
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error('image decode failed'));
+      im.src = src;
+    });
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (!w || !h) return src;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return src;
+    let dim = Math.max(320, Number(maxDim || 960) || 960);
+    let q = Math.max(0.42, Math.min(0.86, Number(quality || 0.74) || 0.74));
+    let best = src;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const scale = Math.min(1, dim / Math.max(w, h));
+      const cw = Math.max(1, Math.round(w * scale));
+      const ch = Math.max(1, Math.round(h * scale));
+      canvas.width = cw;
+      canvas.height = ch;
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.drawImage(img, 0, 0, cw, ch);
+      best = canvas.toDataURL('image/jpeg', q);
+      if (best.length <= maxChars) return best;
+      dim = Math.max(320, Math.round(dim * 0.72));
+      q = Math.max(0.42, q - 0.1);
+    }
+    return best.length < src.length ? best : src;
+  } catch {
+    return src;
+  }
+}
+
+async function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = {}) {
   const dc = __pmRealtimeAgent.conn?.dc;
   if (!dc || dc.readyState !== 'open' || !callId) return;
   try {
     const preview = options.preview && typeof options.preview === 'object' ? options.preview : null;
     const previewDataUrl = String(preview?.dataUrl || '').trim();
     const canSendPreviewImage = !!previewDataUrl && String(__pmRealtimeAgent.conn?.provider || 'openai_realtime') !== 'xai';
+    // function_call_output (the text/metadata result) goes first, synchronously.
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output: String(output || '') },
@@ -6934,6 +8701,158 @@ function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = {}) {
     if (canSendPreviewImage) {
       const source = String(preview?.source || '').trim() || 'screen';
       const dimensions = preview?.width && preview?.height ? ` ${preview.width}x${preview.height}` : '';
+      // Inject the ACTUAL screenshot pixels (downscaled to fit the data channel) so
+      // the agent sees the screen, not just the metadata above.
+      const imageUrl = await _downscaleDataUrlForRealtime(previewDataUrl, 1280, 0.82);
+      if (dc.readyState === 'open') {
+        dc.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: `Fresh ${source} screenshot after the tool call${dimensions}. Look at this image directly and use it as visual context for the next realtime browser/desktop step.`,
+              },
+              {
+                type: 'input_image',
+                detail: 'auto',
+                image_url: imageUrl,
+              },
+            ],
+          },
+        }));
+      }
+    }
+    if (options.createResponse !== false && dc.readyState === 'open') dc.send(JSON.stringify({ type: 'response.create' }));
+  } catch (err) {
+    _voiceDebug('realtime-agent-send-output-failed', { message: err?.message || String(err) });
+  }
+}
+
+// Stage a captured photo: hold it (do NOT send to the model) and show it in the
+// chat bubble. It is flushed to the model as an attachment to the user's next
+// spoken turn (see _flushMobileRealtimeAgentPendingImages).
+function _stageMobileRealtimeAgentImage(attachment, sessionId) {
+  const dataUrl = String(attachment?.dataUrl || '').trim();
+  if (!dataUrl) return false;
+  const sid = String(sessionId || __pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  const img = {
+    dataUrl,
+    name: String(attachment?.name || 'Camera snapshot').trim(),
+    mimeType: String(attachment?.mimeType || 'image/jpeg'),
+    base64: String(attachment?.base64 || dataUrl.replace(/^data:[^;]+;base64,/, '')),
+  };
+  __pmRealtimeAgent.pendingImages.push(img);
+  const previewAttachment = { kind: 'image', name: img.name, mimeType: img.mimeType, dataUrl: img.dataUrl, base64: img.base64, sizeLabel: '' };
+  try {
+    if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
+    let turn = __pmRealtimeAgent.stagedImageTurn;
+    if (turn && __pmChat.threads[sid].includes(turn)) {
+      turn.body.attachments = [...(turn.body.attachments || []), previewAttachment];
+    } else {
+      turn = {
+        role: 'user', streaming: true, staged: true, time: '', timestamp: Date.now(),
+        body: { text: '', source: 'voice', attachments: [previewAttachment] },
+        attachmentPreviews: [previewAttachment], content: '', source: 'voice_agent_realtime',
+      };
+      __pmChat.threads[sid].push(turn);
+      __pmRealtimeAgent.stagedImageTurn = turn;
+    }
+    turn.attachmentPreviews = turn.body.attachments;
+    _persistMobileThreadSnapshot(sid);
+    _renderMobileChatSessionNow(sid);
+    _renderRecent();
+    _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_image_staged', force: true });
+  } catch {}
+  try { pmToast('Photo ready — say what you want to know about it.', 'success'); } catch {}
+  _voiceDebug('realtime-agent-image-staged', { count: __pmRealtimeAgent.pendingImages.length });
+  return true;
+}
+
+// Flush staged photos to the model as user input_image items (downscaled), with
+// NO response.create — the spoken turn that follows is what triggers the model's
+// response, so the image is "attached" to what the user says. Called on
+// speech_started (always-listening) and on PTT release.
+async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options = {}) {
+  const images = __pmRealtimeAgent.pendingImages;
+  if (!images || !images.length) return false;
+  const dc = __pmRealtimeAgent.conn?.dc;
+  if (!dc || dc.readyState !== 'open') return false;
+  const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
+  const toSend = images.slice();
+  __pmRealtimeAgent.pendingImages = [];
+  if (provider === 'xai') {
+    // xAI voice models can't take images directly — handled by a separate summary
+    // workflow (grok). Nothing to inject into the realtime session here.
+    _voiceDebug('realtime-agent-image-flush-skip-xai', { count: toSend.length, reason });
+    return false;
+  }
+  try {
+    const promptText = String(options.promptText || '').trim();
+    for (let i = 0; i < toSend.length; i++) {
+      const imageUrl = await _downscaleDataUrlForRealtime(toSend[i].dataUrl);
+      if (__pmRealtimeAgent.conn?.dc?.readyState !== 'open') break;
+      __pmRealtimeAgent.conn.dc.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: [
+                toSend.length > 1 ? `Attached image ${i + 1} of ${toSend.length}.` : 'Attached image from the mobile camera.',
+                promptText && i === 0 ? `User message: ${promptText}` : 'Use it as visual context for the user\'s next voice/chat turn.',
+              ].filter(Boolean).join('\n'),
+            },
+            { type: 'input_image', detail: 'auto', image_url: imageUrl },
+          ],
+        },
+      }));
+    }
+    _voiceDebug('realtime-agent-image-flushed', { count: toSend.length, reason });
+    if (options.createResponse === true && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
+      __pmRealtimeAgent.conn.dc.send(JSON.stringify({
+        type: 'response.create',
+        response: {
+          output_modalities: ['audio'],
+          instructions: promptText
+            ? 'Use the attached mobile camera image and the user message. Do not say no image was sent unless the image input is actually absent.'
+            : 'Use the attached mobile camera image directly. Do not claim the image was saved to the phone.',
+        },
+      }));
+    }
+    return true;
+  } catch (err) {
+    _voiceDebug('realtime-agent-image-flush-failed', { message: err?.message || String(err) });
+    return false;
+  }
+}
+
+async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {}) {
+  const dc = __pmRealtimeAgent.conn?.dc;
+  const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
+  const dataUrl = String(fileLike?.dataUrl || options.dataUrl || '').trim();
+  if (!dc || dc.readyState !== 'open') {
+    pmToast('Start realtime voice first, then send a camera snapshot.', 'info');
+    return false;
+  }
+  if (!dataUrl) {
+    pmToast('Could not read camera snapshot.', 'error');
+    return false;
+  }
+  const name = String(fileLike?.name || 'Camera snapshot').trim();
+  try {
+    if (__pmRealtimeAgent.quiet?.active) _deactivateMobileRealtimeAgentQuietMode();
+    if (provider === 'xai') {
+      const vision = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', {
+        method: 'POST',
+        body: JSON.stringify({ dataUrl, name }),
+      });
+      const summary = String(vision?.summary || '').trim();
+      if (!summary) throw new Error(vision?.error || 'xAI vision returned no camera summary.');
       dc.send(JSON.stringify({
         type: 'conversation.item.create',
         item: {
@@ -6942,19 +8861,184 @@ function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = {}) {
           content: [
             {
               type: 'input_text',
-              text: `Fresh ${source} screenshot after the tool call${dimensions}. Use this visual context for the next realtime browser/desktop step.`,
-            },
-            {
-              type: 'input_image',
-              image_url: previewDataUrl,
+              text: [
+                `Mobile camera snapshot from the app: ${name}.`,
+                'xAI vision summary of the snapshot:',
+                summary,
+                'Use this visual context in the live voice conversation. Do not claim the image was saved to the phone.',
+              ].join('\n'),
             },
           ],
         },
       }));
+      dc.send(JSON.stringify({ type: 'response.create' }));
+      __pmRealtimeAgent.enqueuePreviews?.([{ kind: 'image', name, dataUrl, mimeType: fileLike?.mimeType || 'image/jpeg' }], { transient: true });
+      _voiceDebug('xai-realtime-agent-camera-summary-sent', { name, summaryLen: summary.length });
+      return true;
     }
-    if (options.createResponse !== false) dc.send(JSON.stringify({ type: 'response.create' }));
+    const snapshotImageUrl = await _downscaleDataUrlForRealtime(dataUrl);
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: `Camera snapshot from the mobile app: ${name}. Use this visual context in the live voice conversation.`,
+          },
+          {
+            type: 'input_image',
+            detail: 'auto',
+            image_url: snapshotImageUrl,
+          },
+        ],
+      },
+    }));
+    if (provider === 'xai') {
+      dc.send(JSON.stringify({ type: 'response.create' }));
+    } else {
+      dc.send(JSON.stringify({
+        type: 'response.create',
+        response: {
+          output_modalities: ['audio'],
+          instructions: [
+            'You are Prometheus in realtime voice mode.',
+            'The user just sent a camera snapshot from the mobile app.',
+            'Use the image directly. Respond naturally with what is useful from the visual context.',
+            'Do not claim the image was saved to the phone. It is an in-app frame capture.',
+          ].join('\n'),
+        },
+      }));
+    }
+    __pmRealtimeAgent.enqueuePreviews?.([{ kind: 'image', name, dataUrl, mimeType: fileLike?.mimeType || 'image/jpeg' }], { transient: true });
+    _voiceDebug('realtime-agent-camera-snapshot-sent', { provider, name, bytes: Number(fileLike?.size || 0) || 0 });
+    return true;
   } catch (err) {
-    _voiceDebug('realtime-agent-send-output-failed', { message: err?.message || String(err) });
+    _voiceDebug('realtime-agent-camera-snapshot-failed', { message: err?.message || String(err) });
+    pmToast(err?.message || 'Could not send camera snapshot to voice.', 'error');
+    return false;
+  }
+}
+
+async function _sendMobileRealtimeAgentVideoFrames(payload = {}, options = {}) {
+  const dc = __pmRealtimeAgent.conn?.dc;
+  const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
+  const frames = (Array.isArray(payload.frames) ? payload.frames : [])
+    .map((frame, index) => ({
+      ...frame,
+      dataUrl: String(frame?.dataUrl || '').trim(),
+      name: String(frame?.name || `video-frame-${index + 1}.jpg`).trim(),
+    }))
+    .filter((frame) => frame.dataUrl)
+    .slice(0, 12);
+  if (!dc || dc.readyState !== 'open') {
+    pmToast('Start realtime voice first, then send video frames.', 'info');
+    return false;
+  }
+  if (!frames.length) {
+    pmToast('Could not sample video frames.', 'error');
+    return false;
+  }
+  const durationMs = Number(payload.durationMs || options.durationMs || 0) || 0;
+  const seconds = durationMs ? `${(durationMs / 1000).toFixed(1)}s` : 'short';
+  try {
+    if (__pmRealtimeAgent.quiet?.active) _deactivateMobileRealtimeAgentQuietMode();
+    if (provider === 'xai') {
+      const vision = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', {
+        method: 'POST',
+        body: JSON.stringify({ frames, durationMs, name: 'mobile camera video frames' }),
+      });
+      const summary = String(vision?.summary || '').trim();
+      if (!summary) throw new Error(vision?.error || 'xAI vision returned no video summary.');
+      dc.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: [
+                `Mobile camera video capture (${seconds}) sampled into ${frames.length} frame${frames.length === 1 ? '' : 's'}.`,
+                'xAI vision summary of the sampled frames:',
+                summary,
+                'Treat this as sequential visual context from the same short in-app recording. Do not claim live video was streamed.',
+              ].join('\n'),
+            },
+          ],
+        },
+      }));
+      dc.send(JSON.stringify({ type: 'response.create' }));
+      __pmRealtimeAgent.enqueuePreviews?.(
+        frames.slice(0, 3).map((frame, index) => ({
+          kind: 'image',
+          name: frame.name || `video-frame-${index + 1}.jpg`,
+          dataUrl: frame.dataUrl,
+          mimeType: frame.mimeType || 'image/jpeg',
+        })),
+        { transient: true },
+      );
+      _voiceDebug('xai-realtime-agent-video-summary-sent', { frames: frames.length, durationMs, summaryLen: summary.length });
+      return true;
+    }
+    // Send frames as INDIVIDUAL conversation items (one image each) so a 12-frame
+    // clip never exceeds the realtime data-channel (SCTP) message size limit.
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: `Mobile camera video capture (${seconds}) sampled into ${frames.length} sequential frame${frames.length === 1 ? '' : 's'} (about one per second). The next ${frames.length} image${frames.length === 1 ? '' : 's'} are those frames in order — treat them as a short clip and respond using the visual context.`,
+        }],
+      },
+    }));
+    frames.forEach((frame, index) => {
+      dc.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: `Frame ${index + 1} of ${frames.length}` },
+            { type: 'input_image', detail: 'auto', image_url: frame.dataUrl },
+          ],
+        },
+      }));
+    });
+    if (provider === 'xai') {
+      dc.send(JSON.stringify({ type: 'response.create' }));
+    } else {
+      dc.send(JSON.stringify({
+        type: 'response.create',
+        response: {
+          output_modalities: ['audio'],
+          instructions: [
+            'You are Prometheus in realtime voice mode.',
+            'The user just recorded a short mobile camera clip.',
+            'Use the sampled frames as a temporal visual sequence. Respond naturally with the most useful observation.',
+            'Do not claim a video was streamed live; it was an in-app short capture sampled into frames.',
+          ].join('\n'),
+        },
+      }));
+    }
+    __pmRealtimeAgent.enqueuePreviews?.(
+      frames.slice(0, 3).map((frame, index) => ({
+        kind: 'image',
+        name: frame.name || `video-frame-${index + 1}.jpg`,
+        dataUrl: frame.dataUrl,
+        mimeType: frame.mimeType || 'image/jpeg',
+      })),
+      { transient: true },
+    );
+    _voiceDebug('realtime-agent-camera-video-frames-sent', { provider, frames: frames.length, durationMs });
+    return true;
+  } catch (err) {
+    _voiceDebug('realtime-agent-camera-video-frames-failed', { message: err?.message || String(err) });
+    pmToast(err?.message || 'Could not send video frames to voice.', 'error');
+    return false;
   }
 }
 
@@ -7004,7 +9088,13 @@ function _mobileRealtimeAgentPttRelease() {
     return;
   }
   _setMobileRealtimeAgentMicEnabled(false);
-  commitAndRespond();
+  // Flush any staged photo into the conversation BEFORE committing the audio +
+  // creating the response, so the image is attached to this spoken turn.
+  if (__pmRealtimeAgent.pendingImages.length) {
+    _flushMobileRealtimeAgentPendingImages('ptt_release').finally(() => commitAndRespond());
+  } else {
+    commitAndRespond();
+  }
 }
 
 async function _mobileRealtimeAgentEnableAlwaysListening(sessionId) {
@@ -7356,6 +9446,23 @@ function _persistMobileThreadSnapshot(sessionId) {
   });
 }
 
+function _setMobileSteerContinuationTurn(sourceTurn, continuationTurn) {
+  if (!sourceTurn || !continuationTurn) return;
+  try {
+    Object.defineProperty(sourceTurn, '_steerContinuationTurn', {
+      value: continuationTurn,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    sourceTurn._steerContinuationTurn = continuationTurn;
+  }
+}
+
+function _mobileStreamTargetTurn(aiTurn) {
+  return aiTurn?._steerContinuationTurn || aiTurn;
+}
+
 function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '') {
   const sid = String(sessionId || '').trim();
   if (!sid || !result?.classification) return false;
@@ -7392,6 +9499,14 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
       eventExtra,
     );
     const entries = Array.isArray(latestAi.processEntries) ? latestAi.processEntries.slice() : [];
+    if (latestAi.streaming && !shouldAbort) {
+      latestAi.streaming = false;
+      latestAi.workEndedAt = Number(latestAi.workEndedAt || Date.now()) || Date.now();
+      latestAi.workDurationMs = Math.max(0, latestAi.workEndedAt - _mobileAssistantWorkStartedAt(latestAi));
+      latestAi.time = _nowTime();
+      latestAi.timestamp = Number(latestAi.timestamp || Date.now()) || Date.now();
+      latestAi.content = String(latestAi.body?.text || latestAi.content || '');
+    }
     if (entries.length) {
       thread.push({
         role: 'ai',
@@ -7433,6 +9548,26 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
       workflowLabel: shouldAbort ? 'Abort response' : 'Interruption response',
       voiceInterruptionEventId: eventId || undefined,
     });
+  }
+  if (latestAi && !shouldAbort) {
+    const continuationTurn = {
+      role: 'ai',
+      time: '',
+      timestamp: Date.now(),
+      streaming: true,
+      workStartedAt: Date.now(),
+      body: { sender: 'Prometheus', text: '' },
+      content: '',
+      processEntries: [],
+      liveTraceEntries: [],
+      _clientRequestId: latestAi._clientRequestId || result?.clientRequestId || '',
+      workflowGroupId,
+      workflowPart: 'interruption_response',
+      workflowLabel: asSteer ? 'Response after steer' : 'Interruption response',
+      voiceInterruptionEventId: eventId || undefined,
+    };
+    thread.push(continuationTurn);
+    _setMobileSteerContinuationTurn(latestAi, continuationTurn);
   }
   if (!shouldAbort) {
     _persistMobileThreadSnapshot(sid);
@@ -7964,6 +10099,7 @@ export async function renderVoicePage(page, ctx) {
   const inputProviderSelect = page.querySelector('#pm-voice-input-provider');
   const outputProviderSelect = page.querySelector('#pm-voice-output-provider');
   const targetBtn  = page.querySelector('#pm-voice-session-target');
+  const cameraBtn  = ctx?.cameraButton || page.querySelector('#pm-voice-camera');
   const dictFallback = page.querySelector('#pm-voice-dictation-fallback');
   const dictText = page.querySelector('#pm-voice-dictation-text');
   const dictSend = page.querySelector('#pm-voice-dictation-send');
@@ -8866,7 +11002,7 @@ export async function renderVoicePage(page, ctx) {
     // If mic permission was already granted in a prior session, warm the mic stream
     // and realtime connection now so the very first PTT press is instant.
     const inputNow = String(__pmVoice.settings?.sttProvider || _inputProviderForMode(__pmVoice.settings?.voiceMode || 'default'));
-    if (inputNow === 'openai_realtime' && _isRealtimeConnected(status)) {
+    if (inputNow === 'openai_realtime' && _isRealtimeConnected(status) && !_isMobileRealtimeAgentMode()) {
       const tryPrewarm = () => _ensureWarmMic().then(() => _prewarmRealtimeConn()).catch(() => {});
       if (navigator.permissions) {
         navigator.permissions.query({ name: 'microphone' })
@@ -9034,6 +11170,59 @@ export async function renderVoicePage(page, ctx) {
     repeatBtn.style.opacity = __pmVoice.lastAi ? '' : '0.45';
   }
   _refreshRepeatBtn();
+  if (cameraBtn) cameraBtn.onclick = async () => {
+    // Live camera -> realtime voice agent. Tap = photo, hold = video (≤12s,
+    // sampled ~1 frame/sec). The capture is STAGED (shown in the chat bubble) and
+    // attached to the user's next spoken turn — take a pic, then say "look at this".
+    // Guard on voice MODE (not an open data channel) so a brief reconnect doesn't
+    // wrongly block capture; staged images flush once the session is ready.
+    const sid = String(__pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+    const hasSession = !!(__pmRealtimeAgent.conn || __pmRealtimeAgent.connecting);
+    if (!hasSession && !_isMobileRealtimeAgentMode()) {
+      pmToast('Start realtime voice first, then take a photo or video.', 'info');
+      return;
+    }
+    const openCamera = ctx?.openCameraCapture;
+    if (typeof openCamera !== 'function') {
+      pmToast('Camera is only available from the chat voice view.', 'info');
+      return;
+    }
+    try {
+      await openCamera({
+        target: 'voice',
+        onCapture: async (normalized, extra) => {
+          _stageMobileRealtimeAgentImage({
+            dataUrl: extra?.dataUrl || normalized?.dataUrl || '',
+            name: extra?.file?.name || normalized?.name || 'Camera snapshot',
+            mimeType: normalized?.mimeType || extra?.file?.type || 'image/jpeg',
+            base64: normalized?.base64,
+          }, sid);
+        },
+        onVideoCapture: async (payload) => {
+          const frames = Array.isArray(payload?.frames) ? payload.frames : [];
+          if (!frames.length) { pmToast('Could not sample video frames.', 'error'); return; }
+          // Show the first frame in the bubble; queue every frame for the model.
+          _stageMobileRealtimeAgentImage({
+            dataUrl: frames[0].dataUrl,
+            name: `Video clip (${frames.length} frame${frames.length === 1 ? '' : 's'})`,
+            mimeType: frames[0].mimeType || 'image/jpeg',
+          }, sid);
+          for (let i = 1; i < frames.length; i++) {
+            if (!String(frames[i]?.dataUrl || '').trim()) continue;
+            __pmRealtimeAgent.pendingImages.push({
+              dataUrl: frames[i].dataUrl,
+              name: frames[i].name || `video-frame-${i + 1}.jpg`,
+              mimeType: frames[i].mimeType || 'image/jpeg',
+              base64: '',
+            });
+          }
+        },
+      });
+    } catch (err) {
+      _voiceDebug('realtime-agent-camera-open-failed', { message: err?.message || String(err) });
+      pmToast(err?.message || 'Could not open camera.', 'error');
+    }
+  };
   repeatBtn.addEventListener('click', () => __pmVoice.lastAi && _ttsSpeak(__pmVoice.lastAi));
 
   clearLink.addEventListener('click', (e) => { e.preventDefault(); __pmVoice.recent = []; _renderRecent(); });
@@ -9305,6 +11494,7 @@ export async function renderVoicePage(page, ctx) {
   // when the user presses PTT the connection is already open and transcription
   // begins immediately instead of spending 1–2 s on "Connecting...".
   async function _prewarmRealtimeConn() {
+    if (_isMobileRealtimeAgentMode()) return;
     const mode = String(__pmVoice.settings?.voiceMode || 'default');
     const inputProvider = String(__pmVoice.settings?.sttProvider || _inputProviderForMode(mode));
     if (inputProvider !== 'openai_realtime') return;
@@ -11506,6 +13696,9 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       artifacts: Array.isArray(message?.artifacts) ? message.artifacts : (Array.isArray(message?.metadata?.artifacts) ? message.metadata.artifacts : []),
     }));
     inner += _renderMobileFileChanges(_mobileAgentMessageFileChanges(message));
+    if (message?.approvalRequest) {
+      inner += `<div class="pm-chat-approvals-inline">${_renderMobileApprovalCard(message.approvalRequest, { compact: false })}</div>`;
+    }
     inner += _renderMobileStreamProcess(message);
   }
   return `
@@ -11515,6 +13708,118 @@ function _renderMobileAgentChatBubble(message, options = {}) {
         ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
       </div>
     </div>`;
+}
+
+function _renderMobileAgentComposerHtml(prefix, placeholder) {
+  const id = String(prefix || 'pm-agent-chat');
+  return `
+    <form class="pm-composer pm-agent-chat-composer" id="${id}-form" style="position:relative;left:auto;right:auto;bottom:auto;margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;box-shadow:none;">
+      <input id="${id}-file-input" type="file" multiple accept="image/*,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
+      <div class="pm-attach-tray" id="${id}-attach-tray" hidden></div>
+      <div class="pm-composer-row">
+        <button type="button" class="pm-icon-btn" id="${id}-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
+        <textarea class="pm-composer-input" id="${id}-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+        <button type="submit" class="pm-send" id="${id}-send-btn" aria-label="Send">${ICONS.send}</button>
+      </div>
+    </form>`;
+}
+
+function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubmit, onAbort }) {
+  const id = String(prefix || 'pm-agent-chat');
+  const form = slot.querySelector(`#${id}-form`);
+  const input = slot.querySelector(`#${id}-input`);
+  const sendBtn = slot.querySelector(`#${id}-send-btn`);
+  const attachBtn = slot.querySelector(`#${id}-attach-btn`);
+  const fileInput = slot.querySelector(`#${id}-file-input`);
+  const attachTray = slot.querySelector(`#${id}-attach-tray`);
+  const pending = [];
+
+  const resize = () => {
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(148, Math.max(30, input.scrollHeight || 30))}px`;
+  };
+  const hasOutbound = () => !!(String(input?.value || '').trim() || pending.length);
+  const renderAttachments = () => {
+    if (!attachTray) return;
+    attachTray.hidden = pending.length === 0;
+    attachTray.innerHTML = _renderChatAttachmentPreviews(pending, true);
+    attachTray.querySelectorAll('[data-remove-attachment]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-remove-attachment'));
+        if (Number.isFinite(idx)) pending.splice(idx, 1);
+        renderAttachments();
+        update();
+      });
+    });
+  };
+  const update = () => {
+    const busy = !!isBusy?.();
+    const abortMode = busy && !hasOutbound();
+    if (input) input.placeholder = busy ? `Queue a message...` : placeholder;
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.classList.toggle('is-abort', abortMode);
+      sendBtn.title = abortMode ? 'Stop' : busy ? 'Queue message' : 'Send';
+      sendBtn.setAttribute('aria-label', abortMode ? 'Stop' : busy ? 'Queue message' : 'Send');
+      sendBtn.innerHTML = abortMode
+        ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>`
+        : ICONS.send;
+    }
+  };
+  const consume = () => {
+    const text = String(input?.value || '').trim();
+    const files = pending.splice(0, pending.length);
+    if (input) {
+      input.value = '';
+      resize();
+    }
+    renderAttachments();
+    update();
+    return { text, files };
+  };
+
+  input?.addEventListener('input', () => { resize(); update(); });
+  input?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      form?.requestSubmit?.();
+    }
+  });
+  input?.addEventListener('paste', async (event) => {
+    const files = Array.from(event.clipboardData?.files || []);
+    if (!files.length) return;
+    if (!String(event.clipboardData?.getData?.('text/plain') || '').trim()) event.preventDefault();
+    const normalized = await Promise.all(files.slice(0, 8).map(_normalizeMobileFile));
+    pending.push(...normalized.filter(Boolean));
+    renderAttachments();
+    update();
+  });
+  attachBtn?.addEventListener('click', () => fileInput?.click());
+  fileInput?.addEventListener('change', async () => {
+    const files = Array.from(fileInput.files || []).slice(0, 8);
+    fileInput.value = '';
+    if (!files.length) return;
+    const normalized = await Promise.all(files.map(_normalizeMobileFile));
+    pending.push(...normalized.filter(Boolean));
+    renderAttachments();
+    update();
+  });
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (isBusy?.() && !hasOutbound()) {
+      onAbort?.();
+      update();
+      return;
+    }
+    const payload = consume();
+    if (!payload.text && !payload.files.length) return;
+    await onSubmit?.(payload);
+    update();
+  });
+
+  requestAnimationFrame(() => { resize(); update(); });
+  return { input, update, consume, pending };
 }
 
 function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
@@ -11590,6 +13895,25 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       _pushMobileStreamProcessEntry(message, 'info', `${action}: ${text}`, evt.actor ? { actor: evt.actor } : null);
       return true;
     }
+    case 'approval_created': {
+      const approval = _normalizeMobileApproval(evt.approval || evt);
+      if (!approval?.id) return false;
+      message.approvalRequest = approval;
+      return true;
+    }
+    case 'approval_approved':
+    case 'approval_denied':
+    case 'approval_expired':
+    case 'approval_failed': {
+      const status = type === 'approval_approved' ? 'approved'
+        : type === 'approval_denied' ? 'rejected'
+          : type === 'approval_expired' ? 'expired'
+            : 'failed';
+      const id = String(evt.approvalId || evt.id || evt.approval?.id || message?.approvalRequest?.id || '').trim();
+      if (!message.approvalRequest || (id && String(message.approvalRequest.id || '') !== id)) return false;
+      message.approvalRequest = _normalizeMobileApproval({ ...message.approvalRequest, ...(evt.approval || evt), status });
+      return true;
+    }
     case 'final': {
       const text = String(evt.text || evt.reply || '').trim();
       try { _collectMediaFromToolEvent(message, evt); } catch {}
@@ -11643,16 +13967,13 @@ async function _renderTeamChatTab(slot, teamId) {
   slot.innerHTML = `
     <div class="pm-card" id="pm-team-chat-card" style="padding:0;overflow:hidden;">
       <div id="pm-team-chat-list" style="max-height:55vh;overflow-y:auto;padding:14px 14px 8px;"></div>
-      <form id="pm-team-chat-form" style="display:flex;gap:8px;border-top:1px solid var(--pm-border);padding:10px 12px;">
-        <input class="pm-input" id="pm-team-chat-input" placeholder="Message the team manager…" autocomplete="off" style="margin:0;flex:1;" />
-        <button type="submit" class="pm-send" aria-label="Send" style="width:42px;height:42px;border-radius:50%;">${ICONS.send}</button>
-      </form>
+      <div id="pm-team-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
+      ${_renderMobileAgentComposerHtml('pm-team-chat', 'Message the team manager...')}
     </div>
   `;
 
   const listEl = slot.querySelector('#pm-team-chat-list');
-  const form   = slot.querySelector('#pm-team-chat-form');
-  const input  = slot.querySelector('#pm-team-chat-input');
+  const queueEl = slot.querySelector('#pm-team-chat-queue');
   let messages = [];
   let liveMsg = null;
   let currentStream = null;
@@ -11660,6 +13981,78 @@ async function _renderTeamChatTab(slot, teamId) {
   let lastStreamId = '';
   let localSseActive = false;
   let cleanupDone = false;
+  const sendQueue = [];
+  let approvalCards = [];
+  let composer = null;
+
+  const isBusy = () => !!(currentStream || liveMsg?.streaming || localSseActive);
+  const approvalBelongsHere = (approvalInput = {}) => {
+    const approval = _normalizeMobileApproval(approvalInput);
+    const sid = String(approval.sessionId || approval.sourceSessionId || '').trim();
+    return !!approval.id && (
+      sid.startsWith(`team_dm_manager_${teamId}___`)
+      || sid.startsWith(`team_dm_member_${teamId}___`)
+      || sid === `team_chat_${teamId}`
+      || String(approval.teamId || approval.toolArgs?.teamId || '').trim() === String(teamId)
+    );
+  };
+  const upsertApprovalCard = (approvalInput = {}) => {
+    if (!approvalBelongsHere(approvalInput)) return false;
+    const approval = _normalizeMobileApproval(approvalInput);
+    const idx = approvalCards.findIndex((item) => String(item?.approvalRequest?.id || '') === approval.id);
+    const msg = {
+      role: 'agent',
+      from: 'manager',
+      fromLabel: 'Manager',
+      content: '',
+      createdAt: Date.now(),
+      approvalRequest: approval,
+    };
+    if (idx >= 0) approvalCards[idx] = { ...approvalCards[idx], approvalRequest: { ...(approvalCards[idx].approvalRequest || {}), ...approval } };
+    else approvalCards.push(msg);
+    approvalCards = approvalCards.slice(-8);
+    return true;
+  };
+  const updateApprovalCard = (id, status, event = {}) => {
+    const approvalId = String(id || '').trim();
+    if (!approvalId) return false;
+    const idx = approvalCards.findIndex((item) => String(item?.approvalRequest?.id || '') === approvalId);
+    if (idx < 0) return false;
+    approvalCards[idx].approvalRequest = _normalizeMobileApproval({ ...(approvalCards[idx].approvalRequest || {}), ...(event.approval || event), id: approvalId, status });
+    return true;
+  };
+  const restoreApprovalCards = async () => {
+    const pending = await loadMobileApprovals('pending').catch(() => []);
+    (Array.isArray(pending) ? pending : []).forEach(upsertApprovalCard);
+  };
+
+  function renderQueue() {
+    if (!queueEl) return;
+    queueEl.hidden = sendQueue.length === 0;
+    queueEl.innerHTML = sendQueue.length
+      ? `<div class="pm-mobile-queued-head"><span>Queued messages</span><b>${sendQueue.length}</b></div>
+         <div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
+           <div class="pm-mobile-queued-item">
+             <button type="button" class="pm-mobile-queued-text" data-team-queue-edit="${idx}">${escapeHtml(String(item.text || 'Attached file(s)').slice(0, 120))}${item.files?.length ? ` <em>+${item.files.length}</em>` : ''}</button>
+             <div class="pm-mobile-queued-actions"><button type="button" class="pm-mobile-queued-icon pm-mobile-queued-remove" data-team-queue-remove="${idx}" aria-label="Remove queued message">${ICONS.trash}</button></div>
+           </div>`).join('')}</div>`
+      : '';
+    queueEl.querySelectorAll('[data-team-queue-remove]').forEach((btn) => btn.addEventListener('click', () => {
+      const idx = Number(btn.getAttribute('data-team-queue-remove'));
+      if (Number.isFinite(idx)) sendQueue.splice(idx, 1);
+      renderQueue();
+    }));
+  }
+
+  function drainQueueSoon() {
+    if (isBusy() || !sendQueue.length) {
+      composer?.update?.();
+      return;
+    }
+    const next = sendQueue.shift();
+    renderQueue();
+    startTeamMobileSend(next).catch((err) => pmToast(err?.message || 'Send failed', 'error'));
+  }
 
   function upsertServerMessages(fresh) {
     const localLive = liveMsg && !liveMsg._done ? liveMsg : null;
@@ -11674,19 +14067,26 @@ async function _renderTeamChatTab(slot, teamId) {
   }
 
   function renderList() {
-    if (!messages.length) {
+    const visibleApprovals = approvalCards.filter((m) => String(m?.approvalRequest?.status || 'pending') === 'pending');
+    const rendered = [...messages, ...visibleApprovals];
+    if (!rendered.length) {
       listEl.innerHTML = `<div style="text-align:center;color:var(--pm-muted);padding:24px 8px;font-size:13px;">No messages yet. Send the first one.</div>`;
       return;
     }
-    listEl.innerHTML = messages.map((m) => _renderMobileAgentChatBubble(m, {
+    listEl.innerHTML = rendered.map((m) => _renderMobileAgentChatBubble(m, {
       sender: m.fromLabel || m.fromName || 'Manager',
       live: m === liveMsg,
     })).join('');
+    listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
+      btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
+    });
+    _wireMobileProcessRunActions(listEl);
     listEl.scrollTop = listEl.scrollHeight;
   }
 
   try {
     upsertServerMessages(await loadTeamChat(teamId, 80));
+    await restoreApprovalCards();
     renderList();
   } catch (err) {
     listEl.innerHTML = `<div style="color:var(--pm-red);padding:16px;">${escapeHtml(err.message || 'Failed to load chat')}</div>`;
@@ -11714,6 +14114,7 @@ async function _renderTeamChatTab(slot, teamId) {
       }
       if (forceHistory || !replay.active || liveMsg?._done) {
         upsertServerMessages(await loadTeamChat(teamId, 80));
+        await restoreApprovalCards();
         if (!replay.active) liveMsg = null;
       }
       renderList();
@@ -11745,9 +14146,29 @@ async function _renderTeamChatTab(slot, teamId) {
     _applyMobileAgentStreamEvent(liveMsg, { type: String(msg.event || ''), ...(msg.data || {}) }, 'Manager');
     renderList();
   };
+  const onApprovalCreated = async (msg = {}) => {
+    const approval = msg.approval ? _normalizeMobileApproval(msg.approval, msg) : await _approvalFromMobileEvent(msg);
+    if (upsertApprovalCard(approval)) renderList();
+  };
+  const onApprovalResolved = (eventName) => (msg = {}) => {
+    const status = eventName === 'approval_approved' ? 'approved'
+      : eventName === 'approval_denied' ? 'rejected'
+        : eventName === 'approval_expired' ? 'expired'
+          : 'failed';
+    if (updateApprovalCard(msg.approvalId || msg.id || msg.approval?.id, status, msg)) renderList();
+  };
+  const onApprovalApproved = onApprovalResolved('approval_approved');
+  const onApprovalDenied = onApprovalResolved('approval_denied');
+  const onApprovalExpired = onApprovalResolved('approval_expired');
+  const onApprovalFailed = onApprovalResolved('approval_failed');
   wsEventBus?.on?.('ws:open', onWsOpen);
   wsEventBus?.on?.('team_chat_message', onTeamChatMessage);
   wsEventBus?.on?.('team_chat_stream_event', onTeamChatStreamEvent);
+  wsEventBus?.on?.('approval_created', onApprovalCreated);
+  wsEventBus?.on?.('approval_approved', onApprovalApproved);
+  wsEventBus?.on?.('approval_denied', onApprovalDenied);
+  wsEventBus?.on?.('approval_expired', onApprovalExpired);
+  wsEventBus?.on?.('approval_failed', onApprovalFailed);
   document.addEventListener('visibilitychange', onVisibility);
   slot._pmCleanup = () => {
     if (cleanupDone) return;
@@ -11756,22 +14177,49 @@ async function _renderTeamChatTab(slot, teamId) {
     wsEventBus?.off?.('ws:open', onWsOpen);
     wsEventBus?.off?.('team_chat_message', onTeamChatMessage);
     wsEventBus?.off?.('team_chat_stream_event', onTeamChatStreamEvent);
+    wsEventBus?.off?.('approval_created', onApprovalCreated);
+    wsEventBus?.off?.('approval_approved', onApprovalApproved);
+    wsEventBus?.off?.('approval_denied', onApprovalDenied);
+    wsEventBus?.off?.('approval_expired', onApprovalExpired);
+    wsEventBus?.off?.('approval_failed', onApprovalFailed);
     document.removeEventListener('visibilitychange', onVisibility);
   };
   reconcile();
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = '';
-    input.disabled = true;
-    const userMsg = { role: 'user', from: 'user', content: text, createdAt: Date.now() };
+  async function startTeamMobileSend(payload) {
+    const rawText = String(payload?.text || '').trim();
+    const files = Array.isArray(payload?.files) ? payload.files : [];
+    const userVisibleText = rawText || (files.length ? 'Please review the attached file(s).' : '');
+    if (!userVisibleText && !files.length) return;
+    if (isBusy()) {
+      sendQueue.push({ text: rawText, files });
+      renderQueue();
+      composer?.update?.();
+      return;
+    }
+    let messageForRuntime = userVisibleText;
+    let attachmentPreviews = files;
+    if (files.length) {
+      const uploadResults = await _uploadMobileChatAttachments(files);
+      messageForRuntime = `${userVisibleText}${_buildMobileFileContextNote(uploadResults)}`;
+      attachmentPreviews = uploadResults.map((r, idx) => ({
+        ...(files[idx] || {}),
+        name: r.name || files[idx]?.name || 'attachment',
+        kind: r.isImage ? 'image' : (files[idx]?.kind || 'file'),
+        workspacePath: r.workspacePath || files[idx]?.workspacePath,
+        path: r.workspacePath || files[idx]?.path,
+        dataUrl: files[idx]?.dataUrl,
+        mimeType: files[idx]?.mimeType,
+        sizeLabel: files[idx]?.sizeLabel,
+      }));
+    }
+    const userMsg = { role: 'user', from: 'user', content: messageForRuntime, body: { text: messageForRuntime, attachments: attachmentPreviews }, attachmentPreviews, createdAt: Date.now() };
     liveMsg = { role: 'manager', from: 'manager', fromLabel: 'Manager', content: '', _progress: 'Manager is thinking...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
     messages.push(userMsg, liveMsg);
     renderList();
     localSseActive = true;
-    currentStream = streamTeamChat(teamId, { message: text }, {
+    composer?.update?.();
+    currentStream = streamTeamChat(teamId, { message: messageForRuntime }, {
       onEvent: (evt) => {
         _applyMobileAgentStreamEvent(liveMsg, evt, 'Manager');
         renderList();
@@ -11783,6 +14231,8 @@ async function _renderTeamChatTab(slot, teamId) {
         liveMsg.streaming = false;
         liveMsg.workEndedAt = Date.now();
         localSseActive = false;
+        currentStream = null;
+        composer?.update?.();
         renderList();
         pmToast(err?.message || 'Send failed', 'error');
       },
@@ -11794,12 +14244,30 @@ async function _renderTeamChatTab(slot, teamId) {
           liveMsg.workDurationMs = Math.max(0, liveMsg.workEndedAt - Number(liveMsg.workStartedAt || liveMsg.createdAt || liveMsg.workEndedAt));
         }
         localSseActive = false;
-        input.disabled = false;
-        input.focus();
+        currentStream = null;
+        composer?.update?.();
         await reconcile({ forceHistory: true });
+        drainQueueSoon();
       },
     });
+  }
+
+  composer = _installMobileAgentComposer(slot, 'pm-team-chat', {
+    placeholder: 'Message the team manager...',
+    isBusy,
+    onAbort: () => {
+      try { currentStream?.abort?.(); } catch {}
+      if (liveMsg) {
+        liveMsg._progress = 'Stopping...';
+        liveMsg.streaming = false;
+      }
+      currentStream = null;
+      localSseActive = false;
+      renderList();
+    },
+    onSubmit: startTeamMobileSend,
   });
+  renderQueue();
 }
 
 /* ---------------- WORKSPACE TAB ---------------- */
@@ -11999,10 +14467,10 @@ function _suggestedDeviceName() {
 
 async function _ensureAccountBeforePairing(setStage) {
   const current = getAccount();
-  if (current?.subscriptionActive || current?.isAdmin) return true;
+  if (current?.accessActive || current?.purchaseActive || current?.subscriptionActive || current?.isAdmin) return true;
   const result = await checkSessionDetailed({ timeoutMs: 3000 }).catch(() => null);
   const account = result?.account || getAccount();
-  if (result?.authenticated && (account?.subscriptionActive || account?.isAdmin)) return true;
+  if (result?.authenticated && (account?.accessActive || account?.purchaseActive || account?.subscriptionActive || account?.isAdmin)) return true;
 
   setStage({
     title: 'Sign in to pair',
@@ -15027,16 +17495,13 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
   slot.innerHTML = `
     <div class="pm-card" id="pm-sa-chat-card" style="padding:0;overflow:hidden;">
       <div id="pm-sa-chat-list" style="max-height:55vh;overflow-y:auto;padding:14px 14px 8px;"></div>
-      <form id="pm-sa-chat-form" style="display:flex;gap:8px;border-top:1px solid var(--pm-border);padding:10px 12px;">
-        <input class="pm-input" id="pm-sa-chat-input" placeholder="Message ${escapeHtml(agent.name)}…" autocomplete="off" style="margin:0;flex:1;" />
-        <button type="submit" class="pm-send" aria-label="Send" style="width:42px;height:42px;border-radius:50%;">${ICONS.send}</button>
-      </form>
+      <div id="pm-sa-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
+      ${_renderMobileAgentComposerHtml('pm-sa-chat', `Message ${agent.name || 'this subagent'}...`)}
     </div>
   `;
 
   const listEl = slot.querySelector('#pm-sa-chat-list');
-  const form   = slot.querySelector('#pm-sa-chat-form');
-  const input  = slot.querySelector('#pm-sa-chat-input');
+  const queueEl = slot.querySelector('#pm-sa-chat-queue');
 
   let messages = [];
   let liveMsg = null;
@@ -15045,6 +17510,74 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
   let lastStreamId = '';
   let localSseActive = false;
   let cleanupDone = false;
+  const sendQueue = [];
+  let approvalCards = [];
+  let composer = null;
+
+  const isBusy = () => !!(currentStream || liveMsg?.streaming || localSseActive);
+  const approvalBelongsHere = (approvalInput = {}) => {
+    const approval = _normalizeMobileApproval(approvalInput);
+    const sid = String(approval.sessionId || approval.sourceSessionId || '').trim();
+    return !!approval.id && (
+      sid === `subagent_chat_${agent.id}`
+      || String(approval.agentId || '').trim() === String(agent.id)
+    );
+  };
+  const upsertApprovalCard = (approvalInput = {}) => {
+    if (!approvalBelongsHere(approvalInput)) return false;
+    const approval = _normalizeMobileApproval(approvalInput);
+    const idx = approvalCards.findIndex((item) => String(item?.approvalRequest?.id || '') === approval.id);
+    const msg = {
+      role: 'agent',
+      content: '',
+      createdAt: Date.now(),
+      approvalRequest: approval,
+    };
+    if (idx >= 0) approvalCards[idx] = { ...approvalCards[idx], approvalRequest: { ...(approvalCards[idx].approvalRequest || {}), ...approval } };
+    else approvalCards.push(msg);
+    approvalCards = approvalCards.slice(-8);
+    return true;
+  };
+  const updateApprovalCard = (id, status, event = {}) => {
+    const approvalId = String(id || '').trim();
+    if (!approvalId) return false;
+    const idx = approvalCards.findIndex((item) => String(item?.approvalRequest?.id || '') === approvalId);
+    if (idx < 0) return false;
+    approvalCards[idx].approvalRequest = _normalizeMobileApproval({ ...(approvalCards[idx].approvalRequest || {}), ...(event.approval || event), id: approvalId, status });
+    return true;
+  };
+  const restoreApprovalCards = async () => {
+    const pending = await loadMobileApprovals('pending').catch(() => []);
+    (Array.isArray(pending) ? pending : []).forEach(upsertApprovalCard);
+  };
+
+  function renderQueue() {
+    if (!queueEl) return;
+    queueEl.hidden = sendQueue.length === 0;
+    queueEl.innerHTML = sendQueue.length
+      ? `<div class="pm-mobile-queued-head"><span>Queued messages</span><b>${sendQueue.length}</b></div>
+         <div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
+           <div class="pm-mobile-queued-item">
+             <button type="button" class="pm-mobile-queued-text" data-sa-queue-edit="${idx}">${escapeHtml(String(item.text || 'Attached file(s)').slice(0, 120))}${item.files?.length ? ` <em>+${item.files.length}</em>` : ''}</button>
+             <div class="pm-mobile-queued-actions"><button type="button" class="pm-mobile-queued-icon pm-mobile-queued-remove" data-sa-queue-remove="${idx}" aria-label="Remove queued message">${ICONS.trash}</button></div>
+           </div>`).join('')}</div>`
+      : '';
+    queueEl.querySelectorAll('[data-sa-queue-remove]').forEach((btn) => btn.addEventListener('click', () => {
+      const idx = Number(btn.getAttribute('data-sa-queue-remove'));
+      if (Number.isFinite(idx)) sendQueue.splice(idx, 1);
+      renderQueue();
+    }));
+  }
+
+  function drainQueueSoon() {
+    if (isBusy() || !sendQueue.length) {
+      composer?.update?.();
+      return;
+    }
+    const next = sendQueue.shift();
+    renderQueue();
+    startSubagentMobileSend(next).catch((err) => pmToast(err?.message || 'Send failed', 'error'));
+  }
 
   function upsertServerMessages(fresh) {
     const localLive = liveMsg && !liveMsg._done ? liveMsg : null;
@@ -15059,19 +17592,26 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
   }
 
   function renderList() {
-    if (!messages.length) {
+    const visibleApprovals = approvalCards.filter((m) => String(m?.approvalRequest?.status || 'pending') === 'pending');
+    const rendered = [...messages, ...visibleApprovals];
+    if (!rendered.length) {
       listEl.innerHTML = `<div style="text-align:center;color:var(--pm-muted);padding:24px 8px;font-size:13px;">No messages yet. Send the first one to ${escapeHtml(agent.name)}.</div>`;
       return;
     }
-    listEl.innerHTML = messages.map((m) => _renderMobileAgentChatBubble(m, {
+    listEl.innerHTML = rendered.map((m) => _renderMobileAgentChatBubble(m, {
       sender: agent.name || agent.id || 'Subagent',
       live: m === liveMsg,
     })).join('');
+    listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
+      btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
+    });
+    _wireMobileProcessRunActions(listEl);
     listEl.scrollTop = listEl.scrollHeight;
   }
 
   try {
     upsertServerMessages(await loadSubagentChat(agent.id, 80));
+    await restoreApprovalCards();
     renderList();
   } catch (err) {
     listEl.innerHTML = `<div style="color:var(--pm-red);padding:16px;">${escapeHtml(err.message || 'Failed to load chat')}</div>`;
@@ -15099,6 +17639,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       }
       if (forceHistory || !replay.active || liveMsg?._done) {
         upsertServerMessages(await loadSubagentChat(agent.id, 80));
+        await restoreApprovalCards();
         if (!replay.active) liveMsg = null;
       }
       renderList();
@@ -15130,9 +17671,29 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     _applyMobileAgentStreamEvent(liveMsg, { type: String(msg.event || ''), ...(msg.data || {}) }, agent.name || agent.id || 'Subagent');
     renderList();
   };
+  const onApprovalCreated = async (msg = {}) => {
+    const approval = msg.approval ? _normalizeMobileApproval(msg.approval, msg) : await _approvalFromMobileEvent(msg);
+    if (upsertApprovalCard(approval)) renderList();
+  };
+  const onApprovalResolved = (eventName) => (msg = {}) => {
+    const status = eventName === 'approval_approved' ? 'approved'
+      : eventName === 'approval_denied' ? 'rejected'
+        : eventName === 'approval_expired' ? 'expired'
+          : 'failed';
+    if (updateApprovalCard(msg.approvalId || msg.id || msg.approval?.id, status, msg)) renderList();
+  };
+  const onApprovalApproved = onApprovalResolved('approval_approved');
+  const onApprovalDenied = onApprovalResolved('approval_denied');
+  const onApprovalExpired = onApprovalResolved('approval_expired');
+  const onApprovalFailed = onApprovalResolved('approval_failed');
   wsEventBus?.on?.('ws:open', onWsOpen);
   wsEventBus?.on?.('subagent_chat_message', onSubagentChatMessage);
   wsEventBus?.on?.('subagent_chat_stream_event', onSubagentStreamEvent);
+  wsEventBus?.on?.('approval_created', onApprovalCreated);
+  wsEventBus?.on?.('approval_approved', onApprovalApproved);
+  wsEventBus?.on?.('approval_denied', onApprovalDenied);
+  wsEventBus?.on?.('approval_expired', onApprovalExpired);
+  wsEventBus?.on?.('approval_failed', onApprovalFailed);
   document.addEventListener('visibilitychange', onVisibility);
   slot._pmCleanup = () => {
     if (cleanupDone) return;
@@ -15141,25 +17702,52 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     wsEventBus?.off?.('ws:open', onWsOpen);
     wsEventBus?.off?.('subagent_chat_message', onSubagentChatMessage);
     wsEventBus?.off?.('subagent_chat_stream_event', onSubagentStreamEvent);
+    wsEventBus?.off?.('approval_created', onApprovalCreated);
+    wsEventBus?.off?.('approval_approved', onApprovalApproved);
+    wsEventBus?.off?.('approval_denied', onApprovalDenied);
+    wsEventBus?.off?.('approval_expired', onApprovalExpired);
+    wsEventBus?.off?.('approval_failed', onApprovalFailed);
     document.removeEventListener('visibilitychange', onVisibility);
   };
   reconcile();
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = '';
-    input.disabled = true;
+  async function startSubagentMobileSend(payload) {
+    const rawText = String(payload?.text || '').trim();
+    const files = Array.isArray(payload?.files) ? payload.files : [];
+    const userVisibleText = rawText || (files.length ? 'Please review the attached file(s).' : '');
+    if (!userVisibleText && !files.length) return;
+    if (isBusy()) {
+      sendQueue.push({ text: rawText, files });
+      renderQueue();
+      composer?.update?.();
+      return;
+    }
+    let messageForRuntime = userVisibleText;
+    let attachmentPreviews = files;
+    if (files.length) {
+      const uploadResults = await _uploadMobileChatAttachments(files);
+      messageForRuntime = `${userVisibleText}${_buildMobileFileContextNote(uploadResults)}`;
+      attachmentPreviews = uploadResults.map((r, idx) => ({
+        ...(files[idx] || {}),
+        name: r.name || files[idx]?.name || 'attachment',
+        kind: r.isImage ? 'image' : (files[idx]?.kind || 'file'),
+        workspacePath: r.workspacePath || files[idx]?.workspacePath,
+        path: r.workspacePath || files[idx]?.path,
+        dataUrl: files[idx]?.dataUrl,
+        mimeType: files[idx]?.mimeType,
+        sizeLabel: files[idx]?.sizeLabel,
+      }));
+    }
 
-    const userMsg = { role: 'user', content: text, createdAt: Date.now() };
+    const userMsg = { role: 'user', content: messageForRuntime, body: { text: messageForRuntime, attachments: attachmentPreviews }, attachmentPreviews, createdAt: Date.now() };
     messages.push(userMsg);
     liveMsg = { role: 'agent', content: '', _progress: `${agent.name} is thinking...`, createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
     messages.push(liveMsg);
     renderList();
 
     localSseActive = true;
-    currentStream = streamSubagentChat(agent.id, { message: text }, {
+    composer?.update?.();
+    currentStream = streamSubagentChat(agent.id, { message: messageForRuntime }, {
       onEvent: (evt) => {
         _applyMobileAgentStreamEvent(liveMsg, evt, agent.name || agent.id || 'Subagent');
         renderList();
@@ -15171,6 +17759,8 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
         liveMsg.streaming = false;
         liveMsg.workEndedAt = Date.now();
         localSseActive = false;
+        currentStream = null;
+        composer?.update?.();
         renderList();
       },
       onDone: async () => {
@@ -15181,11 +17771,29 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
           liveMsg.workDurationMs = Math.max(0, liveMsg.workEndedAt - Number(liveMsg.workStartedAt || liveMsg.createdAt || liveMsg.workEndedAt));
         }
         localSseActive = false;
-        input.disabled = false;
-        input.focus();
+        currentStream = null;
+        composer?.update?.();
         await reconcile({ forceHistory: true });
+        drainQueueSoon();
       },
     });
     attachStream?.(currentStream);
+  }
+
+  composer = _installMobileAgentComposer(slot, 'pm-sa-chat', {
+    placeholder: `Message ${agent.name || 'this subagent'}...`,
+    isBusy,
+    onAbort: () => {
+      try { currentStream?.abort?.(); } catch {}
+      if (liveMsg) {
+        liveMsg._progress = 'Stopping...';
+        liveMsg.streaming = false;
+      }
+      currentStream = null;
+      localSseActive = false;
+      renderList();
+    },
+    onSubmit: startSubagentMobileSend,
   });
+  renderQueue();
 }

@@ -1,27 +1,26 @@
 /**
  * telegram-streaming-message.ts
  *
- * Live token-streaming to Telegram via in-place message edits.
+ * Live token-streaming to Telegram.  Two transport modes:
  *
- * Pattern (matches OpenClaw's extensions/telegram/src/draft-stream.ts):
- *   - The caller feeds the FULL accumulated reply text on every update, not
- *     deltas. The stream internally throttles and only commits to the
- *     Telegram API at most once per throttleMs.
- *   - The first commit calls sendMessage and captures the resulting
- *     message_id. Every subsequent commit calls editMessageText against
- *     that same id, so the user sees one bubble that grows in place — just
- *     like watching a person type into a Telegram message in real time.
- *   - When accumulated text crosses maxChars (Telegram's 4096 limit, with a
- *     safety margin), the stream rotates: the existing bubble is left at its
- *     last committed snapshot, and a fresh sendMessage starts a new bubble
- *     carrying the overflow. This is the only point at which a humanDelay-
- *     style pause makes sense — between message boundaries, not between
- *     edits to the same message.
- *   - end() does a final flush so the bubble shows the complete reply even
- *     if the last delta arrived inside the throttle window.
+ * EDIT mode (default, works everywhere):
+ *   - The first commit calls sendMessage and captures message_id.
+ *   - Every subsequent commit calls editMessageText against that id, so the
+ *     user sees one bubble that grows in place.
+ *   - When text crosses maxChars the stream rotates onto a new bubble.
  *
- * This file deliberately does no markdown/HTML rendering — pass a renderText
- * function if the caller wants parse_mode=HTML. The default sends plain text.
+ * DRAFT mode (Bot API 9.5+, DM/private chats only):
+ *   - Every mid-stream commit calls sendMessageDraft with a fixed draft_id.
+ *     Telegram renders an animated "typing" preview on the client — smoother
+ *     than edit flicker, no message_id to track.
+ *   - The final commit (end()) sends a normal sendMessage that lands in chat
+ *     history; the draft preview clears automatically on the client.
+ *   - Bubble rotation is disabled (each draft frame replaces the previous).
+ *   - On any draft API failure the stream transparently falls back to the
+ *     edit-based path for the remainder of the turn.
+ *
+ * Pass useDraftStreaming: true (and a non-zero draftId) to opt into draft mode.
+ * The caller is responsible for detecting DM chats (msg.chat.type === 'private').
  */
 
 const TELEGRAM_HARD_MAX_CHARS = 4096;
@@ -66,9 +65,23 @@ export interface TelegramStreamingMessageOptions {
    * Optional callback fired when the stream rotates onto a new message.
    * Receives the message id of the message that just finalized. Useful for
    * inserting a humanDelay-style pause between bubbles when the reply
-   * overflows 4000 chars.
+   * overflows 4000 chars. Not called in draft mode (no rotation).
    */
   onMessageRotated?: (finalizedMessageId: number | undefined) => Promise<void> | void;
+  /**
+   * Opt into Bot API 9.5 native draft streaming (DM/private chats only).
+   * When true, mid-stream commits use sendMessageDraft; end() sends a final
+   * sendMessage that lands in history. Falls back to edit-based on failure.
+   * The caller must only set this for chat.type === 'private'.
+   */
+  useDraftStreaming?: boolean;
+  /**
+   * Unique non-zero integer identifying this response's draft animation.
+   * Required when useDraftStreaming is true. Use a monotonic counter or
+   * Date.now() — the same id must be reused for all frames of one response
+   * so Telegram animates them as a single growing draft.
+   */
+  draftId?: number;
 }
 
 export interface TelegramStreamingMessage {
@@ -110,6 +123,14 @@ export function createTelegramStreamingMessage(
   );
   const throttleMs = Math.max(MIN_THROTTLE_MS, Math.floor(options.throttleMs ?? DEFAULT_THROTTLE_MS));
   const renderText = options.renderText;
+
+  // Draft streaming state (Bot API 9.5, DM-only).
+  // When active: mid-stream frames → sendMessageDraft; final → sendMessage.
+  // Falls back to edit-based on any draft API failure.
+  let draftActive = (options.useDraftStreaming === true) && typeof options.draftId === 'number' && options.draftId !== 0;
+  const draftId = options.draftId ?? 0;
+  let draftLastSentText = '';
+  let draftLastSentParseMode: 'HTML' | undefined;
 
   let stopped = false;
   let aborted = false;
@@ -154,6 +175,57 @@ export function createTelegramStreamingMessage(
    */
   const commit = async (): Promise<void> => {
     if (aborted) return;
+
+    // ── Draft path (Bot API 9.5, DM-only) ───────────────────────────────────
+    // On the final commit (stopped=true) we fall through to the normal
+    // sendMessage path below so the reply lands in chat history.
+    if (draftActive && !stopped) {
+      const rendered = render(accumulatedText);
+      const text = rendered.text.trimEnd();
+      if (!text) {
+        pendingChanged = false;
+        lastCommittedAt = Date.now();
+        return;
+      }
+      const minInitialChars = options.minInitialChars ?? 1;
+      if (text.length < minInitialChars) {
+        pendingChanged = false;
+        lastCommittedAt = Date.now();
+        return;
+      }
+      // Skip no-op frames.
+      if (text === draftLastSentText && rendered.parseMode === draftLastSentParseMode) {
+        pendingChanged = false;
+        lastCommittedAt = Date.now();
+        return;
+      }
+      const safeText = text.length > TELEGRAM_HARD_MAX_CHARS ? text.slice(0, TELEGRAM_HARD_MAX_CHARS) : text;
+      const body: Record<string, unknown> = {
+        chat_id: options.chatId,
+        draft_id: draftId,
+        text: safeText,
+      };
+      if (rendered.parseMode) body.parse_mode = rendered.parseMode;
+      if (options.messageThreadId) body.message_thread_id = options.messageThreadId;
+      try {
+        await options.apiCall('sendMessageDraft', body);
+        draftLastSentText = safeText;
+        draftLastSentParseMode = rendered.parseMode;
+        lastDeliveredText = safeText;
+        pendingChanged = accumulatedText.trimEnd() !== safeText;
+        lastCommittedAt = Date.now();
+        return;
+      } catch (err: any) {
+        const msg = String(err?.message || err);
+        // "method not found" → Bot API too old; fall back permanently.
+        // Any other error → also fall back (conservative, avoids loops).
+        options.warn?.(`sendMessageDraft failed, falling back to edit-based: ${msg}`);
+        draftActive = false;
+        // fall through to the edit-based path below
+      }
+    }
+
+    // ── Edit-based path (default, and draft fallback) ────────────────────────
     const bubble = currentBubble();
     const slice = accumulatedText.slice(bubble.offset);
     const rendered = render(slice);
@@ -298,14 +370,52 @@ export function createTelegramStreamingMessage(
     }
   };
 
-  const drain = async (): Promise<void> => {
-    while (!stopped && !aborted && pendingChanged) {
-      const next = commit().finally(() => {
-        if (inFlight === next) inFlight = undefined;
-      });
-      inFlight = next;
-      await next;
+  // Single shared drain loop. Two correctness requirements:
+  //
+  //  1. Single-flight: without it, a timer armed by update() while a commit's
+  //     sendMessage await is still in flight could start a SECOND drain loop,
+  //     running commit() concurrently. Both would see bubble.messageId ===
+  //     undefined (the first send hasn't resolved) and each fire sendMessage,
+  //     producing duplicate bubbles. We dedupe by handing every caller the SAME
+  //     in-progress promise, so only one loop ever runs and callers can await it.
+  //
+  //  2. Final delivery: the loop is gated on pendingChanged (NOT on !stopped).
+  //     end() sets stopped=true BEFORE flush so the draft path falls through to
+  //     a real sendMessage — but that final commit only happens if the loop is
+  //     still allowed to run one more iteration. Gating on !stopped here would
+  //     skip it, dropping the message entirely in draft/DM mode (where streaming
+  //     only sent ephemeral sendMessageDraft frames). aborted still halts it, and
+  //     abort() clears pendingChanged, so the loop always converges.
+  let drainPromise: Promise<void> | undefined;
+  const runDrainLoop = async (): Promise<void> => {
+    try {
+      // No-progress breaker. The loop is gated on pendingChanged rather than
+      // !stopped (so the final commit can run during end()), which means a
+      // persistent commit() failure — where the API keeps erroring and commit()
+      // leaves pendingChanged set for a retry — could otherwise spin forever.
+      // Bound consecutive no-delivery iterations so a failing send can't hang
+      // the turn.
+      let stalls = 0;
+      while (!aborted && pendingChanged) {
+        const before = lastDeliveredText;
+        const next = commit().finally(() => {
+          if (inFlight === next) inFlight = undefined;
+        });
+        inFlight = next;
+        await next;
+        if (pendingChanged && lastDeliveredText === before) {
+          if (++stalls >= 3) break;
+        } else {
+          stalls = 0;
+        }
+      }
+    } finally {
+      drainPromise = undefined;
     }
+  };
+  const drain = (): Promise<void> => {
+    if (!drainPromise) drainPromise = runDrainLoop();
+    return drainPromise;
   };
 
   const schedule = () => {
@@ -339,6 +449,8 @@ export function createTelegramStreamingMessage(
     schedule();
   };
 
+  const hasRealMessage = (): boolean => bubbles.some((b) => b.messageId !== undefined);
+
   const flush = async (): Promise<void> => {
     if (timer) { clearTimeout(timer); timer = undefined; }
     if (inFlight) {
@@ -348,6 +460,21 @@ export function createTelegramStreamingMessage(
     if (inFlight) {
       try { await inFlight; } catch { /* swallow */ }
     }
+    // Final-send guarantee. In draft/DM mode the streaming frames were ephemeral
+    // sendMessageDraft previews — the real message only lands when commit() runs
+    // with stopped=true (draft path skipped, edit path sends). If the draft caught
+    // up to the full text before end(), pendingChanged is already false and the
+    // drain above never ran, so no real message exists yet. Force exactly one
+    // final commit to deliver it. commit() is a no-op when the edit-path text is
+    // unchanged, so this can't double-send in edit mode (where the real bubble
+    // already exists and this guard is skipped).
+    if (stopped && !aborted && !hasRealMessage() && accumulatedText.trim()) {
+      pendingChanged = true;
+      await drain();
+      if (inFlight) {
+        try { await inFlight; } catch { /* swallow */ }
+      }
+    }
   };
 
   const end = async (): Promise<void> => {
@@ -356,8 +483,10 @@ export function createTelegramStreamingMessage(
       if (timer) { clearTimeout(timer); timer = undefined; }
       return;
     }
-    await flush();
+    // Set stopped=true BEFORE flush so the draft path's !stopped guard lets
+    // the final commit fall through to sendMessage (putting the reply in history).
     stopped = true;
+    await flush();
     if (timer) { clearTimeout(timer); timer = undefined; }
   };
 
@@ -374,7 +503,7 @@ export function createTelegramStreamingMessage(
     end,
     abort,
     bubbleCount: () => bubbles.length,
-    hasCommitted: () => bubbles.some(b => b.messageId !== undefined),
+    hasCommitted: () => bubbles.some(b => b.messageId !== undefined) || draftLastSentText !== '',
     lastDeliveredText: () => lastDeliveredText,
   };
 }
