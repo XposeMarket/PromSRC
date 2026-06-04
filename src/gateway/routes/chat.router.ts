@@ -154,6 +154,7 @@ import {
 } from '../../scheduler';
 import { TelegramChannel } from '../comms/telegram-channel';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
+import { executeXaiImageVisionSummary } from '../tools/handlers/xai-handlers.js';
 import { executeWebSearch, executeWebFetch } from '../../tools/web';
 import { executeWriteNote } from '../../tools/write-note';
 import { searchMemoryIndexAsync, readMemoryRecord } from '../memory-index/index';
@@ -1999,6 +2000,29 @@ async function handleChat(
           ? allBuiltTools.filter((t: any) => !alwaysStrip.has(String(t?.function?.name || '')) && String(t?.function?.name || '') !== 'start_task')
           : allBuiltTools.filter((t: any) => !interactiveStrip.has(String(t?.function?.name || '')));
   };
+  let loopGateToolActive = false;
+  const LOOP_CONTINUE_TOOL_DEF = {
+    type: 'function',
+    function: {
+      name: 'tool_loop_continue',
+      description:
+        'Acknowledge Prometheus loop-detector gates when repeated identical tool calls are intentional. This tool is exposed only after the loop detector warns or gates a repeated call. Use it only when the user task truly requires continuing, such as bulk setup of scheduled jobs. Pass the exact blocked tool name, the exact args object you need to repeat, and a concrete reason; then retry the original tool call.',
+      parameters: {
+        type: 'object',
+        required: ['tool_name', 'args', 'reason'],
+        properties: {
+          tool_name: { type: 'string', description: 'The exact gated tool name, for example schedule_job.' },
+          args: { type: 'object', description: 'The exact arguments object for the gated tool call.' },
+          reason: { type: 'string', description: 'Why repeating this exact call is necessary for the user request.' },
+        },
+      },
+    },
+  };
+  const maybeAddLoopGateTool = (toolDefs: any[]): any[] => {
+    if (!loopGateToolActive) return toolDefs;
+    if (toolDefs.some((tool: any) => String(tool?.function?.name || '') === 'tool_loop_continue')) return toolDefs;
+    return [LOOP_CONTINUE_TOOL_DEF, ...toolDefs];
+  };
   const PROPOSAL_CORE_MIN = new Set([
     'run_command',
     'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
@@ -2029,7 +2053,7 @@ async function handleChat(
         return true; // Category tools are still governed by per-session activation.
       })
       : baseTools;
-    return filterToolsForModelCapabilities(currentTools);
+    return maybeAddLoopGateTool(filterToolsForModelCapabilities(currentTools));
   };
   const buildSwitchModelToolCategories = (): Set<string> => {
     const switchCategories = new Set<string>();
@@ -2808,10 +2832,11 @@ async function handleChat(
     }
   };
   const loopDetectionEnabled = orchRuntimeCfg?.triggers?.loop_detection !== false;
-  const loopWarningThreshold = 3;
-  const loopCriticalThreshold = 5;
+  const loopWarningThreshold = 5;
+  const loopCriticalThreshold = 8;
   const loopWarnNudged = new Set<string>();
   const loopBlockNudged = new Set<string>();
+  const loopContinueAllowed = new Set<string>();
   const recentToolCalls: Array<{ name: string; argsHash: string }> = [];
   const hashArgs = (args: any): string => {
     try {
@@ -2832,8 +2857,10 @@ async function handleChat(
   const checkLoopDetection = (toolName: string, args: any): { state: 'ok' | 'warn' | 'block'; repeats: number } => {
     if (!loopDetectionEnabled) return { state: 'ok', repeats: 1 };
     const argsHash = hashArgs(args);
+    const loopSig = `${toolName}:${argsHash}`;
+    if (loopContinueAllowed.has(loopSig)) return { state: 'ok', repeats: 1 };
     // Count includes this current attempt so thresholds are exact:
-    // warning at 3rd identical call, block at 5th.
+    // warning at 5th identical call, gate at 8th.
     const repeats = recentToolCalls.filter((t) => t.name === toolName && t.argsHash === argsHash).length + 1;
     recentToolCalls.push({ name: toolName, argsHash });
     if (recentToolCalls.length > 20) recentToolCalls.shift();
@@ -6095,11 +6122,58 @@ RULES:
       }
       // ── End scroll-before-act gate ────────────────────────────────────────────
 
+      if (toolName === 'tool_loop_continue') {
+        const targetToolName = String(toolArgs?.tool_name || toolArgs?.toolName || '').trim();
+        const targetArgs = toolArgs?.args && typeof toolArgs.args === 'object' ? toolArgs.args : {};
+        const reason = String(toolArgs?.reason || '').trim();
+        const targetSig = targetToolName ? `${targetToolName}:${hashArgs(targetArgs)}` : '';
+        const ok = !!targetToolName && reason.length >= 12;
+        const resultText = ok
+          ? `Loop gate acknowledged. Continuing is allowed for ${targetToolName} with the provided arguments for the rest of this turn.`
+          : 'Loop gate was not acknowledged. Provide tool_name, the exact args object, and a concrete reason explaining why repeated use is required.';
+        if (ok) {
+          loopContinueAllowed.add(targetSig);
+          loopGateToolActive = false;
+          loopWarnNudged.delete(targetSig);
+          loopBlockNudged.delete(targetSig);
+          const argsHash = hashArgs(targetArgs);
+          for (let i = recentToolCalls.length - 1; i >= 0; i--) {
+            if (recentToolCalls[i]?.name === targetToolName && recentToolCalls[i]?.argsHash === argsHash) {
+              recentToolCalls.splice(i, 1);
+            }
+          }
+        }
+        const gateResult: ToolResult = {
+          name: toolName,
+          args: toolArgs,
+          result: resultText,
+          error: !ok,
+        };
+        allToolResults.push(gateResult);
+        logToolCall(workspacePath, toolName, toolArgs, resultText, !ok);
+        markProgressStepStart(toolName);
+        markProgressStepResult(ok);
+        sendSSE('tool_result', {
+          action: toolName,
+          result: resultText,
+          error: !ok,
+          stepNum: allToolResults.length,
+        });
+        messages.push({
+          role: 'tool',
+          tool_name: toolName,
+          tool_call_id: toolCallId || undefined,
+          content: resultText,
+        });
+        continue;
+      }
+
       const loopSig = `${toolName}:${hashArgs(toolArgs)}`;
-      const loopPivotNudge = 'Loop detector: you are looping on this tool, try a different approach or ask the user.';
+      const loopPivotNudge = 'Loop detector: repeated identical tool use detected. Either pivot to a different approach, or call tool_loop_continue with the exact tool_name/args and a reason if the task truly requires continuing.';
       const loopCheck = checkLoopDetection(toolName, toolArgs);
       if (loopCheck.state === 'block') {
-        const blockMsg = `${loopPivotNudge} Repeated call blocked: ${toolName} with identical arguments has run ${loopCheck.repeats} times (critical threshold ${loopCriticalThreshold}).`;
+        loopGateToolActive = true;
+        const blockMsg = `${loopPivotNudge} Gate raised: ${toolName} with identical arguments has run ${loopCheck.repeats} times (critical threshold ${loopCriticalThreshold}). To continue intentionally, call tool_loop_continue with tool_name="${toolName}", args equal to the exact arguments you still need to repeat, and a concrete reason.`;
         console.warn(`[v2] LOOP BLOCK: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
         const blockedResult: ToolResult = {
           name: toolName,
@@ -6128,12 +6202,13 @@ RULES:
           loopBlockNudged.add(loopSig);
           messages.push({
             role: 'user',
-            content: `${loopPivotNudge} Do not call ${toolName} with the same arguments again this turn.`,
+            content: `${loopPivotNudge} If this is required for the user's request, acknowledge it with tool_loop_continue, then retry ${toolName}.`,
           });
         }
         continue;
       }
       if (loopCheck.state === 'warn') {
+        loopGateToolActive = true;
         const warnMsg = `${loopPivotNudge} Warning: ${toolName} with identical arguments repeated ${loopCheck.repeats} times (warning threshold ${loopWarningThreshold}).`;
         console.warn(`[v2] LOOP WARN: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
         sendSSE('info', { message: warnMsg });
@@ -13595,6 +13670,30 @@ router.post('/api/voice-agent/realtime-tool', async (req, res) => {
       preview,
       processEntries: trace,
     });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+// Grok vision summary for the xAI realtime voice agent. xAI voice/realtime models
+// cannot take image input, so when the user captures a photo/video on xAI voice we
+// route the image(s) to Grok (grok-4.3) vision here and the client feeds the text
+// summary back into the live voice session. Accepts { dataUrl } for a photo or
+// { frames:[{dataUrl}], durationMs } for a sampled video clip.
+router.post('/api/voice-agent/xai-vision-summary', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await executeXaiImageVisionSummary({
+      dataUrl: typeof body.dataUrl === 'string' ? body.dataUrl : undefined,
+      frames: Array.isArray(body.frames) ? body.frames : undefined,
+      name: typeof body.name === 'string' ? body.name : undefined,
+      durationMs: Number(body.durationMs || 0) || undefined,
+    });
+    if (!result.success) {
+      res.status(502).json({ ok: false, success: false, error: result.error || 'xAI vision summary failed', model: result.model });
+      return;
+    }
+    res.json({ ok: true, success: true, summary: result.summary, model: result.model, credentialSource: result.credential_source });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
   }

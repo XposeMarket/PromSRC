@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "trello-connector",
+  "name": "Trello Connector",
+  "description": "Expose Trello boards, lists, cards, labels, comments, checklists, and card movement as Prometheus connector tools.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "trello connector",
+    "trello board",
+    "trello card",
+    "move trello card",
+    "create trello card"
+  ],
+  "categories": [
+    "prometheus",
+    "integrations",
+    "connectors",
+    "project-management"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch",
+    "connector_list",
+    "terminal"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true
+  }
+}

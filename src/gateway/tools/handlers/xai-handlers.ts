@@ -304,6 +304,57 @@ async function readHttpError(res: Response): Promise<string> {
   }
 }
 
+// Vision summary for the realtime voice agent: xAI's voice/realtime models can't
+// take image input, so when the user captures a photo/video on xAI voice we route
+// the image(s) to Grok (grok-4.3) vision and feed the text summary back into the
+// live voice session. Video frames (sampled ~1/sec) are summarized as one clip.
+const DEFAULT_XAI_VISION_MODEL = process.env.XAI_VISION_MODEL || 'grok-4.3';
+
+export async function executeXaiImageVisionSummary(input: {
+  dataUrl?: string;
+  frames?: Array<{ dataUrl?: string }>;
+  name?: string;
+  durationMs?: number;
+}): Promise<{ success: boolean; summary?: string; model?: string; credential_source?: string; error?: string }> {
+  const creds = await resolveXAICredentials();
+  if (!creds) {
+    return { success: false, error: 'xAI credentials not configured. Connect xAI in Settings -> Models, or set XAI_API_KEY.' };
+  }
+
+  const images: string[] = [];
+  const single = String(input?.dataUrl || '').trim();
+  if (single.startsWith('data:image')) images.push(single);
+  for (const f of (Array.isArray(input?.frames) ? input.frames : [])) {
+    const u = String(f?.dataUrl || '').trim();
+    if (u.startsWith('data:image')) images.push(u);
+  }
+  if (!images.length) return { success: false, error: 'No image data provided.' };
+
+  const isVideo = images.length > 1;
+  const promptText = isVideo
+    ? `These ${images.length} frames are sampled in order (about one per second) from a short mobile camera clip${input?.durationMs ? ` (~${Math.round(Number(input.durationMs) / 1000)}s)` : ''}. Describe what happens across the clip: the scene, key objects, any people and their actions, readable text, colors, and notable changes between frames. Be specific but concise — this is spoken to a live voice assistant that cannot see the images.`
+    : `Describe this mobile camera photo for a live voice assistant that cannot see it. Cover the scene, key objects, any people and their actions, readable text, colors, and anything notable. Be specific but concise.`;
+
+  const content: any[] = [{ type: 'text', text: promptText }];
+  for (const url of images.slice(0, 12)) content.push({ type: 'image_url', image_url: { url, detail: 'high' } });
+
+  const model = DEFAULT_XAI_VISION_MODEL;
+  const body = { model, messages: [{ role: 'user', content }], temperature: 0.2 };
+  try {
+    const { res, creds: finalCreds } = await fetchXaiJsonWithOAuthRefresh('/chat/completions', creds, body);
+    if (!res.ok) {
+      return { success: false, error: await readHttpError(res), model };
+    }
+    const data = await res.json() as any;
+    const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+    const summary = String(choice?.message?.content || '').trim();
+    if (!summary) return { success: false, error: 'xAI vision returned an empty summary.', model };
+    return { success: true, summary, model, credential_source: finalCreds.source };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err), model };
+  }
+}
+
 export async function executeXSearch(args: XSearchArgs): Promise<XSearchResult> {
   const query = String(args?.query || '').trim();
   if (!query) {

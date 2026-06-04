@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "version": "2.7.0",
+  "description": "Use this skill for interactive work on X.com — posting, searching/collecting, opening bookmarks/notifications/profile/Grok, liking/bookmarking focused posts, replying, and other live browser actions. Prefer the verified X composite tools first when they fit. For plain X status URLs that the user wants fetched/read, start with web_fetch and answer from that unless more interaction is requested.",
+  "triggers": [
+    "post on x",
+    "tweet this",
+    "reply to this tweet",
+    "like tweets",
+    "like focused x post",
+    "bookmark focused x post",
+    "search x",
+    "collect tweets",
+    "open x bookmarks",
+    "find my x bookmarks",
+    "go to x bookmarks",
+    "x bookmarks",
+    "open x notifications",
+    "open x profile",
+    "open x grok",
+    "fetch this x post",
+    "read this tweet url",
+    "pull this x thread",
+    "webfetch this x url",
+    "web fetch this x url",
+    "get this tweet"
+  ],
+  "categories": [
+    "browser",
+    "social",
+    "x",
+    "twitter",
+    "automation",
+    "composite-tools"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "web",
+    "composite_tools"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "browser_automation",
+      "web",
+      "composite_tools"
+    ],
+    "recommendedToolCategories": [
+      "browser_automation",
+      "composite_tools"
+    ],
+    "defaultWorkflow": [
+      "For explicit X posting/search/open-page/focused-like/focused-bookmark requests, use the verified x_* composite tools first when available.",
+      "For plain X post/thread URL reading, use web_fetch first.",
+      "Fallback to manual visual-first browser automation only when the composite does not fit or fails."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": true
+  },
+  "id": "x-browser-automation-playbook"
+}

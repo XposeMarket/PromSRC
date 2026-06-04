@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "knowledge-import-pipeline",
+  "name": "Knowledge Import Pipeline",
+  "description": "Import external docs, repos, notes, transcripts, and datasets into Prometheus memory, project context, skills, or temporary artifacts without polluting durable memory.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["import knowledge", "ingest docs", "index notes", "import repo docs", "add to memory"],
+  "categories": ["prometheus", "memory", "knowledge", "ingestion"],
+  "requiredTools": ["advanced_memory", "workspace_write", "web_search", "web_fetch"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true, "externalSideEffects": true }
+}

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "linear-connector",
+  "name": "Linear Connector",
+  "description": "Expose Linear teams, projects, issues, cycles, comments, and status updates as Prometheus tools using Linear GraphQL with vault-backed credentials.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "linear connector",
+    "linear issue",
+    "create linear task",
+    "update linear",
+    "linear project"
+  ],
+  "categories": [
+    "prometheus",
+    "integrations",
+    "connectors",
+    "project-management"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch",
+    "connector_list",
+    "terminal"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true
+  }
+}

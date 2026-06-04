@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "connector-recipe-library",
+  "name": "Connector Recipe Library",
+  "description": "Choose the correct Prometheus connector recipe for REST, GraphQL, OAuth, browser-session, webhook, CLI, MCP, or memory-source integrations.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["connector recipe", "build integration", "api connector pattern", "graphql connector", "rest connector"],
+  "categories": ["prometheus", "connectors", "integrations", "architecture"],
+  "requiredTools": ["connector_list", "integration_admin", "workspace_write"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true, "externalSideEffects": true }
+}

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "run the prometheus twitter page",
+    "promote prometheus on x",
+    "manage prometheus x account",
+    "prometheus social operator",
+    "social media subagent",
+    "x growth agent",
+    "twitter growth agent",
+    "daily x posting",
+    "draft prometheus tweets",
+    "build prometheus audience",
+    "reply to ai builders",
+    "market prometheus publicly",
+    "prometheus x approval packet",
+    "prometheus x assisted growth cycle",
+    "first prometheus x growth run"
+  ],
+  "categories": [
+    "social",
+    "growth",
+    "x-twitter",
+    "prometheus",
+    "marketing"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "web",
+    "composite_tools"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "browser_automation",
+      "web",
+      "composite_tools"
+    ],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "browser": true,
+    "externalSideEffects": true,
+    "workspaceWrite": true
+  },
+  "status": "ready",
+  "lifecycle": "active",
+  "executionEnabled": true,
+  "id": "prometheus-x-growth-operator"
+}

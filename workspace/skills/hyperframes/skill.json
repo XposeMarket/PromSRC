@@ -31,6 +31,26 @@
       "path": "references/avoid-ai-video-tells.md",
       "type": "reference",
       "description": "Guardrail for avoiding common generated-video visual tells in HyperFrames compositions: purple/blue gradients, generic glows, over-rounded glass panels, and meaningless HUD decoration."
+    },
+    {
+      "path": "references/frame-md-current-research-2026-06-04.md",
+      "type": "doc",
+      "description": "Current research note: frame.md precedence, caption registry components, CLI inspect/validation, audio/producer/studio notes for HyperFrames work."
+    },
+    {
+      "path": "references/frame-md-production-workflow.md",
+      "type": "reference",
+      "description": "Frame.md-first HyperFrames workflow: precedence over design.md for video direction, template, defaults, and QA gates."
+    },
+    {
+      "path": "references/caption-registry-workflow-2026-06-04.md",
+      "type": "reference",
+      "description": "Catalog-first workflow for HyperFrames captions with routing, components, and Prometheus-specific taste guardrails."
+    },
+    {
+      "path": "templates/frame.md",
+      "type": "template",
+      "description": "Reusable frame.md template for Prometheus HyperFrames projects."
     }
   ]
 }

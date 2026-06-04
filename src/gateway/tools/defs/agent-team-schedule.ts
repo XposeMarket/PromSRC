@@ -532,7 +532,7 @@ export function getAgentTeamScheduleTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'schedule_job',
-	        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). Use team_id to schedule a managed team run where the manager wakes first and dispatches members from the team goal. Otherwise recurring/time-based jobs are schedule-owner-subagent backed by default; if subagent_id is omitted, the scheduler creates/assigns a dedicated owner subagent. Do not use session_target=main to represent ownership.',
+	        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). By default, schedule jobs are assigned to Prometheus itself and run through the main scheduler context. Use subagent_id only when the user explicitly asks for a specific subagent owner or the task genuinely requires a specialized delegated agent. Use team_id to schedule a managed team run where the manager wakes first and dispatches members from the team goal. If ownership is ambiguous and delegation would materially change the workflow, ask whether the user wants Prometheus itself or a subagent/team to own the schedule.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -561,11 +561,11 @@ export function getAgentTeamScheduleTools(): any[] {
               type: 'object',
               properties: {
                 channel: { type: 'string', description: 'web, telegram, discord, whatsapp' },
-                session_target: { type: 'string', description: 'Legacy compatibility only. Scheduled jobs run through an isolated schedule-owner subagent even if main is requested.' },
+                session_target: { type: 'string', description: 'Legacy compatibility only. Omit for normal schedules; ownership is controlled by subagent_id/team_id. If "main" is supplied without subagent_id/team_id, the job remains assigned to Prometheus itself.' },
               },
             },
             model_override: { type: 'string', description: 'Optional model override for this scheduled job' },
-	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use as the schedule owner. If omitted, a dedicated owner subagent is created and assigned automatically.' },
+	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use as the schedule owner. Omit to have Prometheus itself own and execute the scheduled job.' },
             team_id: { type: 'string', description: 'Optional: managed team ID. When set, the scheduled run wakes that team manager first; the manager derives the run from team goal/memory and dispatches agents accordingly.' },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
@@ -660,7 +660,7 @@ export function getAgentTeamScheduleTools(): any[] {
               description: 'Schedule patch: {kind:"recurring", cron:"0 9 * * *"} or {kind:"one_shot", run_at:"..."}',
             },
             timezone: { type: 'string', description: 'IANA timezone such as America/New_York.' },
-            delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web. session_target is legacy and is coerced to isolated schedule-owner execution.' },
+            delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web. session_target is legacy; use subagent_id/team_id to change ownership, or clear subagent_id to return ownership to Prometheus itself.' },
             model_override: { type: 'string', description: 'Optional model override; empty string clears.' },
             enabled: { type: 'boolean', description: 'Enable or pause the job.' },
             expected_outputs: {

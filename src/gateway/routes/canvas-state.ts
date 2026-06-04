@@ -89,6 +89,7 @@ export function getCanvasContextBlock(sessionId: string): string {
       `root: ${projectRoot}`,
       projectLabel ? `label: ${projectLabel}` : undefined,
       'Treat this folder as the primary working directory for canvas-related tasks unless the user says otherwise.',
+      'For edit/fix/change requests about the canvas or Design Mode, read and modify files in this project instead of only returning suggested code.',
     ].filter(Boolean).join('\n');
     parts.push(header);
 
@@ -102,7 +103,7 @@ export function getCanvasContextBlock(sessionId: string): string {
 
   if (files.length > 0) {
     const list = files.map(f => `  - ${f}`).join('\n');
-    parts.push(`[CANVAS - files currently open in the editor]\n${list}\nWhen reading or editing these files use the exact paths above.`);
+    parts.push(`[CANVAS - files currently open in the editor]\n${list}\nWhen reading or editing these files use the exact paths above. Treat these as the primary files at hand for this canvas turn; prefer focused edits to these files before searching elsewhere.`);
   }
 
   if (projectLink && (projectLink.github || projectLink.vercel)) {

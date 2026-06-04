@@ -9111,8 +9111,10 @@ function renderUserMessageContent(msg) {
   const attachments = Array.isArray(msg.attachmentPreviews) ? msg.attachmentPreviews : [];
   if (attachments.length) {
     text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
+    text = text.replace(/\n\n\[Design Mode selected element attached\][\s\S]*$/, '').trim();
   }
   text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
+  text = text.replace(/\n\n\[Design Mode selected element attached\][\s\S]*$/, '').trim();
   const imageAttachments = attachments.filter((a) => a && a.kind === 'image' && (a.dataUrl || a.workspacePath));
   const fileAttachments = attachments.filter((a) => a && a.kind !== 'image');
   const imgHtml = imageAttachments.length
@@ -9125,10 +9127,11 @@ function renderUserMessageContent(msg) {
     ? `<div class="file-pills" style="margin-bottom:${text ? '8px' : '0'}">${fileAttachments.map((f) => {
         const safePath = encodeInlineJsString(String(f.workspacePath || ''));
         const safeName = encodeInlineJsString(String(f.name || 'file'));
+        const previewText = String(f.previewText || '').trim();
         return `<div class="file-pill">
           <div class="file-pill-main">
             <div class="file-pill-name">${getCanvasFileIcon(f.ext || '')} ${escHtml(String(f.name || 'file'))}</div>
-            <div class="file-pill-path">${escHtml(String(f.ext || 'file'))}${f.workspacePath ? ` • ${escHtml(String(f.workspacePath))}` : ''}</div>
+            <div class="file-pill-path">${escHtml(previewText || String(f.ext || 'file'))}${f.workspacePath ? ` • ${escHtml(String(f.workspacePath))}` : ''}</div>
           </div>
           <div class="file-pill-actions">
             ${f.workspacePath ? `<button class="file-pill-btn" title="Open in Canvas" onclick="canvasPresentFile(${safePath}, ${safeName})">
@@ -11379,16 +11382,22 @@ async function sendChat(queuedMessage = null, options = {}) {
   let uploadedFileCount = 0;
   let visionAttachments = []; // image attachments to send as vision content
   let uploadedAttachmentPreviews = [];
+  const designAttachmentPreview = normalizeCreativeMode(window.currentCreativeMode) === 'design'
+    ? designSelectionToAttachmentPreview()
+    : null;
   let filesToUpload = [];
   const queuedFiles = queuedTurn ? queuedTurn.files : [];
   if (queuedFiles.length || (!queuedTurn && pendingChatFiles.length)) {
     filesToUpload = queuedFiles.length ? queuedFiles.slice() : pendingChatFiles.slice();
     uploadedFileCount = filesToUpload.length;
     uploadedAttachmentPreviews = stagedFilesToAttachmentPreviews(filesToUpload);
+    if (designAttachmentPreview) uploadedAttachmentPreviews.push(designAttachmentPreview);
     if (!queuedTurn) {
       pendingChatFiles = [];
       renderChatFilePills();
     }
+  } else if (designAttachmentPreview) {
+    uploadedAttachmentPreviews = [designAttachmentPreview];
   }
   let messageWithFiles = message;
 
@@ -11492,6 +11501,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     const uploadResults = await uploadStagedFilesToCanvas(filesToUpload);
     fileContextNote = buildFileContextNote(uploadResults);
     uploadedAttachmentPreviews = uploadResultsToAttachmentPreviews(uploadResults);
+    if (designAttachmentPreview) uploadedAttachmentPreviews.push(designAttachmentPreview);
     visionAttachments = uploadResults
       .filter(r => r.isImage && r.base64 && r.mimeType)
       .map(r => ({ type: 'image', base64: r.base64, mimeType: r.mimeType, name: r.name }));
@@ -17860,15 +17870,39 @@ function getCanvasWorkspaceDisplayRoot() {
 
 function updateDesignSelectionChip() {
   const chip = document.getElementById('chat-design-selection-chip');
-  if (!chip) return;
+  const pills = document.getElementById('chat-design-selection-pills');
+  const setSingleSelectionPill = (context) => {
+    if (!pills) return;
+    if (!context) {
+      renderDesignSelectionPills();
+      return;
+    }
+    const label = context.selector
+      || (context.id ? `#${context.id}` : '')
+      || context.tagName
+      || 'element';
+    const text = String(context.text || '').trim().replace(/\s+/g, ' ');
+    const snippet = String(context.htmlSnippet || context.snippet || '').trim().replace(/\s+/g, ' ');
+    const truncatedLabel = label.length > 42 ? `${label.slice(0, 40)}...` : label;
+    const truncatedContext = (text || snippet).slice(0, 90);
+    pills.style.display = 'flex';
+    pills.innerHTML = `<div class="chat-file-pill" title="${escHtml([`Selected design element: ${label}`, text ? `Text: ${text}` : '', snippet ? `Snippet: ${snippet.slice(0, 500)}` : ''].filter(Boolean).join('\n\n'))}">
+      <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
+      <span class="pill-name">${escHtml(truncatedLabel)}</span>
+      ${truncatedContext ? `<span class="pill-ext">${escHtml(truncatedContext)}</span>` : `<span class="pill-ext">${escHtml(context.tagName || 'el')}</span>`}
+      <button class="pill-remove" onclick="clearDesignSelectionContext()" title="Remove">&times;</button>
+    </div>`;
+  };
   const browserState = getBrowserCanvasState();
   if (isBrowserCanvasSurfaceActive() && browserState.selectedElement) {
     const label = browserState.selectedElement.selector
       || (browserState.selectedElement.id ? `#${browserState.selectedElement.id}` : '')
       || browserState.selectedElement.tagName
       || 'element';
-    chip.textContent = `Browser: ${label}`;
-    chip.style.display = 'block';
+    if (chip) {
+      chip.textContent = `Browser: ${label}`;
+      chip.style.display = 'block';
+    }
     return;
   }
   if (normalizeCreativeMode(window.currentCreativeMode) === 'video' && creativeHtmlMotionSelectedElementContext) {
@@ -17882,30 +17916,38 @@ function updateDesignSelectionChip() {
     const timing = ctx.timing
       ? [ctx.timing.startMs != null ? `${ctx.timing.startMs}ms` : '', ctx.timing.durationMs != null ? `${ctx.timing.durationMs}ms` : ''].filter(Boolean).join(' / ')
       : '';
-    chip.textContent = `HTML Motion: ${String(label).slice(0, 90)}${text ? ` :: ${text.slice(0, 70)}` : ''}`;
-    chip.title = [
-      `Selected HTML motion element: ${label}`,
-      text ? `Text: ${text}` : '',
-      timing ? `Timing: ${timing}` : '',
-      ctx.pretext ? `PreText: ${ctx.pretext.lineCount || '?'} line(s), ${ctx.pretext.measuredHeight || '?'}px measured / ${ctx.pretext.availableHeight || '?'}px box` : '',
-      ctx.snippet ? `Snippet:\n${ctx.snippet}` : '',
-    ].filter(Boolean).join('\n\n');
-    chip.style.display = 'block';
+    if (chip) {
+      chip.textContent = `HTML Motion: ${String(label).slice(0, 90)}${text ? ` :: ${text.slice(0, 70)}` : ''}`;
+      chip.title = [
+        `Selected HTML motion element: ${label}`,
+        text ? `Text: ${text}` : '',
+        timing ? `Timing: ${timing}` : '',
+        ctx.pretext ? `PreText: ${ctx.pretext.lineCount || '?'} line(s), ${ctx.pretext.measuredHeight || '?'}px measured / ${ctx.pretext.availableHeight || '?'}px box` : '',
+        ctx.snippet ? `Snippet:\n${ctx.snippet}` : '',
+      ].filter(Boolean).join('\n\n');
+      chip.style.display = 'block';
+    }
     return;
   }
   if (normalizeCreativeMode(window.currentCreativeMode) !== 'design' || !designSelectedElementContext) {
-    chip.style.display = 'none';
-    chip.textContent = '';
-    chip.title = '';
+    if (chip) {
+      chip.style.display = 'none';
+      chip.textContent = '';
+      chip.title = '';
+    }
+    setSingleSelectionPill(null);
     return;
   }
   const label = designSelectedElementContext.selector
     || (designSelectedElementContext.id ? `#${designSelectedElementContext.id}` : '')
     || designSelectedElementContext.tagName
     || 'element';
-  chip.textContent = `Element: ${label}`;
-  chip.title = `Selected design element: ${label}`;
-  chip.style.display = 'block';
+  if (chip) {
+    chip.textContent = `Element: ${label}`;
+    chip.title = `Selected design element: ${label}`;
+    chip.style.display = 'block';
+  }
+  setSingleSelectionPill(designSelectedElementContext);
 }
 
 async function promptAllowCanvasDirectory(filePath) {
@@ -26882,7 +26924,7 @@ function buildCreativeSceneCallerContext() {
       tab ? `preview_mode: ${tab.mode || 'preview'}` : '',
       projectFiles.length ? `project_files:\n${projectFiles.map((filePath) => `- ${filePath}`).join('\n')}` : '',
       designSelectedElementContext ? `[DESIGN_SELECTION]\n${JSON.stringify(designSelectedElementContext).slice(0, 2600)}` : '',
-      designSelectedElementContext ? 'Use the selected preview element as the primary focus when editing the live project files.' : '',
+      designSelectedElementContext ? 'Use the selected preview element as the primary focus. Read and edit the live project files already open in the canvas; do not only describe code changes.' : '',
       designMultiSelectedElements.length ? `[DESIGN_MULTI_SELECTION]\n${JSON.stringify(designMultiSelectedElements.map((entry) => entry.context)).slice(0, 12000)}` : '',
       designMultiSelectedElements.length ? `The user has attached ${designMultiSelectedElements.length} preview element${designMultiSelectedElements.length === 1 ? '' : 's'} for multi-edit. Apply the requested change across ALL of them by editing the corresponding source files.` : '',
       getDesignPatchInstruction(),
@@ -29776,7 +29818,9 @@ function parseDesignOpsFromText(text) {
 function getDesignPatchInstruction() {
   return [
     '[DESIGN_PATCH_PROTOCOL]',
-    'When editing the live Design project, prefer returning a JSON object with an "ops" array inside a ```json fenced block.',
+    'For Design Mode edit requests, the goal is to change the live project files backing the current canvas, not merely explain a patch.',
+    'If file editing tools are available, use them to read and edit the exact canvas files first.',
+    'If file tools are not available in this turn, return a JSON object with an "ops" array inside a ```json fenced block so the Design client can apply it.',
     'Supported design ops: patch-css-rule, patch-html-attributes, replace-inner-text, replace-in-file, insert-in-file.',
     'Use patch-css-rule for visual style changes to selected elements and components.',
     'Use patch-html-attributes or replace-inner-text for HTML structure/content changes.',
@@ -32216,7 +32260,18 @@ async function submitDesignChatPopover() {
   if (attachments.length && typeof window.stageFiles === 'function') {
     try { await window.stageFiles(attachments); } catch {}
   }
-  mainInput.value = text;
+  const context = designSelectedElementContext || (designLastClickedElement && designLastClickedFrame ? extractDesignElementContext(designLastClickedElement, designLastClickedFrame) : null);
+  const contextPacket = context ? [
+    '',
+    '[Design Mode selected element attached]',
+    `selector: ${context.selector || ''}`,
+    context.tagName ? `tag: ${context.tagName}` : '',
+    context.text ? `text: ${String(context.text).replace(/\s+/g, ' ').slice(0, 500)}` : '',
+    context.file ? `file: ${context.file}` : '',
+    context.htmlSnippet ? `snippet: ${String(context.htmlSnippet).replace(/\s+/g, ' ').slice(0, 900)}` : '',
+    'Apply the requested change to the source file(s) backing the current canvas. If direct file tools are unavailable, return valid Design JSON ops only.',
+  ].filter(Boolean).join('\n') : '';
+  mainInput.value = `${text}${contextPacket}`;
   hideDesignChatPopover();
   try { await sendChat(); } catch (err) { showToast(`Send failed: ${err.message}`, 'error'); }
 }
@@ -33432,6 +33487,23 @@ function uploadResultsToAttachmentPreviews(uploadResults) {
       binary: !!r.binary,
     };
   });
+}
+
+function designSelectionToAttachmentPreview(context = designSelectedElementContext) {
+  if (!context || typeof context !== 'object') return null;
+  const selector = String(context.selector || '').trim();
+  const tagName = String(context.tagName || '').trim();
+  const text = String(context.text || '').trim().replace(/\s+/g, ' ');
+  const snippet = String(context.htmlSnippet || context.snippet || '').trim().replace(/\s+/g, ' ');
+  const label = selector || (context.id ? `#${context.id}` : '') || tagName || 'selected element';
+  return {
+    kind: 'design-selection',
+    name: `Selected: ${label}`,
+    ext: tagName || 'element',
+    workspacePath: String(context.file || ''),
+    previewText: (text || snippet || label).slice(0, 180),
+    selector,
+  };
 }
 function getMimeType(ext) {
   const map = {

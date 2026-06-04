@@ -31,6 +31,11 @@
       "path": "references/strict-hyperframes-project-flow-2026-05-24.md",
       "type": "doc",
       "description": "Strict real HyperFrames CLI project workflow for Raul's Prometheus Windows runtime, including no-ship gates and final artifact reporting."
+    },
+    {
+      "path": "references/required-agent-qa-loop-2026-06-04.md",
+      "type": "reference",
+      "description": "Mandatory HyperFrames CLI QA loop with inspect, hero-frame checks, render, and final MP4 verification."
     }
   ]
 }

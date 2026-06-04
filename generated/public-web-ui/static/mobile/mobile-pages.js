@@ -8731,9 +8731,81 @@ async function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = 
   }
 }
 
-// Stage a captured photo: hold it (do NOT send to the model) and show it in the
-// chat bubble. It is flushed to the model as an attachment to the user's next
-// spoken turn (see _flushMobileRealtimeAgentPendingImages).
+// Inject one image into the realtime conversation as a user item, with NO
+// response.create. Done at STAGE time (when the audio buffer is idle) — injecting
+// while the user is actively speaking races the auto-response and the model ends
+// up "not seeing" the image. Verified: an image item added while idle is visible
+// to a later spoken/typed turn's response.
+async function _injectRealtimeImageItemToConversation(img, label) {
+  if (!img || img.realtimeInjected) return false;
+  const dc = __pmRealtimeAgent.conn?.dc;
+  if (!dc || dc.readyState !== 'open') return false;
+  if (String(__pmRealtimeAgent.conn?.provider || 'openai_realtime') === 'xai') return false;
+  try {
+    const imageUrl = await _downscaleDataUrlForRealtime(img.dataUrl);
+    if (__pmRealtimeAgent.conn?.dc?.readyState !== 'open') return false;
+    __pmRealtimeAgent.conn.dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: label || 'Image captured from the mobile camera. Keep it in view and use it as visual context for what I say next.' },
+          { type: 'input_image', detail: 'auto', image_url: imageUrl },
+        ],
+      },
+    }));
+    img.realtimeInjected = true;
+    _voiceDebug('realtime-agent-image-injected-at-stage', { name: img.name });
+    return true;
+  } catch (err) {
+    _voiceDebug('realtime-agent-image-inject-failed', { message: err?.message || String(err) });
+    return false;
+  }
+}
+
+// xAI voice/realtime models can't take image input. When the user captures media
+// on xAI voice, summarize it with Grok (grok-4.3) vision the moment it's captured
+// and inject the text summary into the live xAI voice session — so it's ready
+// before the user finishes speaking (no wait). One photo = one summary; a video's
+// sampled frames are summarized together as one clip.
+async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
+  if (String(__pmRealtimeAgent.conn?.provider || 'openai_realtime') !== 'xai') return;
+  const urls = (Array.isArray(dataUrls) ? dataUrls : [dataUrls])
+    .map((u) => String(u || '').trim())
+    .filter((u) => u.startsWith('data:image'));
+  if (!urls.length) return;
+  const isVideo = urls.length > 1;
+  try {
+    const reqBody = isVideo
+      ? { frames: urls.map((u) => ({ dataUrl: u })), durationMs: Number(opts.durationMs || 0) || 0, name: String(opts.name || 'camera video') }
+      : { dataUrl: urls[0], name: String(opts.name || 'camera photo') };
+    const res = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', { method: 'POST', body: JSON.stringify(reqBody) });
+    const summary = String(res?.summary || '').trim();
+    if (!summary) { _voiceDebug('realtime-agent-xai-summary-empty', { error: res?.error || '' }); return; }
+    const dc = __pmRealtimeAgent.conn?.dc;
+    if (!dc || dc.readyState !== 'open' || String(__pmRealtimeAgent.conn?.provider) !== 'xai') return;
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: `[Visual context from my camera ${isVideo ? 'video clip' : 'photo'}, described by Grok vision since you can't see images directly]: ${summary}\nTreat this as what I'm showing you and keep it in mind for what I say next.`,
+        }],
+      },
+    }));
+    _voiceDebug('realtime-agent-xai-summary-injected', { isVideo, summaryLen: summary.length });
+  } catch (err) {
+    _voiceDebug('realtime-agent-xai-summary-failed', { message: err?.message || String(err) });
+    try { pmToast('Could not summarize the image for Grok voice.', 'error'); } catch {}
+  }
+}
+
+// Stage a captured photo: show it in the chat bubble AND inject it into the
+// realtime conversation now (no response). The user's next spoken/typed turn is
+// what triggers the model's response — so the image is "attached" to what they say.
 function _stageMobileRealtimeAgentImage(attachment, sessionId) {
   const dataUrl = String(attachment?.dataUrl || '').trim();
   if (!dataUrl) return false;
@@ -8743,8 +8815,11 @@ function _stageMobileRealtimeAgentImage(attachment, sessionId) {
     name: String(attachment?.name || 'Camera snapshot').trim(),
     mimeType: String(attachment?.mimeType || 'image/jpeg'),
     base64: String(attachment?.base64 || dataUrl.replace(/^data:[^;]+;base64,/, '')),
+    realtimeInjected: false,
   };
   __pmRealtimeAgent.pendingImages.push(img);
+  // Inject into the realtime session immediately (audio idle → reliable).
+  _injectRealtimeImageItemToConversation(img).catch(() => {});
   const previewAttachment = { kind: 'image', name: img.name, mimeType: img.mimeType, dataUrl: img.dataUrl, base64: img.base64, sizeLabel: '' };
   try {
     if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
@@ -8781,14 +8856,17 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
   const dc = __pmRealtimeAgent.conn?.dc;
   if (!dc || dc.readyState !== 'open') return false;
   const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
-  const toSend = images.slice();
+  const all = images.slice();
   __pmRealtimeAgent.pendingImages = [];
   if (provider === 'xai') {
     // xAI voice models can't take images directly — handled by a separate summary
     // workflow (grok). Nothing to inject into the realtime session here.
-    _voiceDebug('realtime-agent-image-flush-skip-xai', { count: toSend.length, reason });
+    _voiceDebug('realtime-agent-image-flush-skip-xai', { count: all.length, reason });
     return false;
   }
+  // Most images are already injected at STAGE time (when audio was idle). Only
+  // send the ones that weren't (e.g. captured before the data channel was open).
+  const toSend = all.filter((im) => !im.realtimeInjected);
   try {
     const promptText = String(options.promptText || '').trim();
     for (let i = 0; i < toSend.length; i++) {
@@ -8811,6 +8889,7 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
           ],
         },
       }));
+      toSend[i].realtimeInjected = true;
     }
     _voiceDebug('realtime-agent-image-flushed', { count: toSend.length, reason });
     if (options.createResponse === true && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
@@ -11191,12 +11270,15 @@ export async function renderVoicePage(page, ctx) {
       await openCamera({
         target: 'voice',
         onCapture: async (normalized, extra) => {
+          const dataUrl = extra?.dataUrl || normalized?.dataUrl || '';
           _stageMobileRealtimeAgentImage({
-            dataUrl: extra?.dataUrl || normalized?.dataUrl || '',
+            dataUrl,
             name: extra?.file?.name || normalized?.name || 'Camera snapshot',
             mimeType: normalized?.mimeType || extra?.file?.type || 'image/jpeg',
             base64: normalized?.base64,
           }, sid);
+          // xAI voice: summarize via Grok now (no-op for OpenAI, which got the image directly).
+          _kickoffMobileXaiVisionSummary([dataUrl], { name: 'camera photo' }).catch(() => {});
         },
         onVideoCapture: async (payload) => {
           const frames = Array.isArray(payload?.frames) ? payload.frames : [];
@@ -11209,13 +11291,19 @@ export async function renderVoicePage(page, ctx) {
           }, sid);
           for (let i = 1; i < frames.length; i++) {
             if (!String(frames[i]?.dataUrl || '').trim()) continue;
-            __pmRealtimeAgent.pendingImages.push({
+            const frameImg = {
               dataUrl: frames[i].dataUrl,
               name: frames[i].name || `video-frame-${i + 1}.jpg`,
               mimeType: frames[i].mimeType || 'image/jpeg',
               base64: '',
-            });
+              realtimeInjected: false,
+            };
+            __pmRealtimeAgent.pendingImages.push(frameImg);
+            // Inject each frame now (audio idle) as sequential visual context.
+            _injectRealtimeImageItemToConversation(frameImg, `Video frame ${i + 1} of ${frames.length} from the mobile camera clip — sequential visual context for what I say next.`).catch(() => {});
           }
+          // xAI voice: run the whole clip through Grok vision as one summary.
+          _kickoffMobileXaiVisionSummary(frames.map((f) => f.dataUrl), { name: 'camera video clip', durationMs: Number(payload?.durationMs || 0) || 0 }).catch(() => {});
         },
       });
     } catch (err) {

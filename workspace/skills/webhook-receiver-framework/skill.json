@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "webhook-receiver-framework",
+  "name": "Webhook Receiver Framework",
+  "description": "Design event-driven webhook receivers for Prometheus while respecting the current gap that extension-registered routes are not yet mounted.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["webhook", "receive events", "event receiver", "incoming webhook", "react to external event"],
+  "categories": ["prometheus", "integrations", "events", "architecture"],
+  "requiredTools": ["integration_admin", "prometheus_source_read", "prometheus_source_write"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true, "externalSideEffects": true }
+}

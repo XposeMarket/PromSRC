@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "artifact-registry",
+  "name": "Artifact Registry",
+  "description": "Index and retrieve Prometheus-generated artifacts from chats, tool observations, tasks, teams, processes, media, canvas, and Brain outputs.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["artifact registry", "find generated file", "list artifacts", "where did the output go", "artifact index"],
+  "categories": ["prometheus", "artifacts", "memory", "workflow"],
+  "requiredTools": ["advanced_memory", "workspace_write", "automations"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true }
+}

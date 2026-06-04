@@ -29,7 +29,7 @@ import {
   type ToolResult,
 } from '../../tool-builder';
 import { getManagedTeam } from '../../teams/managed-teams';
-import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from '../../scheduling/schedule-agent';
+import { ensureScheduleRuntimeForAgent } from '../../scheduling/schedule-agent';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -545,6 +545,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             return { name, args, result: `Team not found: ${requestedTeamId}`, error: true };
           }
           const requestedSubagentId = requestedTeamId ? undefined : (String(args.subagent_id || '').trim() || undefined);
+          const assignmentTarget = requestedTeamId ? 'team' : (requestedSubagentId ? 'subagent' : 'main');
 
           let created = deps.cronScheduler.createJob({
             name: nameValue,
@@ -553,38 +554,20 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             schedule: kind === 'recurring' ? cron : undefined,
             runAt: kind === 'one-shot' ? new Date(runAtRaw).toISOString() : undefined,
             tz: timezone,
-            sessionTarget: 'isolated',
+            sessionTarget: assignmentTarget === 'main' ? 'main' : 'isolated',
             model: modelOverride,
             subagent_id: requestedSubagentId,
             team_id: requestedTeamId,
-            assignmentTarget: requestedTeamId ? 'team' : (requestedSubagentId ? 'subagent' : 'main'),
-            deliverToMainChannel: !requestedTeamId && !requestedSubagentId,
+            assignmentTarget,
+            deliverToMainChannel: assignmentTarget === 'main',
           } as any);
-          const owner = requestedTeamId
-            ? { agentId: '', created: false }
-            : requestedSubagentId
-            ? { agentId: requestedSubagentId, created: false }
-            : ensureScheduleOwnerAgent({
-                scheduleId: created.id,
-                scheduleName: created.name,
-                prompt: instructionPrompt,
-                model: modelOverride,
-              });
-          if (owner.agentId) {
-            ensureScheduleRuntimeForAgent(owner.agentId, {
+          if (requestedSubagentId) {
+            ensureScheduleRuntimeForAgent(requestedSubagentId, {
               scheduleId: created.id,
               scheduleName: created.name,
               prompt: instructionPrompt,
               model: modelOverride,
             });
-          }
-          if (!requestedTeamId && (created.subagent_id !== owner.agentId || created.sessionTarget !== 'isolated')) {
-            created = deps.cronScheduler.updateJob(created.id, {
-              subagent_id: owner.agentId,
-              sessionTarget: 'isolated',
-              assignmentTarget: requestedSubagentId ? 'subagent' : 'main',
-              deliverToMainChannel: !requestedSubagentId,
-            } as any) || created;
           }
 
           return {
@@ -595,13 +578,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               action: 'create',
               job: summarizeCronJob(created),
               assigned_team: requestedTeamId || undefined,
-              assigned_owner: owner.agentId ? {
-                subagent_id: owner.agentId,
-                created: owner.created,
-              } : undefined,
+              assigned_owner: requestedSubagentId ? { subagent_id: requestedSubagentId, created: false } : { agent_id: 'main', created: false },
               message: requestedTeamId
                 ? `Scheduled team job "${created.name}" created for team "${requestedTeamId}".`
-                : `Scheduled job "${created.name}" created and assigned to schedule owner "${owner.agentId}".`,
+                : requestedSubagentId
+                ? `Scheduled job "${created.name}" created and assigned to subagent "${requestedSubagentId}".`
+                : `Scheduled job "${created.name}" created and assigned to Prometheus itself.`,
             }, null, 2),
             error: false,
           };
@@ -675,10 +657,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               };
             }
             const sessionTarget = String(delivery.session_target || args.session_target || '').toLowerCase();
-            if (sessionTarget === 'main' || sessionTarget === 'isolated') patch.sessionTarget = 'isolated';
+            if (sessionTarget === 'main' || sessionTarget === 'isolated') patch.sessionTarget = sessionTarget;
             if (sessionTarget === 'main') {
               patch.assignmentTarget = 'main';
               patch.deliverToMainChannel = true;
+              patch.subagent_id = undefined;
+              patch.team_id = undefined;
             }
           }
           if (args.subagent_id !== undefined) {
@@ -688,6 +672,13 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               patch.team_id = undefined;
               patch.assignmentTarget = 'subagent';
               patch.deliverToMainChannel = false;
+              patch.sessionTarget = 'isolated';
+            } else {
+              patch.subagent_id = undefined;
+              patch.team_id = undefined;
+              patch.assignmentTarget = 'main';
+              patch.deliverToMainChannel = true;
+              patch.sessionTarget = 'main';
             }
           }
           if (args.team_id !== undefined || args.teamId !== undefined) {
@@ -744,26 +735,19 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               error: false,
             };
           }
-          const owner = String(updated.subagent_id || '').trim()
-            ? { agentId: String(updated.subagent_id || '').trim(), created: false }
-            : ensureScheduleOwnerAgent({
-                scheduleId: updated.id,
-                scheduleName: updated.name,
-                prompt: updated.prompt,
-                model: updated.model,
-              });
-          ensureScheduleRuntimeForAgent(owner.agentId, {
-            scheduleId: updated.id,
-            scheduleName: updated.name,
-            prompt: updated.prompt,
-            model: updated.model,
-          });
-          if (updated.subagent_id !== owner.agentId || updated.sessionTarget !== 'isolated') {
+          const ownerId = String(updated.subagent_id || '').trim();
+          if (ownerId) {
+            ensureScheduleRuntimeForAgent(ownerId, {
+              scheduleId: updated.id,
+              scheduleName: updated.name,
+              prompt: updated.prompt,
+              model: updated.model,
+            });
+          } else if (updated.assignmentTarget !== 'main' || updated.sessionTarget !== 'main' || updated.deliverToMainChannel !== true) {
             updated = deps.cronScheduler.updateJob(updated.id, {
-              subagent_id: owner.agentId,
-              sessionTarget: 'isolated',
-              assignmentTarget: owner.created ? 'main' : updated.assignmentTarget,
-              deliverToMainChannel: owner.created ? true : updated.deliverToMainChannel,
+              assignmentTarget: 'main',
+              sessionTarget: 'main',
+              deliverToMainChannel: true,
             } as any) || updated;
           }
           return {
@@ -773,11 +757,10 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               success: true,
               action: 'update',
               job: summarizeCronJob(updated),
-              assigned_owner: {
-                subagent_id: owner.agentId,
-                created: owner.created,
-              },
-              message: `Scheduled job "${updated.name}" updated and assigned to schedule owner "${owner.agentId}".`,
+              assigned_owner: ownerId ? { subagent_id: ownerId, created: false } : { agent_id: 'main', created: false },
+              message: ownerId
+                ? `Scheduled job "${updated.name}" updated and assigned to subagent "${ownerId}".`
+                : `Scheduled job "${updated.name}" updated and assigned to Prometheus itself.`,
             }, null, 2),
             error: false,
           };

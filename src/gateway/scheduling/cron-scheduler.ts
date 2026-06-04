@@ -1014,7 +1014,7 @@ export class CronScheduler {
     const scheduledTeamId = String((job as any).team_id || '').trim();
     let scheduledTeam = scheduledTeamId ? getManagedTeam(scheduledTeamId) : null;
     let teamSubagentId = String(job.subagent_id || '').trim();
-    if (!scheduledTeamId && !teamSubagentId) {
+    if (!scheduledTeamId && !teamSubagentId && job.assignmentTarget === 'subagent') {
       try {
         const owner = ensureScheduleOwnerAgent({
           scheduleId: job.id,
@@ -1023,8 +1023,8 @@ export class CronScheduler {
           model: job.model,
         });
         job.subagent_id = owner.agentId;
-        job.assignmentTarget = 'main';
-        job.deliverToMainChannel = true;
+        job.assignmentTarget = 'subagent';
+        job.deliverToMainChannel = false;
         teamSubagentId = owner.agentId;
         this.saveStore();
         this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });

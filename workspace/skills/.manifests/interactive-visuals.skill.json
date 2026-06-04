@@ -1,10 +1,13 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "id": "interactive-visuals",
   "name": "Interactive Visuals Router",
   "description": "Route visual-output requests to the right Prometheus visual skill: Chart.js charts, inline HTML widgets/dashboards, SVG architecture diagrams, or Mermaid flow/sequence/schema diagrams.",
   "version": "1.0.0",
   "triggers": [
+    "visual",
+    "visuals",
     "interactive visual",
     "visualize this",
     "visual summary",
@@ -31,6 +34,19 @@
   "requiredTools": [
     "skill_read"
   ],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": []
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
   "toolBinding": {
     "requiredTools": [
       "skill_read"
@@ -47,5 +63,9 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "id": "interactive-visuals"
+  "resources": [],
+  "status": "ready",
+  "lifecycle": "active",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true
 }

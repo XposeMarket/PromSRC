@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "cli-adapter-framework",
+  "name": "CLI Adapter Framework",
+  "description": "Design Prometheus-safe wrappers for external CLI tools by exposing typed tools, status checks, setup guidance, and artifact paths instead of raw shell prompts.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "add a cli tool",
+    "wrap this command line tool",
+    "make a terminal tool available",
+    "cli adapter",
+    "external command integration"
+  ],
+  "categories": [
+    "prometheus",
+    "integrations",
+    "cli",
+    "tooling"
+  ],
+  "requiredTools": [
+    "terminal",
+    "connector_list"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  }
+}

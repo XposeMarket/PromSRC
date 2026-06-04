@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "background-coding-agent-lanes",
+  "name": "Background Coding Agent Lanes",
+  "description": "Coordinate isolated background coding agents from Prometheus with worktree boundaries, task ownership, progress capture, verification, and diff reconciliation.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "background coding agents",
+    "spawn coding agent",
+    "parallel codex lanes",
+    "agent lanes",
+    "multi agent coding"
+  ],
+  "categories": [
+    "prometheus",
+    "coding",
+    "agents",
+    "workflow"
+  ],
+  "requiredTools": [
+    "terminal"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  }
+}

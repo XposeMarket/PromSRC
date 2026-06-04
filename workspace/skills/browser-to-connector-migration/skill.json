@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "browser-to-connector-migration",
+  "name": "Browser-to-Connector Migration",
+  "description": "Identify repeated browser workflows and decide whether Prometheus should preserve them as teach workflows, composites, desktop flows, or API connectors.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["browser to connector", "turn browser workflow into api", "repeated browser task", "teach workflow", "migrate automation"],
+  "categories": ["prometheus", "browser", "connectors", "automation"],
+  "requiredTools": ["browser_automation", "connector_list", "integration_admin", "workspace_write"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true, "browser": true, "externalSideEffects": true }
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "google-workspace-expansion",
+  "name": "Google Workspace Expansion",
+  "description": "Extend Prometheus Google integrations with Calendar, Docs, Sheets, Drive, Gmail, and Contacts tools using OAuth-backed connectors and existing Prometheus connection patterns.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "google workspace",
+    "google calendar connector",
+    "google docs connector",
+    "google sheets connector",
+    "gmail connector",
+    "google contacts"
+  ],
+  "categories": [
+    "prometheus",
+    "integrations",
+    "connectors",
+    "productivity"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch",
+    "connector_list",
+    "terminal"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true
+  }
+}

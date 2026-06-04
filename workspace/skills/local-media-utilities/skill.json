@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "local-media-utilities",
+  "name": "Local Media Utilities",
+  "description": "Wrap local media CLIs such as ffmpeg, ffprobe, transcription, audio extraction, frame capture, compression, and metadata inspection as Prometheus-safe tools.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "local media tools",
+    "ffmpeg",
+    "ffprobe",
+    "transcribe local audio",
+    "extract video frames",
+    "compress video"
+  ],
+  "categories": [
+    "prometheus",
+    "media",
+    "cli",
+    "tooling"
+  ],
+  "requiredTools": [
+    "terminal"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true
+  }
+}

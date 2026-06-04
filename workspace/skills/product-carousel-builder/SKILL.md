@@ -19,9 +19,11 @@ Do not use for casual discussion or non-product research.
 ## Default workflow
 
 1. **Choose the data path**
-   - Static/general product research: `web_search` → `web_fetch` when source pages are readable.
-   - Live shopping site/search results: use browser tools, especially `browser_open`, `browser_extract_structured`, `browser_scroll_collect_v2`, and screenshots when needed.
-   - Amazon/product SERPs: prefer site-specific extraction selectors if a skill/resource exists, especially Browse.sh-derived product-search resources.
+   - First choice: call `shopping_search_products` with the user's product query, optional `merchant`, and `max_results` around 6-10. It uses the existing web search/fetch stack and requires no shopping API key.
+   - If `shopping_search_products` returns enough useful cards, do not also crawl the browser just to rebuild the same carousel.
+   - Static/general product research fallback: `web_search` -> `web_fetch` when source pages are readable.
+   - Live shopping site/search results fallback: use browser tools, especially `browser_open`, `browser_extract_structured`, `browser_scroll_collect_v2`, and screenshots when fields are missing or visual verification is needed.
+   - Amazon/product SERPs: only use site-specific extraction selectors when the fast product search misses important fields or the user needs page-specific verification.
 
 2. **Extract more candidates than needed**
    - If Raul asks for 4 products, collect around 8–12 candidates when practical.
@@ -45,8 +47,9 @@ Do not use for casual discussion or non-product research.
    - `productUrl`: direct product page URL.
    - `merchant`: store name.
 
-5. **Display with `show_product_carousel`**
-   - Call it after extraction/curation.
+5. **Display the carousel**
+   - `shopping_search_products` can emit carousel-ready cards directly; when it succeeds, a separate `show_product_carousel` call is usually unnecessary.
+   - If you gathered/curated products manually from web/browser sources, call `show_product_carousel` after extraction/curation.
    - Use a clear title like “Popular Men’s Shampoos on Amazon.”
    - Show 3–8 cards, not every extracted result.
 
