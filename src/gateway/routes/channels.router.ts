@@ -8,6 +8,7 @@ import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastR
 import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getSession, setWorkspace } from '../session';
+import { findRecoveryTaskForSubagentChat, handleTaskRecoveryMessage } from '../tasks/task-router';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -133,6 +134,7 @@ router.get('/api/channels/status', (_req, res) => {
       allowedUserIds: channels.telegram.allowedUserIds,
       personaBots: _telegramPersonaBots?.getStatus ? _telegramPersonaBots.getStatus() : { enabled: false, accounts: [] },
       teamRooms: _telegramTeamRoomBridge?.getStatus ? _telegramTeamRoomBridge.getStatus() : { rooms: [] },
+      completionNotifications: channels.telegram.completionNotifications,
     },
     discord: {
       enabled: channels.discord.enabled,
@@ -141,6 +143,7 @@ router.get('/api/channels/status', (_req, res) => {
       applicationId: channels.discord.applicationId,
       guildId: channels.discord.guildId,
       channelId: channels.discord.channelId,
+      completionNotifications: channels.discord.completionNotifications,
     },
     whatsapp: {
       enabled: channels.whatsapp.enabled,
@@ -150,6 +153,7 @@ router.get('/api/channels/status', (_req, res) => {
       verifyTokenSet: !!channels.whatsapp.verifyToken,
       webhookSecretSet: !!channels.whatsapp.webhookSecret,
       testRecipient: channels.whatsapp.testRecipient,
+      completionNotifications: channels.whatsapp.completionNotifications,
     },
   });
 });
@@ -1043,6 +1047,27 @@ export async function runSubagentChatTurnFromChannel(params: {
   const sessionId = params.sessionId || getChannelSubagentChatSessionId(source, accountId, agentId, peerId);
   const content = params.userLabel ? `[${params.userLabel}]\n${message}` : message;
 
+  const recoveryTask = findRecoveryTaskForSubagentChat(agentId);
+  if (recoveryTask) {
+    const recovery = await handleTaskRecoveryMessage(recoveryTask.id, content, {
+      sourceSessionId: sessionId,
+      source: 'subagent_chat',
+    });
+    return {
+      result: { type: 'chat', text: recovery.reply || '' },
+      historyEntry: {
+        agentId,
+        agentName: agent.name || agentId,
+        trigger: source,
+        success: true,
+        taskId: recoveryTask.id,
+        recovery: true,
+        resumed: recovery.resumed,
+      },
+      messages: getSubagentChatHistory(agentId, 100),
+    };
+  }
+
   const userMessage = appendSubagentChatMessage(agentId, {
     role: 'user',
     content,
@@ -1197,6 +1222,29 @@ router.post('/api/agents/:id/chat', async (req, res) => {
   const message = String(req.body?.message || '').trim();
   if (!message) return res.status(400).json({ success: false, error: 'message is required' });
 
+  const recoveryTask = findRecoveryTaskForSubagentChat(agentId);
+  if (recoveryTask) {
+    try {
+      const recovery = await handleTaskRecoveryMessage(recoveryTask.id, message, {
+        sourceSessionId: `subagent_chat_${agentId}`,
+        source: 'subagent_chat',
+      });
+      if (recovery.handled) {
+        return res.json({
+          success: true,
+          recovery: true,
+          taskId: recoveryTask.id,
+          resumed: recovery.resumed,
+          action: recovery.action,
+          reply: recovery.reply,
+          messages: getSubagentChatHistory(agentId, 100),
+        });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, recovery: true, taskId: recoveryTask.id, error: err.message, messages: getSubagentChatHistory(agentId, 100) });
+    }
+  }
+
   const userMessage = appendSubagentChatMessage(agentId, {
     role: 'user',
     content: message,
@@ -1267,6 +1315,36 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
       abortSignal.aborted = true;
     }
   });
+
+  const recoveryTask = findRecoveryTaskForSubagentChat(agentId);
+  if (recoveryTask) {
+    try {
+      sendSSE('ui_preflight', { message: 'Routing message to paused subagent task...' });
+      const recovery = await handleTaskRecoveryMessage(recoveryTask.id, message, {
+        sourceSessionId: `subagent_chat_${agentId}`,
+        source: 'subagent_chat',
+      });
+      const reply = recovery.reply || '';
+      if (!abortSignal.aborted) {
+        sendSSE('final', { text: reply });
+        sendSSE('done', {
+          reply,
+          recovery: true,
+          taskId: recoveryTask.id,
+          resumed: recovery.resumed,
+          action: recovery.action,
+        });
+      }
+    } catch (err: any) {
+      if (!abortSignal.aborted) sendSSE('error', { message: err.message || 'Task recovery failed' });
+    } finally {
+      requestCompleted = true;
+      finishSubagentChatStream(agentId, retainedStream.streamId);
+      clearInterval(heartbeat);
+      res.end();
+    }
+    return;
+  }
 
   const userMessage = appendSubagentChatMessage(agentId, {
     role: 'user',

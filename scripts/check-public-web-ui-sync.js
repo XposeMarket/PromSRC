@@ -71,7 +71,11 @@ function transformIndexHtml(html) {
   return html
     .replace(/(["'])src\//g, '$1static/')
     .replace(/(["'])\.\/(src)\//g, '$1./static/')
-    .replace(/(EXTRACTED to )src\//g, '$1static/');
+    .replace(/(EXTRACTED to )src\//g, '$1static/')
+    .replace(
+      '</head>',
+      '<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>\n</head>',
+    );
 }
 
 function compareBuffer(expectedPath, actualPath, expectedBuffer) {

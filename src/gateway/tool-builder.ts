@@ -132,7 +132,6 @@ const SOURCE_WRITE_TOOL_NAMES = new Set([
 	  'delete_lines_webui_source', 'write_webui_source', 'delete_webui_source',
 	  'find_replace_prom', 'replace_lines_prom', 'insert_after_prom',
 	  'delete_lines_prom', 'write_prom_file', 'delete_prom_file',
-	  'request_dev_source_edit', 'update_dev_source_edit', 'await_dev_source_edit_approval',
 	  'prom_apply_dev_changes',
 	]);
 
@@ -549,7 +548,8 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             name: 'subagent_spawn',
             description:
               'Spawn a child agent in an isolated session to handle a parallel subtask. ' +
-              'The current task pauses until ALL spawned children complete. ' +
+              'Use only when the current task must wait for the child result before it can continue. ' +
+              'For ASAP, urgent, time-sensitive, or independent parallel work, use background_spawn instead so the current task can continue without waiting. ' +
               'Do NOT call this recursively from inside a child task.',
             parameters: {
               type: 'object',

@@ -20,6 +20,7 @@ type MemoryIndexSourceType =
   | 'memory_root'
   | 'memory_note'
   | 'obsidian_note'
+  | 'workspace_file'
   | 'audit_misc';
 
 type RecordItem = {
@@ -1298,7 +1299,7 @@ export function getSqliteMemoryGraphSnapshot(workspacePath: string): { generated
   if (!db) return null;
   try {
     const nodeRows = db.prepare(`
-      SELECT id, layer, type, title, source_type, source_path, project_id, durability, timestamp_ms, day, authority, status
+      SELECT id, layer, type, title, summary, source_type, source_path, project_id, durability, timestamp_ms, day, authority, status
       FROM memory_records
       ORDER BY timestamp_ms DESC
       LIMIT 12000
@@ -1322,6 +1323,7 @@ export function getSqliteMemoryGraphSnapshot(workspacePath: string): { generated
         sourceType: row.source_type,
         sourcePath: row.source_path,
         title: row.title,
+        summary: row.summary || '',
         timestamp: new Date(Number(row.timestamp_ms || 0)).toISOString(),
         day: row.day,
         projectId: row.project_id || null,

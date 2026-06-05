@@ -127,10 +127,74 @@ let nativeBrowserRpcPort = 0;
 let isQuitting          = false;
 let gatewayShuttingDown = false;
 let pendingUpdate       = null;  // holds UpdateInfo once a release is downloaded
+let updaterStatus       = autoUpdater ? 'idle' : 'unsupported';
+let updaterMessage      = autoUpdater ? '' : 'Updates are available only in packaged public builds.';
+let updaterChecking     = false;
+let updaterInstalling   = false;
+let updaterProgress     = 0;
 let isGatewayRestarting = false;
 const GATEWAY_RESTART_EXIT_CODE = 42;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
+
+function getUpdaterState(extra = {}) {
+  return {
+    supported: !!autoUpdater,
+    status: updaterStatus,
+    message: updaterMessage,
+    progress: updaterProgress,
+    version: pendingUpdate && pendingUpdate.version ? pendingUpdate.version : '',
+    releaseName: pendingUpdate && pendingUpdate.releaseName ? pendingUpdate.releaseName : '',
+    releaseNotes: pendingUpdate && typeof pendingUpdate.releaseNotes === 'string' ? pendingUpdate.releaseNotes : '',
+    ...extra,
+  };
+}
+
+function sendUpdaterState(extra = {}) {
+  const state = getUpdaterState(extra);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('updater-state', state); } catch {}
+  }
+  return state;
+}
+
+async function checkForPrometheusUpdates(source = 'manual') {
+  if (!autoUpdater) {
+    updaterStatus = 'unsupported';
+    updaterMessage = 'Updates are available only in packaged public builds.';
+    return sendUpdaterState({ source });
+  }
+  if (updaterInstalling) return sendUpdaterState({ source });
+  if (pendingUpdate) {
+    updaterStatus = 'ready';
+    updaterMessage = 'Update downloaded and ready to install.';
+    return sendUpdaterState({ source });
+  }
+  if (updaterChecking) return sendUpdaterState({ source });
+
+  updaterChecking = true;
+  updaterStatus = 'checking';
+  updaterMessage = 'Checking for the latest Prometheus release...';
+  updaterProgress = 0;
+  sendUpdaterState({ source });
+
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    if (!result || !result.updateInfo) {
+      updaterStatus = 'idle';
+      updaterMessage = 'Prometheus is up to date.';
+      return sendUpdaterState({ source });
+    }
+    return sendUpdaterState({ source });
+  } catch (e) {
+    updaterStatus = 'error';
+    updaterMessage = e && e.message ? e.message : 'Update check failed.';
+    console.error('[Updater] checkForUpdates failed:', updaterMessage);
+    return sendUpdaterState({ source });
+  } finally {
+    updaterChecking = false;
+  }
+}
 
 // ─── Native in-house browser: profile-keyed multi-view registry ──────────────
 // Each "profile" is an isolated, on-disk Electron session partition (its own
@@ -721,6 +785,13 @@ function wireNativeViewEvents(view, partition) {
   const wc = view.webContents;
   const meta = nativeViewMeta(view);
   const onUpdate = () => { if (partition === presentedNativePartition) broadcastNativeBrowserState(); };
+  // DEBUG: surface the in-house view's console (incl. preload) to the main log.
+  wc.on('console-message', (_e, level, message) => {
+    if (String(message || '').includes('[inhouse-preload]')) writeGatewayLog(`[main][inhouse-view] ${message}\n`);
+  });
+  wc.on('preload-error', (_e, preloadPath, error) => {
+    writeGatewayLog(`[main][inhouse-preload-error] ${preloadPath}: ${error && error.message ? error.message : error}\n`);
+  });
   wc.setWindowOpenHandler(({ url }) => {
     if (url) wc.loadURL(url).catch((err) => { meta.lastError = err?.message || String(err); onUpdate(); });
     return { action: 'deny' };
@@ -751,6 +822,7 @@ function ensureNativeBrowserView(sessionId = '', profileId = '') {
     contextIsolation: true,
     sandbox: true,
     webSecurity: true,
+    preload: path.join(__dirname, 'inhouse-browser-preload.js'),
   };
   view = WebContentsView
     ? new WebContentsView({ webPreferences })
@@ -864,6 +936,20 @@ async function navigateNativeBrowserSurface({ action = '', url = '', sessionId =
     throw new Error(`Unsupported native browser navigation action "${normalized || 'unknown'}".`);
   }
   return emitNativeSessionState(sessionId, view, partition);
+}
+
+// Toggle Teach-mode click capture inside the in-house view's preload. When on,
+// the user's clicks are intercepted (not performed) and reported back so the
+// renderer can stage a Teach step.
+function setNativeBrowserTeachCapture({ sessionId = '', enabled = false } = {}) {
+  try {
+    const { wc } = requireNativeViewForSession(sessionId);
+    wc.send('prometheus-teach-capture', !!enabled);
+    writeGatewayLog(`[main] teach-capture set enabled=${!!enabled} sessionId=${sessionId}\n`);
+  } catch (err) {
+    writeGatewayLog(`[main] teach-capture FAILED: ${err && err.message ? err.message : err}\n`);
+  }
+  return { ok: true, enabled: !!enabled };
 }
 
 function stateNativeBrowserSurface({ sessionId = '' } = {}) {
@@ -1225,12 +1311,62 @@ ipcMain.handle('native-browser:focus', async () => {
   return broadcastNativeBrowserState();
 });
 ipcMain.handle('native-browser:state', async () => broadcastNativeBrowserState());
+ipcMain.handle('native-browser:teach-capture', async (_event, options = {}) => setNativeBrowserTeachCapture(options));
 
-ipcMain.on('install-update', () => {
-  if (autoUpdater && pendingUpdate) {
-    isQuitting = true;
-    autoUpdater.quitAndInstall(false, true); // isSilent=false, isForceRunAfter=true
+// Relay Teach capture events from the in-house view's preload to the Prometheus
+// renderer, tagged with the presented session so the right Teach session records.
+ipcMain.on('prometheus-teach-click', (_event, payload = {}) => {
+  writeGatewayLog(`[main] teach-click relayed selector=${payload && payload.selector} -> session=${nativeBrowserState.sessionId}\n`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('native-browser-teach-click', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
   }
+});
+ipcMain.on('prometheus-teach-hover', (_event, payload = {}) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('native-browser-teach-hover', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
+  }
+});
+ipcMain.on('prometheus-teach-fill', (_event, payload = {}) => {
+  writeGatewayLog(`[main] teach-fill relayed selector=${payload && payload.selector}\n`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('native-browser-teach-fill', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
+  }
+});
+ipcMain.on('prometheus-teach-key', (_event, payload = {}) => {
+  writeGatewayLog(`[main] teach-key relayed key=${payload && payload.key}\n`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('native-browser-teach-key', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
+  }
+});
+ipcMain.on('prometheus-teach-scroll', (_event, payload = {}) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('native-browser-teach-scroll', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
+  }
+});
+
+ipcMain.handle('updater:get-state', () => getUpdaterState());
+
+ipcMain.handle('updater:check', async () => checkForPrometheusUpdates('manual'));
+
+ipcMain.handle('updater:install', async () => {
+  if (!autoUpdater) {
+    updaterStatus = 'unsupported';
+    updaterMessage = 'Updates are available only in packaged public builds.';
+    return sendUpdaterState();
+  }
+  if (updaterInstalling) return sendUpdaterState();
+  if (!pendingUpdate) {
+    return checkForPrometheusUpdates('install');
+  }
+
+  updaterInstalling = true;
+  updaterStatus = 'installing';
+  updaterMessage = 'Closing Prometheus to install the update...';
+  sendUpdaterState();
+
+  isQuitting = true;
+  autoUpdater.quitAndInstall(false, true); // isSilent=false, isForceRunAfter=true
+  return getUpdaterState();
 });
 
 // ─── Main Window ───────────────────────────────────────────────────────────
@@ -1281,20 +1417,50 @@ function createWindow() {
 function setupAutoUpdater() {
   if (!autoUpdater) return;
 
+  autoUpdater.on('checking-for-update', () => {
+    updaterStatus = 'checking';
+    updaterMessage = 'Checking for the latest Prometheus release...';
+    updaterProgress = 0;
+    sendUpdaterState();
+  });
+
   autoUpdater.on('update-available', (info) => {
     console.log(`[Updater] Update available: v${info.version}`);
-    // Start download automatically (autoDownload=true handles this)
+    updaterStatus = 'downloading';
+    updaterMessage = `Downloading Prometheus ${info.version || 'update'}...`;
+    updaterProgress = 0;
+    sendUpdaterState({
+      version: info.version || '',
+      releaseName: info.releaseName || (info.version ? `v${info.version}` : ''),
+      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
+    });
+    // Start download automatically (autoDownload=true handles this).
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    pendingUpdate = null;
+    updaterStatus = 'idle';
+    updaterMessage = 'Prometheus is up to date.';
+    updaterProgress = 0;
+    sendUpdaterState();
   });
 
   autoUpdater.on('download-progress', (progress) => {
+    updaterStatus = 'downloading';
+    updaterMessage = 'Downloading update...';
+    updaterProgress = Math.max(0, Math.min(100, Math.round(progress.percent || 0)));
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-download-progress', Math.round(progress.percent));
+      mainWindow.webContents.send('update-download-progress', updaterProgress);
     }
+    sendUpdaterState();
   });
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log(`[Updater] Update downloaded: v${info.version} — ready to install`);
     pendingUpdate = info;
+    updaterStatus = 'ready';
+    updaterMessage = 'Update downloaded and ready to install.';
+    updaterProgress = 100;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-ready', {
         version:     info.version,
@@ -1302,19 +1468,23 @@ function setupAutoUpdater() {
         releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
       });
     }
+    sendUpdaterState();
   });
 
   autoUpdater.on('error', (err) => {
     console.error('[Updater] Error:', err.message);
+    updaterStatus = 'error';
+    updaterMessage = err && err.message ? err.message : 'Update check failed.';
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-error', err.message);
+      mainWindow.webContents.send('update-error', updaterMessage);
     }
+    sendUpdaterState();
   });
 
   // Delay the first check so it doesn't race with gateway startup.
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((e) => {
-      console.error('[Updater] checkForUpdates failed:', e.message);
+    checkForPrometheusUpdates('startup').catch((e) => {
+      console.error('[Updater] startup check failed:', e.message);
     });
   }, 10_000); // 10s after app is ready
 }

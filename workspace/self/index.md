@@ -1,6 +1,6 @@
 # SELF — Prometheus Self-Reference (Split Index)
 
-Last verified against `src/`, `web-ui/`, route/tool definitions, batch read/patchset file tools, dev-source verification profiles/auto-narrow `prom_apply_dev_changes verify_only`, config defaults, command policy/approval surfaces, current package metadata, provider-aware context budgeting, rolling/mid-workflow compaction, tool observation injection, Brain runner skill-curator behavior, Hub/chat context UI, voice-agent/mobile dictation routing/direct voice tool wrappers, OpenAI/xAI realtime voice integration, the desktop web UI source/generated route/component surface, and the Prometheus Mobile PWA/gateway route surface on: 2026-05-30
+Last verified against `src/`, `web-ui/`, route/tool definitions, batch read/patchset file tools, web search/fetch/batch-fetch tool definitions, dev-source verification profiles/auto-narrow `prom_apply_dev_changes verify_only`, config defaults, command policy/approval surfaces, current package metadata, provider-aware context budgeting, rolling/mid-workflow compaction, tool observation injection, Brain runner skill-curator behavior, Hub/chat context UI, voice-agent/mobile dictation routing/direct voice tool wrappers, OpenAI/xAI realtime voice integration, mobile Realtime camera snapshot/video-frame capture and visual input handling, mobile camera-roll video attachments, the desktop web UI source/generated route/component surface, the Prometheus Mobile PWA/gateway route surface, and channel completion notification bridge wiring on: 2026-06-05
 Workspace: `D:\Prometheus\workspace`
 Project root: `D:\Prometheus`
 
@@ -46,12 +46,14 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
 | 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
 | 35 | Onboarding System, Replay, Dev Test, Migration Boundary | [19-onboarding-system.md](19-onboarding-system.md) |
+| Feature Index | Product/feature catalog for copy, launch posts, onboarding, and capability lookup | [feature-index/README.md](feature-index/README.md) |
 
 Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.
 
-> CRITICAL realtime gotchas (two stacked bugs, both fixed 2026-06-03 — see §12A-CRITICAL and §12A-2 of [06-image-voice.md](06-image-voice.md)):
+> CRITICAL realtime gotchas (OpenAI/xAI mobile voice + visual input sharp edges — see §12A-CRITICAL, §12A-2, and §12A-3 of [06-image-voice.md](06-image-voice.md)):
 > 1. AUTH/500: OpenAI Realtime 500s ("Internal Server Error") on Codex OAuth because the realtime CALL endpoint needs a real platform api_key (raw OAuth bearer gets 403 on `/v1/models`). The api_key is minted by exchanging the OAuth **id_token**, which needs an `organization_id` claim — only on a FRESH LOGIN that does NOT send `codex_cli_simplified_flow=true` in `startOAuthFlow`. Working logs show `auth: 'openai_codex_oauth_api_key'`.
 > 2. NO INPUT (after auth fixed): session connects + soundwaves animate but no transcription/audio because the OpenAI WebRTC path did its OWN `getUserMedia` — a SECOND iOS mic capture that comes back silent. Fix: reuse the shared warm mic (`_ensureMobileXaiRealtimeMic()`/`__pmVoice.warmMicStream`) like xAI does; never open a second concurrent `getUserMedia` on iOS.
+> 3. VISUAL INPUTS (mobile Realtime): camera photos/videos are in-app captures, not native saved photos. OpenAI Realtime visual context must be sent as `conversation.item.create` user messages with `input_image` content parts (`image_url` data URLs plus `detail: "auto"`), aggressively downscaled to fit mobile Safari/WebRTC data-channel limits. Voice-camera captures are staged in the chat bubble and flushed to the next spoken PTT/always-listening turn, or to the typed chat send path when the user types after taking a photo.
 
 ## Operational Runbooks
 

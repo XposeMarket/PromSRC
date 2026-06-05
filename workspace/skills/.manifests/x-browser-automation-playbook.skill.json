@@ -1,8 +1,9 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "version": "2.7.0",
-  "description": "Use this skill for interactive work on X.com — posting, searching/collecting, opening bookmarks/notifications/profile/Grok, liking/bookmarking focused posts, replying, and other live browser actions. Prefer the verified X composite tools first when they fit. For plain X status URLs that the user wants fetched/read, start with web_fetch and answer from that unless more interaction is requested.",
+  "name": "x-browser-automation-playbook",
+  "description": "Use this skill for interactive work on X.com — posting, searching/collecting, opening bookmarks/notifications/profile/Grok, liking/bookmarking focused posts, replying, Grok-via-X OAuth flows, and other live browser actions. Prefer the verified X composite tools first when they fit. For plain X status URLs that the user wants fetched/read, start with web_fetch for one URL or web_fetch_batch for several URLs and answer from that unless more interaction is requested.",
+  "version": "2.7.1",
   "triggers": [
     "post on x",
     "tweet this",
@@ -19,6 +20,10 @@
     "open x notifications",
     "open x profile",
     "open x grok",
+    "grok via x",
+    "log in to grok via x",
+    "x oauth grok",
+    "grok release thread",
     "fetch this x post",
     "read this tweet url",
     "pull this x thread",
@@ -39,6 +44,19 @@
     "web",
     "composite_tools"
   ],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": []
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
   "toolBinding": {
     "requiredTools": [
       "browser_automation",
@@ -51,7 +69,8 @@
     ],
     "defaultWorkflow": [
       "For explicit X posting/search/open-page/focused-like/focused-bookmark requests, use the verified x_* composite tools first when available.",
-      "For plain X post/thread URL reading, use web_fetch first.",
+      "For Grok login or Grok file-upload work, prefer X/Grok OAuth routing when anonymous grok.com blocks the task, then continue from the existing Grok-via-X example.",
+      "For plain X post/thread URL reading, use web_fetch first for one URL and web_fetch_batch first for several URLs.",
       "Fallback to manual visual-first browser automation only when the composite does not fit or fails."
     ],
     "canSpawnSubagents": false
@@ -62,5 +81,9 @@
     "shell": false,
     "externalSideEffects": true
   },
+  "status": "ready",
+  "lifecycle": "active",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
   "id": "x-browser-automation-playbook"
 }

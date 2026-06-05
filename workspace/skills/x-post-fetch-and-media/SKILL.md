@@ -16,6 +16,8 @@ The rule is simple:
 
 If `web_fetch` returns the post/thread cleanly, that is the job. Do not add extra retrieval steps unless the user explicitly asks for something beyond the fetched content.
 
+If the user provides several X status URLs and wants each inspected, use `web_fetch_batch` with those exact URLs. Interpret each per-URL result independently; one blocked/deleted post does not invalidate the others.
+
 ---
 
 ## What This Skill Is For
@@ -46,6 +48,17 @@ web_fetch({ "url": "https://x.com/<handle>/status/<id>" })
 
 Then answer directly from what comes back.
 
+For multiple X status URLs:
+```json
+web_fetch_batch({
+  "urls": [
+    "https://x.com/<handle>/status/<id>",
+    "https://x.com/<handle>/status/<id>"
+  ],
+  "max_chars": 6000
+})
+```
+
 No browser first.
 No extra media/download flow by default.
 No unnecessary handoff.
@@ -63,6 +76,13 @@ If the user says **"webfetch this"** for an X URL, this skill should be enough o
 3. If it includes `tweets`, treat that as the canonical extracted result
 4. Report the useful fields clearly
 5. Stop unless the user asked for more
+
+### Flow B — Multiple X URLs
+
+1. Run `web_fetch_batch` on the URL list
+2. For each result, inspect whether the embedded payload/text contains captured tweets or a blocker message
+3. Report each URL separately with status: captured, empty/blocker, or fetch error
+4. Do not open X browser tabs unless the user asked for interaction or the batch results are insufficient
 
 ### What to report
 

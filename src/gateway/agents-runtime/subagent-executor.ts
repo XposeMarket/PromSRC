@@ -13,6 +13,11 @@ import { getPolicyEngine } from '../policy';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
 import { executeWebFetch, executeShoppingSearchProducts } from '../../tools/web';
+import { executeMarketLookup } from '../../tools/market';
+import { executeWeatherLookup } from '../../tools/weather';
+import { executeMapLookup } from '../../tools/mapcard';
+import { executeStockLookup } from '../../tools/stocks';
+import { executePolymarketLookup } from '../../tools/polymarket';
 import { executeAgentList, executeAgentInfo } from '../../tools/agent-control';
 import { executeDownloadMedia, executeDownloadUrl } from '../../tools/download-tools';
 import { executeAnalyzeImage, executeAnalyzeVideo } from '../../tools/media-analysis';
@@ -256,6 +261,12 @@ import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirro
 import type { SkillWindow } from '../prompt-context';
 import { isToolHiddenInPublicBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow.js';
+import {
+  createPrometheusQuestionPayload,
+  getPrometheusQuestionQueue,
+  serializePrometheusQuestionForClient,
+  type PrometheusQuestionAnswer,
+} from '../prometheus-questions.js';
 import { findCommandPermissionGrant, type ToolPermissionCandidate } from '../command-permissions';
 import {
   evaluateHardToolDeny,
@@ -2892,6 +2903,207 @@ export async function executeTool(name: string, args: any, workspacePath: string
       result: `Product carousel ready: "${title}" — ${items.length} item(s) will be displayed.`,
       error: false,
       extra: { productCarousel: { title, source, items } },
+    };
+  }
+
+  if (name === 'show_agent_work') {
+    const artifact = {
+      id: `agent_work-${Date.now()}`,
+      type: 'agent_work' as const,
+      mode: (args?.mode as string) || 'snapshot',
+      greeting: args?.greeting ? String(args.greeting) : undefined,
+      title: args?.title ? String(args.title) : undefined,
+      subtitle: args?.subtitle ? String(args.subtitle) : undefined,
+      summaryRows: Array.isArray(args?.summaryRows) ? args.summaryRows : undefined,
+      priorities: Array.isArray(args?.priorities) ? args.priorities : undefined,
+      teams: Array.isArray(args?.teams) ? args.teams : undefined,
+      activeWork: Array.isArray(args?.activeWork) ? args.activeWork : undefined,
+    };
+    const counts = [
+      artifact.summaryRows?.length ? `${artifact.summaryRows.length} summary` : '',
+      artifact.priorities?.length ? `${artifact.priorities.length} priorities` : '',
+      artifact.teams?.length ? `${artifact.teams.length} teams` : '',
+      artifact.activeWork?.length ? `${artifact.activeWork.length} active` : '',
+    ].filter(Boolean).join(', ');
+    return {
+      name,
+      args,
+      result: `Agent work snapshot ready${counts ? ` — ${counts}` : ''}.`,
+      error: false,
+      extra: { richArtifacts: [artifact] },
+    };
+  }
+
+  if (name === 'show_sources') {
+    const items = (Array.isArray(args?.items) ? args.items : [])
+      .filter((it: any) => it && (it.title || it.url))
+      .map((it: any) => ({
+        title: String(it.title || it.url || 'Source'),
+        publisher: it.publisher ? String(it.publisher) : undefined,
+        url: it.url ? String(it.url) : undefined,
+        imageUrl: it.imageUrl ? String(it.imageUrl) : undefined,
+        snippet: it.snippet ? String(it.snippet) : undefined,
+        publishedAt: it.publishedAt ? String(it.publishedAt) : undefined,
+        badge: it.badge ? String(it.badge) : undefined,
+      }));
+    if (!items.length) return { name, args, result: 'show_sources requires at least one item with a title or url.', error: true };
+    const artifact = {
+      id: `sources-${Date.now()}`,
+      type: 'sources' as const,
+      title: args?.title ? String(args.title) : undefined,
+      layout: args?.layout === 'list' ? 'list' : 'cards',
+      items,
+    };
+    return {
+      name,
+      args,
+      result: `Sources card ready — ${items.length} source(s).`,
+      error: false,
+      extra: { richArtifacts: [artifact] },
+    };
+  }
+
+  if (name === 'show_market') {
+    const tr = await executeMarketLookup({
+      coins: args?.coins ?? args?.symbols ?? args?.query,
+      vs_currency: args?.vs_currency != null ? String(args.vs_currency) : undefined,
+      sparkline: typeof args?.sparkline === 'boolean' ? args.sparkline : undefined,
+    });
+    return {
+      name,
+      args,
+      result: tr?.stdout || tr?.error || JSON.stringify(tr || {}),
+      error: tr?.success === false,
+      data: tr?.data,
+      extra: tr?.extra,
+    };
+  }
+
+  if (name === 'show_stocks') {
+    const tr = await executeStockLookup({
+      symbols: args?.symbols ?? args?.tickers ?? args?.query,
+      range: args?.range != null ? String(args.range) : undefined,
+    });
+    return {
+      name,
+      args,
+      result: tr?.stdout || tr?.error || JSON.stringify(tr || {}),
+      error: tr?.success === false,
+      data: tr?.data,
+      extra: tr?.extra,
+    };
+  }
+
+  if (name === 'show_weather') {
+    const tr = await executeWeatherLookup({
+      location: args?.location != null ? String(args.location) : undefined,
+      latitude: args?.latitude != null ? Number(args.latitude) : undefined,
+      longitude: args?.longitude != null ? Number(args.longitude) : undefined,
+      unit: args?.unit != null ? String(args.unit) : undefined,
+      days: args?.days != null ? Number(args.days) : undefined,
+    });
+    return {
+      name,
+      args,
+      result: tr?.stdout || tr?.error || JSON.stringify(tr || {}),
+      error: tr?.success === false,
+      data: tr?.data,
+      extra: tr?.extra,
+    };
+  }
+
+  if (name === 'show_comparison') {
+    const columns = (Array.isArray(args?.columns) ? args.columns : [])
+      .map((c: any) => (typeof c === 'string' ? { key: c, label: c } : { key: String(c?.key || c?.label || ''), label: String(c?.label || c?.key || '') }))
+      .filter((c: any) => c.key);
+    const rows = Array.isArray(args?.rows) ? args.rows.filter((r: any) => r && typeof r === 'object') : [];
+    if (!columns.length || !rows.length) return { name, args, result: 'show_comparison requires columns[] and rows[].', error: true };
+    const artifact = {
+      id: `comparison-${Date.now()}`,
+      type: 'comparison' as const,
+      title: args?.title ? String(args.title) : undefined,
+      columns,
+      rows,
+      labelKey: args?.labelKey ? String(args.labelKey) : undefined,
+      highlightColumn: args?.highlightColumn ? String(args.highlightColumn) : undefined,
+    };
+    return { name, args, result: `Comparison table ready — ${rows.length} row(s) × ${columns.length} column(s).`, error: false, extra: { richArtifacts: [artifact] } };
+  }
+
+  if (name === 'show_chart') {
+    const series = (Array.isArray(args?.series) ? args.series : [])
+      .map((s: any) => ({
+        label: s?.label ? String(s.label) : undefined,
+        color: s?.color ? String(s.color) : undefined,
+        points: (Array.isArray(s?.points) ? s.points : [])
+          .map((p: any) => ({ x: p?.x, y: Number(p?.y) }))
+          .filter((p: any) => Number.isFinite(p.y)),
+      }))
+      .filter((s: any) => s.points.length);
+    if (!series.length) return { name, args, result: 'show_chart requires series[] with points[].', error: true };
+    const artifact = {
+      id: `chart-${Date.now()}`,
+      type: 'chart' as const,
+      title: args?.title ? String(args.title) : undefined,
+      chartType: ['line', 'bar', 'area'].includes(String(args?.chartType)) ? String(args.chartType) : 'line',
+      series,
+      xLabel: args?.xLabel ? String(args.xLabel) : undefined,
+      yLabel: args?.yLabel ? String(args.yLabel) : undefined,
+      unit: args?.unit ? String(args.unit) : undefined,
+    };
+    return { name, args, result: `Chart ready — ${series.length} series.`, error: false, extra: { richArtifacts: [artifact] } };
+  }
+
+  if (name === 'show_run_result') {
+    const files = (Array.isArray(args?.files) ? args.files : [])
+      .map((f: any) => (typeof f === 'string' ? { path: f } : { path: String(f?.path || ''), label: f?.label ? String(f.label) : undefined }))
+      .filter((f: any) => f.path);
+    const links = (Array.isArray(args?.links) ? args.links : [])
+      .map((l: any) => ({ label: String(l?.label || l?.href || 'Link'), href: String(l?.href || '') }))
+      .filter((l: any) => l.href);
+    const artifact = {
+      id: `run_result-${Date.now()}`,
+      type: 'run_result' as const,
+      title: String(args?.title || 'Task complete'),
+      taskId: args?.taskId ? String(args.taskId) : undefined,
+      status: args?.status ? String(args.status) : undefined,
+      summary: args?.summary ? String(args.summary) : undefined,
+      files: files.length ? files : undefined,
+      links: links.length ? links : undefined,
+    };
+    return { name, args, result: `Run result card ready: "${artifact.title}".`, error: false, extra: { richArtifacts: [artifact] } };
+  }
+
+  if (name === 'show_prediction_market') {
+    const tr = await executePolymarketLookup({
+      query: args?.query != null ? String(args.query) : undefined,
+      slug: args?.slug != null ? String(args.slug) : undefined,
+      limit: args?.limit != null ? Number(args.limit) : undefined,
+    });
+    return {
+      name,
+      args,
+      result: tr?.stdout || tr?.error || JSON.stringify(tr || {}),
+      error: tr?.success === false,
+      data: tr?.data,
+      extra: tr?.extra,
+    };
+  }
+
+  if (name === 'show_map') {
+    const tr = await executeMapLookup({
+      markers: Array.isArray(args?.markers) ? args.markers : [],
+      center: args?.center,
+      zoom: args?.zoom != null ? Number(args.zoom) : undefined,
+      title: args?.title != null ? String(args.title) : undefined,
+    });
+    return {
+      name,
+      args,
+      result: tr?.stdout || tr?.error || JSON.stringify(tr || {}),
+      error: tr?.success === false,
+      data: tr?.data,
+      extra: tr?.extra,
     };
   }
 
@@ -9067,7 +9279,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
           include_metadata: typeof args.include_metadata === 'boolean' ? args.include_metadata : undefined,
+          include_images: typeof args.include_images === 'boolean' ? args.include_images : undefined,
           metadata_timeout_ms: args.metadata_timeout_ms != null ? Number(args.metadata_timeout_ms) : undefined,
+          image_timeout_ms: args.image_timeout_ms != null ? Number(args.image_timeout_ms) : undefined,
         }) as any;
         return {
           name,
@@ -14386,6 +14600,199 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (getExtensionRuntimeRegistry().getTool(name)) {
           const extensionResult = await getExtensionRuntimeRegistry().executeTool(name, args);
           return { name, args, ...extensionResult };
+        }
+
+        if (name === 'ask_prometheus_questions' || name === 'await_prometheus_question_response') {
+          const questionQueue = getPrometheusQuestionQueue();
+          const activeTask = resolveTaskForSession(sessionId);
+          const activeTaskId = String(activeTask?.id || '').trim() || undefined;
+
+          if (name === 'await_prometheus_question_response') {
+            const questionId = String(args?.question_id || args?.questionId || '').trim();
+            if (!questionId) {
+              return { name, args, result: 'await_prometheus_question_response requires question_id.', error: true };
+            }
+            const existing = questionQueue.get(questionId);
+            if (!existing) {
+              return { name, args, result: `Prometheus question ${questionId} not found.`, error: true };
+            }
+            if (existing.sessionId !== sessionId) {
+              return { name, args, result: 'Cannot await a Prometheus question from a different session.', error: true };
+            }
+            if (existing.status !== 'pending') {
+              if (existing.status === 'answered') {
+                return {
+                  name,
+                  args,
+                  result: `Prometheus question ${questionId} was already answered.\n${JSON.stringify({ answers: existing.answers || [], generalOther: existing.generalOther || '' }, null, 2)}`,
+                  data: { question_id: questionId, answers: existing.answers || [], generalOther: existing.generalOther || '' },
+                  error: false,
+                };
+              }
+              return { name, args, result: `Prometheus question ${questionId} is ${existing.status}.`, error: true };
+            }
+
+            const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }>((resolve) => {
+              let settled = false;
+              const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }) => {
+                if (settled) return;
+                settled = true;
+                questionQueue.clearSteerCallback(questionId);
+                resolve(value);
+              };
+              questionQueue.onResolve(questionId, (answerPayload) => safeResolve(answerPayload));
+              questionQueue.onSteer(questionId, (steerMessage) => safeResolve({ steerInterrupt: steerMessage }));
+            });
+
+            if ('steerInterrupt' in waitResult) {
+              try {
+                deps.broadcastWS({ type: 'question_steer_interrupt', sessionId, questionId, steerMessage: waitResult.steerInterrupt.slice(0, 500) });
+              } catch {}
+              return {
+                name,
+                args,
+                result:
+                  `[STEER RECEIVED WHILE WAITING FOR PROMETHEUS QUESTION]\n` +
+                  `Steer message: "${waitResult.steerInterrupt}"\n\n` +
+                  `Question ${questionId} is still pending. Address the steer, then call await_prometheus_question_response(question_id: "${questionId}") to resume waiting.`,
+                error: false,
+              };
+            }
+
+            return {
+              name,
+              args,
+              result: `Prometheus question ${questionId} answered.\n${JSON.stringify(waitResult, null, 2)}`,
+              data: { question_id: questionId, ...waitResult },
+              error: false,
+            };
+          }
+
+          let payload;
+          try {
+            const origin = inferApprovalOrigin(sessionId, activeTask, args);
+            payload = createPrometheusQuestionPayload({
+              sessionId,
+              taskId: activeTaskId,
+              agentId: inferAgentIdFromSession(sessionId, args),
+              originType: origin.originType === 'proposal' ? 'unknown' : origin.originType,
+              originLabel: origin.originLabel,
+              title: args?.title,
+              prompt: args?.prompt || args?.message || args?.question,
+              context: args?.context || args?.reason,
+              questions: args?.questions,
+              allowGeneralOther: args?.allow_general_other ?? args?.allowGeneralOther,
+              ttlMs: args?.ttl_ms || args?.ttlMs,
+            });
+          } catch (err: any) {
+            return { name, args, result: `ask_prometheus_questions error: ${err.message || err}`, error: true };
+          }
+
+          if (activeTaskId) {
+            updateTaskStatus(activeTaskId, 'needs_assistance', { pauseReason: 'awaiting_prometheus_question_response' });
+            appendJournal(activeTaskId, {
+              type: 'pause',
+              content: `Waiting for Prometheus question response: ${payload.title.slice(0, 220)}`,
+            });
+          }
+
+          const question = questionQueue.create(payload);
+          try {
+            appendAuditEntry({
+              timestamp: new Date().toISOString(),
+              sessionId,
+              agentId: inferAgentIdFromSession(sessionId, args),
+              actionType: 'tool_executed' as any,
+              toolName: name,
+              toolArgs: { question_id: question.id, title: question.title, prompt: question.prompt, questions: question.questions },
+              policyTier: 'propose',
+              approvalStatus: 'auto_allowed' as any,
+              resultSummary: `Queued Prometheus question ${question.id}`,
+            });
+          } catch {}
+
+          try {
+            deps.broadcastWS({
+              type: 'question_created',
+              sessionId,
+              taskId: activeTaskId,
+              questionId: question.id,
+              summary: question.prompt,
+              question: serializePrometheusQuestionForClient(question),
+            });
+            if (activeTaskId) {
+              deps.broadcastWS({
+                type: 'task_needs_assistance',
+                taskId: activeTaskId,
+                title: activeTask?.title,
+                reason: 'Prometheus question response required',
+                detail: question.prompt,
+              });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
+            }
+          } catch {}
+
+          try {
+            if (deps.telegramChannel?.sendPrometheusQuestion) {
+              await deps.telegramChannel.sendPrometheusQuestion(question);
+            }
+          } catch (err: any) {
+            console.warn('[prometheus_questions] Could not send Telegram question:', err?.message || err);
+          }
+
+          const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }>((resolve) => {
+            let settled = false;
+            const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }) => {
+              if (settled) return;
+              settled = true;
+              questionQueue.clearSteerCallback(question.id);
+              resolve(value);
+            };
+            questionQueue.onResolve(question.id, (answerPayload) => safeResolve(answerPayload));
+            questionQueue.onSteer(question.id, (steerMessage) => safeResolve({ steerInterrupt: steerMessage }));
+          });
+
+          if ('steerInterrupt' in waitResult) {
+            try {
+              deps.broadcastWS({ type: 'question_steer_interrupt', sessionId, questionId: question.id, steerMessage: waitResult.steerInterrupt.slice(0, 500) });
+            } catch {}
+            return {
+              name,
+              args,
+              result:
+                `[STEER RECEIVED WHILE WAITING FOR PROMETHEUS QUESTION]\n` +
+                `Steer message: "${waitResult.steerInterrupt}"\n\n` +
+                `Question ${question.id} is still pending. Address the steer, then call await_prometheus_question_response(question_id: "${question.id}") to resume waiting.`,
+              error: false,
+            };
+          }
+
+          try {
+            if (activeTaskId) {
+              updateTaskStatus(activeTaskId, 'running', { pauseReason: undefined });
+              appendJournal(activeTaskId, {
+                type: 'resume',
+                content: `Prometheus question answered: ${question.title.slice(0, 220)}`,
+              });
+              deps.broadcastWS({ type: 'task_running', taskId: activeTaskId, title: activeTask?.title });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
+            }
+            deps.broadcastWS({
+              type: 'question_answered',
+              sessionId,
+              taskId: activeTaskId,
+              questionId: question.id,
+              question: serializePrometheusQuestionForClient(questionQueue.get(question.id) || question),
+            });
+          } catch {}
+
+          return {
+            name,
+            args,
+            result: `Prometheus question ${question.id} answered.\n${JSON.stringify(waitResult, null, 2)}`,
+            data: { question_id: question.id, ...waitResult },
+            error: false,
+          };
         }
 
         if (name === 'request_final_action_approval') {

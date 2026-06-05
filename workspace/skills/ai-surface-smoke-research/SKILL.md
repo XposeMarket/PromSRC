@@ -44,7 +44,12 @@ Good topics include `Claude`, `OpenClaw`, `Hermes`, `Codex`, `AI agents`, or any
    - Capture authors, handles, timestamps, text, links, and visible metrics when available.
    - Do not like, reply, repost, bookmark, follow, or post.
 
-5. **Summarize**
+5. **Fallback web research only when browser/social collection is blocked**
+   - If the point of the run is browser execution, do not replace the browser steps preemptively.
+   - If Reddit/X cannot be collected because browser or auth is blocked, use `web_search({ fetch_top_k: 2-4 })` for Reddit/web mentions or `web_fetch_batch` for selected URLs.
+   - Clearly label this as fallback research, separate from the browser/desktop smoke-test result.
+
+6. **Summarize**
    - Report after the actual tool sequence completes.
    - Keep it concise unless Raul asks for depth.
    - Include: surfaces tested, app focus result, source highlights, and a short read on the AI chatter.

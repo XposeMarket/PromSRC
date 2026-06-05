@@ -1,7 +1,7 @@
 import { ToolResult } from '../types.js';
 import { shellTool } from './shell.js';
 import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool } from './files.js';
-import { webSearchTool, webSearchSingleTool, webSearchMultiTool, webFetchTool, shoppingSearchProductsTool } from './web.js';
+import { webSearchTool, webSearchSingleTool, webSearchMultiTool, webFetchTool, webFetchBatchTool, shoppingSearchProductsTool } from './web.js';
 import { allSkillTools } from './skills.js';
 import { timeNowTool } from './time.js';
 import { personaReadTool, personaUpdateTool } from './persona.js';
@@ -268,6 +268,7 @@ class ToolRegistry {
     this.registerSafe(webSearchMultiTool);
     this.registerSafe(shoppingSearchProductsTool);
     this.registerSafe(webFetchTool);
+    this.registerSafe(webFetchBatchTool);
     // Memory tools are provided by the subagent runtime executor
     // (memory_browse, memory_write, memory_read over USER.md/SOUL.md/MEMORY.md).
     // Time tool (system clock — no network)

@@ -23,6 +23,8 @@ import {
 export interface ConnectorToolResult {
   result: string;
   error: boolean;
+  extra?: Record<string, any>;
+  data?: Record<string, any>;
 }
 
 function notConnected(name: string): ConnectorToolResult {
@@ -37,6 +39,95 @@ function ok(data: any): ConnectorToolResult {
 function summarizeEmails(messages: any[]): string {
   if (!messages.length) return 'No emails found.';
   return messages.map((m: any) => `• [${m.id}] ${m.subject} | from: ${m.from} | ${m.date}\n  ${m.snippet}`).join('\n');
+}
+
+function splitEmailList(value: any): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeEmailAttachments(value: any): any[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const path = String(item.path || item.filePath || item.workspacePath || '').trim();
+      const name = String(item.name || item.filename || (path ? path.split(/[\\/]/).pop() : '') || `Attachment ${index + 1}`).trim();
+      if (!name && !path) return null;
+      return {
+        id: String(item.id || `att-${index + 1}`),
+        name,
+        path: path || undefined,
+        mimeType: item.mimeType ? String(item.mimeType) : undefined,
+        size: Number.isFinite(Number(item.size)) ? Number(item.size) : undefined,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getGmailAccountEmail(gmail: GmailConnector): string | undefined {
+  try {
+    const tokens = (gmail as any)?.loadTokens?.();
+    return tokens?.account_email ? String(tokens.account_email) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildEmailComposerArtifact(gmail: GmailConnector, args: any, state: { mode: 'draft' | 'sent'; status: 'draft' | 'sent' | 'failed'; sent?: { id?: string; threadId?: string }; error?: string }) {
+  const now = new Date().toISOString();
+  const subject = String(args.subject || '').trim();
+  const to = splitEmailList(args.to);
+  const cc = splitEmailList(args.cc);
+  const bcc = splitEmailList(args.bcc);
+  const body = String(args.body || '');
+  const idSeed = [
+    state.mode,
+    to.join(','),
+    cc.join(','),
+    bcc.join(','),
+    subject,
+    body.slice(0, 80),
+    Date.now(),
+  ].join('|');
+  const id = `email-${Math.abs(idSeed.split('').reduce((hash, ch) => ((hash << 5) - hash + ch.charCodeAt(0)) | 0, 0))}-${Date.now()}`;
+  return {
+    id,
+    type: 'email_composer',
+    provider: 'gmail',
+    mode: state.mode,
+    status: state.status,
+    title: state.mode === 'sent' ? 'Email sent' : 'Email draft',
+    subtitle: to.length ? `To ${to.join(', ')}` : 'Ready to address',
+    source: 'Gmail',
+    accountEmail: getGmailAccountEmail(gmail),
+    to,
+    cc,
+    bcc,
+    subject,
+    body,
+    htmlBody: args.html_body ? String(args.html_body) : undefined,
+    attachments: normalizeEmailAttachments(args.attachments),
+    messageId: state.sent?.id,
+    threadId: state.sent?.threadId,
+    createdAt: now,
+    sentAt: state.mode === 'sent' ? now : undefined,
+    error: state.error,
+  };
+}
+
+function emailComposerResult(summary: string, artifact: any): ConnectorToolResult {
+  return {
+    result: summary,
+    error: false,
+    extra: { richArtifacts: [artifact] },
+    data: { richArtifacts: [artifact] },
+  };
 }
 
 export async function handleConnectorTool(toolName: string, args: any): Promise<ConnectorToolResult> {
@@ -107,9 +198,15 @@ export async function handleConnectorTool(toolName: string, args: any): Promise<
         return ok(`Subject: ${msg.subject}\nFrom: ${msg.from}\nDate: ${msg.date}\n\n${msg.body || msg.snippet}`);
       }
 
+      if (toolName === 'connector_gmail_prepare_email') {
+        const artifact = buildEmailComposerArtifact(gmail, args, { mode: 'draft', status: 'draft' });
+        return emailComposerResult('Email draft prepared. Show the user the composer so they can edit or send it.', artifact);
+      }
+
       if (toolName === 'connector_gmail_send_email') {
         const sent = await gmail.sendEmail(args.to, args.subject, args.body, args.cc, args.bcc);
-        return ok(`Email sent successfully. Message ID: ${sent.id}, Thread ID: ${sent.threadId}`);
+        const artifact = buildEmailComposerArtifact(gmail, args, { mode: 'sent', status: 'sent', sent });
+        return emailComposerResult(`Email sent successfully. Message ID: ${sent.id}, Thread ID: ${sent.threadId}`, artifact);
       }
 
       if (toolName === 'connector_gmail_get_profile') {

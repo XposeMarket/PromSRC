@@ -26,7 +26,8 @@ Best use cases:
 
 Avoid Browse.sh when:
 
-- The task is a one-off page read that `web_fetch`, `browser_get_page_text`, or `browser_extract_structured` can handle directly.
+- The task is a one-off page read that `web_fetch`, `web_fetch_batch`, `browser_get_page_text`, or `browser_extract_structured` can handle directly.
+- The task is normal source discovery/readback where `web_search({ fetch_top_k })` or `web_fetch_batch` can fetch the relevant pages without browser automation.
 - The user wants local authenticated Chrome continuity and Prometheus browser tools already work.
 - The Browse.sh skill would trigger external actions (buy, book, send, submit) without explicit user approval.
 - The site/task is not represented in Browse.sh and discovery would take longer than native browser inspection.
@@ -42,7 +43,8 @@ Use web research first:
 - Search `browse.sh <domain> <task>`
 - Search `site:browse.sh <domain>`
 - Search `site:github.com/browserbase/skills <domain or task>`
-- Fetch the Browse.sh/catalog/docs/GitHub pages that look relevant.
+- Use `web_search({ fetch_top_k: 2-5 })` when top results are clearly relevant.
+- Otherwise fetch selected Browse.sh/catalog/docs/GitHub pages with `web_fetch_batch`.
 
 Capture:
 
@@ -111,7 +113,7 @@ Convert Browse.sh knowledge into Prometheus-native primitives:
 | `browse network --tail` | `browser_intercept_network` |
 | `browse console --tail` | `inspect_console` |
 | Skill output schema | `browser_extract_structured` schema or skill resource |
-| API skill endpoint | `web_fetch` / connector/API integration when safe |
+| API skill endpoint | `web_fetch`, `web_fetch_batch`, or connector/API integration when safe |
 | Cloud Browserbase session | Future connector/cloud fallback; do not assume available |
 
 ---

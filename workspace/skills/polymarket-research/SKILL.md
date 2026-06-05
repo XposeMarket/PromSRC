@@ -30,9 +30,15 @@ This Prometheus skill is adapted from the Hermes Agent bundled skill `skills/res
 3. **Data API** — `https://data-api.polymarket.com`
    - Recent trades and open interest.
 
-## Default Workflow
+## Visual card: `show_prediction_market`
 
-When asked for odds or probabilities:
+For the common "what are the odds of X" / "show me the markets" request, just call the **`show_prediction_market`** tool (`query`, optional `slug`, optional `limit`). It hits the same keyless Gamma API and renders a native prediction-market card — questions with outcome probability bars, volume, and close date — on desktop and mobile. Lead with the card, then add a one-line takeaway.
+
+Drop to the manual API workflow below only when you need depth this card doesn't show: orderbook, midpoint/spread, price history, recent trades, or open interest.
+
+## Default Workflow (manual / depth)
+
+When asked for odds or probabilities and the card isn't enough:
 
 1. Search Gamma using `GET /public-search?q=QUERY`.
 2. Parse events and nested markets.
@@ -57,6 +63,8 @@ Example:
 Preferred lightweight path:
 
 - Use `web_fetch` on direct API URLs when you only need JSON text.
+- Use `web_fetch_batch` when comparing several Gamma/CLOB/Data API URLs or checking multiple related markets in one pass.
+- Use `web_search({ fetch_top_k })` only for surrounding news/context; do not treat search snippets as market data.
 - For richer repeated use, run or adapt the local helper from the downloaded Hermes repo:
   - `oss agents/hermes-agent/skills/research/polymarket/scripts/polymarket.py`
   - Commands include `search`, `trending`, `market`, `event`, `price`, `book`, `history`, `trades`.

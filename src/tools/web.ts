@@ -31,6 +31,7 @@ type ShoppingProductResult = {
   id: string;
   title: string;
   price?: string;
+  listPrice?: string;
   description?: string;
   rating?: number;
   reviews?: number;
@@ -38,6 +39,7 @@ type ShoppingProductResult = {
   tag?: string;
   badge?: string;
   imageUrl?: string;
+  imagePath?: string;
   productUrl: string;
   merchant?: string;
   confidence?: number;
@@ -940,7 +942,14 @@ async function searchDDGHtml(query: string, limit: number): Promise<ToolResult> 
 }
 
 // ── Main web_search tool ──────────────────────────────────────────────────────
-export async function executeWebSearch(args: { query: string; max_results?: number; multi_engine?: boolean; provider?: SearchProviderOption }): Promise<ToolResult> {
+export async function executeWebSearch(args: {
+  query: string;
+  max_results?: number;
+  multi_engine?: boolean;
+  provider?: SearchProviderOption;
+  fetch_top_k?: number;
+  fetch_max_chars?: number;
+}): Promise<ToolResult> {
   if (!args.query?.trim()) return { success: false, error: 'query is required' };
   let limit = Math.min(args.max_results ?? 5, 10);
   if (isPriceQuery(args.query)) limit = Math.max(limit, 5);
@@ -1014,7 +1023,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
           ? `\n[Successful engines: ${usedProviders.join('+')}]\n`
           : '';
         const failedLine = failedProviders.length ? `\n[Failed engines: ${failedProviders.join(' | ')}]\n` : '';
-        return {
+        return maybeAttachFetchedSearchResults({
           success: true,
           data: {
             results: capped,
@@ -1025,7 +1034,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
             search_diagnostics: diagnostics,
           },
           stdout: `[Multi-engine: ${attemptedProviders.join('+')}]${successLine}${failedLine}\n` + lines.join('\n\n'),
-        };
+        }, args);
       }
       // fall through to single-engine if all parallel calls failed
     }
@@ -1074,7 +1083,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
         });
         diagnostics.selected_provider = 'tinyfish';
         res.data = { ...(res.data || {}), provider: 'tinyfish', search_diagnostics: diagnostics };
-        return res;
+        return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'tavily') {
         const res = await searchTavily(args.query, limit, cfg.tavilyKey as string);
@@ -1088,7 +1097,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
         });
         diagnostics.selected_provider = 'tavily';
         res.data = { ...(res.data || {}), provider: 'tavily', search_diagnostics: diagnostics };
-        return res;
+        return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'google') {
         const res = await searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string);
@@ -1102,7 +1111,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
         });
         diagnostics.selected_provider = 'google';
         res.data = { ...(res.data || {}), provider: 'google', search_diagnostics: diagnostics };
-        return res;
+        return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'brave') {
         const res = await searchBrave(args.query, limit, cfg.braveKey as string);
@@ -1116,7 +1125,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
         });
         diagnostics.selected_provider = 'brave';
         res.data = { ...(res.data || {}), provider: 'brave', search_diagnostics: diagnostics };
-        return res;
+        return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'xai') {
         const res = await searchXAI(args.query, limit);
@@ -1129,7 +1138,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
         });
         diagnostics.selected_provider = 'xai';
         res.data = { ...(res.data || {}), provider: 'xai', search_diagnostics: diagnostics };
-        return res;
+        return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'ddg') {
         const res = await searchDDG(args.query, limit);
@@ -1153,7 +1162,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
           });
           diagnostics.selected_provider = 'ddg';
           res.data = { ...(res.data || {}), provider: 'ddg', search_diagnostics: diagnostics };
-          return res;
+          return maybeAttachFetchedSearchResults(res, args);
         }
       }
     } catch (err) {
@@ -1194,7 +1203,7 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
     });
     diagnostics.selected_provider = 'ddg_html';
     res.data = { ...(res.data || {}), provider: 'ddg_html', search_diagnostics: diagnostics };
-    return res;
+    return maybeAttachFetchedSearchResults(res, args);
   } catch (err) {
     lastErr = err;
     diagnostics.attempted.push({
@@ -1779,10 +1788,141 @@ export async function executeWebFetch(
   }
 }
 
+type WebFetchBatchArgs = {
+  urls: string[];
+  max_chars?: number;
+  concurrency?: number;
+};
+
+function normalizeBatchUrls(urls: unknown): string[] {
+  if (!Array.isArray(urls)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const raw of urls) {
+    const url = String(raw || '').trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    normalized.push(url);
+  }
+  return normalized.slice(0, 20);
+}
+
+export async function executeWebFetchBatch(
+  args: WebFetchBatchArgs,
+  progress?: WebFetchProgressReporter,
+): Promise<ToolResult> {
+  const urls = normalizeBatchUrls(args.urls);
+  if (!urls.length) return { success: false, error: 'urls array is required' };
+
+  const maxChars = Math.max(500, Math.min(Number(args.max_chars ?? 6_000), 25_000));
+  const concurrency = Math.max(1, Math.min(Number(args.concurrency ?? 4), 8));
+  const results: Array<{
+    url: string;
+    status: 'ok' | 'error';
+    text?: string;
+    data?: any;
+    error?: string;
+    length?: number;
+  }> = new Array(urls.length);
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < urls.length) {
+      const index = nextIndex++;
+      const url = urls[index];
+      try {
+        const result = await executeWebFetch({ url, max_chars: maxChars }, progress);
+        const text = result.stdout || '';
+        results[index] = result.success
+          ? {
+              url,
+              status: 'ok',
+              text,
+              data: result.data,
+              length: text.length,
+            }
+          : {
+              url,
+              status: 'error',
+              text,
+              data: result.data,
+              error: result.error || text || `Fetch failed for ${url}.`,
+              length: text.length,
+            };
+      } catch (err: any) {
+        results[index] = {
+          url,
+          status: 'error',
+          error: err?.message || String(err),
+        };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, () => worker()));
+
+  const ok = results.filter(r => r?.status === 'ok').length;
+  const failed = results.length - ok;
+  const stdout = results.map((item, i) => {
+    if (!item || item.status === 'error') {
+      return `[${i + 1}] ERROR ${item?.url || urls[i]}\n${item?.error || 'Unknown fetch error'}`;
+    }
+    return `[${i + 1}] ${item.url}\n${clipText(item.text || '', maxChars)}`;
+  }).join('\n\n---\n\n');
+
+  return {
+    success: ok > 0,
+    error: ok > 0 ? undefined : 'All batch fetches failed.',
+    data: {
+      count: results.length,
+      ok,
+      failed,
+      max_chars_per_url: maxChars,
+      concurrency,
+      results,
+    },
+    stdout,
+  };
+}
+
+async function maybeAttachFetchedSearchResults(
+  result: ToolResult,
+  args: { fetch_top_k?: number; fetch_max_chars?: number },
+): Promise<ToolResult> {
+  const fetchTopK = Math.max(0, Math.min(Number(args.fetch_top_k ?? 0), 10));
+  if (!result.success || fetchTopK <= 0 || !Array.isArray(result.data?.results)) return result;
+
+  const urls = normalizeBatchUrls(
+    result.data.results
+      .slice(0, fetchTopK)
+      .map((item: SearchResultItem) => item?.url),
+  );
+  if (!urls.length) return result;
+
+  const batch = await executeWebFetchBatch({
+    urls,
+    max_chars: args.fetch_max_chars ?? 4_000,
+    concurrency: Math.min(4, urls.length),
+  });
+  result.data = {
+    ...(result.data || {}),
+    fetched_results: batch.data?.results || [],
+    fetch_summary: {
+      count: batch.data?.count || 0,
+      ok: batch.data?.ok || 0,
+      failed: batch.data?.failed || 0,
+    },
+  };
+  if (batch.stdout) {
+    result.stdout = `${result.stdout || ''}\n\n[Fetched top ${urls.length} result URL${urls.length === 1 ? '' : 's'}]\n\n${batch.stdout}`.trim();
+  }
+  return result;
+}
+
 export const webSearchTool = {
   name: 'web_search',
   get description() {
-    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. Defaults to multi-engine mode across every configured credentialed provider, including xAI X Search when xAI credentials are present, and merges deduplicated results. Pass provider to force one engine, or provider:"multi" to force all configured engines. For complex research, call with different query angles and web_fetch the most relevant URLs.`;
+    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. Defaults to multi-engine mode across every configured credentialed provider, including xAI X Search when xAI credentials are present, and merges deduplicated results. Pass provider to force one engine, or provider:"multi" to force all configured engines. Set fetch_top_k to fetch the top result URLs in the same call.`;
   },
   execute: executeWebSearch,
   schema: {
@@ -1790,6 +1930,8 @@ export const webSearchTool = {
     max_results: 'number (optional, default 5) - Max results to return',
     multi_engine: 'boolean (optional, default true) - Pass false to use only the preferred search provider from Settings',
     provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, xai, multi. Use a provider name for single-provider search; use multi for all configured engines',
+    fetch_top_k: 'number (optional, default 0, max 10) - Fetch this many top result URLs after search',
+    fetch_max_chars: 'number (optional, default 4000) - Max characters per fetched result when fetch_top_k is set',
   },
   jsonSchema: {
     type: 'object',
@@ -1803,6 +1945,8 @@ export const webSearchTool = {
         enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'],
         description: 'Optional provider selector. Use multi for every configured provider, or a provider name for one provider.',
       },
+      fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
+      fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
     },
     additionalProperties: false,
   },
@@ -1813,12 +1957,14 @@ export const webSearchSingleTool = {
   get description() {
     return `Search using one provider only. Defaults to the preferred provider from Settings. Configured providers: ${getSearchProvidersSummary()}. Use provider to override for testing.`;
   },
-  execute: (args: { query: string; max_results?: number; provider?: SearchProviderOption }) =>
+  execute: (args: { query: string; max_results?: number; provider?: SearchProviderOption; fetch_top_k?: number; fetch_max_chars?: number }) =>
     executeWebSearch({ ...args, multi_engine: false }),
   schema: {
     query: 'string (required) - Search query',
     max_results: 'number (optional, default 5) - Max results to return',
     provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, xai. Omit to use Settings preferred provider',
+    fetch_top_k: 'number (optional, default 0, max 10) - Fetch this many top result URLs after search',
+    fetch_max_chars: 'number (optional, default 4000) - Max characters per fetched result when fetch_top_k is set',
   },
   jsonSchema: {
     type: 'object',
@@ -1831,6 +1977,8 @@ export const webSearchSingleTool = {
         enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'],
         description: 'Optional provider override. Omit to use Settings preferred provider.',
       },
+      fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
+      fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
     },
     additionalProperties: false,
   },
@@ -1841,11 +1989,13 @@ export const webSearchMultiTool = {
   get description() {
     return `Search using every configured credentialed provider in parallel, including xAI X Search when connected, then merge deduplicated results. Configured providers: ${getSearchProvidersSummary()}.`;
   },
-  execute: (args: { query: string; max_results?: number }) =>
+  execute: (args: { query: string; max_results?: number; fetch_top_k?: number; fetch_max_chars?: number }) =>
     executeWebSearch({ ...args, provider: 'multi' }),
   schema: {
     query: 'string (required) - Search query',
     max_results: 'number (optional, default 5) - Max results to return per provider',
+    fetch_top_k: 'number (optional, default 0, max 10) - Fetch this many top result URLs after search',
+    fetch_max_chars: 'number (optional, default 4000) - Max characters per fetched result when fetch_top_k is set',
   },
   jsonSchema: {
     type: 'object',
@@ -1853,6 +2003,8 @@ export const webSearchMultiTool = {
     properties: {
       query: { type: 'string', description: 'Search query' },
       max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
+      fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
+      fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
     },
     additionalProperties: false,
   },
@@ -1929,7 +2081,7 @@ function buildProductSearchQuery(query: string, merchant?: string): string {
   const q = String(query || '').trim();
   const domain = merchantDomain(merchant);
   if (!domain) return `${q} product price rating review`;
-  if (domain.includes('amazon.com')) return `site:amazon.com/dp ${q} price rating review`;
+  if (domain.includes('amazon.com')) return `site:amazon.com/dp ${q} ${q.toLowerCase().includes('keyboard') ? '"keyboard"' : ''} price rating review`.replace(/\s+/g, ' ').trim();
   if (q.toLowerCase().includes(domain.toLowerCase())) return `${q} product price rating review`;
   return `site:${domain} ${q} product price rating review`;
 }
@@ -1977,22 +2129,76 @@ function cleanProductTitle(title: string): string {
     .slice(0, 110);
 }
 
+const PRODUCT_QUERY_STOPWORDS = new Set([
+  'amazon', 'product', 'products', 'price', 'rating', 'review', 'reviews', 'best', 'good',
+  'with', 'from', 'that', 'this', 'under', 'over', 'and', 'for', 'the', 'office', 'gaming',
+]);
+
+function productQueryTokens(query: string): string[] {
+  return String(query || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !PRODUCT_QUERY_STOPWORDS.has(token))
+    .slice(0, 14);
+}
+
+function productTextTokens(text: string): Set<string> {
+  return new Set(String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 3));
+}
+
+function productQueryRelevanceScore(query: string, text: string): number {
+  const queryTokens = productQueryTokens(query);
+  if (!queryTokens.length) return 1;
+  const textTokens = productTextTokens(text);
+  let score = 0;
+  for (const token of queryTokens) {
+    if (textTokens.has(token)) score += 1;
+    if (token.endsWith('s') && textTokens.has(token.slice(0, -1))) score += 0.8;
+  }
+  return score / Math.max(1, queryTokens.length);
+}
+
+function hasRequiredProductIntent(query: string, text: string): boolean {
+  const q = String(query || '').toLowerCase();
+  const t = String(text || '').toLowerCase();
+  if (/\bkeyboards?\b/.test(q)) {
+    if (!/\bkeyboards?\b/.test(t)) return false;
+    if (/\b(?:shavers?|razors?|mouse\s*pads?|desks?|covers?|cases?|skins?|switch\s+pullers?|keycap\s+pullers?)\b/.test(t)) return false;
+    if (!/\b(?:combo|mouse|mice)\b/.test(q) && /\bkeyboard\s+(?:and|&|\+)\s+mouse\b|\bmouse\s+(?:and|&|\+)\s+keyboard\b|\bkeyboard\/mouse\b/i.test(t)) return false;
+  }
+  if (/\bmechanical\b/.test(q) && !/\bmechanical\b/.test(t)) return false;
+  if (/\bwireless\b/.test(q) && !/\b(?:wireless|bluetooth|2\.4g|2\.4ghz|tri-mode|trimode)\b/.test(t)) return false;
+  if (/\bmouse|mice\b/.test(q) && !/\bmouse|mice\b/.test(t)) return false;
+  if (/\b(?:laptops?|notebooks?)\b/.test(q) && !/\b(?:laptops?|notebooks?)\b/.test(t)) return false;
+  if (/\b(?:headphones?|earbuds?|earphones?)\b/.test(q) && !/\b(?:headphones?|earbuds?|earphones?)\b/.test(t)) return false;
+  return true;
+}
+
 function extractPrice(text: string): string | undefined {
   const clean = stripProductSearchNoise(text);
-  const m = clean.match(/\$[0-9][0-9,]*(?:\.[0-9]{2})?/);
+  const m = clean.match(/\$[0-9][0-9,]*(?:\.[0-9]{2})?/)
+    || clean.match(/\b(?:Price|Now|Sale)\s*[:\-]?\s*(\$[0-9][0-9,]*(?:\.[0-9]{2})?)/i);
   return m?.[0];
 }
 
 function extractRating(text: string): number | undefined {
   const raw = String(text || '');
   const m = raw.match(/\b([0-5](?:\.[0-9])?)\s*(?:out of\s*5|\/\s*5|stars?|★)/i)
+    || raw.match(/\b([0-5](?:\.[0-9])?)\s+[0-5](?:\.[0-9])?\s+out of\s+5\s+stars/i)
     || raw.match(/\brated\s+([0-5](?:\.[0-9])?)\b/i);
   const n = m ? Number(m[1]) : NaN;
   return Number.isFinite(n) && n >= 0 && n <= 5 ? n : undefined;
 }
 
 function extractReviewCount(text: string): number | undefined {
-  const m = String(text || '').match(/\b([0-9][0-9,]*)\s+(?:reviews?|ratings?)\b/i);
+  const m = String(text || '').match(/\b([0-9][0-9,]*)\s+(?:reviews?|ratings?)\b/i)
+    || String(text || '').match(/\((?:\s*)?([0-9][0-9,]*)\s*\)\s*(?:reviews?|ratings?)?/i);
   if (!m) return undefined;
   const n = Number(m[1].replace(/,/g, ''));
   return Number.isFinite(n) ? n : undefined;
@@ -2047,16 +2253,20 @@ function isWeakProductCandidate(item: SearchResultItem, title: string, price?: s
   return false;
 }
 
-function normalizeProductCandidate(item: SearchResultItem, index: number, merchant?: string): ShoppingProductResult | null {
+function normalizeProductCandidate(item: SearchResultItem, index: number, query: string, merchant?: string): ShoppingProductResult | null {
   const text = `${item.title || ''} ${item.snippet || ''}`;
   const title = cleanProductTitle(item.title || '');
   if (!title || !item.url) return null;
   const price = extractPrice(text);
   if (isWeakProductCandidate(item, title, price)) return null;
+  const relevanceText = `${title} ${item.snippet || ''}`;
+  if (!hasRequiredProductIntent(query, relevanceText)) return null;
+  const relevance = productQueryRelevanceScore(query, relevanceText);
+  if (relevance < 0.18) return null;
   const rating = extractRating(text);
   const reviewCount = extractReviewCount(text);
   const badge = extractBadge(text);
-  let confidence = 0.45 + productUrlScore(item.url);
+  let confidence = 0.36 + productUrlScore(item.url) + Math.min(0.24, relevance * 0.24);
   if (price) confidence += 0.16;
   if (rating != null) confidence += 0.12;
   if (reviewCount != null) confidence += 0.1;
@@ -2083,6 +2293,35 @@ function extractMetaTag(html: string, property: string): string | undefined {
   const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i');
   return htmlDecodeLite(re.exec(html)?.[1] || '');
+}
+
+function extractAttributeNear(html: string, attrName: string, attrValue: string, targetAttr: string): string | undefined {
+  const escapedName = attrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedValue = attrValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedTarget = targetAttr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tag = new RegExp(`<[^>]+${escapedName}=["']${escapedValue}["'][^>]*>`, 'i').exec(html)?.[0] || '';
+  if (!tag) return undefined;
+  const value = new RegExp(`${escapedTarget}=["']([^"']+)["']`, 'i').exec(tag)?.[1] || '';
+  return htmlDecodeLite(value);
+}
+
+function fallbackProductPagePrice(html: string): string | undefined {
+  const itempropPrice = extractAttributeNear(html, 'itemprop', 'price', 'content');
+  const currency = extractAttributeNear(html, 'itemprop', 'priceCurrency', 'content') || 'USD';
+  if (itempropPrice) return `${currency === 'USD' ? '$' : `${currency} `}${itempropPrice}`;
+  const twitterData = extractMetaTag(html, 'twitter:data1') || extractMetaTag(html, 'twitter:label1');
+  return extractPrice(twitterData || html.slice(0, 60_000));
+}
+
+function fallbackProductPageRating(html: string): Pick<ShoppingProductResult, 'rating' | 'reviews' | 'reviewCount'> {
+  const compact = htmlDecodeLite(html.slice(0, 90_000).replace(/<[^>]+>/g, ' '));
+  const rating = extractRating(compact);
+  const reviews = extractReviewCount(compact);
+  return {
+    rating,
+    reviews,
+    reviewCount: reviews,
+  };
 }
 
 function asFirstString(value: unknown): string | undefined {
@@ -2155,6 +2394,81 @@ function parseJsonLdProductMetadata(html: string): Partial<ShoppingProductResult
   return meta;
 }
 
+function getActiveWorkspaceRoot(): string {
+  try {
+    const { getConfig } = require('../config/config') as typeof import('../config/config');
+    const { getActiveWorkspace } = require('./workspace-context') as typeof import('./workspace-context');
+    const globalWorkspace = getConfig().getConfig().workspace.path;
+    return getActiveWorkspace(globalWorkspace);
+  } catch {
+    return process.cwd();
+  }
+}
+
+function safeProductImageFilename(product: ShoppingProductResult, index: number, contentType = '', imageUrl = ''): string {
+  const extFromType = String(contentType || '').split(';')[0].trim().toLowerCase();
+  const extFromUrl = (() => {
+    try {
+      const ext = path.extname(new URL(imageUrl).pathname).toLowerCase();
+      return /\.(?:jpg|jpeg|png|webp|gif|avif)$/i.test(ext) ? ext : '';
+    } catch {
+      return '';
+    }
+  })();
+  const ext = extFromType === 'image/png' ? '.png'
+    : extFromType === 'image/webp' ? '.webp'
+      : extFromType === 'image/gif' ? '.gif'
+        : extFromType === 'image/avif' ? '.avif'
+          : extFromUrl || '.jpg';
+  const stem = `${String(index + 1).padStart(2, '0')}-${product.title || product.id || 'product'}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 72) || `product-${index + 1}`;
+  return `${stem}${ext}`;
+}
+
+function normalizeProductImageUrl(imageUrl: string, productUrl: string): string {
+  const raw = String(imageUrl || '').trim();
+  if (!raw || /^data:/i.test(raw)) return '';
+  try {
+    return new URL(raw, productUrl).href;
+  } catch {
+    return raw;
+  }
+}
+
+async function downloadProductImage(product: ShoppingProductResult, index: number, timeoutMs: number): Promise<string | undefined> {
+  const imageUrl = normalizeProductImageUrl(product.imageUrl || '', product.productUrl);
+  if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) return undefined;
+  try {
+    const response = await fetch(imageUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Referer': product.productUrl,
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return undefined;
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType && !contentType.includes('image/')) return undefined;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length < 1024 || bytes.length > 8 * 1024 * 1024) return undefined;
+    const workspaceRoot = getActiveWorkspaceRoot();
+    const relDir = 'downloads/product-carousel';
+    const absDir = path.join(workspaceRoot, relDir);
+    await fs.promises.mkdir(absDir, { recursive: true });
+    const filename = safeProductImageFilename(product, index, contentType, imageUrl);
+    const absPath = path.join(absDir, filename);
+    await fs.promises.writeFile(absPath, bytes);
+    return `${relDir}/${filename}`;
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchProductMetadata(url: string, timeoutMs: number): Promise<Partial<ShoppingProductResult>> {
   const cached = productMetadataCache.get(url);
   if (cached && Date.now() - cached.at < PRODUCT_METADATA_CACHE_TTL_MS) return cached.meta;
@@ -2176,14 +2490,15 @@ async function fetchProductMetadata(url: string, timeoutMs: number): Promise<Par
     const jsonLd = parseJsonLdProductMetadata(html);
     const ogTitle = cleanProductTitle(extractMetaTag(html, 'og:title') || extractMetaTag(html, 'twitter:title') || '');
     const ogDescription = cleanProductDescription(extractMetaTag(html, 'og:description') || extractMetaTag(html, 'twitter:description') || '');
+    const fallbackRating = fallbackProductPageRating(html);
     const meta: Partial<ShoppingProductResult> = {
       title: jsonLd.title || (looksLikeProductTitle(ogTitle) ? ogTitle : undefined),
       description: jsonLd.description || ogDescription,
       imageUrl: jsonLd.imageUrl || extractMetaTag(html, 'og:image') || extractMetaTag(html, 'twitter:image'),
-      price: jsonLd.price || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined),
-      rating: jsonLd.rating,
-      reviews: jsonLd.reviews,
-      reviewCount: jsonLd.reviewCount,
+      price: jsonLd.price || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined) || fallbackProductPagePrice(html),
+      rating: jsonLd.rating || fallbackRating.rating,
+      reviews: jsonLd.reviews || fallbackRating.reviews,
+      reviewCount: jsonLd.reviewCount || fallbackRating.reviewCount,
     };
     const compact = Object.fromEntries(Object.entries(meta).filter(([, v]) => v != null && String(v).trim())) as Partial<ShoppingProductResult>;
     productMetadataCache.set(url, { at: Date.now(), meta: compact });
@@ -2199,16 +2514,20 @@ export async function executeShoppingSearchProducts(args: {
   max_results?: number;
   provider?: SearchProviderOption;
   include_metadata?: boolean;
+  include_images?: boolean;
   metadata_timeout_ms?: number;
+  image_timeout_ms?: number;
 }): Promise<ToolResult> {
   const query = String(args?.query || '').trim();
   if (!query) return { success: false, error: 'query is required' };
   const maxResults = Math.max(1, Math.min(12, Math.floor(Number(args?.max_results || 8))));
   const provider = (String(args?.provider || 'multi').toLowerCase() || 'multi') as SearchProviderOption;
   const includeMetadata = args?.include_metadata !== false;
+  const includeImages = args?.include_images !== false;
   const metadataTimeoutMs = Math.max(500, Math.min(5000, Math.floor(Number(args?.metadata_timeout_ms || 1800))));
+  const imageTimeoutMs = Math.max(500, Math.min(4000, Math.floor(Number(args?.image_timeout_ms || 1600))));
   const searchQuery = buildProductSearchQuery(query, args?.merchant);
-  const cacheKey = JSON.stringify({ searchQuery, maxResults, provider, includeMetadata, metadataTimeoutMs });
+  const cacheKey = JSON.stringify({ searchQuery, maxResults, provider, includeMetadata, includeImages, metadataTimeoutMs, imageTimeoutMs });
   const cached = productSearchCache.get(cacheKey);
   if (cached && Date.now() - cached.at < PRODUCT_SEARCH_CACHE_TTL_MS) return cached.result;
 
@@ -2219,7 +2538,7 @@ export async function executeShoppingSearchProducts(args: {
 
   const seen = new Set<string>();
   const products = (search.data.results as SearchResultItem[])
-    .map((item, index) => normalizeProductCandidate(item, index, args?.merchant))
+    .map((item, index) => normalizeProductCandidate(item, index, query, args?.merchant))
     .filter((item): item is ShoppingProductResult => {
       if (!item) return false;
       const key = `${item.productUrl.replace(/[?#].*$/, '')}|${item.title.toLowerCase()}`;
@@ -2233,10 +2552,17 @@ export async function executeShoppingSearchProducts(args: {
   if (includeMetadata && products.length) {
     await mapWithConcurrency(products.slice(0, Math.min(products.length, 8)), 4, async (product, index) => {
       const meta = await fetchProductMetadata(product.productUrl, metadataTimeoutMs);
+      const nextTitle = looksLikeProductTitle(meta.title || '') ? meta.title || product.title : product.title;
+      const nextDescription = meta.description || product.description;
+      const relevanceText = `${nextTitle || ''} ${nextDescription || ''}`;
+      if (!hasRequiredProductIntent(query, relevanceText) || productQueryRelevanceScore(query, relevanceText) < 0.18) {
+        products[index] = { ...product, confidence: Math.min(product.confidence || 0.4, 0.2) };
+        return;
+      }
       products[index] = {
         ...product,
-        title: looksLikeProductTitle(meta.title || '') ? meta.title || product.title : product.title,
-        description: meta.description || product.description,
+        title: nextTitle,
+        description: nextDescription,
         imageUrl: meta.imageUrl || product.imageUrl,
         price: meta.price || product.price,
         rating: meta.rating || product.rating,
@@ -2247,20 +2573,40 @@ export async function executeShoppingSearchProducts(args: {
     });
   }
 
+  const relevantProducts = products
+    .filter((product) => (product.confidence || 0) >= 0.28)
+    .filter((product) => hasRequiredProductIntent(query, `${product.title || ''} ${product.description || ''}`))
+    .filter((product) => productQueryRelevanceScore(query, `${product.title || ''} ${product.description || ''}`) >= 0.18)
+    .slice(0, maxResults);
+
+  if (includeImages && relevantProducts.length) {
+    await mapWithConcurrency(relevantProducts.slice(0, Math.min(relevantProducts.length, maxResults)), 4, async (product, index) => {
+      if (product.imagePath || !product.imageUrl) return;
+      const imagePath = await downloadProductImage(product, index, imageTimeoutMs);
+      if (imagePath) {
+        relevantProducts[index] = {
+          ...product,
+          imagePath,
+          confidence: Math.min(1, Number(((product.confidence || 0.5) + 0.05).toFixed(2))),
+        };
+      }
+    });
+  }
+
   const carousel = {
     title: args?.merchant ? `${query} on ${merchantFromUrl(`https://${merchantDomain(args.merchant)}`) || args.merchant}` : query,
     source: 'shopping_search_products',
-    items: products,
+    items: relevantProducts,
   };
   const stdout = [
-    `Found ${products.length} product candidate${products.length === 1 ? '' : 's'} for "${query}" using existing web search (${String(search.data?.provider || provider)}).`,
+    `Found ${relevantProducts.length} product candidate${relevantProducts.length === 1 ? '' : 's'} for "${query}" using existing web search (${String(search.data?.provider || provider)}).`,
     'No shopping API key was used.',
     '',
-    JSON.stringify({ query, searchQuery, source: carousel.source, items: products }, null, 2),
+    JSON.stringify({ query, searchQuery, source: carousel.source, items: relevantProducts }, null, 2),
   ].join('\n');
   const result = {
     success: true,
-    data: { query, searchQuery, provider: search.data?.provider || provider, products },
+    data: { query, searchQuery, provider: search.data?.provider || provider, products: relevantProducts },
     stdout,
     extra: { productCarousel: carousel },
   } as ToolResult;
@@ -2280,7 +2626,9 @@ export const shoppingSearchProductsTool = {
     max_results: 'number (optional, default 8, max 12) - Product cards to return',
     provider: 'string (optional, default multi) - One of multi, tinyfish, tavily, google, brave, ddg, xai',
     include_metadata: 'boolean (optional, default true) - Fetch top result pages briefly for Open Graph images/titles/prices',
+    include_images: 'boolean (optional, default true) - Download discovered product images into downloads/product-carousel and set imagePath',
     metadata_timeout_ms: 'number (optional, default 1800, max 5000) - Per-page metadata fetch timeout',
+    image_timeout_ms: 'number (optional, default 1600, max 4000) - Per-image download timeout',
   },
   jsonSchema: {
     type: 'object',
@@ -2291,7 +2639,34 @@ export const shoppingSearchProductsTool = {
       max_results: { type: 'number', description: 'Number of product cards to return. Default 8, max 12.' },
       provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Default multi.' },
       include_metadata: { type: 'boolean', description: 'Default true. Briefly fetch top pages for Open Graph images/titles/prices without browser automation.' },
+      include_images: { type: 'boolean', description: 'Default true. Briefly download discovered product images to downloads/product-carousel and set imagePath for stable carousel rendering.' },
       metadata_timeout_ms: { type: 'number', description: 'Per-page metadata fetch timeout. Default 1800, max 5000.' },
+      image_timeout_ms: { type: 'number', description: 'Per-image download timeout. Default 1600, max 4000.' },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const webFetchBatchTool = {
+  name: 'web_fetch_batch',
+  description: 'Fetch and extract text from multiple URLs in parallel. Use after web_search when several result URLs need full-page evidence. Returns one result per URL with partial-failure details.',
+  execute: executeWebFetchBatch,
+  schema: {
+    urls: 'string[] (required, max 20) - Full URLs to fetch',
+    max_chars: 'number (optional, default 6000, max 25000) - Max characters per URL',
+    concurrency: 'number (optional, default 4, max 8) - Parallel fetches',
+  },
+  jsonSchema: {
+    type: 'object',
+    required: ['urls'],
+    properties: {
+      urls: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Full URLs to fetch. Duplicate and blank URLs are ignored. Max 20.',
+      },
+      max_chars: { type: 'number', description: 'Max characters per URL. Default 6000, max 25000.' },
+      concurrency: { type: 'number', description: 'Parallel fetches. Default 4, max 8.' },
     },
     additionalProperties: false,
   },
@@ -2299,7 +2674,13 @@ export const shoppingSearchProductsTool = {
 
 // ─── Simple string-returning helpers for executeTool (subagent executor) ────────────
 // These delegate to the registry implementations above so there is one code path.
-export async function webSearch(query: string, options: { max_results?: number; multi_engine?: boolean; provider?: SearchProviderOption } = {}): Promise<string> {
+export async function webSearch(query: string, options: {
+  max_results?: number;
+  multi_engine?: boolean;
+  provider?: SearchProviderOption;
+  fetch_top_k?: number;
+  fetch_max_chars?: number;
+} = {}): Promise<string> {
   const result = await executeWebSearch({ query, ...options });
   if (!result.success) return result.error || `Search failed for "${query}".`;
   return result.stdout || result.data?.answer || `No results for "${query}".`;

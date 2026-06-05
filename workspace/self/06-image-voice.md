@@ -187,6 +187,54 @@ PTT caveat: gating the shared mic via `micTrack.enabled` also pauses the visuali
 
 Also still true (session config): the backend `/api/voice-agent/realtime-bootstrap` bakes `server_vad` for ALL modes (it never receives `listenMode`); clients MUST re-assert per-mode `session.update` after the data channel opens (always_listening → server_vad with `create_response`; push_to_talk → `turn_detection: null` + manual commit/response on release). Do NOT bake session-level `output_modalities` into the mint.
 
+## 12A-3) Mobile Realtime camera/video visual inputs (2026-06-05)
+
+Mobile camera capture is an in-app visual-input feature for the PWA, not a native "save a photo to the phone" workflow. The PWA opens a camera preview with `getUserMedia`, captures the current video frame to a canvas, and turns that frame into a JPEG/data URL attachment. Tap captures a still image. Hold records a short clip in the same preview; the clip is sampled into sequential JPEG frames so the voice agent can treat it as a short visual sequence without live video streaming.
+
+Canonical mobile source:
+
+- `web-ui/src/mobile/mobile-pages.js`
+- generated/public copy: `generated/public-web-ui/static/mobile/mobile-pages.js`
+- styling lives in `web-ui/src/styles/mobile.css` and generated `generated/public-web-ui/static/styles/mobile.css`
+
+Realtime camera UI behavior:
+
+- Chat page voice strip has a camera/file button near the top-left of the inline voice section, opposite the close/X control.
+- The existing mobile attach button can open camera capture for normal chat attachments.
+- Voice camera capture is staged: the image/frame preview appears in the mobile chat bubble immediately, then is flushed into Realtime when the next user turn happens.
+- For OpenAI Realtime, staged images flush on:
+  - `input_audio_buffer.speech_started` for always-listening
+  - PTT release before `input_audio_buffer.commit` and `response.create`
+  - typed mobile chat send, so a user can take a photo and then type the question instead of speaking
+- For typed sends after a staged voice photo, the image is also converted into normal mobile chat attachments so the Prometheus worker receives the visual context through the regular `/api/chat` attachment path.
+
+OpenAI Realtime visual input contract:
+
+- Send visual context over the Realtime data channel as `conversation.item.create`.
+- Item type is a user `message`.
+- Content contains `input_text` plus one `input_image` part.
+- `input_image` must use a data URL in `image_url` and should include `detail: "auto"`.
+- After a typed/send-now visual turn, create a Realtime response with `response.create` when the live voice agent should answer.
+- Do not claim no image was sent if the chat bubble has a staged preview; debug whether `_flushMobileRealtimeAgentPendingImages(...)` ran and whether the data-channel image event fit the message-size limit.
+
+Mobile Safari/WebRTC data-channel gotcha:
+
+- Full-res camera PNG/JPEG data URLs can silently fail over the Realtime WebRTC data channel. The local UI may show the image bubble while the model receives only text or nothing useful.
+- `_downscaleDataUrlForRealtime(...)` now recompresses to JPEG, defaults around longest side 960, quality 0.74, and iteratively shrinks toward about 180k data-URL chars.
+- Keep image events small. If increasing camera/video quality, retest on iOS Safari/PWA because desktop Chrome can tolerate larger messages than mobile Safari.
+
+Video capture rule:
+
+- Do not stream live video to OpenAI/xAI Realtime for this feature.
+- Mobile video is short hold-to-record capture, capped/sampled client-side, then sent as individual image-frame conversation items.
+- Frames should be sent as separate `conversation.item.create` messages with `input_image`, not one giant event with many frames, to avoid SCTP/data-channel size limits.
+
+xAI/Grok Realtime visual note:
+
+- xAI Realtime does not share the same native `input_image` path in this implementation.
+- xAI image/video visual context is handled by a side vision-summary workflow (`/api/voice-agent/xai-vision-summary`) and injected into the xAI Realtime conversation as text.
+- Do not send OpenAI-style `input_image` events to xAI unless the xAI Realtime API path has been reverified; prior attempts produced invalid-event/404-style failures.
+
 ## 12B) Voice Agent, Mobile Dictation Handoff, and Live Worker Steering
 
 2026-05-22 voice refactor correction:

@@ -899,7 +899,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'shopping_search_products',
-        description: 'Fast product search for shopping/product carousel requests using existing web_search providers plus short metadata fetches. No shopping API keys required. Use this FIRST when the user asks for products, shopping comparisons, prices, ratings, or a product carousel; use browser tools only if this result is missing details or needs visual verification.',
+        description: 'Fast product search for shopping/product carousel requests using existing web_search providers plus short metadata/image fetches. No shopping API keys required. Use this FIRST when the user asks for products, shopping comparisons, prices, ratings, or a product carousel; use browser tools only if this result is missing details or needs visual verification.',
         parameters: {
           type: 'object',
           required: ['query'],
@@ -909,7 +909,9 @@ export function getFileWebMemoryTools(): any[] {
             max_results: { type: 'number', description: 'Number of product cards to return. Default 8, max 12.' },
             provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Default multi.' },
             include_metadata: { type: 'boolean', description: 'Default true. Briefly fetch top result pages for Open Graph images/titles/prices without browser automation.' },
+            include_images: { type: 'boolean', description: 'Default true. Briefly downloads discovered product images to downloads/product-carousel and sets imagePath for stable carousel rendering.' },
             metadata_timeout_ms: { type: 'number', description: 'Per-page metadata timeout in ms. Default 1800, max 5000.' },
+            image_timeout_ms: { type: 'number', description: 'Per-image download timeout in ms. Default 1600, max 4000.' },
           },
         },
       },
@@ -918,7 +920,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_search',
-        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, or provider:"multi" to force all configured engines. Use web_fetch on result URLs to read full page content.',
+        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, or provider:"multi" to force all configured engines. Use fetch_top_k to fetch the top result URLs in the same call, or web_fetch_batch for selected URLs.',
         parameters: {
           type: 'object', required: ['query'],
           properties: {
@@ -926,6 +928,8 @@ export function getFileWebMemoryTools(): any[] {
             max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
             multi_engine: { type: 'boolean', description: 'Default true. When true, queries every configured credentialed provider. Set false to use only the preferred search provider from Settings.' },
             provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional engine selector. Use multi for every configured engine, or a provider name for a true single-provider search.' },
+            fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
+            fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
           },
         },
       },
@@ -942,6 +946,8 @@ export function getFileWebMemoryTools(): any[] {
             query: { type: 'string', description: 'Search query' },
             max_results: { type: 'number', description: 'Maximum results to return. Default 5, max 10.' },
             provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider override. Omit to use Settings preferred provider.' },
+            fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
+            fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
           },
         },
       },
@@ -957,6 +963,8 @@ export function getFileWebMemoryTools(): any[] {
           properties: {
             query: { type: 'string', description: 'Search query' },
             max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
+            fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
+            fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
           },
         },
       },
@@ -969,6 +977,26 @@ export function getFileWebMemoryTools(): any[] {
         parameters: {
           type: 'object', required: ['url'],
           properties: { url: { type: 'string', description: 'Full URL to fetch (from web_search results or any URL)' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'web_fetch_batch',
+        description: 'Fetch full text content from multiple webpage URLs in parallel. Use after web_search when several result URLs need full-page evidence. Returns one result per URL and preserves partial failures.',
+        parameters: {
+          type: 'object',
+          required: ['urls'],
+          properties: {
+            urls: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Full URLs to fetch. Duplicate and blank URLs are ignored. Max 20.',
+            },
+            max_chars: { type: 'number', description: 'Max characters per URL. Default 6000, max 25000.' },
+            concurrency: { type: 'number', description: 'Parallel fetches. Default 4, max 8.' },
+          },
         },
       },
     },

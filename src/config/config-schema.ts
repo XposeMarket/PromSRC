@@ -195,6 +195,15 @@ const TelegramTeamRoomConfigSchema = z.object({
   usePersonaIdentities: z.boolean().optional(),
 });
 
+const CompletionNotificationsConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  desktop: z.boolean().optional(),
+  mobile: z.boolean().optional(),
+  includeSummary: z.boolean().optional(),
+  includeLink: z.boolean().optional(),
+  summaryMaxChars: z.number().int().min(80).max(1200).optional(),
+}).optional();
+
 const TelegramConfigSchema = z.object({
   enabled:        z.boolean(),
   botToken:       z.string(),
@@ -202,6 +211,7 @@ const TelegramConfigSchema = z.object({
   streamMode:     z.enum(['full', 'partial']),
   personas:       z.record(TelegramPersonaConfigSchema).optional(),
   teamRooms:      z.record(TelegramTeamRoomConfigSchema).optional(),
+  completionNotifications: CompletionNotificationsConfigSchema,
 });
 
 const DiscordConfigSchema = z.object({
@@ -211,6 +221,7 @@ const DiscordConfigSchema = z.object({
   guildId:       z.string().optional(),
   channelId:     z.string().optional(),
   webhookUrl:    z.string().optional(),
+  completionNotifications: CompletionNotificationsConfigSchema,
 });
 
 const WhatsappConfigSchema = z.object({
@@ -221,6 +232,7 @@ const WhatsappConfigSchema = z.object({
   verifyToken:       z.string().optional(),
   webhookSecret:     z.string().optional(),
   testRecipient:     z.string().optional(),
+  completionNotifications: CompletionNotificationsConfigSchema,
 });
 
 // ─── Top-Level Config Schema ─────────────────────────────────────────────────

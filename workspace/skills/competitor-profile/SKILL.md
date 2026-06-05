@@ -1,13 +1,13 @@
 ---
 name: competitor-profile
-description: Use this skill to build a comprehensive intelligence dossier on a specific competitor or company. Uses web_search, web_fetch, and optionally deploy_analysis_team for full website audits.
+description: Use this skill to build a comprehensive intelligence dossier on a specific competitor or company. Uses web_search, web_fetch_batch/web_fetch, and optionally deploy_analysis_team for full website audits.
 emoji: "🧩"
 version: 1.0.0
 ---
 
 # Competitor Profile
 
-Use this skill to build a comprehensive intelligence dossier on a specific competitor or company. Uses web_search, web_fetch, and optionally deploy_analysis_team for full website audits.
+Use this skill to build a comprehensive intelligence dossier on a specific competitor or company. Uses web_search, web_fetch_batch/web_fetch, and optionally deploy_analysis_team for full website audits.
 
 ---
 
@@ -86,17 +86,18 @@ Step 2: Pricing page
   → Capture: tiers, prices, limits
 
 Step 3: Web search pass 1 — general
-  → web_search("CompanyName 2026 review funding features")
-  → web_search("CompanyName pricing plans")
+  → web_search("CompanyName 2026 review funding features", fetch_top_k: 3)
+  → web_search("CompanyName pricing plans", fetch_top_k: 2)
 
 Step 4: Web search pass 2 — competitive signals
   → web_search("CompanyName alternative 2026")
   → web_search("switching from CompanyName reddit")
   → web_search("CompanyName vs [your product]")
+  → web_fetch_batch on selected review/comparison/social URLs
 
 Step 5: Review mining
   → web_fetch("https://g2.com/products/CompanyName/reviews")
-  → web_search("CompanyName review G2 Capterra 2026")
+  → web_search("CompanyName review G2 Capterra 2026", fetch_top_k: 3)
 
 Step 6: Hiring signals
   → web_search("CompanyName jobs 2026 OR hiring")

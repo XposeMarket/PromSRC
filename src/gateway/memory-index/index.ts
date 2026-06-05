@@ -31,6 +31,7 @@ export type MemoryIndexSourceType =
   | 'memory_root'
   | 'memory_note'
   | 'obsidian_note'
+  | 'workspace_file'
   | 'audit_misc';
 
 export interface MemorySearchParams {
@@ -170,6 +171,36 @@ const MAX_SOURCE_BYTES = 450000;
 const MAX_RECORDS_FOR_FULL_SEMANTIC_RELATIONS = 900;
 const STOP = new Set(['a','an','and','are','as','at','be','by','for','from','had','has','have','i','if','in','is','it','its','of','on','or','that','the','their','them','they','this','to','was','we','were','what','when','where','who','why','will','with','you','your']);
 const ROOT_DIRS = ['chats', 'tasks', 'cron', 'teams', 'proposals', 'memory', 'projects', 'schedules', 'obsidian'] as const;
+const WORKSPACE_FILE_PREFIX = 'workspace/files/';
+const WORKSPACE_EXCLUDED_DIRS = new Set(['.git', 'node_modules', '.next', '.nuxt', 'dist', 'build', 'out', 'coverage', '.cache', '.parcel-cache', '.turbo', 'tmp', 'temp']);
+const WORKSPACE_EXCLUDED_ROOTS = new Set(['audit']);
+const WORKSPACE_PRIORITY_ROOTS = [
+  'downloads',
+  'uploads',
+  'generated',
+  'creative-projects',
+  'outputs',
+  'assets',
+  'entities',
+  'business',
+  'skills',
+  'Brain',
+  'memory',
+  'projects',
+  'proposals',
+  'tasks',
+  'teams',
+  'self',
+  '.prometheus',
+];
+const WORKSPACE_MAX_FILES = 12000;
+const TEXT_EXTENSIONS = new Set([
+  '.txt', '.md', '.mdx', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.ini', '.env', '.csv', '.tsv',
+  '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.css', '.scss', '.sass', '.less', '.html', '.htm',
+  '.py', '.ps1', '.sh', '.bat', '.cmd', '.sql', '.xml', '.svg', '.vue', '.svelte', '.rs', '.go',
+  '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.rb', '.swift', '.kt', '.kts', '.r', '.lua',
+  '.log', '.lock', '.gitignore', '.dockerignore', '.editorconfig'
+]);
 const MEMORY_PROFILE = process.env.PROMETHEUS_MEMORY_PROFILE === '1';
 let memoryProfileT0 = 0;
 let memoryProfileLast = 0;
@@ -352,6 +383,78 @@ function cosine(a: number[], b: number[]): number {
   return dot / den;
 }
 function preview(s: string): string { const x = norm(s).replace(/\n/g, ' '); return x.length <= 260 ? x : `${x.slice(0, 257)}...`; }
+function workspaceDisplayPath(relPath: string): string {
+  return String(relPath || '').startsWith(WORKSPACE_FILE_PREFIX) ? String(relPath).slice(WORKSPACE_FILE_PREFIX.length) : String(relPath || '');
+}
+function isLikelyTextFile(relPath: string): boolean {
+  const lower = String(relPath || '').toLowerCase();
+  const base = path.basename(lower);
+  if (TEXT_EXTENSIONS.has(base)) return true;
+  return TEXT_EXTENSIONS.has(path.extname(lower));
+}
+function shouldSkipWorkspaceDir(absDir: string, workspacePath: string): boolean {
+  const relDir = rel(absDir, workspacePath);
+  if (!relDir || relDir === '.') return false;
+  const parts = relDir.split('/').filter(Boolean);
+  if (!parts.length) return false;
+  if (WORKSPACE_EXCLUDED_ROOTS.has(parts[0])) return true;
+  return parts.some((part) => WORKSPACE_EXCLUDED_DIRS.has(part));
+}
+function listWorkspaceFiles(workspacePath: string): string[] {
+  if (!fs.existsSync(workspacePath)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const pushFile = (abs: string): void => {
+    if (out.length >= WORKSPACE_MAX_FILES) return;
+    const key = path.resolve(abs);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(abs);
+  };
+  const walk = (rootDir: string): void => {
+    const stack = [rootDir];
+    while (stack.length && out.length < WORKSPACE_MAX_FILES) {
+      const cur = stack.pop() as string;
+      if (shouldSkipWorkspaceDir(cur, workspacePath)) continue;
+      let ents: fs.Dirent[] = []; try { ents = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+      ents.sort((a, b) => a.name.localeCompare(b.name));
+      for (const e of ents) {
+        const abs = path.join(cur, e.name);
+        if (e.isFile()) pushFile(abs);
+      }
+      for (let i = ents.length - 1; i >= 0; i -= 1) {
+        const e = ents[i];
+        const abs = path.join(cur, e.name);
+        if (e.isDirectory() && !shouldSkipWorkspaceDir(abs, workspacePath)) stack.push(abs);
+      }
+    }
+  };
+
+  let rootEntries: fs.Dirent[] = []; try { rootEntries = fs.readdirSync(workspacePath, { withFileTypes: true }); } catch { return []; }
+  rootEntries.sort((a, b) => a.name.localeCompare(b.name));
+  for (const e of rootEntries) {
+    if (e.isFile()) pushFile(path.join(workspacePath, e.name));
+  }
+
+  const rootDirs = new Map<string, string>();
+  for (const e of rootEntries) {
+    if (!e.isDirectory()) continue;
+    const abs = path.join(workspacePath, e.name);
+    if (!shouldSkipWorkspaceDir(abs, workspacePath)) rootDirs.set(e.name.toLowerCase(), abs);
+  }
+  for (const rootName of WORKSPACE_PRIORITY_ROOTS) {
+    const abs = rootDirs.get(rootName.toLowerCase());
+    if (abs) walk(abs);
+  }
+  for (const e of rootEntries) {
+    if (!e.isDirectory()) continue;
+    const abs = path.join(workspacePath, e.name);
+    if (!rootDirs.has(e.name.toLowerCase())) continue;
+    if (WORKSPACE_PRIORITY_ROOTS.some((rootName) => rootName.toLowerCase() === e.name.toLowerCase())) continue;
+    walk(abs);
+  }
+  return out;
+}
 function inferType(r: string): MemoryIndexSourceType {
   if (r.startsWith('chats/sessions/')) return 'chat_session';
   if (r.startsWith('chats/transcripts/')) return 'chat_transcript';
@@ -366,9 +469,10 @@ function inferType(r: string): MemoryIndexSourceType {
   if (r.startsWith('memory/root/')) return 'memory_root';
   if (r.startsWith('memory/files/')) return 'memory_note';
   if (r.startsWith('obsidian/vaults/')) return 'obsidian_note';
+  if (r.startsWith(WORKSPACE_FILE_PREFIX)) return 'workspace_file';
   return 'audit_misc';
 }
-function durability(t: MemoryIndexSourceType): number { return ({ memory_root: 1, proposal_state: 0.88, project_state: 0.82, chat_compaction: 0.76, task_state: 0.72, obsidian_note: 0.7, chat_session: 0.64, schedule_state: 0.6, cron_job: 0.58, chat_transcript: 0.56, team_state: 0.54, cron_run: 0.5, memory_note: 0.45, audit_misc: 0.5 } as Record<string, number>)[t] || 0.5; }
+function durability(t: MemoryIndexSourceType): number { return ({ memory_root: 1, proposal_state: 0.88, project_state: 0.82, chat_compaction: 0.76, task_state: 0.72, obsidian_note: 0.7, chat_session: 0.64, schedule_state: 0.6, cron_job: 0.58, chat_transcript: 0.56, team_state: 0.54, cron_run: 0.5, workspace_file: 0.52, memory_note: 0.45, audit_misc: 0.5 } as Record<string, number>)[t] || 0.5; }
 function projectFrom(relPath: string, obj: any): string | undefined {
   const m = relPath.match(/^projects\/state\/([^/]+)/); if (m?.[1]) return m[1];
   for (const v of [obj?.projectId, obj?.project_id, obj?.project, obj?.metadata?.projectId, obj?.frontmatter?.projectId, obj?.frontmatter?.project]) { const s = String(v || '').trim(); if (s) return s; }
@@ -394,9 +498,30 @@ function listFilesRecursive(rootDir: string): string[] {
   return out;
 }
 function parseContent(abs: string, relPath: string): { text: string; parsed?: any } | null {
-  let raw = ''; try { raw = fs.readFileSync(abs, 'utf-8'); } catch { return null; }
-  if (!raw.trim()) return null; if (raw.length > MAX_SOURCE_BYTES) raw = `${raw.slice(0, MAX_SOURCE_BYTES)}\n...[truncated_for_index]`;
   const lower = relPath.toLowerCase();
+  if (relPath.startsWith(WORKSPACE_FILE_PREFIX) && !isLikelyTextFile(relPath)) {
+    let st: fs.Stats | null = null; try { st = fs.statSync(abs); } catch { st = null; }
+    const displayPath = workspaceDisplayPath(relPath);
+    return {
+      text: [
+        `Workspace file: ${displayPath}`,
+        `File name: ${path.basename(displayPath)}`,
+        `Extension: ${path.extname(displayPath) || '(none)'}`,
+        st ? `Size bytes: ${st.size}` : '',
+        'Binary or non-text file; content was not indexed.',
+      ].filter(Boolean).join('\n'),
+      parsed: { title: path.basename(displayPath), binary: true },
+    };
+  }
+  let raw = ''; try { raw = fs.readFileSync(abs, 'utf-8'); } catch { return null; }
+  if (!raw.trim()) {
+    if (relPath.startsWith(WORKSPACE_FILE_PREFIX)) {
+      const displayPath = workspaceDisplayPath(relPath);
+      return { text: `Workspace file: ${displayPath}\nFile name: ${path.basename(displayPath)}\nEmpty file.`, parsed: { title: path.basename(displayPath), empty: true } };
+    }
+    return null;
+  }
+  if (raw.length > MAX_SOURCE_BYTES) raw = `${raw.slice(0, MAX_SOURCE_BYTES)}\n...[truncated_for_index]`;
   if (lower.endsWith('.md') && relPath.startsWith('obsidian/vaults/')) {
     const match = raw.match(/^<!--\s*PROMETHEUS_OBSIDIAN_META\s*\n([\s\S]*?)\n-->\s*/);
     let meta: any = {};
@@ -731,9 +856,21 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   }
   if (!fs.existsSync(auditRoot)) return { indexedFiles: 0, skippedFiles: 0, removedFiles: 0, deferredFiles: 0, totalRecords: 0, totalChunks: 0, updatedAt: nowIso };
 
-  const filesAbs = ROOT_DIRS.flatMap((d) => listFilesRecursive(path.join(auditRoot, d)));
-  memoryMark(`files listed (${filesAbs.length})`);
-  const rels = filesAbs.map((a) => rel(a, auditRoot)).filter((r) => r && !r.startsWith('_index/') && !r.endsWith('/INDEX.md') && !r.endsWith('/README.md'));
+  const sourceFiles = new Map<string, string>();
+  for (const d of ROOT_DIRS) {
+    for (const abs of listFilesRecursive(path.join(auditRoot, d))) {
+      const relPath = rel(abs, auditRoot);
+      if (!relPath || relPath.startsWith('_index/') || relPath.endsWith('/INDEX.md') || relPath.endsWith('/README.md')) continue;
+      sourceFiles.set(relPath, abs);
+    }
+  }
+  for (const abs of listWorkspaceFiles(workspacePath)) {
+    const workspaceRel = rel(abs, workspacePath);
+    if (!workspaceRel || workspaceRel.startsWith('audit/')) continue;
+    sourceFiles.set(WORKSPACE_FILE_PREFIX + workspaceRel, abs);
+  }
+  memoryMark(`files listed (${sourceFiles.size})`);
+  const rels = Array.from(sourceFiles.keys());
   const relSet = new Set(rels);
   let removed = 0; let skipped = 0; let indexed = 0;
   const removedRels: string[] = [];
@@ -744,7 +881,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   }
   const changed: string[] = [];
   for (const relPath of rels) {
-    const st = fs.statSync(path.join(auditRoot, relPath));
+    const st = fs.statSync(sourceFiles.get(relPath) || path.join(auditRoot, relPath));
     const prev = manifest.files[relPath];
     if (options?.force || !prev || prev.mtimeMs !== st.mtimeMs || prev.size !== st.size) changed.push(relPath); else skipped += 1;
   }
@@ -775,7 +912,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     delete manifest.files[oldRel];
   }
   for (const relPath of nowChanges) {
-    const abs = path.join(auditRoot, relPath); const st = fs.statSync(abs);
+    const abs = sourceFiles.get(relPath) || path.join(auditRoot, relPath); const st = fs.statSync(abs);
     const prev = manifest.files[relPath];
     if (prev) {
       for (const cid of prev.chunkIds || []) { const c = store.chunks[cid]; if (c) { removeChunkIndex(store.tokenIndex, c); delete store.chunks[cid]; } }
@@ -815,11 +952,16 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   ensureDir(root); writeJson(storePath, store); writeJson(manifestPath, manifest);
   memoryMark('store and manifest written');
   const graphPath = path.join(root, 'graph.json');
+  const firstChunkPreviewByRecord = new Map<string, string>();
+  for (const chunk of Object.values(store.chunks)) {
+    if (!firstChunkPreviewByRecord.has(chunk.recordId) || chunk.index === 0) firstChunkPreviewByRecord.set(chunk.recordId, preview(chunk.text));
+  }
   const nodes = Object.values(store.records).map((r) => ({
     id: r.id,
     sourceType: r.sourceType,
     sourcePath: r.sourcePath,
     title: r.title,
+    summary: firstChunkPreviewByRecord.get(r.id) || '',
     timestamp: new Date(r.timestampMs).toISOString(),
     day: r.day,
     projectId: r.projectId || null,
@@ -840,7 +982,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     edges,
   });
   memoryMark('graph written');
-  fs.writeFileSync(readme, `# Memory Index\n\nGenerated from workspace/audit.\n\nUpdated: ${nowIso}\nRecords: ${Object.keys(store.records).length}\nChunks: ${Object.keys(store.chunks).length}\nTokens: ${Object.keys(store.tokenIndex).length}\nRelations: ${store.relations.length}\nGraph: graph.json\n`, 'utf-8');
+  fs.writeFileSync(readme, `# Memory Index\n\nGenerated from workspace/audit plus workspace files.\n\nUpdated: ${nowIso}\nRecords: ${Object.keys(store.records).length}\nChunks: ${Object.keys(store.chunks).length}\nTokens: ${Object.keys(store.tokenIndex).length}\nRelations: ${store.relations.length}\nGraph: graph.json\n`, 'utf-8');
   // Refresh operational layer alongside evidence rebuild (throttled — max once per 60s)
   try { refreshOperationalIndex(workspacePath, { minIntervalMs: 60000 }); } catch { /* non-fatal */ }
   memoryMark('operational refresh checked');
@@ -1165,3 +1307,4 @@ export function getRelatedMemory(workspacePath: string, recordId: string, limit 
     }];
   });
 }
+

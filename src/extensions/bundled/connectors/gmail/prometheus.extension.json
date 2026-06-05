@@ -25,6 +25,7 @@
     "tools": [
       "connector_gmail_list_emails",
       "connector_gmail_get_email",
+      "connector_gmail_prepare_email",
       "connector_gmail_send_email",
       "connector_gmail_get_profile",
       "connector_gmail_list_labels"

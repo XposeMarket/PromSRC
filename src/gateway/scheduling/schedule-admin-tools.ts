@@ -11,6 +11,9 @@ import { listInternalWatches } from '../internal-watch/internal-watch-store';
 import { observeInternalWatchTarget } from '../internal-watch/internal-watch-runner';
 import { listTasks, loadTask, saveTask, updateTaskStatus } from '../tasks/task-store';
 import { peekPendingEvents } from '../teams/notify-bridge';
+import { getAgents } from '../../config/config';
+import { listManagedTeams } from '../teams/managed-teams';
+import { getBuildStatus } from '../../runtime/build-status';
 import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
 import { normalizeScheduleSpec } from './schedule-pattern';
 
@@ -675,24 +678,65 @@ function jobHealth(job: CronJob): Record<string, any> {
   };
 }
 
-export function automationDashboardTool(scheduler: SchedulerLike, args: any): SchedulerAdminResult {
-  const limit = clampLimit(args?.limit, 25, 200);
-  const jobs = scheduler.getJobs().slice(0, limit).map((job) => ({
-    ...summarizeJob(job),
-    health: jobHealth(job),
-  }));
-  const tasks = listTasks().slice(0, limit).map((task) => ({
+// ── automation_dashboard v2 helpers ──────────────────────────────────────────
+
+/** Trim a task record for the snapshot. `outputCap` caps the produced output. */
+function snapshotTask(task: any, outputCap: number): Record<string, any> {
+  const total = Array.isArray(task.plan) ? task.plan.length : 0;
+  const done = (task.plan || []).filter((s: any) => s.status === 'done' || s.status === 'skipped').length;
+  return {
     id: task.id,
     title: task.title,
     status: task.status,
+    step: total ? Math.min((task.currentStepIndex || 0) + 1, total) : null,
+    total_steps: total || null,
+    completed_steps: done,
     scheduleId: task.scheduleId || null,
     pausedByScheduleId: task.pausedByScheduleId || null,
+    teamId: task.teamSubagent?.teamId || null,
+    agentId: task.teamSubagent?.agentId || null,
     startedAt: task.startedAt,
     completedAt: task.completedAt || null,
     lastProgressAt: task.lastProgressAt,
     pauseReason: task.pauseReason || null,
-    finalSummary: task.finalSummary ? String(task.finalSummary).slice(0, 300) : null,
+    finalSummary: task.finalSummary ? String(task.finalSummary).slice(0, outputCap) : null,
+  };
+}
+
+/** Recent runs for a job, with output/error capped by depth. */
+function snapshotRunsForJob(job: CronJob, limit: number, outputCap: number): Array<Record<string, any>> {
+  return getRunHistory(job, limit).map((run) => ({
+    ...run,
+    jobId: job.id,
+    jobName: job.name,
+    outputSummary: run.outputSummary ? String(run.outputSummary).slice(0, outputCap) : '',
+    error: run.error ? String(run.error).slice(0, outputCap) : null,
   }));
+}
+
+export function automationDashboardTool(scheduler: SchedulerLike, args: any): SchedulerAdminResult {
+  const limit = clampLimit(args?.limit, 25, 200);
+  const depth = String(args?.depth || 'summary').toLowerCase() === 'full' ? 'full' : 'summary';
+  const outputCap = depth === 'full' ? 4000 : 300;
+  const resultCap = depth === 'full' ? 2000 : 120;
+  const agentFilter = String(args?.agent_id || args?.agentId || '').trim() || null;
+  const includeRaw = Array.isArray(args?.include)
+    ? args.include.map((s: any) => String(s || '').trim().toLowerCase()).filter(Boolean)
+    : null;
+  // Default: every section on. `include` narrows to the requested sections.
+  const wants = (section: string): boolean => !includeRaw || includeRaw.includes(section);
+  const withOutputs = wants('outputs');
+
+  const allJobs = scheduler.getJobs();
+  const allTasks = listTasks();
+
+  const jobs = allJobs.slice(0, limit).map((job) => ({
+    ...summarizeJob(job),
+    health: jobHealth(job),
+    lastResult: (job as any).lastResult ? String((job as any).lastResult).slice(0, resultCap) : null,
+  }));
+  const tasks = allTasks.slice(0, limit).map((task) => snapshotTask(task, outputCap));
+
   const watches = listInternalWatches({ includeDone: args?.include_done === true || args?.includeDone === true })
     .slice(0, limit)
     .map((watch) => {
@@ -723,6 +767,73 @@ export function automationDashboardTool(scheduler: SchedulerLike, args: any): Sc
       return [];
     }
   })();
+
+  // ── Agent-centric joined view: roster ⨝ jobs ⨝ tasks ⨝ recent output ──────
+  let agents: Array<Record<string, any>> | undefined;
+  if (wants('agents')) {
+    const roster = getAgents().filter((a: any) => !agentFilter || a.id === agentFilter);
+    agents = roster.map((a: any) => {
+      const agentJobs = allJobs.filter((j) => String(j.subagent_id || '') === a.id);
+      const agentJobIds = new Set(agentJobs.map((j) => j.id));
+      const agentTasks = allTasks.filter(
+        (t: any) => t.teamSubagent?.agentId === a.id || (t.scheduleId && agentJobIds.has(t.scheduleId)),
+      );
+      const recentRuns = withOutputs
+        ? sortRunsDesc(agentJobs.flatMap((j) => snapshotRunsForJob(j, 3, outputCap))).slice(0, 5)
+        : [];
+      const lastOutput =
+        recentRuns.find((r) => r.outputSummary)?.outputSummary ||
+        (agentJobs.map((j) => (j as any).lastResult).find(Boolean)
+          ? String(agentJobs.map((j) => (j as any).lastResult).find(Boolean)).slice(0, outputCap)
+          : null);
+      const tasksByStatus = agentTasks.reduce((acc: Record<string, number>, t: any) => {
+        const s = String(t.status || 'unknown');
+        acc[s] = (acc[s] || 0) + 1;
+        return acc;
+      }, {});
+      return {
+        id: a.id,
+        name: a.name || a.id,
+        description: a.description || null,
+        isTeamManager: (a as any).isTeamManager === true,
+        teamRole: a.teamRole || null,
+        default: a.default === true,
+        jobCount: agentJobs.length,
+        taskCount: agentTasks.length,
+        tasksByStatus,
+        jobs: agentJobs.slice(0, limit).map((j) => summarizeJob(j)),
+        tasks: agentTasks.slice(0, limit).map((t: any) => snapshotTask(t, outputCap)),
+        recentRuns,
+        lastOutput,
+      };
+    });
+  }
+
+  // ── Team-centric joined view: team ⨝ members ⨝ jobs ⨝ recent tasks ────────
+  let teams: Array<Record<string, any>> | undefined;
+  if (wants('teams') && !agentFilter) {
+    const roster = getAgents();
+    teams = listManagedTeams().map((t: any) => {
+      const memberIds: string[] = Array.isArray(t.subagentIds) ? t.subagentIds : [];
+      const members = memberIds.map((id) => {
+        const a = roster.find((r: any) => r.id === id);
+        return { id, name: a?.name || id, isTeamManager: (a as any)?.isTeamManager === true };
+      });
+      const teamJobs = allJobs.filter((j) => String((j as any).team_id || '') === t.id);
+      const teamTasks = allTasks.filter((task: any) => task.teamSubagent?.teamId === t.id);
+      return {
+        id: t.id,
+        name: t.name,
+        description: t.description || null,
+        emoji: t.emoji || null,
+        memberCount: members.length,
+        members,
+        jobs: teamJobs.slice(0, limit).map((j) => summarizeJob(j)),
+        recentTasks: teamTasks.slice(0, limit).map((task: any) => snapshotTask(task, outputCap)),
+      };
+    });
+  }
+
   const counts = {
     jobs: jobs.length,
     jobsByHealth: jobs.reduce((acc: Record<string, number>, job: any) => {
@@ -735,13 +846,28 @@ export function automationDashboardTool(scheduler: SchedulerLike, args: any): Sc
       acc[status] = (acc[status] || 0) + 1;
       return acc;
     }, {}),
+    agents: agents ? agents.length : undefined,
+    teams: teams ? teams.length : undefined,
     watches: watches.length,
     events: events.length,
   };
+  const build = getBuildStatus();
+
   return {
     success: true,
     message: 'Automation dashboard snapshot loaded.',
-    data: { generatedAt: new Date().toISOString(), counts, scheduledJobs: jobs, tasks, internalWatches: watches, eventQueue: events },
+    data: {
+      generatedAt: new Date().toISOString(),
+      depth,
+      build,
+      counts,
+      ...(agents ? { agents } : {}),
+      ...(teams ? { teams } : {}),
+      scheduledJobs: jobs,
+      tasks,
+      internalWatches: watches,
+      eventQueue: events,
+    },
   };
 }
 

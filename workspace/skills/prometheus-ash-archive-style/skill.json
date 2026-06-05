@@ -48,6 +48,11 @@
       "path": "templates/hyperframes-brief.md",
       "type": "template",
       "description": "Pre-authoring brief for Ash & Archive HyperFrames videos."
+    },
+    {
+      "path": "references/mythic-editorial-launch-visuals-2026-06-04.md",
+      "type": "reference",
+      "description": "Campaign-specific mythic editorial Prometheus launch visual direction from Raul’s 2026-06-04 release-thread session."
     }
   ]
 }

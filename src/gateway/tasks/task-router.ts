@@ -13,6 +13,9 @@ import {
   createTask, type TaskRecord, type TaskStatus,
 } from './task-store';
 import { addMessage, clearHistory } from '../session';
+import { broadcastTeamEvent, broadcastWS } from '../comms/broadcaster';
+import { appendSubagentChatMessage } from '../agents-runtime/subagent-chat-store';
+import { appendTeamChat, getManagedTeam } from '../teams/managed-teams';
 import { BackgroundTaskRunner } from './background-task-runner';
 import { type TaskControlResponse } from '../tool-builder';
 import {
@@ -32,6 +35,15 @@ const ACTIVE_TASK_STATUSES: TaskStatus[] = [
   'queued', 'running', 'paused', 'stalled',
   'needs_assistance', 'awaiting_user_input', 'failed', 'waiting_subagent',
 ];
+
+type RecoveryTurnSource =
+  | 'pause_analysis'
+  | 'chat'
+  | 'task_panel'
+  | 'subagent_chat'
+  | 'team_chat'
+  | 'team_manager'
+  | 'system';
 
 function inferTaskChannelFromSession(sessionId: string): 'web' | 'telegram' {
   return String(sessionId || '').startsWith('telegram_') ? 'telegram' : 'web';
@@ -75,16 +87,62 @@ function findRecoveryTaskForReplySession(sessionId: string, statuses?: TaskStatu
   return blocked[0] || null;
 }
 
+export function findRecoveryTaskForSubagentChat(agentId: string, statuses?: TaskStatus[]): TaskRecord | null {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+  return listTasks({ status: statuses || RECOVERY_BLOCKED_STATUSES })
+    .filter((task) => isRecoveryBlockedTask(task))
+    .filter((task) =>
+      !task.teamSubagent
+      && String(task.subagentProfile || '').trim() === cleanAgentId
+    )
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)[0] || null;
+}
+
+export function findRecoveryTaskForTeamChatTarget(
+  teamId: string,
+  targetType?: 'room' | 'team' | 'manager' | 'member',
+  targetId?: string,
+  statuses?: TaskStatus[],
+): TaskRecord | null {
+  const cleanTeamId = String(teamId || '').trim();
+  const cleanTargetId = String(targetId || '').trim();
+  if (!cleanTeamId) return null;
+  return listTasks({ status: statuses || RECOVERY_BLOCKED_STATUSES })
+    .filter((task) => isRecoveryBlockedTask(task))
+    .filter((task) => {
+      const taskTeamId = String(task.teamSubagent?.teamId || task.proposalExecution?.teamExecution?.teamId || '').trim();
+      if (taskTeamId !== cleanTeamId) return false;
+      if (targetType === 'member') {
+        return !!cleanTargetId && String(task.teamSubagent?.agentId || '').trim() === cleanTargetId;
+      }
+      if (targetType === 'manager') return !!task.proposalExecution?.teamExecution || !!task.teamSubagent;
+      return true;
+    })
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)[0] || null;
+}
+
 function buildTaskRecoveryCallerContext(task: TaskRecord, objective: 'conversation' | 'resume_brief'): string {
   const liveTask = loadTask(task.id) || task;
   const snapshot = liveTask.pauseSnapshot || buildTaskPauseSnapshot(liveTask);
   const latestAnalysis = String(liveTask.pauseAnalysis?.message || '').trim();
   const latestConversation = formatTaskRecoveryConversation(liveTask.recoveryConversation, { maxTurns: 14 });
+  const standaloneSubagent = String(liveTask.subagentProfile || '').trim();
+  const teamSubagent = liveTask.teamSubagent;
+  const teamExecution = liveTask.proposalExecution?.teamExecution;
+  const ownershipContext = teamSubagent?.teamId && teamSubagent?.agentId
+    ? `Task owner: team subagent ${teamSubagent.agentName || teamSubagent.agentId} on team ${teamSubagent.teamId}. This recovery chat is only for this task; pass actionable guidance to that team/subagent and resume only when the user approves.`
+    : standaloneSubagent
+      ? `Task owner: standalone subagent ${standaloneSubagent}. This recovery chat is only for this subagent task; do not start unrelated work in this session.`
+      : teamExecution?.teamId
+        ? `Task owner: team manager/executor for team ${teamExecution.teamId}. This recovery chat is only for this team task; route guidance to the manager context and resume only when appropriate.`
+        : 'Task owner: main background task.';
   return [
     objective === 'resume_brief'
       ? 'TASK RECOVERY MODE: resume brief synthesis.'
       : 'TASK RECOVERY MODE: paused-task conversation.',
     'This is a task-attached recovery conversation for a paused background task.',
+    ownershipContext,
     'Do not use tools.',
     objective === 'resume_brief'
       ? 'Write only the compact execution brief the task runner should receive next. Do not include pleasantries.'
@@ -179,9 +237,88 @@ async function synthesizeTaskResumeBrief(task: TaskRecord, latestUserMessage: st
   ].filter(Boolean).join('\n');
 }
 
+function mirrorTaskRecoveryTurnsToOwnerChats(
+  task: TaskRecord,
+  turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number; source?: RecoveryTurnSource }>,
+): void {
+  const cleanTurns = turns
+    .filter((turn) => turn && (turn.role === 'user' || turn.role === 'assistant') && String(turn.content || '').trim())
+    .map((turn) => ({
+      ...turn,
+      content: String(turn.content || '').trim(),
+      timestamp: Number.isFinite(Number(turn.timestamp)) ? Number(turn.timestamp) : Date.now(),
+    }));
+  if (cleanTurns.length === 0) return;
+
+  const standaloneSubagent = String(task.subagentProfile || '').trim();
+  if (standaloneSubagent && !task.teamSubagent) {
+    for (const turn of cleanTurns) {
+      try {
+        const message = appendSubagentChatMessage(standaloneSubagent, {
+          role: turn.role === 'user' ? 'user' : 'agent',
+          content: turn.content,
+          ts: turn.timestamp,
+          metadata: {
+            source: 'task_recovery',
+            taskId: task.id,
+            recoverySource: turn.source || 'system',
+          },
+        });
+        broadcastWS({ type: 'subagent_chat_message', agentId: standaloneSubagent, message });
+      } catch (err: any) {
+        console.warn(`[TaskRecovery] Failed to mirror task ${task.id} turn to subagent ${standaloneSubagent}:`, err?.message || err);
+      }
+    }
+  }
+
+  const teamId = String(task.teamSubagent?.teamId || task.proposalExecution?.teamExecution?.teamId || '').trim();
+  if (!teamId) return;
+  const team = getManagedTeam(teamId);
+  const agentId = String(task.teamSubagent?.agentId || task.proposalExecution?.teamExecution?.executorAgentId || '').trim();
+  const agentName = String(task.teamSubagent?.agentName || task.proposalExecution?.teamExecution?.executorAgentName || agentId || 'Team Agent').trim();
+  const isManagerTask = !task.teamSubagent && !!task.proposalExecution?.teamExecution;
+
+  for (const turn of cleanTurns) {
+    try {
+      const chatMessage = appendTeamChat(teamId, turn.role === 'user'
+        ? {
+            from: 'user',
+            fromName: turn.source === 'team_chat' ? 'You' : 'Task Recovery',
+            content: turn.content,
+            metadata: {
+              source: 'task_recovery',
+              taskId: task.id,
+              targetType: isManagerTask ? 'manager' : agentId ? 'member' : 'team',
+              targetId: isManagerTask ? 'manager' : agentId || undefined,
+              targetLabel: isManagerTask ? 'Manager' : agentName,
+            },
+          }
+        : {
+            from: isManagerTask ? 'manager' : 'subagent',
+            fromName: isManagerTask ? 'Manager' : agentName,
+            fromAgentId: isManagerTask ? undefined : agentId || undefined,
+            content: turn.content,
+            metadata: {
+              source: 'task_recovery',
+              taskId: task.id,
+            },
+          });
+      broadcastTeamEvent({
+        type: 'team_chat_message',
+        teamId,
+        teamName: team?.name,
+        chatMessage,
+        text: String(chatMessage?.content || ''),
+      });
+    } catch (err: any) {
+      console.warn(`[TaskRecovery] Failed to mirror task ${task.id} turn to team ${teamId}:`, err?.message || err);
+    }
+  }
+}
+
 function persistRecoveryConversationUpdate(
   taskId: string,
-  turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number; source?: 'pause_analysis' | 'chat' | 'task_panel' | 'team_manager' | 'system' }>,
+  turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number; source?: RecoveryTurnSource }>,
   opts?: { resumeBrief?: string; approvedAction?: 'resume' | 'rerun'; clearPendingClarification?: boolean },
 ): TaskRecord | null {
   const liveTask = loadTask(taskId);
@@ -221,6 +358,7 @@ function persistRecoveryConversationUpdate(
     delete liveTask.pendingClarificationQuestion;
   }
   saveTask(liveTask);
+  mirrorTaskRecoveryTurnsToOwnerChats(liveTask, appended);
   try {
     syncTaskRecoverySession(liveTask);
   } catch {}
@@ -674,7 +812,7 @@ export function renderTaskCandidatesForHuman(candidates: Array<Record<string, an
 export async function handleTaskRecoveryMessage(
   taskId: string,
   rawMessage: string,
-  opts?: { sourceSessionId?: string; source?: 'chat' | 'task_panel' | 'team_manager' },
+  opts?: { sourceSessionId?: string; source?: 'chat' | 'task_panel' | 'subagent_chat' | 'team_chat' | 'team_manager' },
 ): Promise<{ handled: boolean; resumed: boolean; reply: string | null; action?: 'conversation' | 'resume' | 'rerun' | 'cancel' }> {
   const task = loadTask(taskId);
   const message = String(rawMessage || '').trim();
@@ -682,7 +820,15 @@ export async function handleTaskRecoveryMessage(
     return { handled: false, resumed: false, reply: null };
   }
 
-  const source = opts?.source === 'task_panel' ? 'task_panel' : opts?.source === 'team_manager' ? 'team_manager' : 'chat';
+  const source = opts?.source === 'task_panel'
+    ? 'task_panel'
+    : opts?.source === 'subagent_chat'
+      ? 'subagent_chat'
+      : opts?.source === 'team_chat'
+        ? 'team_chat'
+        : opts?.source === 'team_manager'
+          ? 'team_manager'
+          : 'chat';
   const sourceSessionId = String(opts?.sourceSessionId || task.sessionId || getTaskReplySessionIds(task)[0] || '').trim();
 
   if (isCancelIntent(message)) {

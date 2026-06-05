@@ -15,26 +15,38 @@ const TYPE_COLORS = {
   memory_root: '#ffde7d',
   memory_note: '#f5a3ff',
   obsidian_note: '#8fddc7',
+  workspace_file: '#9fb7ff',
   audit_misc: '#b0b8c9',
   unknown: '#b0b8c9',
 };
 
 const CATEGORY_META = {
   chats: { label: 'Chats', color: '#79b8ff' },
+  thoughts: { label: 'Thoughts', color: '#35e8ff' },
+  dreams: { label: 'Dreams', color: '#b58cff' },
+  restarts: { label: 'Restarts', color: '#ff7a90' },
   proposals: { label: 'Proposals', color: '#ff96b8' },
   tasks: { label: 'Tasks', color: '#ffbe7a' },
   cron: { label: 'Cron', color: '#ffd76e' },
   schedules: { label: 'Schedules', color: '#c18eff' },
   teams: { label: 'Teams', color: '#69d5e8' },
+  subagents: { label: 'Subagents', color: '#75a7ff' },
+  subagentWorkspace: { label: 'Subagent Files', color: '#28d7c7' },
   projects: { label: 'Projects', color: '#8fe39d' },
-  memory: { label: 'Memory', color: '#f4b0ff' },
+  workspaceFiles: { label: 'Workspace Files', color: '#9fb7ff' },
+  userMemory: { label: 'USER.md', color: '#46e6a8' },
+  soulMemory: { label: 'SOUL.md', color: '#ff72d8' },
+  memoryRoot: { label: 'MEMORY.md', color: '#ffe277' },
+  manualMemory: { label: 'Manual Memories', color: '#f3a6ff' },
+  memory: { label: 'Memory Files', color: '#f4b0ff' },
   obsidian: { label: 'Obsidian', color: '#8fddc7' },
   misc: { label: 'Other', color: '#aab4c5' },
 };
 
-const SHUFFLE_KINDS = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation', 'flame'];
+const PARTICLE_MODES = ['galaxy', 'sphere', 'wave', 'tunnel'];
 const DEFAULT_LAYOUT_KEY = 'prometheus-memory-default-layout';
 const LEGACY_DEFAULT_SHAPE_KEY = 'prometheus-memory-default-shape';
+const MEMORY_GRAPH_SETTINGS_KEY = 'prometheus-memory-graph-settings';
 const MAX_MEMORY_ATTACHMENTS = 12;
 
 function createMemoryDraft() {
@@ -64,11 +76,27 @@ const state = {
     minEdgeWeight: 0.34,
     showLabels: false,
     organizeByType: false,
-    repulsion: 90,
-    linkStrength: 0.026,
-    collision: 24,
+    separateByType: false,
+    visualMode: 'galaxy',
+    speed: 35,
+    depth: 740,
+    glow: 20,
   },
   transform: { x: 0, y: 0, scale: 1 },
+  scene: {
+    width: 0,
+    height: 0,
+    dpr: 1,
+    time: 0,
+    yaw: -0.35,
+    pitch: 0.22,
+    targetYaw: -0.35,
+    targetPitch: 0.22,
+    zoom: 1120,
+    targetZoom: 1120,
+    projected: [],
+    burst: 0,
+  },
   rawNodes: [],
   rawEdges: [],
   recordNodes: [],
@@ -91,15 +119,18 @@ const state = {
   dragOverDropzone: false,
   imagePoints: null,
   shuffleTimer: 0,
-  shuffleKindIndex: -1,
   simulationHeat: 1,
   raf: 0,
   resizeObserver: null,
+  spriteCache: new Map(),
 };
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function hashString(input) { let hash = 5381; for (let i = 0; i < input.length; i += 1) hash = ((hash << 5) + hash) ^ input.charCodeAt(i); return Math.abs(hash); }
-function currentShuffleKind() { return SHUFFLE_KINDS[state.shuffleKindIndex] || 'constellation'; }
+function currentParticleModeLabel() {
+  const mode = PARTICLE_MODES.includes(state.controls.visualMode) ? state.controls.visualMode : 'galaxy';
+  return mode.charAt(0).toUpperCase() + mode.slice(1);
+}
 function flameNodePath(ctx, cx, cy, r) {
   // Flame shape centered at (cx, cy), tip pointing up. r is the effective radius.
   const s = r * 1.25;
@@ -121,18 +152,51 @@ function roundedRectPath(ctx, x, y, width, height, radius = 8) {
   ctx.quadraticCurveTo(x, y, x + r, y);
 }
 function sourceColor(type) { return TYPE_COLORS[type] || TYPE_COLORS.unknown; }
-function alpha(color, opacity) {
+function rgbFromColor(color) {
   const hex = String(color || '#ffffff').replace('#', '');
   const expanded = hex.length === 3 ? hex.split('').map((part) => part + part).join('') : hex.padEnd(6, 'f');
   const int = parseInt(expanded.slice(0, 6), 16);
-  const r = (int >> 16) & 255;
-  const g = (int >> 8) & 255;
-  const b = int & 255;
+  return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
+}
+function alpha(color, opacity) {
+  const hex = String(color || '#ffffff').replace('#', '');
+  const expanded = hex.length === 3 ? hex.split('').map((part) => part + part).join('') : hex.padEnd(6, 'f');
+  const [r, g, b] = rgbFromColor(color);
   return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 function formatTime(ts) { if (!ts) return 'Unknown'; const parsed = Date.parse(ts); return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : ts; }
-function toCategoryId(sourceType) {
-  const type = String(sourceType || '');
+function normalizedMemoryPath(raw) {
+  return String(raw?.sourcePath || raw?.path || '').replace(/\\/g, '/');
+}
+
+function toCategoryId(rawInput) {
+  const raw = typeof rawInput === 'object' && rawInput ? rawInput : { sourceType: rawInput };
+  const type = String(raw.sourceType || '').toLowerCase();
+  const sourcePath = normalizedMemoryPath(raw);
+  const pathLower = sourcePath.toLowerCase();
+  const label = String(raw.label || raw.title || '').toLowerCase();
+  const summary = String(raw.summary || '').toLowerCase();
+  const haystack = [type, pathLower, label, summary].join(' ');
+
+  if (/memory\/root\/user\.md$/i.test(sourcePath) || /(^|\/)user\.md$/i.test(sourcePath)) return 'userMemory';
+  if (/memory\/root\/soul\.md$/i.test(sourcePath) || /(^|\/)soul\.md$/i.test(sourcePath)) return 'soulMemory';
+  if (/memory\/root\/memory\.md$/i.test(sourcePath) || /(^|\/)memory\.md$/i.test(sourcePath)) return 'memoryRoot';
+  if (pathLower.startsWith('memory/files/curated-claims/')) return 'memory';
+  if (pathLower.startsWith('memory/files/')) return 'manualMemory';
+
+  if (pathLower.startsWith('restarts/') || /\brestart(s|ed|ing)?\b/.test(haystack) || type === 'hot_restart') return 'restarts';
+  if (/brain\/(thoughts?|pulses?)\//.test(pathLower) || /(^|[\s_-])thought(s)?([\s_-]|$)/.test(haystack) || /-thought\.md$/.test(pathLower)) return 'thoughts';
+  if (/brain\/(dreams?|cleanups?)\//.test(pathLower) || /(^|[\s_-])(dreams?|cleanups?|cleanup)([\s_-]|$)/.test(haystack)) return 'dreams';
+
+  if (pathLower.includes('/subagents/') || pathLower.startsWith('subagents/') || pathLower.includes('.prometheus/subagents/')) {
+    if (pathLower.includes('/workspace/') || pathLower.includes('/workspaces/') || /(^|\/)(files|artifacts|uploads)\//.test(pathLower)) return 'subagentWorkspace';
+    return 'subagents';
+  }
+  if (/\bsubagent\b/.test(haystack)) {
+    if (/\b(workspace|file|artifact|upload)\b/.test(haystack)) return 'subagentWorkspace';
+    return 'subagents';
+  }
+
   if (type.startsWith('chat_')) return 'chats';
   if (type.startsWith('proposal_')) return 'proposals';
   if (type.startsWith('task_')) return 'tasks';
@@ -140,6 +204,7 @@ function toCategoryId(sourceType) {
   if (type.startsWith('schedule_')) return 'schedules';
   if (type.startsWith('team_')) return 'teams';
   if (type.startsWith('project_')) return 'projects';
+  if (type === 'workspace_file' || pathLower.startsWith('workspace/files/')) return 'workspaceFiles';
   if (type.startsWith('memory_')) return 'memory';
   if (type.startsWith('obsidian_')) return 'obsidian';
   return 'misc';
@@ -157,9 +222,9 @@ function getVisibleRecordCount() { return state.recordNodes.reduce((sum, node) =
 function getMatchedNodeCount() { return state.recordNodes.reduce((sum, node) => sum + (node.matched ? 1 : 0), 0); }
 function updateStatsText(extra = '') {
   if (!state.statsEl) return;
-  const modeLabel = state.controls.organizeByType ? 'organized' : 'relation graph';
-  const suffix = extra ? ` | ${extra}` : '';
-  state.statsEl.textContent = `${getVisibleRecordCount()} nodes${suffix}`;
+  const modeLabel = state.controls.separateByType ? 'separated by type' : state.controls.organizeByType ? 'organized by type' : state.shapeMode === 'image' ? 'image' : currentParticleModeLabel().toLowerCase();
+  const suffix = extra ? ' | ' + extra : '';
+  state.statsEl.textContent = getVisibleRecordCount() + ' nodes | ' + modeLabel + suffix;
 }
 
 function buildAdjacency(edges) {
@@ -558,93 +623,75 @@ function applyImageShapeToNodes(nodes, points) {
   return true;
 }
 
-function layoutByTypeGroups(nodes) {
+function sortedCategoryEntries(nodes) {
   const grouped = new Map();
   nodes.forEach((node) => {
     const categoryId = node.categoryId || 'misc';
     if (!grouped.has(categoryId)) grouped.set(categoryId, []);
     grouped.get(categoryId).push(node);
   });
-
   const categoryOrder = Object.keys(CATEGORY_META);
-  const entries = Array.from(grouped.entries()).sort((a, b) => {
+  return Array.from(grouped.entries()).sort((a, b) => {
     const ai = categoryOrder.indexOf(a[0]);
     const bi = categoryOrder.indexOf(b[0]);
     return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi) || a[0].localeCompare(b[0]);
   });
-  const groupCols = Math.ceil(Math.sqrt(entries.length * 1.35));
-  const groupRows = Math.ceil(entries.length / Math.max(1, groupCols));
-  const gapX = 360;
-  const gapY = 300;
-  const cards = [];
+}
 
-  entries.forEach(([categoryId, items], index) => {
+function layoutByTypeGroups(nodes) {
+  const entries = sortedCategoryEntries(nodes);
+  const groupCount = Math.max(1, entries.length);
+  return entries.map(([categoryId, items], groupIndex) => {
     const meta = CATEGORY_META[categoryId] || CATEGORY_META.misc;
-    const groupCol = index % groupCols;
-    const groupRow = Math.floor(index / groupCols);
-    const centerX = (groupCol - (groupCols - 1) / 2) * gapX;
-    const centerY = (groupRow - (groupRows - 1) / 2) * gapY;
-    const cols = Math.ceil(Math.sqrt(items.length));
-    const rows = Math.ceil(items.length / Math.max(1, cols));
-    const spacing = clamp(260 / Math.max(cols, rows), 8, 18);
-    const clusterWidth = Math.max(120, (cols - 1) * spacing + 64);
-    const clusterHeight = Math.max(96, (rows - 1) * spacing + 64);
-
     items.sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
+    const typeCount = Math.max(1, items.length);
     items.forEach((node, itemIndex) => {
-      const col = itemIndex % cols;
-      const row = Math.floor(itemIndex / cols);
-      const jitterX = ((hashString(`${node.id}:type:x`) % 1000) / 1000 - 0.5) * spacing * 0.85;
-      const jitterY = ((hashString(`${node.id}:type:y`) % 1000) / 1000 - 0.5) * spacing * 0.85;
-      node.baseX = centerX + (col - (cols - 1) / 2) * spacing + jitterX;
-      node.baseY = centerY + (row - (rows - 1) / 2) * spacing + jitterY;
-      resetNodePhysics(node);
+      node.typeGroupIndex = groupIndex;
+      node.typeGroupCount = groupCount;
+      node.typeLocalIndex = itemIndex;
+      node.typeLocalT = typeCount <= 1 ? 0.5 : itemIndex / Math.max(1, typeCount - 1);
+      node.typeCount = typeCount;
     });
-    resolveClusterOverlap(items.map((node) => node.id), 6);
-
-    cards.push({
-      id: `type-card:${categoryId}`,
-      label: meta.label,
-      count: items.length,
-      color: meta.color,
-      x: centerX,
-      y: centerY - clusterHeight / 2 - 46,
-      width: clamp(meta.label.length * 8 + 86, 128, 220),
-      height: 32,
-      clusterWidth,
-      clusterHeight,
-    });
+    return { id: 'type-card:' + categoryId, categoryId, label: meta.label, count: items.length, color: meta.color };
   });
+}
 
+function layoutSeparatedTypeGroups(nodes) {
+  const entries = sortedCategoryEntries(nodes);
+  const groupCount = Math.max(1, entries.length);
+  const columns = Math.max(2, Math.ceil(Math.sqrt(groupCount * 1.34)));
+  const cards = [];
+  entries.forEach(([categoryId, items], groupIndex) => {
+    const meta = CATEGORY_META[categoryId] || CATEGORY_META.misc;
+    items.sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
+    const count = Math.max(1, items.length);
+    const grid = Math.ceil(Math.sqrt(count));
+    const clusterWidth = clamp(84 + grid * 12 + Math.sqrt(count) * 11, 112, 280);
+    const clusterHeight = clamp(76 + Math.ceil(count / grid) * 12 + Math.sqrt(count) * 10, 94, 260);
+    const row = Math.floor(groupIndex / columns);
+    const col = groupIndex % columns;
+    const x = (col - (columns - 1) / 2) * 310 + ((row % 2) ? 54 : 0);
+    const y = (row - (Math.ceil(groupCount / columns) - 1) / 2) * 245;
+    items.forEach((node, itemIndex) => {
+      const gx = itemIndex % grid;
+      const gy = Math.floor(itemIndex / grid);
+      const jitterA = ((hashString(node.id + ':sep:a') % 1000) / 1000 - 0.5);
+      const jitterB = ((hashString(node.id + ':sep:b') % 1000) / 1000 - 0.5);
+      node.typeGroupIndex = groupIndex;
+      node.typeGroupCount = groupCount;
+      node.typeLocalIndex = itemIndex;
+      node.typeLocalT = count <= 1 ? 0.5 : itemIndex / Math.max(1, count - 1);
+      node.typeCount = count;
+      node.baseX = x + (gx / Math.max(1, grid - 1) - 0.5) * clusterWidth * 0.72 + jitterA * 18;
+      node.baseY = y + (gy / Math.max(1, Math.ceil(count / grid) - 1) - 0.5) * clusterHeight * 0.66 + jitterB * 18;
+    });
+    cards.push({ id: 'type-card:' + categoryId, categoryId, label: meta.label, count: items.length, color: meta.color });
+  });
   return cards;
 }
 
 function fitGraphToViewport() {
-  if (!state.stageEl || !state.renderNodes.length) return;
-  const width = state.stageEl.clientWidth || 1;
-  const height = state.stageEl.clientHeight || 1;
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-  state.renderNodes.forEach((node) => {
-    minX = Math.min(minX, node.baseX);
-    maxX = Math.max(maxX, node.baseX);
-    minY = Math.min(minY, node.baseY);
-    maxY = Math.max(maxY, node.baseY);
-  });
-  state.typeGroupCards.forEach((card) => {
-    minX = Math.min(minX, card.x - card.width / 2);
-    maxX = Math.max(maxX, card.x + card.width / 2);
-    minY = Math.min(minY, card.y - card.height / 2);
-    maxY = Math.max(maxY, card.y + card.height / 2);
-  });
-  const graphWidth = Math.max(1, maxX - minX + 280);
-  const graphHeight = Math.max(1, maxY - minY + 280);
-  const scale = clamp(Math.min(width / graphWidth, height / graphHeight), 0.05, 1.08);
-  state.transform.scale = scale;
-  state.transform.x = width / 2 - ((minX + maxX) / 2) * scale;
-  state.transform.y = height / 2 - ((minY + maxY) / 2) * scale;
+  state.transform = { x: 0, y: 0, scale: 1 };
 }
 
 function rebuildRenderGraph(relayout = true) {
@@ -652,35 +699,29 @@ function rebuildRenderGraph(relayout = true) {
   const nodeMap = new Map(visibleNodes.map((node) => [node.id, node]));
   const filteredEdges = state.realEdges.filter((edge) => edge.visible && nodeMap.has(edge.source) && nodeMap.has(edge.target));
   state.visibleAdjacency = buildAdjacency(filteredEdges);
-  state.typeGroupCards = [];
-
-  if (state.controls.organizeByType) {
-    state.typeGroupCards = layoutByTypeGroups(visibleNodes);
-    state.renderNodes = [...visibleNodes];
-    state.renderEdges = [];
-  } else if (state.shapeMode === 'prometheus') {
-    if (relayout) layoutPrometheus(visibleNodes);
-    state.renderNodes = [...visibleNodes];
-    state.renderEdges = [...filteredEdges];
-  } else if (state.shapeMode === 'image' && state.imagePoints?.length) {
-    if (relayout) applyImageShapeToNodes(visibleNodes, state.imagePoints);
-    state.renderNodes = [...visibleNodes];
-    state.renderEdges = [...filteredEdges];
-  } else if (state.shapeMode === 'shuffle') {
-    if (relayout) {
-      layoutByRandomShape(visibleNodes, currentShuffleKind());
-    }
-    state.renderNodes = [...visibleNodes];
-    state.renderEdges = [...filteredEdges];
-  } else {
-    if (relayout) layoutByComponents(visibleNodes, filteredEdges);
-    state.renderNodes = [...visibleNodes];
-    state.renderEdges = [...filteredEdges];
-  }
-
+  state.typeGroupCards = state.controls.separateByType ? layoutSeparatedTypeGroups(visibleNodes) : state.controls.organizeByType ? layoutByTypeGroups(visibleNodes) : [];
+  state.renderNodes = [...visibleNodes];
+  state.renderEdges = [...filteredEdges].sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0));
   state.nodeById = new Map(state.renderNodes.map((node) => [node.id, node]));
-  state.renderNodes.forEach((node) => { if (!node.isHub) node.interactive = true; });
-  wakeSimulation(relayout ? 1 : 0.55);
+
+  const ordered = [...state.renderNodes].sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
+  ordered.forEach((node, index) => {
+    const seed = hashString(node.id + ':particle');
+    const colorPick = (hashString(node.id + ':hue') % 100) / 100;
+    node.sceneIndex = index;
+    node.sceneT = ordered.length <= 1 ? 0.5 : index / Math.max(1, ordered.length - 1);
+    node.sceneSeed = seed;
+    node.sceneHue = colorPick < 0.46 ? 'cyan' : colorPick < 0.78 ? 'ember' : 'pink';
+    node.interactive = true;
+    if (relayout || state.shapeMode !== 'image') {
+      node.x = node.baseX || 0;
+      node.y = node.baseY || 0;
+    }
+  });
+
+  if (state.shapeMode === 'image' && state.imagePoints?.length && relayout) {
+    applyImageShapeToNodes(ordered, state.imagePoints);
+  }
 }
 
 function processGraph(data) {
@@ -694,8 +735,8 @@ function processGraph(data) {
       ...raw,
       degree,
       radius,
-      color: sourceColor(raw.sourceType),
-      categoryId: toCategoryId(raw.sourceType),
+      color: CATEGORY_META[toCategoryId(raw)]?.color || sourceColor(raw.sourceType),
+      categoryId: toCategoryId(raw),
       virtual: false,
       interactive: true,
       isHub: false,
@@ -749,6 +790,7 @@ function applyFilters(options = {}) {
       option.textContent = state.rawNodes.find((node) => node.sourceType === type)?.sourceTypeLabel || type;
       typeSelect.appendChild(option);
     });
+    typeSelect.value = state.controls.typeFilter || '';
   }
 
   rebuildRenderGraph(relayout);
@@ -780,317 +822,373 @@ function showTooltip(node, point) {
 }
 
 function getNodeAtPoint(clientX, clientY) {
-  const world = uiToWorld(clientX, clientY);
+  if (!state.canvas) return null;
+  const rect = state.canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
   let best = null;
   let bestDist = Infinity;
-  for (const node of state.renderNodes) {
-    if (!node.visible) continue;
-    const dist = Math.hypot(world.x - node.x, world.y - node.y);
-    if (dist <= (node.radius * 1.3 + 9) / state.transform.scale && dist < bestDist) {
-      best = node;
+  for (let i = state.scene.projected.length - 1; i >= 0; i -= 1) {
+    const item = state.scene.projected[i];
+    if (!item?.node?.visible || item.node.interactive === false) continue;
+    const dist = Math.hypot(x - item.screenX, y - item.screenY);
+    const hitRadius = Math.max(9, item.size + 8);
+    if (dist <= hitRadius && dist < bestDist) {
+      best = item.node;
       bestDist = dist;
     }
   }
   return best;
 }
 
+function particleColor(node, alphaValue) {
+  if (state.controls.organizeByType) return alpha(CATEGORY_META[node.categoryId]?.color || node.color, alphaValue);
+  if (node.sceneHue === 'cyan') return 'rgba(57,232,255,' + alphaValue + ')';
+  if (node.sceneHue === 'pink') return 'rgba(255,79,216,' + alphaValue + ')';
+  return 'rgba(255,106,26,' + alphaValue + ')';
+}
+
+function particleRgb(node) {
+  if (state.controls.organizeByType) return rgbFromColor(CATEGORY_META[node.categoryId]?.color || node.color);
+  if (node.sceneHue === 'cyan') return [57, 232, 255];
+  if (node.sceneHue === 'pink') return [255, 79, 216];
+  return [255, 106, 26];
+}
+
+function getParticleSprite(node, size, glow) {
+  const [r, g, b] = particleRgb(node);
+  const sizeBucket = Math.max(1, Math.round(size * 2) / 2);
+  const glowBucket = Math.round(glow * 20) / 20;
+  const key = r + ',' + g + ',' + b + ':' + sizeBucket + ':' + glowBucket;
+  const cached = state.spriteCache.get(key);
+  if (cached) return cached;
+  if (state.spriteCache.size > 420) state.spriteCache.clear();
+  const halo = sizeBucket * (4.8 + glowBucket * 9.5);
+  const pad = 3;
+  const dim = Math.ceil((halo + pad) * 2);
+  const sprite = document.createElement('canvas');
+  sprite.width = dim;
+  sprite.height = dim;
+  const ctx = sprite.getContext('2d');
+  const c = dim / 2;
+  const grad = ctx.createRadialGradient(c, c, 0, c, c, halo);
+  grad.addColorStop(0, 'rgba(' + r + ',' + g + ',' + b + ',1)');
+  grad.addColorStop(0.28, 'rgba(' + r + ',' + g + ',' + b + ',' + (glowBucket * 0.42) + ')');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(c, c, halo, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',1)';
+  ctx.beginPath();
+  ctx.arc(c, c, sizeBucket, 0, Math.PI * 2);
+  ctx.fill();
+  const out = { canvas: sprite, width: dim, height: dim };
+  state.spriteCache.set(key, out);
+  return out;
+}
+
+function renderDprForNodeCount(count) {
+  const device = window.devicePixelRatio || 1;
+  if (count > 2600) return Math.min(device, 1);
+  if (count > 1400) return Math.min(device, 1.25);
+  return Math.min(device, 1.5);
+}
+
+function edgeBudget() {
+  const edgeCount = state.renderEdges.length;
+  const nodeCount = state.renderNodes.length;
+  if (state.controls.organizeByType) return Math.min(edgeCount, 420);
+  if (nodeCount > 3200) return Math.min(edgeCount, 520);
+  if (nodeCount > 1800) return Math.min(edgeCount, 820);
+  if (nodeCount > 900) return Math.min(edgeCount, 1250);
+  return Math.min(edgeCount, 1900);
+}
+
+function particlePosition(node, time) {
+  const mode = PARTICLE_MODES.includes(state.controls.visualMode) ? state.controls.visualMode : 'galaxy';
+  const depth = Number(state.controls.depth || 740);
+  const count = Math.max(1, state.renderNodes.length);
+  const seed = Number(node.sceneSeed || hashString(node.id));
+  let index = Number(node.sceneIndex || 0);
+  let t = Number(node.sceneT || 0);
+  let x = 0; let y = 0; let z = 0;
+
+  if (state.controls.separateByType) {
+    x = node.baseX || 0;
+    y = node.baseY || 0;
+    z = Math.sin((node.sceneSeed || 1) * 0.01 + time) * 36;
+  } else if (state.controls.organizeByType) {
+    const groupCount = Math.max(1, Number(node.typeGroupCount || 1));
+    const groupIndex = Number(node.typeGroupIndex || 0);
+    const localIndex = Number(node.typeLocalIndex || 0);
+    const typeCount = Math.max(1, Number(node.typeCount || 1));
+    const localT = Number.isFinite(node.typeLocalT) ? node.typeLocalT : (typeCount <= 1 ? 0.5 : localIndex / Math.max(1, typeCount - 1));
+    const groupAngle = (Math.PI * 2 * groupIndex) / groupCount;
+    const wedge = (Math.PI * 2) / groupCount;
+    const localHashA = ((hashString(node.id + ':type:a') % 1000) / 1000 - 0.5);
+    const localHashB = ((hashString(node.id + ':type:b') % 1000) / 1000 - 0.5);
+
+    const colorPhase = groupAngle * 0.18;
+    const laneOffset = (groupIndex - (groupCount - 1) / 2) / Math.max(1, groupCount) * depth * 0.22;
+    if (mode === 'galaxy') {
+      const arm = (localIndex % 5) * (Math.PI * 2 / 5) + colorPhase;
+      const radius = (0.1 + Math.sqrt(localT) * 0.88) * depth;
+      const swirl = radius * 0.013 + time * 0.38 + arm + localHashA * 0.18;
+      x = Math.cos(swirl) * radius + Math.cos(groupAngle) * laneOffset + localHashB * 18;
+      y = Math.sin(seed * 2.1 + time) * 16 + Math.cos(radius * 0.02 + groupIndex) * 18;
+      z = Math.sin(swirl) * radius + Math.sin(groupAngle) * laneOffset + localHashA * 18;
+    } else if (mode === 'sphere') {
+      const phi = Math.acos(1 - 2 * localT);
+      const theta = Math.PI * (3 - Math.sqrt(5)) * localIndex + time * 0.22 + colorPhase;
+      const radius = depth * (0.35 + 0.11 * Math.sin(time * 1.2 + seed));
+      x = Math.cos(theta) * Math.sin(phi) * radius + Math.cos(groupAngle) * depth * 0.055;
+      y = Math.cos(phi) * radius + localHashB * depth * 0.025;
+      z = Math.sin(theta) * Math.sin(phi) * radius + Math.sin(groupAngle) * depth * 0.055;
+    } else if (mode === 'wave') {
+      const grid = Math.max(1, Math.ceil(Math.sqrt(typeCount)));
+      const gx = (localIndex % grid) / grid - 0.5 + localHashA * 0.025;
+      const gy = Math.floor(localIndex / grid) / grid - 0.5 + localHashB * 0.025;
+      x = gx * depth * 1.42 + laneOffset;
+      z = gy * depth * 1.42 + Math.sin(groupAngle) * depth * 0.08;
+      y = Math.sin(gx * 18 + time * 2.1 + groupIndex * 0.34) * 42 + Math.cos(gy * 16 + time * 1.7) * 34;
+    } else {
+      const ring = localIndex % 80;
+      const lane = ring / 80 * Math.PI * 2 + colorPhase + localHashA * 0.08;
+      const travel = ((localT * 2 + time * 0.12) % 1);
+      const radius = depth * (0.12 + 0.34 * travel) + laneOffset * 0.18;
+      x = Math.cos(lane + time * 0.8) * radius;
+      y = Math.sin(lane + time * 0.8) * radius;
+      z = (travel - 0.5) * depth * 2.1 + localHashB * 30;
+    }
+  } else if (state.shapeMode === 'image' && state.imagePoints?.length) {
+    x = node.baseX || 0;
+    y = node.baseY || 0;
+    z = Math.sin((node.sceneSeed || 1) * 0.01 + time) * 28;
+  } else if (mode === 'galaxy') {
+    const arm = (index % 5) * (Math.PI * 2 / 5);
+    const radius = Math.sqrt(t) * depth * 0.95;
+    const swirl = radius * 0.013 + time * 0.38 + arm;
+    x = Math.cos(swirl) * radius + Math.sin(seed) * 20;
+    y = Math.sin(seed * 2.1 + time) * 18 + Math.cos(radius * 0.02) * 22;
+    z = Math.sin(swirl) * radius + Math.cos(seed) * 20;
+  } else if (mode === 'sphere') {
+    const phi = Math.acos(1 - 2 * t);
+    const theta = Math.PI * (3 - Math.sqrt(5)) * index + time * 0.22;
+    const radius = depth * (0.38 + 0.12 * Math.sin(time * 1.2 + seed));
+    x = Math.cos(theta) * Math.sin(phi) * radius;
+    y = Math.cos(phi) * radius;
+    z = Math.sin(theta) * Math.sin(phi) * radius;
+  } else if (mode === 'wave') {
+    const grid = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const gx = (index % grid) / grid - 0.5;
+    const gy = Math.floor(index / grid) / grid - 0.5;
+    x = gx * depth * 1.55;
+    z = gy * depth * 1.55;
+    y = Math.sin(gx * 18 + time * 2.1) * 42 + Math.cos(gy * 16 + time * 1.7) * 42;
+  } else {
+    const ring = index % 80;
+    const lane = ring / 80 * Math.PI * 2;
+    const travel = ((t * 2 + time * 0.12) % 1);
+    const radius = depth * (0.12 + 0.34 * travel);
+    x = Math.cos(lane + time * 0.8) * radius;
+    y = Math.sin(lane + time * 0.8) * radius;
+    z = (travel - 0.5) * depth * 2.1;
+  }
+
+  if (state.scene.burst > 0) {
+    const b = state.scene.burst;
+    x += (((seed % 200) / 100) - 1) * b * 240;
+    y += ((((seed >> 3) % 200) / 100) - 1) * b * 240;
+    z += ((((seed >> 7) % 200) / 100) - 1) * b * 240;
+  }
+  return { x, y, z };
+}
+
+function projectPosition(pos) {
+  const scene = state.scene;
+  const cy = Math.cos(scene.yaw); const sy = Math.sin(scene.yaw);
+  const cp = Math.cos(scene.pitch); const sp = Math.sin(scene.pitch);
+  let x = pos.x * cy - pos.z * sy;
+  let z = pos.x * sy + pos.z * cy;
+  let y = pos.y * cp - z * sp;
+  z = pos.y * sp + z * cp;
+  const cameraZ = scene.zoom;
+  const perspective = cameraZ / (cameraZ + z);
+  const sceneScale = 720 / Math.max(280, cameraZ);
+  return { screenX: scene.width / 2 + x * perspective * sceneScale, screenY: scene.height / 2 + y * perspective * sceneScale, z, perspective, sceneScale };
+}
+
+function drawParticleBackground(ctx, width, height) {
+  const g = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.72);
+  g.addColorStop(0, '#101118');
+  g.addColorStop(0.45, '#07080b');
+  g.addColorStop(1, '#020203');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, width, height);
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+  ctx.lineWidth = 1;
+  const gap = 62;
+  for (let x = width / 2 % gap; x < width; x += gap) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
+  for (let y = height / 2 % gap; y < height; y += gap) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
+  ctx.restore();
+}
+
 function draw() {
   if (!state.ctx || !state.canvas || !state.stageEl) return;
   const width = state.stageEl.clientWidth || 1;
   const height = state.stageEl.clientHeight || 1;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = renderDprForNodeCount(state.renderNodes.length);
   if (state.canvas.width !== Math.round(width * dpr) || state.canvas.height !== Math.round(height * dpr)) {
     state.canvas.width = Math.round(width * dpr);
     state.canvas.height = Math.round(height * dpr);
   }
-  state.canvas.style.width = `${width}px`;
-  state.canvas.style.height = `${height}px`;
-  state.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  state.ctx.clearRect(0, 0, width, height);
+  state.canvas.style.width = width + 'px';
+  state.canvas.style.height = height + 'px';
+  state.scene.width = width;
+  state.scene.height = height;
+  state.scene.dpr = dpr;
+  const ctx = state.ctx;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawParticleBackground(ctx, width, height);
 
-  state.ctx.save();
-  state.ctx.translate(state.transform.x, state.transform.y);
-  state.ctx.scale(state.transform.scale, state.transform.scale);
-  const isOrganized = state.controls.organizeByType;
+  const projected = [];
+  for (const node of state.renderNodes) {
+    node._projected = null;
+    if (!node.visible) continue;
+    const pos = particlePosition(node, state.scene.time);
+    const item = { node, ...projectPosition(pos) };
+    if (item.perspective <= 0 || item.screenX < -70 || item.screenX > width + 70 || item.screenY < -70 || item.screenY > height + 70) continue;
+    item.alphaValue = clamp((item.perspective - 0.25) * 1.4, 0.08, 0.9);
+    item.size = clamp((node.radius || 5) * item.perspective * 0.62, 1.2, 8.2);
+    node._projected = item;
+    projected.push(item);
+  }
+  state.scene.projected = projected;
 
-  if (isOrganized) {
-    state.ctx.save();
-    state.ctx.textAlign = 'center';
-    state.ctx.textBaseline = 'middle';
+  if (state.controls.separateByType && state.typeGroupCards.length) {
+    const boundsByCategory = new Map();
+    for (const item of state.scene.projected) {
+      const categoryId = item.node.categoryId || 'misc';
+      let bounds = boundsByCategory.get(categoryId);
+      if (!bounds) {
+        bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+        boundsByCategory.set(categoryId, bounds);
+      }
+      const pad = Math.max(16, item.size * 3.4);
+      bounds.minX = Math.min(bounds.minX, item.screenX - pad);
+      bounds.minY = Math.min(bounds.minY, item.screenY - pad);
+      bounds.maxX = Math.max(bounds.maxX, item.screenX + pad);
+      bounds.maxY = Math.max(bounds.maxY, item.screenY + pad);
+    }
+    ctx.save();
+    ctx.textBaseline = 'middle';
     state.typeGroupCards.forEach((card) => {
-      const x = card.x - card.width / 2;
-      const y = card.y - card.height / 2;
-      state.ctx.beginPath();
-      roundedRectPath(state.ctx, x, y, card.width, card.height, 8);
-      state.ctx.fillStyle = alpha('#07111f', 0.46);
-      state.ctx.fill();
-      state.ctx.lineWidth = 1;
-      state.ctx.strokeStyle = alpha(card.color, 0.42);
-      state.ctx.stroke();
-
-      state.ctx.beginPath();
-      state.ctx.arc(x + 17, card.y, 4.2, 0, Math.PI * 2);
-      state.ctx.fillStyle = alpha(card.color, 0.95);
-      state.ctx.fill();
-
-      state.ctx.font = '700 11px Manrope, sans-serif';
-      state.ctx.fillStyle = alpha('#f2f7ff', 0.9);
-      state.ctx.fillText(card.label, card.x + 5, card.y - 4);
-      state.ctx.font = '600 8px Manrope, sans-serif';
-      state.ctx.fillStyle = alpha('#c8d4e6', 0.72);
-      state.ctx.fillText(`${card.count} nodes`, card.x + 5, card.y + 8);
+      const bounds = boundsByCategory.get(card.categoryId);
+      if (!bounds || !Number.isFinite(bounds.minX)) return;
+      const cardWidth = clamp(bounds.maxX - bounds.minX + 42, 116, width * 0.82);
+      const cardHeight = clamp(bounds.maxY - bounds.minY + 52, 72, height * 0.72);
+      const centerX = clamp((bounds.minX + bounds.maxX) / 2, cardWidth / 2 + 10, width - cardWidth / 2 - 10);
+      const centerY = clamp((bounds.minY + bounds.maxY) / 2, cardHeight / 2 + 10, height - cardHeight / 2 - 10);
+      const x = centerX - cardWidth / 2;
+      const y = centerY - cardHeight / 2;
+      ctx.beginPath();
+      roundedRectPath(ctx, x, y, cardWidth, cardHeight, 14);
+      ctx.fillStyle = alpha(card.color, 0.06);
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = alpha(card.color, 0.34);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x + 18, y + 20, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = alpha(card.color, 0.94);
+      ctx.fill();
+      ctx.font = '800 11px Manrope, sans-serif';
+      ctx.fillStyle = 'rgba(244,247,255,0.92)';
+      ctx.fillText(card.label, x + 30, y + 19);
+      ctx.font = '700 9px Manrope, sans-serif';
+      ctx.fillStyle = 'rgba(214,224,240,0.72)';
+      ctx.fillText(card.count + ' nodes', x + 30, y + 34);
     });
-    state.ctx.restore();
+    ctx.restore();
   }
 
-  for (const edge of state.renderEdges) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const baseEdgeBudget = edgeBudget();
+  for (let i = 0; i < state.renderEdges.length; i += 1) {
+    const edge = state.renderEdges[i];
     if (!edge.visible) continue;
-    const a = state.nodeById.get(edge.source);
-    const b = state.nodeById.get(edge.target);
+    const source = state.nodeById.get(edge.source);
+    const target = state.nodeById.get(edge.target);
+    const a = source?._projected;
+    const b = target?._projected;
     if (!a || !b) continue;
-    const linkedToHover = state.hoverNodeId && (a.id === state.hoverNodeId || b.id === state.hoverNodeId);
-    const linkedToSelected = state.selectedNodeId && (a.id === state.selectedNodeId || b.id === state.selectedNodeId);
-    if (isOrganized && state.transform.scale < 0.3 && !linkedToHover && !linkedToSelected) continue;
-    const opacity = edge.virtual ? 0.12 : linkedToSelected ? 0.88 : linkedToHover ? 0.55 : 0.08;
-    state.ctx.save();
-    if (edge.virtual) state.ctx.setLineDash([4, 6]);
-    state.ctx.strokeStyle = edge.virtual ? alpha('#ffffff', opacity) : linkedToSelected ? alpha('#ffffff', opacity) : linkedToHover ? alpha('#a8d4ff', opacity) : alpha('#91b8ff', opacity);
-    state.ctx.lineWidth = edge.virtual ? 1.1 : linkedToSelected ? 2.4 : linkedToHover ? 1.8 : 1;
-    state.ctx.beginPath();
-    state.ctx.moveTo(a.x, a.y);
-    state.ctx.lineTo(b.x, b.y);
-    state.ctx.stroke();
-    state.ctx.restore();
+    const linkedToHover = state.hoverNodeId && (edge.source === state.hoverNodeId || edge.target === state.hoverNodeId);
+    const linkedToSelected = state.selectedNodeId && (edge.source === state.selectedNodeId || edge.target === state.selectedNodeId);
+    if (!linkedToHover && !linkedToSelected && i >= baseEdgeBudget) continue;
+    const opacity = linkedToSelected ? 0.5 : linkedToHover ? 0.42 : 0.045;
+    ctx.strokeStyle = linkedToSelected ? 'rgba(255,255,255,' + opacity + ')' : linkedToHover ? 'rgba(116,244,255,' + opacity + ')' : 'rgba(57,232,255,' + opacity + ')';
+    ctx.lineWidth = linkedToSelected ? 2 : linkedToHover ? 1.6 : 0.7;
+    ctx.beginPath();
+    ctx.moveTo(a.screenX, a.screenY);
+    ctx.lineTo(b.screenX, b.screenY);
+    ctx.stroke();
   }
 
-  state.renderNodes.forEach((node) => {
-    if (!node.visible) return;
+  const glow = Number(state.controls.glow || 20) / 100;
+  for (const item of state.scene.projected) {
+    const node = item.node;
     const isSelected = node.id === state.selectedNodeId;
     const isHovered = node.id === state.hoverNodeId;
-    const opacity = node.highlighted ? 0.98 : state.controls.search && !node.matched ? 0.24 : 0.84;
-    const nodeR = node.radius + (isSelected ? 2.4 : isHovered ? 1.2 : 0);
-    const nodeColor = isOrganized ? (CATEGORY_META[node.categoryId]?.color || node.color) : node.color;
-    state.ctx.beginPath();
-    state.ctx.fillStyle = alpha(nodeColor, opacity);
-    flameNodePath(state.ctx, node.x, node.y, nodeR);
-    state.ctx.fill();
-    if (isSelected || isHovered) {
-      state.ctx.lineWidth = isSelected ? 2.2 : 1.2;
-      state.ctx.strokeStyle = isSelected ? '#ffffff' : alpha('#ffffff', 0.76);
-      state.ctx.stroke();
-    }
+    const alphaValue = item.alphaValue * (node.highlighted ? 1.16 : state.controls.search && !node.matched ? 0.24 : 1);
+    const size = item.size + (isSelected ? 3.2 : isHovered ? 1.6 : 0);
+    const sprite = getParticleSprite(node, size, glow);
+    ctx.globalAlpha = clamp(alphaValue * 1.15, 0, 1);
+    ctx.drawImage(sprite.canvas, item.screenX - sprite.width / 2, item.screenY - sprite.height / 2, sprite.width, sprite.height);
+    ctx.globalAlpha = 1;
     if (isSelected) {
-      state.ctx.save();
-      state.ctx.shadowBlur = 14;
-      state.ctx.shadowColor = nodeColor;
-      state.ctx.beginPath();
-      flameNodePath(state.ctx, node.x, node.y, nodeR * 0.55);
-      state.ctx.fillStyle = alpha(nodeColor, 0.45);
-      state.ctx.fill();
-      state.ctx.restore();
+      ctx.fillStyle = 'rgba(255,255,255,0.98)';
+      ctx.beginPath();
+      ctx.arc(item.screenX, item.screenY, Math.max(1.8, size * 0.55), 0, Math.PI * 2);
+      ctx.fill();
     }
-  });
+    if (isSelected || isHovered) {
+      ctx.lineWidth = isSelected ? 2 : 1.2;
+      ctx.strokeStyle = 'rgba(255,255,255,' + (isSelected ? 0.92 : 0.62) + ')';
+      ctx.beginPath();
+      ctx.arc(item.screenX, item.screenY, size, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 
   if (state.controls.showLabels) {
-    state.ctx.font = '11px Manrope, sans-serif';
-    state.ctx.textBaseline = 'middle';
-    const maxLabels = isOrganized
-      ? Math.round(clamp(18 + state.transform.scale * 44, 18, 52))
-      : Math.round(clamp(28 + state.transform.scale * 58, 28, 96));
-    const labeled = state.renderNodes
-      .filter((node) => node.visible && (node.isHub || node.highlighted || node.id === state.hoverNodeId || node.id === state.selectedNodeId || (state.transform.scale > 0.42 && node.radius >= 6.2)))
-      .sort((a, b) => Number(b.isHub) - Number(a.isHub) || b.radius - a.radius)
-      .slice(0, maxLabels);
-    labeled.forEach((node) => {
-      state.ctx.fillStyle = node.id === state.selectedNodeId ? '#ffffff' : alpha('#ecf4ff', 0.86);
-      state.ctx.fillText(node.label, node.x + node.radius + 6, node.y);
-    });
+    ctx.save();
+    ctx.font = '11px Manrope, sans-serif';
+    ctx.textBaseline = 'middle';
+    const maxLabels = Math.round(clamp(26 + state.scene.zoom / 18, 32, 92));
+    state.scene.projected
+      .filter((item) => item.node.highlighted || item.node.id === state.hoverNodeId || item.node.id === state.selectedNodeId || item.size > 4.6)
+      .sort((a, b) => b.size - a.size)
+      .slice(0, maxLabels)
+      .forEach((item) => {
+        ctx.fillStyle = item.node.id === state.selectedNodeId ? '#ffffff' : 'rgba(236,244,255,0.86)';
+        ctx.fillText(item.node.label, item.screenX + item.size + 7, item.screenY);
+      });
+    ctx.restore();
   }
-
-  state.ctx.restore();
 }
 
 function stepSimulation() {
-  const visibleNodes = state.renderNodes.filter((node) => node.visible);
-  const draggingNode = state.dragState?.type === 'node';
-  const organizeMode = state.controls.organizeByType;
-  const heat = draggingNode ? 1 : state.simulationHeat;
-
-  if (!draggingNode && heat < 0.018) {
-    let changed = false;
-    visibleNodes.forEach((node) => {
-      if (node.isHub) return;
-      const dx = node.baseX - node.x;
-      const dy = node.baseY - node.y;
-      const speed = Math.abs(node.vx) + Math.abs(node.vy);
-      const dist = Math.hypot(dx, dy);
-      if (speed < 0.018 && dist < 0.45) {
-        node.x = node.baseX;
-        node.y = node.baseY;
-        node.vx = 0;
-        node.vy = 0;
-        node.sleeping = true;
-        return;
-      }
-      node.x += dx * 0.22;
-      node.y += dy * 0.22;
-      node.vx = 0;
-      node.vy = 0;
-      node.sleeping = false;
-      changed = true;
-    });
-    return; // Never run repulsion at near-zero heat — pure spring snap only
-  }
-
-  const cellSize = 72;
-  const buckets = new Map();
-  visibleNodes.forEach((node) => {
-    const gx = Math.floor(node.x / cellSize);
-    const gy = Math.floor(node.y / cellSize);
-    const key = `${gx}:${gy}`;
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(node);
-  });
-
-  visibleNodes.forEach((node) => {
-    if (node.isHub) {
-      node.vx = 0;
-      node.vy = 0;
-      node.x = node.baseX;
-      node.y = node.baseY;
-      return;
-    }
-    if (draggingNode && node.id === state.dragState.nodeId) {
-      node.vx = 0;
-      node.vy = 0;
-      node.x = state.dragState.worldX;
-      node.y = state.dragState.worldY;
-      node.sleeping = false;
-      return;
-    }
-    const pull = (node.id === state.selectedNodeId ? 0.0036 : organizeMode ? 0.0043 : 0.0028) * (0.52 + heat * 0.48);
-    node.vx += (node.baseX - node.x) * pull;
-    node.vy += (node.baseY - node.y) * pull;
-  });
-
-  const repulsionBase = Number(state.controls.repulsion || 90) * (organizeMode ? 0.62 : 1) * (0.56 + heat * 0.44);
-  const collisionStrength = Number(state.controls.collision || 24) / 100;
-  visibleNodes.forEach((node) => {
-    if (node.sleeping && !draggingNode) return;
-    const gx = Math.floor(node.x / cellSize);
-    const gy = Math.floor(node.y / cellSize);
-    for (let ix = -1; ix <= 1; ix += 1) {
-      for (let iy = -1; iy <= 1; iy += 1) {
-        const list = buckets.get(`${gx + ix}:${gy + iy}`);
-        if (!list) continue;
-        list.forEach((other) => {
-          if (other.id === node.id || other.id < node.id) return;
-          const dx = other.x - node.x;
-          const dy = other.y - node.y;
-          const distSq = dx * dx + dy * dy + 0.01;
-          const dist = Math.sqrt(distSq);
-          if (dist > (organizeMode ? 92 : 110)) return;
-          const repulsion = repulsionBase / distSq;
-          const fx = (dx / dist) * repulsion;
-          const fy = (dy / dist) * repulsion;
-          if (!node.isHub) { node.vx -= fx; node.vy -= fy; }
-          if (!other.isHub) { other.vx += fx; other.vy += fy; }
-
-          const minDist = node.radius + other.radius + collisionStrength * (organizeMode ? 18 : 22);
-          if (dist < minDist) {
-            const overlap = (minDist - dist) * (organizeMode ? 0.009 : 0.012);
-            const ox = (dx / dist) * overlap;
-            const oy = (dy / dist) * overlap;
-            if (!node.isHub) { node.vx -= ox; node.vy -= oy; }
-            if (!other.isHub) { other.vx += ox; other.vy += oy; }
-          }
-        });
-      }
-    }
-  });
-
-  const linkStrength = Number(state.controls.linkStrength || 0.026) * (organizeMode ? 0.66 : 1) * (0.48 + heat * 0.52);
-  state.renderEdges.forEach((edge) => {
-    if (!edge.visible) return;
-    const source = state.nodeById.get(edge.source);
-    const target = state.nodeById.get(edge.target);
-    if (!source || !target) return;
-    const dx = target.x - source.x;
-    const dy = target.y - source.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    const targetDist = edge.virtual ? 78 : 38 + (1 - Number(edge.weight || 0)) * 34;
-    const force = (dist - targetDist) * (edge.virtual ? linkStrength * 0.8 : linkStrength);
-    const fx = (dx / dist) * force;
-    const fy = (dy / dist) * force;
-    if (!source.isHub) { source.vx += fx; source.vy += fy; }
-    if (!target.isHub) { target.vx -= fx; target.vy -= fy; }
-  });
-
-  if (draggingNode) {
-    const followers = state.dragState.followers || new Map();
-    followers.forEach((offset, nodeId) => {
-      if (nodeId === state.dragState.nodeId) return;
-      const node = state.recordNodeById.get(nodeId);
-      if (!node || !node.visible) return;
-      const desiredX = state.dragState.worldX + offset.x;
-      const desiredY = state.dragState.worldY + offset.y;
-      node.vx += (desiredX - node.x) * 0.055;
-      node.vy += (desiredY - node.y) * 0.055;
-      node.sleeping = false;
-    });
-
-    visibleNodes.forEach((node) => {
-      if (node.isHub || followers.has(node.id)) return;
-      const dx = state.dragState.worldX - node.x;
-      const dy = state.dragState.worldY - node.y;
-      const dist = Math.hypot(dx, dy) || 1;
-      if (dist > 210) return;
-      const influence = (1 - dist / 210) * 0.34;
-      node.vx -= (dx / dist) * influence;
-      node.vy -= (dy / dist) * influence;
-      node.sleeping = false;
-    });
-  }
-
-  visibleNodes.forEach((node) => {
-    if (node.isHub || (draggingNode && node.id === state.dragState.nodeId)) return;
-    node.vx *= organizeMode ? 0.8 : 0.88;
-    node.vy *= organizeMode ? 0.8 : 0.88;
-    node.vx = clamp(node.vx, organizeMode ? -4.8 : -6, organizeMode ? 4.8 : 6);
-    node.vy = clamp(node.vy, organizeMode ? -4.8 : -6, organizeMode ? 4.8 : 6);
-    node.x += node.vx;
-    node.y += node.vy;
-    const speed = Math.abs(node.vx) + Math.abs(node.vy);
-    const distToBase = Math.hypot(node.baseX - node.x, node.baseY - node.y);
-    if (speed < 0.035 && distToBase < 0.9) {
-      node.x = node.baseX;
-      node.y = node.baseY;
-      node.vx = 0;
-      node.vy = 0;
-      node.sleeping = true;
-    } else if (!draggingNode && heat < 0.08 && speed < 0.08 && distToBase < (organizeMode ? 3.4 : 2.4)) {
-      node.x += (node.baseX - node.x) * 0.36;
-      node.y += (node.baseY - node.y) * 0.36;
-      node.vx *= 0.28;
-      node.vy *= 0.28;
-      if (Math.hypot(node.baseX - node.x, node.baseY - node.y) < 0.45) {
-        node.x = node.baseX;
-        node.y = node.baseY;
-        node.vx = 0;
-        node.vy = 0;
-        node.sleeping = true;
-      }
-    } else {
-      node.sleeping = false;
-    }
-  });
-
-  if (!draggingNode) {
-    state.simulationHeat *= organizeMode ? 0.94 : 0.968;
-    if (state.simulationHeat < 0.0008) state.simulationHeat = 0;
-  } else {
-    state.simulationHeat = 1;
-  }
+  const scene = state.scene;
+  scene.time += (Number(state.controls.speed || 35) / 100) * 0.016;
+  scene.yaw += (scene.targetYaw - scene.yaw) * 0.08;
+  scene.pitch += (scene.targetPitch - scene.pitch) * 0.08;
+  scene.zoom += (scene.targetZoom - scene.zoom) * 0.12;
+  scene.burst *= 0.93;
 }
 
 function animate() { stepSimulation(); draw(); state.raf = requestAnimationFrame(animate); }
@@ -1308,14 +1406,36 @@ async function submitMemoryDraft(event) {
 async function loadDetail(recordId) {
   if (!recordId) return;
   if (state.detailCache.has(recordId)) return renderDetail(state.detailCache.get(recordId));
-  state.detailEl.innerHTML = '<div class="memory-detail-empty">Loading record details...</div>';
+  const requestedId = recordId;
   try {
-    const data = await api(ENDPOINTS.memoryRecord(recordId));
+    const data = await api(ENDPOINTS.memoryRecord(recordId) + '?related=0');
     state.detailCache.set(recordId, data);
-    renderDetail(data);
+    if (state.selectedNodeId === requestedId) renderDetail(data);
   } catch (err) {
-    state.detailEl.innerHTML = `<div class="memory-detail-empty">${escHtml(err.message || 'Failed to load record detail')}</div>`;
+    if (state.selectedNodeId === requestedId) state.detailEl.innerHTML = '<div class="memory-detail-empty">' + escHtml(err.message || 'Failed to load record detail') + '</div>';
   }
+}
+
+function nodePreviewPayload(node) {
+  if (!node) return null;
+  const timestampMs = Date.parse(node.timestamp || '');
+  return {
+    success: true,
+    layer: 'graph',
+    record: {
+      id: node.id,
+      title: node.label || node.title || 'Untitled record',
+      sourceType: node.sourceType || 'record',
+      sourcePath: node.sourcePath || '',
+      timestamp: node.timestamp || '',
+      timestampMs: Number.isFinite(timestampMs) ? timestampMs : undefined,
+      projectId: node.projectId || null,
+      durability: node.durability || 0.5,
+    },
+    chunks: node.summary ? [{ id: node.id + ':preview', index: 0, text: node.summary }] : [],
+    related: [],
+    preview: true,
+  };
 }
 
 function renderDetail(payload) {
@@ -1329,6 +1449,7 @@ function renderDetail(payload) {
   }
   const chunks = Array.isArray(payload?.chunks) ? payload.chunks.slice(0, 2) : [];
   const related = Array.isArray(payload?.related) ? payload.related.slice(0, 6) : [];
+  const isPreview = payload?.preview === true;
   const noteAttachments = Array.isArray(payload?.noteMeta?.attachments) ? payload.noteMeta.attachments : [];
   function renderParagraphs(text) {
     const cleaned = cleanReadableText(text);
@@ -1354,6 +1475,7 @@ function renderDetail(payload) {
       <div><strong>Durability</strong>${escHtml(String(Number(record.durability || 0).toFixed(2)))}</div>
       <div><strong>Source</strong>${escHtml(record.sourcePath || '')}</div>
     </div>
+    ${isPreview ? '<div class="memory-detail-loading-row">Loading full record...</div>' : ''}
     <div class="memory-detail-section-title">Summary</div>
     <div class="memory-detail-summary">${summaryText ? renderParagraphs(summaryText) : '<em class="memory-detail-empty-inline">No indexed summary available for this record yet.</em>'}</div>
     ${extraChunks.length ? `<div class="memory-detail-section-title">Additional Chunks</div>${extraChunks.map((chunk) => `<div class="memory-detail-chunk">${renderParagraphs(String(chunk.text || '').slice(0, 520))}</div>`).join('')}` : ''}
@@ -1366,10 +1488,10 @@ function renderDetail(payload) {
         <button type="button" class="memory-attachment-open" data-memory-open-path="${escHtml(attachment.absPath || '')}">Open</button>
       </div>
     `).join('')}</div>` : ''}
-    <div class="memory-detail-section-title">Related Records</div>
+    ${!isPreview ? `    <div class="memory-detail-section-title">Related Records</div>
     <div class="memory-related-list">
       ${related.map((item) => `<button type="button" class="memory-related-item" data-record-id="${escHtml(item.recordId)}"><strong>${escHtml(item.title || item.recordId)}</strong><div class="meta">${escHtml(item.sourceType || 'record')} | ${escHtml(formatTime(item.timestamp || ''))}</div><div class="body">${escHtml(cleanReadableText(item.preview || '', 200))}</div></button>`).join('') || '<div class="memory-detail-empty">No related records returned for this node.</div>'}
-    </div>
+    </div>` : ''}
   `;
 }
 
@@ -1379,6 +1501,7 @@ function selectNode(nodeId) {
   if (!node) return renderDetail(null);
   openMemoryDetailDrawer();
   setControlsCollapsed(true);
+  renderDetail(nodePreviewPayload(node));
   loadDetail(nodeId);
 }
 
@@ -1479,36 +1602,14 @@ function loadImageShapeFromFile(file) {
 function handlePointerMove(event) {
   if (!state.canvas) return;
   if (state.pointers.has(event.pointerId)) state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (state.dragState?.type === 'pinch') {
-    const points = [...state.pointers.values()];
-    if (points.length < 2) return;
-    const a = points[0];
-    const b = points[1];
-    const dist = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
-    const centerX = (a.x + b.x) / 2;
-    const centerY = (a.y + b.y) / 2;
-    const rect = state.canvas.getBoundingClientRect();
-    const nextScale = clamp(state.dragState.startScale * (dist / state.dragState.startDistance), 0.04, 2.8);
-    state.transform.scale = nextScale;
-    state.transform.x = centerX - rect.left - state.dragState.centerWorldX * nextScale;
-    state.transform.y = centerY - rect.top - state.dragState.centerWorldY * nextScale;
-    hideTooltip();
-    return;
-  }
-  if (state.dragState?.type === 'pan') {
-    state.transform.x = state.dragState.originX + (event.clientX - state.dragState.startClientX);
-    state.transform.y = state.dragState.originY + (event.clientY - state.dragState.startClientY);
-    hideTooltip();
-    return;
-  }
-  if (state.dragState?.type === 'node') {
-    const dxFromStart = event.clientX - (state.dragState.startClientX ?? event.clientX);
-    const dyFromStart = event.clientY - (state.dragState.startClientY ?? event.clientY);
-    if (Math.hypot(dxFromStart, dyFromStart) > 4) state.dragState.moved = true;
-    const world = uiToWorld(event.clientX, event.clientY);
-    state.dragState.worldX = world.x - state.dragState.offsetX;
-    state.dragState.worldY = world.y - state.dragState.offsetY;
-    wakeSimulation(1);
+  if (state.dragState?.type === 'orbit') {
+    const dx = event.clientX - state.dragState.lastX;
+    const dy = event.clientY - state.dragState.lastY;
+    if (Math.hypot(event.clientX - state.dragState.startClientX, event.clientY - state.dragState.startClientY) > 4) state.dragState.moved = true;
+    state.dragState.lastX = event.clientX;
+    state.dragState.lastY = event.clientY;
+    state.scene.targetYaw += dx * 0.006;
+    state.scene.targetPitch = clamp(state.scene.targetPitch + dy * 0.004, -1.25, 1.25);
     hideTooltip();
     return;
   }
@@ -1523,41 +1624,10 @@ function handlePointerDown(event) {
   event.preventDefault();
   try { state.canvas.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
   state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (state.pointers.size >= 2) {
-    const points = [...state.pointers.values()];
-    const a = points[0];
-    const b = points[1];
-    const centerX = (a.x + b.x) / 2;
-    const centerY = (a.y + b.y) / 2;
-    const centerWorld = uiToWorld(centerX, centerY);
-    state.dragState = {
-      type: 'pinch',
-      startDistance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
-      startScale: state.transform.scale,
-      centerWorldX: centerWorld.x,
-      centerWorldY: centerWorld.y,
-    };
-    state.canvas.classList.add('is-dragging');
-    hideTooltip();
-    return;
-  }
   const node = getNodeAtPoint(event.clientX, event.clientY);
-  if (node && node.interactive !== false) {
-    const world = uiToWorld(event.clientX, event.clientY);
-    const connected = getFollowers(node.id, 2);
-    const followers = new Map();
-    connected.forEach((id) => {
-      const follower = state.recordNodeById.get(id);
-      if (!follower) return;
-      followers.set(id, { x: follower.x - node.x, y: follower.y - node.y });
-      stopNode(follower);
-    });
-    state.dragState = { type: 'node', nodeId: node.id, worldX: node.x, worldY: node.y, offsetX: world.x - node.x, offsetY: world.y - node.y, followers, startClientX: event.clientX, startClientY: event.clientY, moved: false };
-    state.canvas.classList.add('is-dragging');
-    return;
-  }
-  state.dragState = { type: 'pan', startClientX: event.clientX, startClientY: event.clientY, originX: state.transform.x, originY: state.transform.y };
+  state.dragState = { type: 'orbit', nodeId: node?.interactive === false ? null : node?.id || null, startClientX: event.clientX, startClientY: event.clientY, lastX: event.clientX, lastY: event.clientY, moved: false };
   state.canvas.classList.add('is-dragging');
+  hideTooltip();
 }
 
 function handlePointerUp(event) {
@@ -1565,45 +1635,12 @@ function handlePointerUp(event) {
     state.pointers.delete(event.pointerId);
     try { state.canvas?.releasePointerCapture?.(event.pointerId); } catch { /* noop */ }
   }
-  if (state.dragState?.type === 'pinch') {
-    state.dragState = null;
-    if (state.canvas) state.canvas.classList.remove('is-dragging');
-    return;
-  }
-  if (state.dragState?.type === 'node') {
-    const wasClick = !state.dragState.moved;
+  if (state.dragState?.type === 'orbit') {
     const clickedNodeId = state.dragState.nodeId;
-    const anchor = state.recordNodeById.get(state.dragState.nodeId);
-    if (anchor) {
-      anchor.x = state.dragState.worldX;
-      anchor.y = state.dragState.worldY;
-      anchor.baseX = anchor.x;
-      anchor.baseY = anchor.y;
-      stopNode(anchor);
-    }
-    const followers = state.dragState.followers || new Map();
-    followers.forEach((offset, nodeId) => {
-      const node = state.recordNodeById.get(nodeId);
-      if (!node) return;
-      if (nodeId === state.dragState.nodeId) return;
-      node.baseX = node.x;
-      node.baseY = node.y;
-      stopNode(node);
-    });
-    followers.forEach((offset, nodeId) => {
-      const node = state.recordNodeById.get(nodeId);
-      if (!node) return;
-      node.x = node.baseX;
-      node.y = node.baseY;
-      stopNode(node);
-    });
-    // Kill ALL node momentum so nothing explodes, then let spring-snap animate
-    state.renderNodes.forEach((n) => { n.vx = 0; n.vy = 0; });
-    // Drop heat below 0.018 threshold — pure spring snap, no repulsion
-    state.simulationHeat = 0.008;
+    const wasClick = !state.dragState.moved;
     state.dragState = null;
     if (state.canvas) state.canvas.classList.remove('is-dragging');
-    if (wasClick) selectNode(clickedNodeId);
+    if (wasClick && clickedNodeId) selectNode(clickedNodeId);
     return;
   }
   state.dragState = null;
@@ -1613,16 +1650,138 @@ function handlePointerUp(event) {
 function handleWheel(event) {
   if (!state.canvas) return;
   event.preventDefault();
-  const before = uiToWorld(event.clientX, event.clientY);
-  const nextScale = clamp(state.transform.scale * (event.deltaY > 0 ? 0.92 : 1.08), 0.04, 2.8);
-  state.transform.scale = nextScale;
-  state.transform.x = event.clientX - state.canvas.getBoundingClientRect().left - before.x * nextScale;
-  state.transform.y = event.clientY - state.canvas.getBoundingClientRect().top - before.y * nextScale;
+  state.scene.targetZoom = clamp(state.scene.targetZoom + event.deltaY * 0.5, 300, 2600);
   hideTooltip();
+}
+
+function setMemoryParticleMode(mode) {
+  if (!PARTICLE_MODES.includes(mode)) return;
+  state.shapeMode = 'prometheus';
+  state.controls.visualMode = mode;
+  document.querySelectorAll('[data-memory-particle-mode]').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-memory-particle-mode') === mode);
+  });
+  updateStatsText();
+}
+
+function syncTypeModeControls() {
+  const organizeToggle = document.getElementById('memory-organize-type');
+  const separateToggle = document.getElementById('memory-separate-type');
+  if (organizeToggle) organizeToggle.checked = !!state.controls.organizeByType;
+  if (separateToggle) separateToggle.checked = !!state.controls.separateByType;
+  document.querySelectorAll('[data-memory-particle-mode]').forEach((btn) => {
+    btn.disabled = !!state.controls.separateByType;
+  });
+  document.querySelectorAll('.memory-particle-controls').forEach((panel) => {
+    panel.classList.toggle('is-shape-disabled', !!state.controls.separateByType);
+  });
 }
 
 function toggleMemoryControlsPanel() {
   setControlsCollapsed(!state.controlsCollapsed);
+}
+
+function clampControlNumber(value, min, max, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return clamp(parsed, min, max);
+}
+
+function applyDepthZoomRecommendation() {
+  const recommendedZoom = clamp(720 + Math.max(0, state.controls.depth - 460) * 1.42, 720, 1800);
+  if (state.scene.targetZoom < recommendedZoom) state.scene.targetZoom = recommendedZoom;
+}
+
+function updateControlValue(inputEl, valueEl, value) {
+  if (inputEl) inputEl.value = String(value);
+  if (valueEl) valueEl.textContent = String(value);
+}
+
+function setNumericControl(key, rawValue, inputEl, valueEl) {
+  const config = { speed: { min: 0, max: 200, fallback: 35 }, depth: { min: 160, max: 900, fallback: 740 }, glow: { min: 0, max: 100, fallback: 20 } }[key];
+  if (!config) return;
+  const next = Math.round(clampControlNumber(rawValue, config.min, config.max, config.fallback));
+  state.controls[key] = next;
+  updateControlValue(inputEl, valueEl, next);
+  if (key === 'depth') applyDepthZoomRecommendation();
+}
+
+function bindEditableControlValue(valueEl, inputEl, key) {
+  if (!valueEl || !inputEl || valueEl.dataset.editableBound === '1') return;
+  valueEl.dataset.editableBound = '1';
+  valueEl.tabIndex = 0;
+  valueEl.setAttribute('role', 'button');
+  valueEl.setAttribute('title', 'Click to type a value');
+  const config = { speed: { min: 0, max: 200, step: 1 }, depth: { min: 160, max: 900, step: 10 }, glow: { min: 0, max: 100, step: 1 } }[key];
+  const beginEdit = () => {
+    if (valueEl.querySelector('input')) return;
+    const current = String(state.controls[key] ?? inputEl.value ?? '');
+    valueEl.innerHTML = '<input class="memory-control-value-input" type="number" min="' + config.min + '" max="' + config.max + '" step="' + config.step + '" value="' + escHtml(current) + '" />';
+    const editor = valueEl.querySelector('input');
+    editor?.focus();
+    editor?.select();
+    let finished = false;
+    const commit = () => {
+      if (finished) return;
+      finished = true;
+      setNumericControl(key, editor?.value, inputEl, valueEl);
+    };
+    const cancel = () => {
+      if (finished) return;
+      finished = true;
+      valueEl.textContent = String(state.controls[key] ?? inputEl.value ?? '');
+    };
+    editor?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); commit(); }
+      if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+    });
+    editor?.addEventListener('blur', commit);
+  };
+  valueEl.addEventListener('click', beginEdit);
+  valueEl.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); beginEdit(); } });
+}
+
+function savedMemoryGraphSettings() {
+  return {
+    typeFilter: state.controls.typeFilter || '',
+    search: state.controls.search || '',
+    minEdgeWeight: clamp(Number(state.controls.minEdgeWeight || 0.34), 0, 1),
+    showLabels: !!state.controls.showLabels,
+    organizeByType: !!state.controls.organizeByType,
+    separateByType: !!state.controls.separateByType,
+    visualMode: PARTICLE_MODES.includes(state.controls.visualMode) ? state.controls.visualMode : 'galaxy',
+    speed: clampControlNumber(state.controls.speed, 0, 200, 35),
+    depth: clampControlNumber(state.controls.depth, 160, 900, 740),
+    glow: clampControlNumber(state.controls.glow, 0, 100, 20),
+  };
+}
+
+function applyMemoryGraphSettings(settings) {
+  if (!settings || typeof settings !== 'object') return;
+  if (typeof settings.typeFilter === 'string') state.controls.typeFilter = settings.typeFilter;
+  if (typeof settings.search === 'string') state.controls.search = settings.search;
+  if (Number.isFinite(Number(settings.minEdgeWeight))) state.controls.minEdgeWeight = clamp(Number(settings.minEdgeWeight), 0, 1);
+  if (typeof settings.showLabels === 'boolean') state.controls.showLabels = settings.showLabels;
+  if (typeof settings.organizeByType === 'boolean') state.controls.organizeByType = settings.organizeByType;
+  if (typeof settings.separateByType === 'boolean') state.controls.separateByType = settings.separateByType;
+  if (state.controls.separateByType) state.controls.organizeByType = true;
+  if (PARTICLE_MODES.includes(settings.visualMode)) state.controls.visualMode = settings.visualMode;
+  state.controls.speed = clampControlNumber(settings.speed, 0, 200, state.controls.speed);
+  state.controls.depth = clampControlNumber(settings.depth, 160, 900, state.controls.depth);
+  state.controls.glow = clampControlNumber(settings.glow, 0, 100, state.controls.glow);
+}
+
+function loadMemoryGraphSettings() {
+  try { applyMemoryGraphSettings(JSON.parse(localStorage.getItem(MEMORY_GRAPH_SETTINGS_KEY) || 'null')); } catch { /* ignore invalid storage */ }
+}
+
+function saveMemoryGraphSettings() {
+  try {
+    localStorage.setItem(MEMORY_GRAPH_SETTINGS_KEY, JSON.stringify(savedMemoryGraphSettings()));
+    showToast('Memory graph settings saved', 'Filters and graph controls will persist after restart.', 'success', 2200);
+  } catch {
+    showToast('Save failed', 'Could not persist memory graph settings.', 'error');
+  }
 }
 
 function triggerMemoryImageInput() {
@@ -1630,17 +1789,10 @@ function triggerMemoryImageInput() {
 }
 
 function shuffleMemoryGraph() {
-  explodeNodes(5.8);
-  clearTimeout(state.shuffleTimer);
-  state.shuffleTimer = setTimeout(() => {
-    // Zero velocities so explosion momentum doesn't overpower the spring toward new positions
-    state.recordNodes.forEach((n) => { n.vx = 0; n.vy = 0; });
-    state.shuffleKindIndex = (state.shuffleKindIndex + 1) % SHUFFLE_KINDS.length;
-    commitLayoutMode('shuffle', true);
-    const kindName = currentShuffleKind();
-    showToast('Nodes shuffled', `Settled into ${kindName} layout.`, 'success', 2200);
-    updateDefaultShapeBtn();
-  }, 220);
+  const current = PARTICLE_MODES.indexOf(state.controls.visualMode);
+  const nextMode = PARTICLE_MODES[(current + 1) % PARTICLE_MODES.length] || 'galaxy';
+  state.scene.burst = 1;
+  setMemoryParticleMode(nextMode);
 }
 
 function bindControls() {
@@ -1650,71 +1802,80 @@ function bindControls() {
   const edgeWeightValue = document.getElementById('memory-edge-weight-value');
   const showLabels = document.getElementById('memory-show-labels');
   const organizeByType = document.getElementById('memory-organize-type');
-  const repulsion = document.getElementById('memory-force-repulsion');
-  const link = document.getElementById('memory-force-link');
-  const collision = document.getElementById('memory-force-collision');
+  const separateByType = document.getElementById('memory-separate-type');
+  const speed = document.getElementById('memory-particle-speed');
+  const speedValue = document.getElementById('memory-particle-speed-value');
+  const depth = document.getElementById('memory-particle-depth');
+  const depthValue = document.getElementById('memory-particle-depth-value');
+  const glow = document.getElementById('memory-particle-glow');
+  const glowValue = document.getElementById('memory-particle-glow-value');
+  const saveSettings = document.getElementById('memory-save-settings');
   const imageInput = imageInputEl();
-
-  if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`;
+  if (searchInput) searchInput.value = state.controls.search || '';
+  if (typeFilter) typeFilter.value = state.controls.typeFilter || '';
+  if (edgeWeight) edgeWeight.value = String(Math.round(state.controls.minEdgeWeight * 100));
+  if (edgeWeightValue) edgeWeightValue.textContent = state.controls.minEdgeWeight.toFixed(2) + '+';
   if (showLabels) showLabels.checked = !!state.controls.showLabels;
+  if (organizeByType) organizeByType.checked = !!state.controls.organizeByType;
+  if (separateByType) separateByType.checked = !!state.controls.separateByType;
+  if (speed) speed.value = String(state.controls.speed);
+  if (speedValue) speedValue.textContent = String(state.controls.speed);
+  if (depth) depth.value = String(state.controls.depth);
+  if (depthValue) depthValue.textContent = String(state.controls.depth);
+  if (glow) glow.value = String(state.controls.glow);
+  if (glowValue) glowValue.textContent = String(state.controls.glow);
+  bindEditableControlValue(speedValue, speed, 'speed');
+  bindEditableControlValue(depthValue, depth, 'depth');
+  bindEditableControlValue(glowValue, glow, 'glow');
+  document.querySelectorAll('[data-memory-particle-mode]').forEach((btn) => {
+    const mode = btn.getAttribute('data-memory-particle-mode');
+    btn.classList.toggle('active', mode === state.controls.visualMode);
+    btn.addEventListener('click', () => { if (!state.controls.separateByType) setMemoryParticleMode(mode); });
+  });
   searchInput?.addEventListener('input', () => { state.controls.search = searchInput.value || ''; applyFilters({ relayout: false }); });
   typeFilter?.addEventListener('change', () => { state.controls.typeFilter = typeFilter.value || ''; applyFilters({ relayout: true }); });
-  edgeWeight?.addEventListener('input', () => { state.controls.minEdgeWeight = Number(edgeWeight.value || 0) / 100; if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`; applyFilters({ relayout: true }); });
+  edgeWeight?.addEventListener('input', () => { state.controls.minEdgeWeight = Number(edgeWeight.value || 0) / 100; if (edgeWeightValue) edgeWeightValue.textContent = state.controls.minEdgeWeight.toFixed(2) + '+'; applyFilters({ relayout: true }); });
   showLabels?.addEventListener('change', () => { state.controls.showLabels = !!showLabels.checked; });
-  organizeByType?.addEventListener('change', () => { state.controls.organizeByType = !!organizeByType.checked; if (state.controls.organizeByType) state.shapeMode = 'prometheus'; applyFilters({ relayout: true }); });
-  repulsion?.addEventListener('input', () => { state.controls.repulsion = Number(repulsion.value || 90); });
-  link?.addEventListener('input', () => { state.controls.linkStrength = Number(link.value || 26) / 1000; });
-  collision?.addEventListener('input', () => { state.controls.collision = Number(collision.value || 24); });
+  organizeByType?.addEventListener('change', () => {
+    state.controls.organizeByType = !!organizeByType.checked;
+    if (!state.controls.organizeByType) state.controls.separateByType = false;
+    syncTypeModeControls();
+    applyFilters({ relayout: true });
+  });
+  separateByType?.addEventListener('change', () => {
+    state.controls.separateByType = !!separateByType.checked;
+    if (state.controls.separateByType) state.controls.organizeByType = true;
+    syncTypeModeControls();
+    applyFilters({ relayout: true });
+  });
+  speed?.addEventListener('input', () => { setNumericControl('speed', speed.value, speed, speedValue); });
+  depth?.addEventListener('input', () => { setNumericControl('depth', depth.value, depth, depthValue); });
+  glow?.addEventListener('input', () => { setNumericControl('glow', glow.value, glow, glowValue); });
+  saveSettings?.addEventListener('click', saveMemoryGraphSettings);
   imageInput?.addEventListener('change', () => {
     const file = imageInput.files?.[0];
     if (!file) return;
     state.controls.organizeByType = false;
-    const organizeToggle = document.getElementById('memory-organize-type');
-    if (organizeToggle) organizeToggle.checked = false;
+    state.controls.separateByType = false;
+    syncTypeModeControls();
     loadImageShapeFromFile(file);
     imageInput.value = '';
   });
-
   state.detailEl?.addEventListener('click', (event) => {
     const addFilesButton = event.target.closest('[data-memory-add-files]');
-    if (addFilesButton) {
-      state.detailEl?.querySelector('[data-memory-file-input]')?.click();
-      return;
-    }
+    if (addFilesButton) { state.detailEl?.querySelector('[data-memory-file-input]')?.click(); return; }
     const removeAttachmentButton = event.target.closest('[data-memory-remove-attachment]');
-    if (removeAttachmentButton) {
-      const index = Number(removeAttachmentButton.getAttribute('data-memory-remove-attachment'));
-      if (Number.isInteger(index) && index >= 0) removeDraftAttachment(index);
-      return;
-    }
+    if (removeAttachmentButton) { const index = Number(removeAttachmentButton.getAttribute('data-memory-remove-attachment')); if (Number.isInteger(index) && index >= 0) removeDraftAttachment(index); return; }
     const openPathButton = event.target.closest('[data-memory-open-path]');
-    if (openPathButton) {
-      openMemoryAttachment(openPathButton.getAttribute('data-memory-open-path'));
-      return;
-    }
+    if (openPathButton) { openMemoryAttachment(openPathButton.getAttribute('data-memory-open-path')); return; }
     const button = event.target.closest('[data-record-id]');
     if (!button) return;
     const recordId = button.getAttribute('data-record-id');
     if (!recordId) return;
     selectNode(recordId);
-    const node = state.recordNodeById.get(recordId);
-    if (node) {
-      const width = state.stageEl.clientWidth || 1;
-      const height = state.stageEl.clientHeight || 1;
-      state.transform.x = width / 2 - node.x * state.transform.scale;
-      state.transform.y = height / 2 - node.y * state.transform.scale;
-    }
   });
-  state.detailEl?.addEventListener('change', (event) => {
-    const input = event.target.closest('[data-memory-file-input]');
-    if (!input) return;
-    addDraftFiles(input.files);
-    input.value = '';
-  });
-  state.detailEl?.addEventListener('submit', (event) => {
-    if (!event.target.closest('[data-memory-compose-form]')) return;
-    submitMemoryDraft(event);
-  });
+  state.detailEl?.addEventListener('change', (event) => { const input = event.target.closest('[data-memory-file-input]'); if (!input) return; addDraftFiles(input.files); input.value = ''; });
+  state.detailEl?.addEventListener('submit', (event) => { if (!event.target.closest('[data-memory-compose-form]')) return; submitMemoryDraft(event); });
 }
 
 function setupCanvas() {
@@ -1757,8 +1918,8 @@ function setupCanvas() {
     const file = event.dataTransfer?.files?.[0];
     if (!file) return;
     state.controls.organizeByType = false;
-    const organizeToggle = document.getElementById('memory-organize-type');
-    if (organizeToggle) organizeToggle.checked = false;
+    state.controls.separateByType = false;
+    syncTypeModeControls();
     loadImageShapeFromFile(file);
   });
   if (typeof ResizeObserver !== 'undefined') {
@@ -1795,15 +1956,6 @@ function loadSavedDefaultShape() {
     updateDefaultShapeBtn();
     return true;
   }
-  if (saved.mode === 'shuffle') {
-    const index = SHUFFLE_KINDS.indexOf(String(saved.kind || ''));
-    if (index >= 0) {
-      state.shuffleKindIndex = index;
-      state.shapeMode = 'shuffle';
-      updateDefaultShapeBtn();
-      return true;
-    }
-  }
   return false;
 }
 
@@ -1811,51 +1963,30 @@ function updateDefaultShapeBtn() {
   const btn = document.getElementById('memory-set-default-btn');
   if (!btn) return;
   const saved = readSavedDefaultLayout();
-  const canSaveCurrent = (state.shapeMode === 'image' && state.imagePoints?.length) || state.shapeMode === 'shuffle';
-  const activeSavedLayout = !!saved
-    && ((saved.mode === 'image' && state.shapeMode === 'image')
-      || (saved.mode === 'shuffle' && state.shapeMode === 'shuffle' && saved.kind === currentShuffleKind()));
-  if (canSaveCurrent && !activeSavedLayout) {
-    btn.textContent = 'Set as Default';
-    btn.style.opacity = '1';
-  } else if (saved) {
-    btn.textContent = 'Clear Default';
-    btn.style.opacity = '1';
-  } else {
-    btn.textContent = 'Set as Default';
-    btn.style.opacity = '0.4';
-  }
+  const canSaveCurrent = state.shapeMode === 'image' && state.imagePoints?.length;
+  if (canSaveCurrent && !saved) { btn.textContent = 'Set Image Default'; btn.style.opacity = '1'; }
+  else if (saved) { btn.textContent = 'Clear Image Default'; btn.style.opacity = '1'; }
+  else { btn.textContent = 'Set Image Default'; btn.style.opacity = '0.4'; }
 }
 
 function toggleDefaultShape() {
   const saved = readSavedDefaultLayout();
   const canSaveImage = state.shapeMode === 'image' && state.imagePoints?.length;
-  const canSaveShuffle = state.shapeMode === 'shuffle';
-  const activeSavedLayout = !!saved
-    && ((saved.mode === 'image' && canSaveImage)
-      || (saved.mode === 'shuffle' && canSaveShuffle && saved.kind === currentShuffleKind()));
-  if (saved && activeSavedLayout) {
+  if (saved) {
     localStorage.removeItem(DEFAULT_LAYOUT_KEY);
     localStorage.removeItem(LEGACY_DEFAULT_SHAPE_KEY);
-    showToast('Default shape cleared', 'Page will start with the square layout on next load.', 'success', 2200);
+    state.shapeMode = 'prometheus';
+    showToast('Default image cleared', 'Particle modes will be used on next load.', 'success', 2200);
   } else if (canSaveImage) {
     try {
       localStorage.setItem(DEFAULT_LAYOUT_KEY, JSON.stringify({ mode: 'image', points: state.imagePoints }));
       localStorage.removeItem(LEGACY_DEFAULT_SHAPE_KEY);
-      showToast('Default shape saved', 'This image layout will be used on every page load.', 'success', 2200);
+      showToast('Default image saved', 'This image layout will be used on every page load.', 'success', 2200);
     } catch {
       showToast('Save failed', 'Could not save to localStorage - image may be too large.', 'error');
     }
-  } else if (canSaveShuffle) {
-    try {
-      localStorage.setItem(DEFAULT_LAYOUT_KEY, JSON.stringify({ mode: 'shuffle', kind: currentShuffleKind() }));
-      localStorage.removeItem(LEGACY_DEFAULT_SHAPE_KEY);
-      showToast('Default shape saved', `The ${currentShuffleKind()} layout will be used on every page load.`, 'success', 2200);
-    } catch {
-      showToast('Save failed', 'Could not save the default layout to localStorage.', 'error');
-    }
   } else {
-    showToast('No custom shape active', 'Shuffle the nodes or upload an image first, then set it as default.', 'warning');
+    showToast('No image shape active', 'Upload an image first, then set it as default.', 'warning');
   }
   updateDefaultShapeBtn();
 }
@@ -1867,7 +1998,9 @@ function init() {
   if (state.initialized) return;
   state.initialized = true;
   setupCanvas();
+  loadMemoryGraphSettings();
   bindControls();
+  syncTypeModeControls();
   setControlsCollapsed(true);
   loadSavedDefaultShape();
   if (state.detailEl) renderDetail(null);
@@ -1933,3 +2066,4 @@ window.openAddMemoryDrawer = openAddMemoryDrawer;
 window.shuffleMemoryGraph = shuffleMemoryGraph;
 window.triggerMemoryImageInput = triggerMemoryImageInput;
 window.toggleDefaultShape = toggleDefaultShape;
+window.saveMemoryGraphSettings = saveMemoryGraphSettings;

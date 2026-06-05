@@ -6,6 +6,13 @@ Current channel config blocks exist for:
 - Discord
 - WhatsApp
 
+Each channel config can also carry `completionNotifications`:
+
+- `enabled` gates response-complete notification delivery for that channel.
+- `desktop` and `mobile` select which chat origins should trigger alerts.
+- `includeSummary`, `includeLink`, and `summaryMaxChars` control the truncated final-message preview and best-effort deep link.
+- Defaults are off; normalization lives in `src/gateway/comms/broadcaster.ts`, schema validation lives in `src/config/config-schema.ts`, and the Settings > Channels UI writes the block from `web-ui/src/pages/SettingsPage.js`.
+
 Telegram channel config now also supports:
 
 - persona bot configs under `personas`
@@ -28,6 +35,16 @@ Telegram currently supports:
 - persona-specific bots that can route group/direct messages to configured agent IDs
 - team room mirroring for team chat, dispatch, completion, proposed changes, and manager review events
 - **live token streaming to desktop web UI** — every token, tool call, and tool result emitted during a Telegram turn is broadcast as a `main_chat_stream_event` WebSocket message to all connected desktop clients, so the desktop sees Telegram activity live without refresh
+
+Response-complete notification bridge:
+
+- `src/gateway/notifications/completion-bridge.ts` sends opt-in completion alerts to Telegram, Discord, and WhatsApp when a `/api/chat` turn reaches the final response path.
+- `src/gateway/routes/chat.router.ts` calls `notifyChatCompletion(...)` only for normalized `mobile` and `web` origins. Mobile sends `Mobile chat response complete:`; desktop web sends `Desktop response complete:`.
+- Terminal/CLI, Telegram-origin, Discord-origin, WhatsApp-origin, tasks, proposals, team rooms, and existing Telegram command/task delivery are not replaced or echoed by this bridge.
+- Telegram delivery uses `sendTelegramNotification(...)` in `broadcaster.ts`, which routes through the existing allowed Telegram channel delivery path.
+- Discord and WhatsApp delivery reuse `sendDiscordNotification(...)` and `sendWhatsAppNotification(...)`.
+- The bridge dedupes repeated final notifications by source/session/clientRequestId/content hash in memory.
+- Link generation is best-effort: it prefers configured public mobile/gateway/remote-access URLs, then request origin, then local `http://127.0.0.1:<port>`, and appends `/#mobile/chat/<sessionId>`. iOS/PWA behavior may still open Safari/browser instead of the installed mobile shell, so the notification preview is the reliable part.
 
 ## 25-LIVE) Cross-Channel Live Update Behavior (Web UI)
 

@@ -2,7 +2,7 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "browser-automation-playbook",
   "name": "Browser Automation Playbook",
-  "description": "Current operating guide for Prometheus browser automation. Covers visual-first execution, DOM refs, vision fallback, keyboard flows, uploads/downloads, media capture, structured extraction, network interception, browser smoke tests, and when to use browser tools versus web_search/web_fetch/download tools.",
+  "description": "Current operating guide for Prometheus browser automation. Covers visual-first execution, DOM refs, vision fallback, keyboard flows, uploads/downloads, media capture, structured extraction, network interception, browser smoke tests, and when to use browser tools versus web_search/web_fetch_batch/web_fetch/download tools.",
   "version": "4.2.1",
   "entrypoint": "SKILL.md",
   "triggers": [

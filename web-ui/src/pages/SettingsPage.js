@@ -2977,6 +2977,7 @@ async function loadAgentRunHistory() {
 
 // --- Channels Settings Functions ---------------------------------------
 let channelsStatusLoaded = false;
+let channelsStatusCache = null;
 
 function setChannelStatus(idPrefix, state, message) {
   const dot = document.getElementById(`${idPrefix}-status-dot`);
@@ -2996,6 +2997,7 @@ function setChannelStatus(idPrefix, state, message) {
 }
 
 function readChannelPayload(channel) {
+  const completionNotifications = readCompletionNotificationPayload();
   if (channel === 'telegram') {
     const userIdStr = (document.getElementById('settings-tg-userid')?.value || '').trim();
     const allowedUserIds = userIdStr ? userIdStr.split(/[,\s]+/).map(Number).filter(n => !isNaN(n) && n > 0) : [];
@@ -3004,6 +3006,7 @@ function readChannelPayload(channel) {
       botToken: (document.getElementById('settings-tg-token')?.value || '').trim(),
       allowedUserIds,
       streamMode: 'full',
+      completionNotifications,
     };
   }
   if (channel === 'discord') {
@@ -3014,6 +3017,7 @@ function readChannelPayload(channel) {
       guildId: (document.getElementById('settings-dc-guildid')?.value || '').trim(),
       channelId: (document.getElementById('settings-dc-channelid')?.value || '').trim(),
       webhookUrl: (document.getElementById('settings-dc-webhook')?.value || '').trim(),
+      completionNotifications,
     };
   }
   return {
@@ -3024,7 +3028,35 @@ function readChannelPayload(channel) {
     verifyToken: (document.getElementById('settings-wa-verify')?.value || '').trim(),
     webhookSecret: (document.getElementById('settings-wa-secret')?.value || '').trim(),
     testRecipient: (document.getElementById('settings-wa-recipient')?.value || '').trim(),
+    completionNotifications,
   };
+}
+
+function readCompletionNotificationPayload() {
+  const maxChars = Number(document.getElementById('settings-ch-notify-maxchars')?.value || 420);
+  return {
+    enabled: !!document.getElementById('settings-ch-notify-enabled')?.checked,
+    mobile: !!document.getElementById('settings-ch-notify-mobile')?.checked,
+    desktop: !!document.getElementById('settings-ch-notify-desktop')?.checked,
+    includeSummary: document.getElementById('settings-ch-notify-summary')?.checked !== false,
+    includeLink: !!document.getElementById('settings-ch-notify-link')?.checked,
+    summaryMaxChars: Number.isFinite(maxChars) ? Math.max(80, Math.min(1200, Math.floor(maxChars))) : 420,
+  };
+}
+
+function applyCompletionNotificationFields(channelData) {
+  const cfg = channelData?.completionNotifications || {};
+  const setChecked = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!value;
+  };
+  setChecked('settings-ch-notify-enabled', cfg.enabled === true);
+  setChecked('settings-ch-notify-mobile', cfg.mobile === true);
+  setChecked('settings-ch-notify-desktop', cfg.desktop === true);
+  setChecked('settings-ch-notify-summary', cfg.includeSummary !== false);
+  setChecked('settings-ch-notify-link', cfg.includeLink === true);
+  const maxEl = document.getElementById('settings-ch-notify-maxchars');
+  if (maxEl) maxEl.value = String(Number.isFinite(Number(cfg.summaryMaxChars)) ? Number(cfg.summaryMaxChars) : 420);
 }
 
 function setButtonBusy(id, busy, busyLabel, normalLabel) {
@@ -3063,6 +3095,7 @@ function onChannelTypeChange() {
     if (guide) guide.style.display = (k === ch) ? 'block' : 'none';
     if (status) status.style.display = (k === ch) ? 'flex' : 'none';
   });
+  applyCompletionNotificationFields(channelsStatusCache?.[ch] || null);
 }
 
 async function saveSelectedChannelSettings() {
@@ -3084,6 +3117,7 @@ async function loadChannelsStatus() {
     const tg = data.telegram || {};
     const dc = data.discord || {};
     const wa = data.whatsapp || {};
+    channelsStatusCache = { telegram: tg, discord: dc, whatsapp: wa };
 
     if (tg.connected && tg.polling) setChannelStatus('tg', 'ok', `Connected as @${tg.username || 'bot'}`);
     else if (tg.hasToken) setChannelStatus('tg', 'warn', 'Token saved, not connected');

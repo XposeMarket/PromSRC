@@ -222,6 +222,10 @@ function buildPublicWebUi() {
   // Replace inline ES module import paths: from './src/...' and import('./src/...')
   html = html.replace(/(["'])\.\/(src)\//g, '$1./static/');
   html = html.replace(/(EXTRACTED to )src\//g, '$1static/');
+  html = html.replace(
+    '</head>',
+    '<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>\n</head>',
+  );
 
   fs.writeFileSync(path.join(OUT_ROOT, 'index.html'), html, 'utf-8');
   copyRecursive(path.join(SRC_WEB_UI, 'src'), OUT_STATIC);

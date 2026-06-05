@@ -1,6 +1,6 @@
 # 16) Prometheus Mobile App Maintenance Reference
 
-Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, and package scripts on: 2026-05-28
+Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, and package scripts on: 2026-06-05
 
 Prometheus Mobile is a hash-routed PWA shell inside the existing web UI. It is not a separate native iOS/Android/Capacitor app in this repo. Treat `web-ui/src/mobile/*` as the canonical mobile app source and treat `generated/public-web-ui/static/mobile/*` as generated public-build output.
 
@@ -141,6 +141,19 @@ Mobile sends normal worker turns through `POST /api/chat` with SSE. `mobile-api.
 
 `chat.router.ts` normalizes turn origin. A session ID beginning `mobile_` or an explicit `origin.channel='mobile'` becomes channel `mobile`, surface `mobile_app`, device `phone`. The injected origin context tells the model that mobile is only the contact channel; local desktop/browser/files/tools can still be available.
 
+Mobile chat attachment path:
+
+- `web-ui/src/mobile/mobile-pages.js` owns the mobile chat attachment picker, attachment normalization, staged attachment chips, upload result mapping, and the shared team/subagent mobile composer.
+- Main mobile chat file input is `#pm-file-input`; shared team/subagent composer inputs are generated as `${id}-file-input`.
+- Camera-roll/file-picker video support was added on 2026-06-05 by allowing `video/*` plus common video extensions (`.mp4`, `.mov`, `.m4v`, `.webm`, `.avi`, `.mkv`) in both mobile chat inputs.
+- `_normalizeMobileFile(file)` now treats `mimeType.startsWith('video/')` as `kind: 'video'`. Videos intentionally are not converted into in-memory data URLs during staging; they upload as binary files through the existing canvas upload path.
+- `_uploadMobileChatAttachments(files)` preserves `isVideo` alongside `isImage`, and mobile send mappings convert uploaded videos back to `kind: 'video'` so chat previews and runtime attachment metadata do not collapse them into generic files.
+- `_renderChatAttachmentPreviews(...)` can render uploaded video chips with `<video muted playsinline preload="metadata">`; `web-ui/src/styles/mobile.css` styles `.pm-attach-chip.video video`.
+- Uploaded mobile videos are saved through `uploadMobileBinaryFile(...)` -> `POST /api/canvas/upload-binary`, which stores them under `workspace/uploads/` and returns a workspace path. The runtime prompt receives that exact path via `[UPLOADED FILES]`, so agents should use the media/video tools or workspace path directly to inspect/process the clip.
+- Keep generated mirrors in sync: `generated/public-web-ui/static/mobile/mobile-pages.js` and `generated/public-web-ui/static/styles/mobile.css`.
+- Because this is PWA-facing static JS/CSS, bump `web-ui/service-worker.js` `VERSION` on meaningful attachment/picker changes; the 2026-06-05 video attachment change uses `pm-v29-2026-06-05-mobile-video-attachments`.
+- Verification used for this change: `npm run sync:web-ui`, which regenerated public assets and passed `check:web-ui`.
+
 Mobile chat APIs:
 
 - `GET /api/sessions?channel=mobile&limit=...&offset=...`
@@ -169,6 +182,8 @@ Live stream behavior:
 - `appendMainChatStreamEvent` broadcasts `main_chat_stream_event` over WebSocket to all clients.
 - Mobile can replay missed events through `GET /api/mobile/chat/stream/:sessionId`.
 - `web-ui/src/ws.js` auto-reconnects and routes WebSocket events through `wsEventBus`.
+- 2026-06-05 desktop-to-mobile live sync fix: the server was already broadcasting every main-chat frame, including `event: 'user_message'`, through `main_chat_stream_event`. The mobile bug was client-side: `web-ui/src/mobile/mobile-pages.js::onMainChatStreamEvent` created/reused an assistant placeholder for every frame before special-casing user frames, so a user message sent from desktop did not appear in the open mobile chat until history reload. Fix: handle `eventType === 'user_message'` first, insert a mobile-format user turn from `msg.data.message`, dedupe the phone's own send via `clientRequestId`, then return before assistant placeholder logic. Keep the generated public copy (`generated/public-web-ui/static/mobile/mobile-pages.js`) in sync or run `npm run sync:web-ui`.
+- Verification for that fix: `node --check web-ui/src/mobile/mobile-pages.js` and `node --check generated/public-web-ui/static/mobile/mobile-pages.js` passed. Manual expected behavior: with the same chat open on desktop and mobile, a desktop user message should appear immediately on mobile, followed by the normal Prometheus streaming/tool/process updates.
 
 Mobile command endpoints:
 
@@ -213,6 +228,20 @@ Realtime/mobile audio details:
 - REALTIME AUTH GOTCHA (bug 1): OpenAI Realtime 500s ("Internal Server Error", no transcription/audio) when minting works but the call fails. Cause: the realtime CALL endpoint rejects the raw Codex OAuth bearer; it needs a real platform api_key minted by exchanging the OAuth id_token, which needs an `organization_id` claim (fresh login only, and `startOAuthFlow` must NOT send `codex_cli_simplified_flow=true`). Working logs show `auth: 'openai_codex_oauth_api_key'`. Full runbook: §12A-CRITICAL of `workspace/self/06-image-voice.md`. xAI realtime is independent and unaffected.
 - REALTIME MIC GOTCHA (bug 2, iOS): after auth is fixed, if the session connects and soundwaves animate but there is still no transcription/audio, the OpenAI WebRTC path is doing its OWN `getUserMedia` — a SECOND concurrent iOS mic capture that comes back live-but-silent, so OpenAI's VAD hears nothing. Fix/rule: mobile realtime mic MUST reuse the shared warm mic (`_ensureMobileXaiRealtimeMic()` / `__pmVoice.warmMicStream`), exactly like xAI; tag the conn `sharedMic: true` and do NOT `.stop()` the shared stream on teardown (only re-enable its track). Never open a second concurrent `getUserMedia` on iOS. Details: §12A-2 of `workspace/self/06-image-voice.md`.
 
+Mobile Realtime camera/video additions from 2026-06-05:
+
+- The PWA can open an in-app camera preview from the mobile chat attachment sheet and from the inline chat voice section. This uses browser `getUserMedia` camera permission; it does not need to save a native photo to the user's phone.
+- Tap on the capture button takes a still frame from the live preview and converts it to a JPEG/data URL via canvas.
+- Hold on the capture button records a short clip in the same preview. The hold interaction must suppress Safari text selection/context menu behavior, like the PTT fix. The clip is sampled into sequential JPEG frames rather than streamed as live video.
+- The voice camera/file button belongs at the top-left of the chat voice section, opposite the close/X button. Keep it above the bottom tab footer; camera controls must not sit behind the mobile nav.
+- Captured voice images are staged in `__pmRealtimeAgent.pendingImages` and rendered into the current mobile chat thread as a visible image bubble via `__pmRealtimeAgent.stagedImageTurn`.
+- Staged OpenAI Realtime images flush into the live Realtime data channel on the next spoken PTT/always-listening turn, and also on typed chat send if the user types after taking the photo.
+- Typed sends after a staged voice photo also include the staged image as regular mobile chat attachments, so the Prometheus worker receives the pixels through `/api/chat` even if the user typed instead of speaking.
+- The OpenAI Realtime image event shape is `conversation.item.create` with a user `message` containing `input_text` and `input_image`. The `input_image` uses a data URL in `image_url` and includes `detail: "auto"`.
+- Realtime images must be downscaled/recompressed before data-channel send. Mobile Safari can silently drop large SCTP messages; `_downscaleDataUrlForRealtime(...)` targets small JPEG data URLs instead of passing full-res captures through.
+- xAI/Grok Realtime is not sent OpenAI-style `input_image` events in this implementation. xAI visual context goes through `/api/voice-agent/xai-vision-summary` and is injected into the xAI Realtime conversation as text.
+- If a user says the bubble shows but the voice agent says it cannot see anything, inspect `_flushMobileRealtimeAgentPendingImages(...)`, the provider guard (`openai_realtime` vs `xai`), and the downscaled data URL size. The local bubble alone does not prove the Realtime model received the image event.
+
 Voice Agent and interruptions:
 
 - `POST /api/voice-agent/context`
@@ -248,12 +277,26 @@ Debugging voice:
 
 There is no native push-notification service in this PWA path. Mobile delivery is currently WebSocket/in-app delivery plus session unread state.
 
+Prometheus now has an opt-in channel notification fallback for completed chat responses:
+
+- Settings > Channels can enable `completionNotifications` separately for Telegram, Discord, and WhatsApp.
+- Source filters let the user notify on `mobile`, `desktop`, or both. In backend terms, `mobile` means `/api/chat` turns normalized to origin channel `mobile`; `desktop` means web chat turns normalized to origin channel `web`.
+- Completion alerts are sent after the final assistant response is produced, not during token streaming.
+- Mobile alerts are labeled `Mobile chat response complete:`; desktop web alerts are labeled `Desktop response complete:`.
+- Alerts can include a cleaned/truncated summary and an optional best-effort chat link to `/#mobile/chat/<sessionId>`.
+- This is deliberately separate from in-app WebSocket delivery/unread state and from Telegram's existing task/proposal/command delivery.
+- PWA deep links remain browser/OS dependent. Telegram on iOS may open Safari rather than the installed PWA, so the notification itself and summary preview are the durable behavior.
+
 Source files:
 
 - `src/gateway/delivery-router.ts`
 - `src/gateway/comms/broadcaster.ts`
+- `src/gateway/notifications/completion-bridge.ts`
 - `src/gateway/tool-builder.ts`
+- `src/gateway/routes/chat.router.ts`
+- `src/gateway/routes/channels.router.ts`
 - `web-ui/src/mobile/mobile-pages.js`
+- `web-ui/src/pages/SettingsPage.js`
 - `web-ui/src/ws.js`
 - `src/gateway/comms/telegram-channel.ts`
 - `src/gateway/comms/telegram-persona-bots.ts`

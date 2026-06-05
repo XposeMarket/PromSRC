@@ -26,7 +26,40 @@ export function isTaskRecoveryEligible(task: TaskRecord | null | undefined): boo
 
 export function getTaskReplySessionIds(task: TaskRecord | null | undefined): string[] {
   if (!task) return [];
-  return uniqueStrings([task.sessionId, task.originatingSessionId]);
+  const ids = [task.sessionId, task.originatingSessionId];
+  const subagentId = String(task.subagentProfile || '').trim();
+  if (subagentId) ids.push(`subagent_chat_${subagentId.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'agent'}`);
+
+  const teamId = String(task.teamSubagent?.teamId || '').trim();
+  const teamAgentId = String(task.teamSubagent?.agentId || '').trim();
+  if (teamId && teamAgentId) {
+    ids.push(teamId);
+    ids.push(`team_member_room_${teamId}___AGENT___${teamAgentId}`);
+    try {
+      const managedTeams = require('../teams/managed-teams.js') as typeof import('../teams/managed-teams.js');
+      const directThread = managedTeams.getTeamDirectThread(teamId, 'member', teamAgentId);
+      if (directThread?.sessionId) ids.push(directThread.sessionId);
+    } catch {
+      // Optional route identity only; recovery still works through task/main sessions.
+    }
+  }
+
+  const proposalTeam = task.proposalExecution?.teamExecution;
+  const proposalTeamId = String(proposalTeam?.teamId || '').trim();
+  const managerSessionId = String(proposalTeam?.managerSessionId || '').trim();
+  if (proposalTeamId) {
+    ids.push(proposalTeamId);
+    ids.push(managerSessionId || `team_coord_${proposalTeamId}`);
+    try {
+      const managedTeams = require('../teams/managed-teams.js') as typeof import('../teams/managed-teams.js');
+      const directThread = managedTeams.getTeamDirectThread(proposalTeamId, 'manager', 'manager');
+      if (directThread?.sessionId) ids.push(directThread.sessionId);
+    } catch {
+      // Optional route identity only; recovery still works through task/main sessions.
+    }
+  }
+
+  return uniqueStrings(ids);
 }
 
 export function matchesTaskReplySession(task: TaskRecord | null | undefined, sessionId: string): boolean {

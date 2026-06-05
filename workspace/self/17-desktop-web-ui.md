@@ -165,6 +165,8 @@ Important backend route groups consumed by the desktop UI:
 
 WebSocket events enter through `web-ui/src/ws.js` and are consumed by page modules through `window.wsEventBus.addEventListener('message', ...)`. Chat streaming also uses `/api/chat` SSE directly in `ChatPage.js`; retained and cross-surface stream events are also mirrored through websocket/main-chat stream handlers.
 
+Paused task recovery chat is backend-synchronized across task, subagent, and team surfaces. `TasksPage.js` posts to the task message APIs, while `SubagentsPage.js` and `TeamsPage.js` continue to post to their normal chat routes; the backend detects matching blocked task ownership, routes the turn through task recovery, and mirrors recovery turns back as `subagent_chat_message` or `team_chat_message` events. UI code should treat those mirrored messages as canonical chat history for the owner surface instead of creating a separate recovery-only display.
+
 ## Desktop Globals and Public Function Map
 
 The desktop UI intentionally exposes many functions on `window` because `index.html` still contains inline handlers and page modules call each other without a framework-level event bus. When refactoring, treat these names as compatibility API until the corresponding markup/caller is migrated.

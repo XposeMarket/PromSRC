@@ -62,6 +62,11 @@ import { getLastMainSessionId } from '../comms/broadcaster';
 import { createDevSourceEditApprovalScope, grantDevSourceEditApproval } from '../dev-source-approvals';
 import { buildContextBudget, resolveActiveModelContextProfile, selectModelInfoForContextProfile } from '../context/model-context';
 import { resolveApprovalDecision } from '../approval-actions';
+import {
+  getPrometheusQuestionQueue,
+  serializePrometheusQuestionForClient,
+  submitPrometheusQuestionResponse,
+} from '../prometheus-questions';
 
 export const router = Router();
 
@@ -1169,6 +1174,57 @@ router.post('/api/approvals/:id/approve', requireGatewayAuth, (req, res) => {
 router.post('/api/approvals/:id/deny', requireGatewayAuth, (req, res) => {
   req.body = { ...(req.body || {}), decision: 'rejected' };
   resolveApprovalRequest(req, res, 'rejected', 'web');
+});
+
+// ─── Prometheus Questions API ─────────────────────────────────────────────────
+
+router.get('/api/questions', requireGatewayAuth, (req, res) => {
+  const queue = getPrometheusQuestionQueue();
+  const status = String(req.query.status || 'pending').trim().toLowerCase();
+  const sessionId = String(req.query.sessionId || '').trim();
+  const taskId = String(req.query.taskId || '').trim();
+  const questions = (status === 'all'
+    ? queue.listAll()
+    : queue.listAll().filter((record) => record.status === status))
+    .filter((record) => !sessionId || String(record.sessionId || '') === sessionId)
+    .filter((record) => !taskId || String(record.taskId || '') === taskId)
+    .map(serializePrometheusQuestionForClient);
+  res.json({ questions });
+});
+
+router.post('/api/questions/:id/submit', requireGatewayAuth, (req, res) => {
+  const result = submitPrometheusQuestionResponse({
+    questionId: req.params.id,
+    answers: Array.isArray(req.body?.answers) ? req.body.answers : [],
+    generalOther: String(req.body?.generalOther || req.body?.general_other || '').trim(),
+    resolvedBy: 'web',
+  });
+  res.status(result.statusCode).json(result.statusCode === 200 ? {
+    success: true,
+    question: result.question ? serializePrometheusQuestionForClient(result.question) : undefined,
+    resumePrompt: result.resumePrompt,
+    requiresChatResume: result.requiresChatResume,
+  } : { success: false, error: result.error });
+});
+
+router.post('/api/questions/:id/cancel', requireGatewayAuth, (req, res) => {
+  const queue = getPrometheusQuestionQueue();
+  const cancelled = queue.cancel(req.params.id, 'web');
+  if (!cancelled) {
+    res.status(404).json({ success: false, error: 'Pending question not found' });
+    return;
+  }
+  try {
+    const { broadcastWS } = require('../comms/broadcaster');
+    broadcastWS({
+      type: 'question_cancelled',
+      sessionId: cancelled.sessionId,
+      taskId: cancelled.taskId,
+      questionId: cancelled.id,
+      question: serializePrometheusQuestionForClient(cancelled),
+    });
+  } catch {}
+  res.json({ success: true, question: serializePrometheusQuestionForClient(cancelled) });
 });
 
 // ─── Lifecycle / Restart ──────────────────────────────────────────────────────────

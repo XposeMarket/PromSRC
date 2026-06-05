@@ -13,6 +13,7 @@ import {
   computeTeamHealth, getTeamRunHistory, getTeamRoomState,
 } from '../teams/managed-teams';
 import { createTask, listTaskSummaries, updateTaskStatus, mutatePlan, appendJournal } from '../tasks/task-store';
+import { findRecoveryTaskForTeamChatTarget, handleTaskRecoveryMessage } from '../tasks/task-router';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory } from '../../scheduler';
 import {
   triggerManagerReview,
@@ -365,6 +366,19 @@ export async function postTeamChatFromChannel(params: {
     if (team.agentPauseStates?.[routeTarget.targetId]?.paused === true) {
       throw new Error(`${routeTarget.targetLabel || routeTarget.targetId} is paused.`);
     }
+  }
+
+  const recoveryTask = findRecoveryTaskForTeamChatTarget(
+    teamId,
+    routeTarget.type,
+    routeTarget.targetId,
+  );
+  if (recoveryTask) {
+    await handleTaskRecoveryMessage(recoveryTask.id, routeTarget.routedMessage || content, {
+      sourceSessionId: teamId,
+      source: 'team_chat',
+    });
+    return { success: true, message: null, target: routeTarget };
   }
 
   const directThread = routeTarget.type === 'manager'
@@ -1012,6 +1026,32 @@ router.post('/api/teams/:id/chat', async (req, res) => {
       }
       if (team.agentPauseStates?.[routeTarget.targetId]?.paused === true) {
         return res.status(409).json({ success: false, error: `${routeTarget.targetLabel || routeTarget.targetId} is paused.` });
+      }
+    }
+    const recoveryTask = findRecoveryTaskForTeamChatTarget(
+      req.params.id,
+      routeTarget.type,
+      routeTarget.targetId,
+    );
+    if (recoveryTask) {
+      const recovery = await handleTaskRecoveryMessage(
+        recoveryTask.id,
+        getAttachmentContext().appendAttachmentContextToMessage(routeTarget.routedMessage || content, attachmentContext.block),
+        {
+          sourceSessionId: req.params.id,
+          source: 'team_chat',
+        },
+      );
+      if (recovery.handled) {
+        return res.json({
+          success: true,
+          recovery: true,
+          taskId: recoveryTask.id,
+          resumed: recovery.resumed,
+          action: recovery.action,
+          reply: recovery.reply,
+          target: routeTarget,
+        });
       }
     }
     const directThread = routeTarget.type === 'manager'
@@ -2248,6 +2288,43 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
     if (!res.writableEnded) abortSignal.aborted = true;
     clearInterval(heartbeat);
   });
+
+  const recoveryTask = findRecoveryTaskForTeamChatTarget(
+    req.params.id,
+    routeTarget.type,
+    routeTarget.targetId,
+  );
+  if (recoveryTask) {
+    try {
+      sendSSE('ui_preflight', { message: 'Routing message to paused team task...' });
+      const recovery = await handleTaskRecoveryMessage(
+        recoveryTask.id,
+        getAttachmentContext().appendAttachmentContextToMessage(routeTarget.routedMessage || content, attachmentContext.block),
+        {
+          sourceSessionId: req.params.id,
+          source: 'team_chat',
+        },
+      );
+      const reply = recovery.reply || '';
+      if (!abortSignal.aborted) {
+        sendSSE('final', { text: reply });
+        sendSSE('done', {
+          reply,
+          recovery: true,
+          taskId: recoveryTask.id,
+          resumed: recovery.resumed,
+          action: recovery.action,
+          target: routeTarget,
+        });
+      }
+    } catch (err: any) {
+      if (!abortSignal.aborted) sendSSE('error', { message: err.message || 'Task recovery failed' });
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
+    }
+    return;
+  }
 
   try {
     const userMsg = appendTeamChat(req.params.id, {

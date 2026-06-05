@@ -84,3 +84,68 @@ Memory defaults in config source:
 - embedding model: `nomic-embed-text`
 
 Agent retrieval policy settings are configurable via `GET/POST /api/settings/agent`.
+## 28) Memory Graph UI and Workspace File Indexing
+
+Verified/updated on 2026-06-05 after the memory graph revamp.
+
+Memory Graph UI current behavior:
+
+- the flat 2D graph was replaced with a bright 3D particle-style graph in `web-ui/src/pages/MemoryPage.js`
+- graph layout modes include `Galaxy`, `Sphere`, `Wave`, and `Tunnel`
+- controls persist locally via saved graph settings
+- defaults after the revamp:
+  - speed: `35`
+  - depth: `740`
+  - glow: `20`
+- speed/depth/glow numeric readouts can be clicked and edited manually, then committed with Enter/blur
+- node hover/select behavior remains active
+- edge/web highlighting gets brighter around hovered/selected nodes
+- graph performance was improved by avoiding expensive per-frame/per-node DOM/canvas work where possible
+
+Memory graph organization modes:
+
+- `Organize by type` keeps nodes in the selected 3D shape while grouping by color/type inside that shape
+- `Separate` is a distinct mode for separated type cards/clusters
+- when `Separate` is enabled, shape controls are intentionally greyed out/unselectable because the separated card layout owns positioning
+- memory categories were expanded so thoughts/dreams/restarts/cleanups, soul/user/memory, subagents, workspace files, and manually added memory notes can be treated as distinct visual/type groups
+
+Workspace file evidence indexing:
+
+- workspace files are indexed as evidence records with source type `workspace_file`
+- workspace file record IDs use the source path prefix `workspace/files/`
+- text-like files are read, truncated at the memory index source byte cap, chunked, added to FTS, and embedded through the current memory embedding path
+- binary/non-text workspace files are still represented, but as metadata-only records; their raw binary content is not embedded
+- top-level `workspace/audit` is excluded from workspace-file scanning because audit material is indexed separately through the evidence roots
+- dependency/build/cache folders are skipped, including `.git`, `node_modules`, `.next`, `.nuxt`, `dist`, `build`, `out`, `coverage`, cache/temp folders, etc.
+
+Workspace file priority policy:
+
+- root-level workspace files are indexed first, so files like `USER.md`, `SOUL.md`, `MEMORY.md`, `SELF.md`, `BUSINESS.md`, `TOOLS.md`, and other `workspace/<file>` docs are first-class memory evidence
+- priority workspace roots are then scanned before general project folders:
+  - `downloads`
+  - `uploads`
+  - `generated`
+  - `creative-projects`
+  - `outputs`
+  - `assets`
+  - `entities`
+  - `business`
+  - `skills`
+  - `Brain`
+  - `memory`
+  - `projects`
+  - `proposals`
+  - `tasks`
+  - `teams`
+  - `self`
+  - `.prometheus`
+- remaining workspace folders are scanned after those priority roots
+- current workspace-file scan still has a global cap of `12000` files; the priority order is meant to make the useful human/workspace material win that cap instead of dependency or generated noise
+
+Memory refresh notes:
+
+- `/api/memory/graph`, `/api/memory/create`, and `/api/memory/refresh` now request a `12000` changed-file pass for this workspace-aware index path
+- the graph endpoint still returns cached graph data and schedules background refresh, so opening the graph should not block on a full workspace scan
+- the larger unsolved design is a dedicated workspace inventory/search layer: all files should be searchable/browsable from the Memory page, while the graph should render high-signal clusters and promoted search results instead of tens of thousands of always-visible particles
+
+

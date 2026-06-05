@@ -22,7 +22,7 @@ maintained upstream. Fall back to a REST connector otherwise.
 
 ## Workflow (REST connector)
 
-1. **Research the API.** Use `web_search` + `web_fetch` to find: base URL, auth
+1. **Research the API.** Use `web_search({ fetch_top_k })` for compact discovery and `web_fetch_batch` for selected docs pages to find: base URL, auth
    scheme (API key header? bearer token?), and the 4–8 most useful endpoints
    (list/get/search/create). Note the exact header name and any prefix.
 2. **Pick an id.** Lowercase, `[a-z0-9_-]`, 1–64 chars, e.g. `airtable`. It must

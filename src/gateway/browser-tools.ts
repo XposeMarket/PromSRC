@@ -7933,6 +7933,91 @@ export async function browserTeachVerify(
     phase: 'verifying',
     verification: null,
   });
+
+  // ── In-house browser verify ──────────────────────────────────────────────
+  // The Playwright detached-tab verifier can't run in-house (no Playwright
+  // session). Replay the recorded steps in the SAME in-house view instead — it
+  // shares the live login. (v1: this disturbs the visible page rather than using
+  // a hidden tab; a same-partition detached view is a future enhancement.)
+  if (getInHouseSession(resolved)) {
+    try {
+      broadcastWS({
+        type: 'browser:teach:verification_started',
+        sessionId: resolved,
+        verifierSessionId: resolved,
+        phase: 'verifying',
+        url: teach.startUrl,
+        title: teach.startTitle || '',
+        statusLabel: 'Replaying the Teach workflow in the Prometheus in-house browser.',
+        timestamp: Date.now(),
+      });
+    } catch {}
+    const inHouseOpenResult = await browserOpenInHouse(resolved, teach.startUrl, { observe: 'none' });
+    if (inHouseOpenResult.startsWith('ERROR')) {
+      return `ERROR: Teach verification could not return to the recorded start URL: ${summarizeTeachVerificationResult(inHouseOpenResult)}`;
+    }
+    const executionLines: string[] = [];
+    let failedStep = 0;
+    let failureSummary = '';
+    for (let index = 0; index < stepsToReplay.length; index += 1) {
+      const step = teach.steps[index];
+      const stepNumber = index + 1;
+      let result = '';
+      switch (String(step?.toolName || '').trim()) {
+        case 'browser_click': result = await browserClick(resolved, step.args || {}, { observe: 'none' }); break;
+        case 'browser_fill': result = await browserFill(resolved, step.args || {}, String(step?.args?.text || ''), { observe: 'none' }); break;
+        case 'browser_type': result = await browserType(resolved, String(step?.args?.text || '')); break;
+        case 'browser_press_key': result = await browserPressKey(resolved, String(step?.args?.key || ''), { observe: 'none' }); break;
+        case 'browser_scroll': result = await browserScroll(resolved, String(step?.args?.direction || '').trim().toLowerCase() === 'up' ? 'up' : 'down', Number(step?.args?.multiplier || 1) || 1, { observe: 'none' }); break;
+        default: result = `ERROR: Unsupported Teach step tool "${String(step?.toolName || 'unknown').trim()}".`; break;
+      }
+      const resultSummary = summarizeTeachVerificationResult(result);
+      executionLines.push(`${stepNumber}. ${String(step?.toolPreview || step?.summary || step?.toolName || 'browser step').trim()} -> ${resultSummary || 'Done.'}`);
+      if (isTeachVerificationError(result)) {
+        failedStep = stepNumber;
+        failureSummary = resultSummary || `Step ${stepNumber} failed.`;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    const inHouseAfter = getInHouseSession(resolved);
+    const finalUrl = String(inHouseAfter?.url || teach.startUrl || '').trim();
+    const finalTitle = String(inHouseAfter?.title || '').trim();
+    const completedAt = Date.now();
+    const executedCount = failedStep > 0 ? Math.max(0, failedStep - 1) : stepsToReplay.length;
+    const verification: BrowserTeachVerificationResult = {
+      status: failedStep > 0 ? (executedCount > 0 ? 'partial' : 'failed') : 'passed',
+      mode,
+      boundaryLabel,
+      stopBeforeStep,
+      verifierSessionId: resolved,
+      executedCount,
+      totalRecordedSteps,
+      riskyStepIndexes,
+      ...(failedStep > 0 ? { failedStep, failureSummary } : {}),
+      finalUrl,
+      finalTitle,
+      startedAt,
+      completedAt,
+    };
+    browserTeachSessions.set(resolved, { ...teach, phase: 'verified', verification });
+    try {
+      broadcastWS({ type: 'browser:teach:verification', sessionId: resolved, phase: 'verified', verification, timestamp: completedAt });
+    } catch {}
+    return [
+      `Teach verification ${verification.status === 'passed' ? 'passed' : (verification.status === 'partial' ? 'completed with issues' : 'failed')}.`,
+      `Boundary: ${boundaryLabel}.`,
+      `Start URL: ${teach.startUrl}`,
+      `Verifier: Prometheus in-house browser (same view).`,
+      `Executed ${executedCount} of ${totalRecordedSteps} recorded step${totalRecordedSteps === 1 ? '' : 's'}.`,
+      verification.stopBeforeStep > 0 ? `Stopped before step ${verification.stopBeforeStep}.` : 'Ran the recorded workflow through the approved boundary.',
+      riskyStepIndexes.length ? `Risky steps in the recorded workflow: ${riskyStepIndexes.join(', ')}.` : 'Risky steps in the recorded workflow: none.',
+      executionLines.length ? `Step log:\n${executionLines.join('\n')}` : '',
+      failedStep > 0 ? `Failure: ${failureSummary}` : '',
+      finalTitle || finalUrl ? `Final page: ${finalTitle ? `"${finalTitle}"` : finalUrl}${finalUrl ? ` (${finalUrl})` : ''}` : '',
+    ].filter(Boolean).join('\n');
+  }
+
   const detached = await replaceDetachedBrowserSession(resolved, 'teach-verify');
   const verifierSessionId = detached.sessionId;
 

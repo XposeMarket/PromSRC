@@ -182,6 +182,8 @@ let nativeBrowserStateUnsubscribe = null;
 let nativeBrowserLastBoundsKey = '';
 let nativeBrowserSyncQueued = false;
 let nativeBrowserAttachedSessionId = '';
+let nativeBrowserTeachUnsub = null;
+let nativeBrowserTeachCaptureOn = false;
 
 // Per-session streaming state — allows concurrent independent sessions
 if (window._sessionThinking === undefined) window._sessionThinking = {};
@@ -2634,6 +2636,144 @@ function ensureNativeBrowserSurfaceStateListener() {
   });
 }
 
+// ─── In-house browser Teach-mode capture ────────────────────────────────────
+// The native WebContentsView sits on top of the canvas and eats clicks, so the
+// normal renderer click recorder never fires. Instead we toggle a preload-based
+// capture inside the native view and stage Teach steps from the clicks it relays.
+function ensureNativeBrowserTeachListener() {
+  const api = getNativeBrowserSurfaceApi();
+  if (!api || nativeBrowserTeachUnsub || typeof api.onTeachClick !== 'function') return;
+  nativeBrowserTeachUnsub = api.onTeachClick((payload) => handleNativeBrowserTeachClick(payload));
+  if (typeof api.onTeachFill === 'function') api.onTeachFill((payload) => handleNativeBrowserTeachFill(payload));
+  if (typeof api.onTeachKey === 'function') api.onTeachKey((payload) => handleNativeBrowserTeachKey(payload));
+  if (typeof api.onTeachScroll === 'function') api.onTeachScroll((payload) => handleNativeBrowserTeachScroll(payload));
+}
+
+function nativeTeachRecordingState() {
+  const state = getBrowserCanvasState();
+  if (!isBrowserCanvasInHouseProvider(state)) return null;
+  if (normalizeBrowserInteractionMode(state.interactionMode) !== 'teach') return null;
+  if (!isBrowserTeachRecording(state)) return null;
+  return state;
+}
+
+function appendRecordedNativeTeachStep(state, step, label) {
+  const teach = getBrowserTeachSession(state);
+  const finalized = refreshBrowserTeachStepMetadata(step, state);
+  finalized.status = 'recorded';
+  finalized.executedAt = Date.now();
+  teach.steps = [...(Array.isArray(teach.steps) ? teach.steps : []), finalized];
+  teach.pendingStep = null;
+  state.statusLabel = `Recorded step ${teach.steps.length}: ${finalized.summary || finalized.title || label}. Remove it below if unwanted.`;
+  addProcessEntry('info', `Teach: recorded ${finalized.summary || label}.`);
+  renderBrowserCanvasSurface();
+  persistActiveChat();
+  syncBrowserTeachSessionToBackend();
+}
+
+function syncNativeBrowserTeachCapture(state = getBrowserCanvasState()) {
+  const api = getNativeBrowserSurfaceApi();
+  if (!api || typeof api.setTeachCapture !== 'function') return;
+  ensureNativeBrowserTeachListener();
+  const sessionId = getBrowserCanvasVisibleSessionId();
+  const teach = getBrowserTeachSession(state);
+  // Capture only while actively recording AND no step is staged. Disabling capture
+  // while a step is pending lets the "Continue" execution click pass through to the
+  // page (and advance it) instead of being intercepted again.
+  const wantCapture = !!(
+    isBrowserCanvasInHouseProvider(state)
+    && normalizeBrowserInteractionMode(state.interactionMode) === 'teach'
+    && isBrowserTeachRecording(state)
+    && sessionId
+  );
+  if (wantCapture === nativeBrowserTeachCaptureOn) return;
+  nativeBrowserTeachCaptureOn = wantCapture;
+  try { api.setTeachCapture({ sessionId, enabled: wantCapture }); } catch {}
+}
+
+function handleNativeBrowserTeachClick(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  const state = getBrowserCanvasState();
+  if (!isBrowserCanvasInHouseProvider(state)) return;
+  if (normalizeBrowserInteractionMode(state.interactionMode) !== 'teach') return;
+  if (!isBrowserTeachRecording(state)) return;
+  const teach = getBrowserTeachSession(state);
+  const selection = {
+    selector: String(payload.selector || '').trim(),
+    pack: null,
+    tagName: String(payload.tagName || '').trim(),
+    id: String(payload.id || '').trim(),
+    role: String(payload.role || '').trim(),
+    text: String(payload.text || '').trim(),
+    bounds: payload.bounds || null,
+    liveBounds: payload.bounds || null,
+  };
+  if (!selection.selector && !selection.id && !selection.tagName) return;
+  state.selectedElement = selection;
+  state.elementNameDraftKey = '';
+  // Live-macro model: the click already passed through to the page, so record it
+  // straight into the steps list (visible + removable) — no pending/Continue.
+  const intent = { action: 'click', x: Number(payload.x || 0), y: Number(payload.y || 0), button: 'left' };
+  appendRecordedNativeTeachStep(state, createBrowserTeachClickStep(selection, intent, state), 'browser click step');
+}
+
+function handleNativeBrowserTeachFill(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  const state = nativeTeachRecordingState();
+  if (!state) return;
+  const selector = String(payload.selector || '').trim();
+  const text = String(payload.text || '');
+  if (!selector || !text) return;
+  const teach = getBrowserTeachSession(state);
+  // If the last recorded step was a fill on the SAME field, replace it (so we keep
+  // the final text rather than stacking partial edits from refocus/blur cycles).
+  const selection = {
+    selector,
+    pack: null,
+    tagName: String(payload.tagName || '').trim(),
+    id: '',
+    role: String(payload.role || '').trim(),
+    text: String(payload.label || '').trim(),
+    bounds: payload.bounds || null,
+    liveBounds: payload.bounds || null,
+  };
+  state.selectedElement = selection;
+  const steps = Array.isArray(teach.steps) ? teach.steps : [];
+  const last = steps[steps.length - 1];
+  if (last && last.kind === 'fill' && String(last?.selection?.selector || '') === selector) {
+    teach.steps = steps.slice(0, -1);
+  }
+  appendRecordedNativeTeachStep(state, createBrowserTeachTextStep(text, state), 'text input');
+}
+
+function handleNativeBrowserTeachKey(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  const state = nativeTeachRecordingState();
+  if (!state) return;
+  const key = String(payload.key || '').trim();
+  if (!key) return;
+  const modifiers = {
+    ctrlKey: payload.ctrlKey === true,
+    altKey: payload.altKey === true,
+    metaKey: payload.metaKey === true,
+    shiftKey: payload.shiftKey === true,
+  };
+  appendRecordedNativeTeachStep(state, createBrowserTeachKeyStep(key, modifiers, state), `press ${key}`);
+}
+
+function handleNativeBrowserTeachScroll(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  const state = nativeTeachRecordingState();
+  if (!state) return;
+  const deltaX = Number(payload.deltaX || 0);
+  const deltaY = Number(payload.deltaY || 0);
+  if (Math.abs(deltaX) < 40 && Math.abs(deltaY) < 40) return;
+  // The preload already debounces a scroll burst into one event, so record each
+  // deliberate burst as its own step (preserves scroll distance on replay).
+  const point = { x: 60, y: 200 };
+  appendRecordedNativeTeachStep(state, createBrowserTeachScrollStep(point, deltaX, deltaY, state), 'scroll');
+}
+
 function truncateBrowserPreview(value, max = 80) {
   const str = String(value ?? '');
   if (str.length <= max) return str;
@@ -3404,6 +3544,7 @@ function renderBrowserCanvasSurface() {
   updateBrowserHoverOverlay();
   syncBrowserCanvasStream();
   queueNativeBrowserSurfaceSync();
+  syncNativeBrowserTeachCapture(state);
   updateDesignSelectionChip();
   updateCreativeModeControls();
 }
@@ -6167,7 +6308,10 @@ function syncActiveChat() {
   renderBrowserCanvasSurface();
   // Instantly refresh pending actions for the new session
   if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
-  if (sess && !window._sessionThinking?.[sess.id]) restorePendingInlineApprovalsForSession(sess.id).catch(() => {});
+  if (sess && !window._sessionThinking?.[sess.id]) {
+    restorePendingInlineApprovalsForSession(sess.id).catch(() => {});
+    restorePendingInlineQuestionsForSession(sess.id).catch(() => {});
+  }
   // Sync button/input state for the newly active session
   const activeSessThinking = syncActiveSessionRunState();
   if (typeof window.setButtonState === 'function') window.setButtonState(activeSessThinking);
@@ -8917,7 +9061,13 @@ function pcMerchantLabel(item) {
 }
 
 function renderProductCarousel(msg) {
-  const carousel = msg?.productCarousel;
+  // Legacy alias path: skip if a `products` rich artifact already covers this
+  // message (renderRichArtifacts handles it) to avoid double-rendering.
+  if (Array.isArray(msg?.richArtifacts) && msg.richArtifacts.some((a) => a?.type === 'products')) return '';
+  return pcRenderCarousel(msg?.productCarousel);
+}
+
+function pcRenderCarousel(carousel) {
   const items = Array.isArray(carousel?.items) ? carousel.items : [];
   if (!items.length) return '';
   const title = String(carousel?.title || '');
@@ -8931,10 +9081,14 @@ function renderProductCarousel(msg) {
     const tagText = String(item.tag || item.badge || '').trim();
     const reviewValue = item.reviews ?? item.reviewCount;
     const stars = item.rating != null
-      ? `<span class="pc-rating">★ ${Number(item.rating).toFixed(1)}${reviewValue != null && Number.isFinite(Number(reviewValue)) && Number(reviewValue) > 0 ? ` (${Number(reviewValue).toLocaleString()})` : ''}</span>`
+      ? `<span class="pc-rating">★ ${Number(item.rating).toFixed(1)}</span>`
+      : '';
+    const reviews = reviewValue != null && Number.isFinite(Number(reviewValue)) && Number(reviewValue) > 0
+      ? `<span class="pc-reviews">${Number(reviewValue).toLocaleString()} reviews</span>`
       : '';
     const tag = tagText ? `<span class="pc-tag">${escHtml(tagText)}</span>` : '';
     const price = item.price ? `<span class="pc-price">${escHtml(pcCleanText(item.price, 28))}</span>` : '';
+    const inlineBadge = tagText ? `<span class="pc-badge-inline">${escHtml(pcCleanText(tagText, 24))}</span>` : '';
     const desc = descText ? `<span class="pc-desc">${escHtml(descText)}</span>` : '';
     const imgEl = imgSrc
       ? `<img class="pc-img" src="${escHtml(imgSrc)}" alt="" loading="lazy" onerror="this.closest('.pc-img-wrap')?.classList.add('pc-img-missing');this.remove()">`
@@ -8944,7 +9098,7 @@ function renderProductCarousel(msg) {
         <div class="pc-card-body">
           <div class="pc-merchant">${escHtml(merchantText)}</div>
           <strong class="pc-title">${escHtml(titleText)}</strong>
-          ${(price || stars) ? `<div class="pc-stats">${price}${stars}</div>` : ''}
+          ${(price || stars || reviews || inlineBadge) ? `<div class="pc-stats">${price}${stars}${reviews}${inlineBadge}</div>` : ''}
           ${desc ? `<div class="pc-meta">${desc}</div>` : ''}
         </div>
       </a>`;
@@ -8958,6 +9112,656 @@ function renderProductCarousel(msg) {
     <div class="pc-track" data-carousel onscroll="pcUpdateProductCarouselArrows(this)" onmouseenter="pcUpdateProductCarouselArrows(this)" onfocus="pcUpdateProductCarouselArrows(this)">${cards}</div>
     ${arrowBtns}
   </div>`;
+}
+
+// ─── Rich artifacts (additive lane: products + agent_work) ───────────────────
+
+function renderRichArtifacts(msg) {
+  const artifacts = Array.isArray(msg?.richArtifacts) ? msg.richArtifacts : [];
+  if (!artifacts.length) return '';
+  return artifacts.map((a) => {
+    switch (a?.type) {
+      case 'products': return renderProductsArtifact(a);
+      case 'agent_work': return renderAgentWorkArtifact(a);
+      case 'sources': return renderSourcesArtifact(a);
+      case 'stocks': return renderStocksArtifact(a);
+      case 'weather': return renderWeatherArtifact(a);
+      case 'comparison': return renderComparisonArtifact(a);
+      case 'chart': return renderChartArtifact(a);
+      case 'run_result': return renderRunResultArtifact(a);
+      case 'map': return renderMapArtifact(a);
+      case 'email_composer': return renderEmailComposerArtifact(a);
+      case 'prediction_market': return renderPredictionMarketArtifact(a);
+      default: return '';
+    }
+  }).join('');
+}
+
+function normalizeEmailComposerList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+  return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function renderEmailComposerArtifact(a) {
+  if (!a || typeof a !== 'object') return '';
+  const id = String(a.id || `email-${Date.now()}`);
+  const status = String(a.status || a.mode || 'draft').toLowerCase();
+  const sent = status === 'sent' || String(a.mode || '').toLowerCase() === 'sent';
+  const to = normalizeEmailComposerList(a.to).join(', ');
+  const cc = normalizeEmailComposerList(a.cc).join(', ');
+  const bcc = normalizeEmailComposerList(a.bcc).join(', ');
+  const subject = String(a.subject || '');
+  const body = String(a.body || '');
+  const account = String(a.accountEmail || '').trim();
+  const messageId = String(a.messageId || '').trim();
+  const threadId = String(a.threadId || '').trim();
+  const sentAt = a.sentAt ? new Date(a.sentAt).toLocaleString() : '';
+  const readonly = sent ? 'readonly' : '';
+  const disabled = sent ? 'disabled' : '';
+  const attachments = Array.isArray(a.attachments) ? a.attachments : [];
+  const attachmentHtml = attachments.length
+    ? `<div class="email-composer-attachments">${attachments.map((att) => {
+        const label = String(att?.name || att?.path || 'Attachment').trim();
+        const path = String(att?.path || '').trim();
+        return `<span class="email-composer-attachment" title="${escHtml(path || label)}">${escHtml(label)}</span>`;
+      }).join('')}</div>`
+    : '';
+  const meta = [
+    account ? `From ${account}` : '',
+    sentAt ? `Sent ${sentAt}` : '',
+    messageId ? `Message ${messageId}` : '',
+  ].filter(Boolean).join(' · ');
+  const summary = sent
+    ? `${subject || '(no subject)'}${to ? ` -> ${to}` : ''}`
+    : 'Review, edit, and send from Gmail';
+  const detailsAttrs = sent ? '' : ' open';
+  return `<details class="email-composer-card ${sent ? 'is-sent' : 'is-draft'}" data-email-artifact-id="${escHtml(id)}"${detailsAttrs}>
+    <summary class="email-composer-summary">
+      <span class="email-composer-summary-main">
+        <span class="email-composer-dot"></span>
+        <span><strong>${sent ? 'Email sent' : 'Email draft'}</strong><small>${escHtml(summary)}</small></span>
+      </span>
+      <span class="email-composer-status">${escHtml(sent ? 'sent' : 'draft')}</span>
+    </summary>
+    <div class="email-composer-window">
+      <div class="email-composer-titlebar">
+        <span>${sent ? 'Sent Email' : 'New Message'}</span>
+        <span class="email-composer-title-actions"><button type="button" title="Minimize" onclick="this.closest('details').open=false">_</button><button type="button" title="Pop out" onclick="emailComposerNotice('Pop out is coming soon')">[]</button></span>
+      </div>
+      <div class="email-composer-fields">
+        <label><span>To</span><input class="email-field-to" value="${escHtml(to)}" ${readonly}></label>
+        <label class="email-field-cc"><span>Cc</span><input class="email-field-cc-input" value="${escHtml(cc)}" ${readonly}></label>
+        <label class="email-field-bcc"><span>Bcc</span><input class="email-field-bcc-input" value="${escHtml(bcc)}" ${readonly}></label>
+        <label><input class="email-field-subject" value="${escHtml(subject)}" placeholder="Subject" ${readonly}></label>
+      </div>
+      <textarea class="email-field-body" placeholder="Write your message..." ${readonly}>${escHtml(body)}</textarea>
+      ${attachmentHtml}
+      ${meta ? `<div class="email-composer-meta">${escHtml(meta)}</div>` : ''}
+      <div class="email-composer-toolbar">
+        <div class="email-composer-send-wrap">
+          ${sent ? `<button type="button" class="email-send-btn is-sent" disabled>Sent</button>` : `<button type="button" class="email-send-btn" onclick="emailComposerSend(this)">Send</button>`}
+          ${sent ? '' : `<button type="button" class="email-send-menu" title="More send options" onclick="emailComposerNotice('More send options are coming soon')">v</button>`}
+        </div>
+        <button type="button" title="Formatting" onclick="emailComposerNotice('Formatting is coming soon')" ${disabled}>Aa</button>
+        <button type="button" title="Attach file" onclick="emailComposerNotice('Attachments are visible but Gmail attachment sending is not wired yet')" ${disabled}>clip</button>
+        <button type="button" title="Insert link" onclick="emailComposerNotice('Links can be pasted into the body')" ${disabled}>link</button>
+        <button type="button" title="Emoji" onclick="emailComposerInsertText(this, ':)')" ${disabled}>:)</button>
+        <button type="button" title="Insert image" onclick="emailComposerNotice('Image insertion is coming soon')" ${disabled}>img</button>
+        <span class="email-composer-spacer"></span>
+        ${sent ? '' : `<button type="button" title="Discard draft" onclick="emailComposerDiscard(this)">trash</button>`}
+      </div>
+    </div>
+  </details>`;
+}
+
+function findEmailComposerArtifact(artifactId) {
+  const id = String(artifactId || '').trim();
+  if (!id) return null;
+  for (const session of (window.chatSessions || [])) {
+    for (const msg of (session.history || [])) {
+      const artifacts = Array.isArray(msg.richArtifacts) ? msg.richArtifacts : [];
+      const artifact = artifacts.find((item) => String(item?.id || '') === id);
+      if (artifact) return artifact;
+    }
+  }
+  return null;
+}
+
+function emailComposerPayload(card) {
+  const value = (selector) => String(card.querySelector(selector)?.value || '').trim();
+  return {
+    artifactId: String(card.dataset.emailArtifactId || '').trim(),
+    sessionId: String(window.activeChatSessionId || window.agentSessionId || 'default'),
+    to: value('.email-field-to'),
+    cc: value('.email-field-cc-input'),
+    bcc: value('.email-field-bcc-input'),
+    subject: value('.email-field-subject'),
+    body: String(card.querySelector('.email-field-body')?.value || ''),
+  };
+}
+
+async function emailComposerSend(btn) {
+  const card = btn?.closest('.email-composer-card');
+  if (!card) return;
+  const payload = emailComposerPayload(card);
+  if (!payload.to || !payload.subject) {
+    showToast?.('Email needs a recipient and subject', '', 'error', 3500);
+    return;
+  }
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  card.classList.add('is-sending');
+  try {
+    const data = await api('/api/connectors/gmail/send-composer', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (!data?.success) throw new Error(data?.error || 'Send failed');
+    const artifact = findEmailComposerArtifact(payload.artifactId);
+    if (artifact && data.artifact) Object.assign(artifact, data.artifact);
+    showToast?.('Email sent', payload.subject, 'success', 3500);
+    persistActiveChat();
+    const activeSession = getChatSessionById(window.activeChatSessionId);
+    if (activeSession) syncSessionHistoryToServerById(activeSession.id, activeSession.history || []).catch(() => {});
+    renderChatMessages();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = original || 'Send';
+    card.classList.remove('is-sending');
+    showToast?.('Email send failed', String(err?.message || err), 'error', 5000);
+  }
+}
+
+function emailComposerInsertText(btn, text) {
+  const card = btn?.closest('.email-composer-card');
+  const body = card?.querySelector('.email-field-body');
+  if (!body || body.readOnly) return;
+  const start = body.selectionStart || body.value.length;
+  const end = body.selectionEnd || start;
+  body.value = `${body.value.slice(0, start)}${text}${body.value.slice(end)}`;
+  body.focus();
+  body.selectionStart = body.selectionEnd = start + String(text).length;
+}
+
+function emailComposerDiscard(btn) {
+  const card = btn?.closest('.email-composer-card');
+  if (!card || !confirm('Discard this email draft?')) return;
+  card.remove();
+}
+
+function emailComposerNotice(message) {
+  showToast?.(String(message || 'Coming soon'), '', 'info', 2500);
+}
+
+function renderPredictionMarketArtifact(a) {
+  const items = Array.isArray(a?.items) ? a.items.filter(Boolean) : [];
+  if (!items.length) return '';
+  const title = String(a?.title || 'Polymarket').trim();
+  const cards = items.map((it) => {
+    const outcomes = Array.isArray(it.outcomes) ? it.outcomes.slice(0, 6) : [];
+    const binary = outcomes.length === 2 && /^(yes|no)$/i.test(String(outcomes[0]?.label || ''));
+    const rows = outcomes
+      .slice()
+      .sort((x, y) => (Number(y.price) || 0) - (Number(x.price) || 0))
+      .map((o) => {
+        const pct = Number.isFinite(Number(o.price)) ? Math.round(Number(o.price) * 100) : null;
+        return `<div class="pmkt-outcome">
+          <div class="pmkt-outcome-top"><span class="pmkt-outcome-label">${escHtml(String(o.label || ''))}</span><span class="pmkt-outcome-pct">${pct != null ? pct + '%' : '—'}</span></div>
+          <div class="pmkt-bar"><div class="pmkt-bar-fill${binary && /^yes$/i.test(String(o.label)) ? ' yes' : (binary ? ' no' : '')}" style="width:${pct != null ? pct : 0}%"></div></div>
+        </div>`;
+      }).join('');
+    const vol = Number(it.volume) > 0 ? `$${mkFmtCap(it.volume)} Vol` : '';
+    const end = it.endDate ? new Date(it.endDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    const meta = [vol, end ? `Ends ${end}` : ''].filter(Boolean).join(' · ');
+    const icon = it.icon ? `<img class="pmkt-icon" src="${escHtml(String(it.icon))}" alt="" loading="lazy" onerror="this.remove()">` : '';
+    const head = `<div class="pmkt-q">${icon}<span>${escHtml(String(it.question || ''))}</span></div>`;
+    const inner = `${head}<div class="pmkt-outcomes">${rows}</div>${meta ? `<div class="pmkt-meta">${escHtml(meta)}</div>` : ''}`;
+    return it.url
+      ? `<a class="pmkt-card" href="${escHtml(String(it.url))}" target="_blank" rel="noopener noreferrer">${inner}</a>`
+      : `<div class="pmkt-card">${inner}</div>`;
+  }).join('');
+  return `<div class="prediction-market-artifact">
+    <div class="pmkt-heading">${escHtml(title)}</div>
+    <div class="pmkt-cards">${cards}</div>
+    <div class="pmkt-source">Source: Polymarket · read-only</div>
+  </div>`;
+}
+
+function renderRunResultArtifact(a) {
+  if (!a || typeof a !== 'object') return '';
+  const title = String(a.title || 'Task complete').trim();
+  const status = String(a.status || '').trim();
+  const summary = String(a.summary || '').trim();
+  const files = Array.isArray(a.files) ? a.files : [];
+  const links = Array.isArray(a.links) ? a.links : [];
+  const taskId = String(a.taskId || '').trim();
+  const filePills = files.map((f) => {
+    const p = String(f.path || '').trim();
+    if (!p) return '';
+    const label = String(f.label || p.split(/[\\/]/).pop() || p);
+    return `<button class="rr-file" onclick="openInFileLocation(${encodeInlineJsString(p)})" title="${escHtml(p)}">📄 ${escHtml(label)}</button>`;
+  }).join('');
+  const linkPills = links.map((l) => `<a class="rr-link" href="${escHtml(String(l.href))}" target="_blank" rel="noopener noreferrer">${escHtml(String(l.label || l.href))} ↗</a>`).join('');
+  const rerun = taskId ? `<button class="aw-act aw-act-primary" onclick="awTaskAction(${encodeInlineJsString(taskId)}, 'restart', this)">Rerun</button>` : '';
+  return `<div class="run-result-artifact">
+    <div class="rr-head"><span class="rr-icon">✅</span><div class="rr-title">${escHtml(title)}</div>${status ? `<span class="aw-status ${escHtml(status.toLowerCase())}">${escHtml(status)}</span>` : ''}</div>
+    ${summary ? `<div class="rr-summary">${escHtml(summary)}</div>` : ''}
+    ${filePills ? `<div class="rr-files">${filePills}</div>` : ''}
+    ${linkPills ? `<div class="rr-links">${linkPills}</div>` : ''}
+    ${rerun ? `<div class="rr-actions">${rerun}</div>` : ''}
+  </div>`;
+}
+
+function mapEmbedSrc(center, markers, zoom) {
+  const located = markers.filter((m) => Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng)));
+  const lat = Number(center?.lat), lng = Number(center?.lng);
+  // bbox span shrinks as zoom grows; clamp to a reasonable default.
+  const span = Math.max(0.01, 0.08 / Math.max(1, (Number(zoom) || 12) / 12));
+  const latS = Number.isFinite(lat) ? lat : (located[0]?.lat || 0);
+  const lngS = Number.isFinite(lng) ? lng : (located[0]?.lng || 0);
+  const W = lngS - span, S = latS - span, E = lngS + span, N = latS + span;
+  const mark = located[0] ? `&marker=${located[0].lat},${located[0].lng}` : '';
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${W},${S},${E},${N}&layer=mapnik${mark}`;
+}
+
+function renderMapArtifact(a) {
+  if (!a || typeof a !== 'object') return '';
+  const markers = Array.isArray(a.markers) ? a.markers : [];
+  if (!markers.length) return '';
+  const title = String(a.title || '').trim();
+  const iframe = `<iframe class="map-frame" src="${escHtml(mapEmbedSrc(a.center, markers, a.zoom))}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`;
+  const list = markers.map((m, i) => {
+    const name = String(m.label || `Location ${i + 1}`);
+    const cat = String(m.category || '').trim();
+    const rating = Number.isFinite(Number(m.rating)) ? `★ ${Number(m.rating).toFixed(1)}` : '';
+    const addr = String(m.address || '').trim();
+    const dirHref = (Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng)))
+      ? `https://www.google.com/maps/search/?api=1&query=${m.lat},${m.lng}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name + ' ' + addr)}`;
+    const web = m.url ? `<a class="map-link" href="${escHtml(String(m.url))}" target="_blank" rel="noopener noreferrer">Website ↗</a>` : '';
+    return `<div class="map-marker">
+      <div class="map-marker-num">${i + 1}</div>
+      <div class="map-marker-body">
+        <div class="map-marker-top"><strong>${escHtml(name)}</strong>${rating ? `<span class="map-rating">${escHtml(rating)}</span>` : ''}</div>
+        ${(cat || addr) ? `<div class="map-marker-sub">${[escHtml(cat), escHtml(addr)].filter(Boolean).join(' · ')}</div>` : ''}
+        <div class="map-marker-links"><a class="map-link" href="${escHtml(dirHref)}" target="_blank" rel="noopener noreferrer">Directions ↗</a>${web}</div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="map-artifact">
+    ${title ? `<div class="map-heading">${escHtml(title)}</div>` : ''}
+    <div class="map-frame-wrap">${iframe}</div>
+    <div class="map-markers">${list}</div>
+  </div>`;
+}
+
+function renderWeatherArtifact(a) {
+  if (!a || typeof a !== 'object') return '';
+  const loc = String(a.location || '').trim();
+  const unit = String(a.unit || 'F').toUpperCase();
+  const cur = a.current || {};
+  const daily = Array.isArray(a.daily) ? a.daily : [];
+  const hourly = Array.isArray(a.hourly) ? a.hourly : [];
+  if (!loc && !daily.length) return '';
+  const days = daily.map((d) => `
+    <div class="wx-day">
+      <div class="wx-day-name">${escHtml(String(d.day || ''))}</div>
+      <div class="wx-day-icon">${escHtml(String(d.icon || '🌡️'))}</div>
+      <div class="wx-day-hi">${d.high != null ? escHtml(String(d.high)) + '°' : ''}</div>
+      <div class="wx-day-lo">${d.low != null ? escHtml(String(d.low)) + '°' : ''}</div>
+    </div>`).join('');
+  const hrs = hourly.length ? awSparklineSvg(hourly.map((h) => Number(h.temp)).filter((n) => Number.isFinite(n)), true) : '';
+  const hrLabels = hourly.length ? `<div class="wx-hourly-labels">${hourly.map((h) => `<span>${escHtml(String(h.time || ''))}<em>${h.temp != null ? escHtml(String(h.temp)) + '°' : ''}</em></span>`).join('')}</div>` : '';
+  return `<div class="weather-artifact">
+    <div class="wx-head">
+      <div class="wx-loc">${escHtml(loc)}</div>
+      <div class="wx-now"><span class="wx-temp">${cur.temp != null ? escHtml(String(cur.temp)) + '°' : ''}</span><span class="wx-unit">${escHtml(unit)}</span></div>
+      <div class="wx-cond">${escHtml(String(cur.icon || ''))} ${escHtml(String(cur.condition || ''))}</div>
+    </div>
+    ${days ? `<div class="wx-days">${days}</div>` : ''}
+    ${hrs ? `<div class="wx-hourly">${hrs}${hrLabels}</div>` : ''}
+  </div>`;
+}
+
+function renderComparisonArtifact(a) {
+  const columns = Array.isArray(a?.columns) ? a.columns.filter((c) => c && c.key) : [];
+  const rows = Array.isArray(a?.rows) ? a.rows : [];
+  if (!columns.length || !rows.length) return '';
+  const title = String(a?.title || '').trim();
+  const labelKey = String(a?.labelKey || columns[0].key);
+  const highlight = String(a?.highlightColumn || '');
+  const head = `<tr>${columns.map((c) => `<th class="${c.key === highlight ? 'cmp-hl' : ''}${c.key === labelKey ? ' cmp-label' : ''}">${escHtml(String(c.label || c.key))}</th>`).join('')}</tr>`;
+  const body = rows.map((r) => `<tr>${columns.map((c) => {
+    const v = r[c.key];
+    const cell = (v === true) ? '✓' : (v === false) ? '—' : (v == null ? '' : String(v));
+    return `<td class="${c.key === highlight ? 'cmp-hl' : ''}${c.key === labelKey ? ' cmp-label' : ''}">${escHtml(cell)}</td>`;
+  }).join('')}</tr>`).join('');
+  return `<div class="comparison-artifact">
+    ${title ? `<div class="cmp-heading">${escHtml(title)}</div>` : ''}
+    <div class="cmp-scroll"><table class="cmp-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>
+  </div>`;
+}
+
+const CHART_COLORS = ['#5a91ff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4'];
+
+function renderChartArtifact(a) {
+  const series = Array.isArray(a?.series) ? a.series.filter((s) => s && Array.isArray(s.points) && s.points.length) : [];
+  if (!series.length) return '';
+  const title = String(a?.title || '').trim();
+  const type = ['line', 'bar', 'area'].includes(a?.chartType) ? a.chartType : 'line';
+  const W = 460, H = 180, padL = 8, padR = 8, padT = 10, padB = 10;
+  const allY = series.flatMap((s) => s.points.map((p) => Number(p.y)).filter((n) => Number.isFinite(n)));
+  const minY = Math.min(0, ...allY), maxY = Math.max(...allY);
+  const rangeY = (maxY - minY) || 1;
+  const maxLen = Math.max(...series.map((s) => s.points.length));
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const xAt = (i) => padL + (maxLen <= 1 ? innerW / 2 : (i / (maxLen - 1)) * innerW);
+  const yAt = (y) => padT + innerH - ((Number(y) - minY) / rangeY) * innerH;
+
+  let body = '';
+  if (type === 'bar') {
+    const groupW = innerW / maxLen;
+    const barW = Math.max(2, (groupW / series.length) * 0.7);
+    series.forEach((s, si) => {
+      const color = s.color || CHART_COLORS[si % CHART_COLORS.length];
+      s.points.forEach((p, i) => {
+        const x = padL + i * groupW + si * (groupW / series.length) + (groupW / series.length - barW) / 2;
+        const y = yAt(p.y), y0 = yAt(0);
+        body += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.abs(y0 - y).toFixed(1)}" fill="${color}" rx="1.5"/>`;
+      });
+    });
+  } else {
+    series.forEach((s, si) => {
+      const color = s.color || CHART_COLORS[si % CHART_COLORS.length];
+      const d = s.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(p.y).toFixed(1)}`).join(' ');
+      if (type === 'area') {
+        const area = `${d} L${xAt(s.points.length - 1).toFixed(1)},${yAt(minY).toFixed(1)} L${xAt(0).toFixed(1)},${yAt(minY).toFixed(1)} Z`;
+        body += `<path d="${area}" fill="${color}" opacity="0.14"/>`;
+      }
+      body += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+    });
+  }
+  const legend = series.length > 1 || series[0].label
+    ? `<div class="chart-legend">${series.map((s, si) => `<span><i style="background:${s.color || CHART_COLORS[si % CHART_COLORS.length]}"></i>${escHtml(String(s.label || `Series ${si + 1}`))}</span>`).join('')}</div>`
+    : '';
+  return `<div class="chart-artifact">
+    ${title ? `<div class="chart-heading">${escHtml(title)}</div>` : ''}
+    <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">${body}</svg>
+    ${legend}
+  </div>`;
+}
+
+function renderSourcesArtifact(artifact) {
+  const items = Array.isArray(artifact?.items) ? artifact.items.filter(Boolean) : [];
+  if (!items.length) return '';
+  const title = String(artifact?.title || '').trim();
+  const layout = artifact?.layout === 'list' ? 'list' : 'cards';
+  const cards = items.map((it) => {
+    const url = String(it.url || '').trim();
+    const img = String(it.imageUrl || '').trim();
+    const publisher = String(it.publisher || '').trim();
+    const headline = String(it.title || url || 'Source').trim();
+    const snippet = String(it.snippet || '').trim();
+    const date = String(it.publishedAt || '').trim();
+    const badge = String(it.badge || '').trim();
+    const inner = `
+      ${layout === 'cards' && img ? `<div class="src-img-wrap"><img class="src-img" src="${escHtml(img)}" alt="" loading="lazy" onerror="this.closest('.src-img-wrap')?.remove()"></div>` : ''}
+      <div class="src-body">
+        ${publisher ? `<div class="src-publisher">${escHtml(publisher)}${badge ? ` <span class="src-badge">${escHtml(badge)}</span>` : ''}</div>` : (badge ? `<div class="src-publisher"><span class="src-badge">${escHtml(badge)}</span></div>` : '')}
+        <strong class="src-title">${escHtml(headline)}</strong>
+        ${snippet ? `<div class="src-snippet">${escHtml(snippet)}</div>` : ''}
+        ${date ? `<div class="src-date">${escHtml(date)}</div>` : ''}
+      </div>`;
+    return url
+      ? `<a class="src-card" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
+      : `<div class="src-card">${inner}</div>`;
+  }).join('');
+  return `<div class="sources-artifact sources-${layout}">
+    ${title ? `<div class="src-heading">${escHtml(title)}</div>` : ''}
+    <div class="src-track">${cards}</div>
+  </div>`;
+}
+
+function awSparklineSvg(points, up) {
+  const nums = (Array.isArray(points) ? points : []).filter((n) => Number.isFinite(n));
+  if (nums.length < 2) return '';
+  const w = 120, h = 32, min = Math.min(...nums), max = Math.max(...nums);
+  const range = (max - min) || 1;
+  const step = w / (nums.length - 1);
+  const d = nums.map((n, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - ((n - min) / range) * h).toFixed(1)}`).join(' ');
+  const color = up ? '#22c55e' : '#ef4444';
+  return `<svg class="mk-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+}
+
+function mkFmtPrice(value, currency) {
+  if (value == null || !Number.isFinite(Number(value))) return '';
+  const n = Number(value);
+  const cur = String(currency || 'USD').toUpperCase();
+  const digits = n < 1 ? (n < 0.01 ? 6 : 4) : 2;
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, maximumFractionDigits: digits }).format(n);
+  } catch {
+    return `${n.toFixed(digits)} ${cur}`;
+  }
+}
+
+function mkFmtCap(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 1e12) return `${(n / 1e12).toFixed(2)}T`;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  return n.toLocaleString();
+}
+
+function renderStocksArtifact(artifact) {
+  const items = Array.isArray(artifact?.items) ? artifact.items.filter(Boolean) : [];
+  if (!items.length) return '';
+  const title = String(artifact?.title || '').trim();
+  const single = items.length === 1;
+  const rows = items.map((it) => {
+    const up = Number(it.changePct) >= 0;
+    const pct = Number.isFinite(Number(it.changePct))
+      ? `<span class="mk-delta ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} ${Math.abs(Number(it.changePct)).toFixed(2)}%</span>`
+      : '';
+    const logo = it.logoUrl ? `<img class="mk-logo" src="${escHtml(String(it.logoUrl))}" alt="" loading="lazy" onerror="this.remove()">` : '';
+    const cap = mkFmtCap(it.marketCap);
+    return `<div class="mk-row${single ? ' mk-single' : ''}">
+      <div class="mk-id">${logo}<div class="mk-id-text"><strong>${escHtml(String(it.symbol || ''))}</strong>${it.name ? `<span>${escHtml(String(it.name))}</span>` : ''}</div></div>
+      ${single && Array.isArray(it.sparkline) ? awSparklineSvg(it.sparkline, up) : ''}
+      <div class="mk-figures">
+        <div class="mk-price">${escHtml(mkFmtPrice(it.price, it.currency))}</div>
+        ${pct}
+        ${cap ? `<div class="mk-cap">MCap ${escHtml(cap)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  const src = String(artifact?.source || (items[0] && items[0].source) || 'CoinGecko');
+  return `<div class="stocks-artifact">
+    ${title ? `<div class="mk-heading">${escHtml(title)}</div>` : ''}
+    ${rows}
+    <div class="mk-source">Source: ${escHtml(src)}</div>
+  </div>`;
+}
+
+function renderProductsArtifact(artifact) {
+  return pcRenderCarousel({ title: artifact?.title, items: artifact?.items });
+}
+
+const AGENT_WORK_ICONS = {
+  calendar: '🗓️', users: '👥', clipboard: '📋', check: '✅',
+  bolt: '⚡', clock: '⏱️', flag: '🚩', sparkles: '✨',
+};
+
+function renderAgentWorkArtifact(artifact) {
+  if (!artifact || typeof artifact !== 'object') return '';
+  const greeting = String(artifact.greeting || '').trim();
+  const title = String(artifact.title || '').trim();
+  const subtitle = String(artifact.subtitle || '').trim();
+  const summaryRows = Array.isArray(artifact.summaryRows) ? artifact.summaryRows : [];
+  const priorities = Array.isArray(artifact.priorities) ? artifact.priorities : [];
+  const teams = Array.isArray(artifact.teams) ? artifact.teams : [];
+  const activeWork = Array.isArray(artifact.activeWork) ? artifact.activeWork : [];
+  if (!summaryRows.length && !priorities.length && !teams.length && !activeWork.length && !greeting && !title) return '';
+
+  const summaryHtml = summaryRows.length ? `<div class="aw-summary">${summaryRows.map((s) => `
+    <div class="aw-summary-row">
+      <span class="aw-icon">${AGENT_WORK_ICONS[s.icon] || AGENT_WORK_ICONS.clipboard}</span>
+      <span class="aw-meta"><strong>${escHtml(String(s.title || ''))}</strong>${s.subtitle ? `<span>${escHtml(String(s.subtitle))}</span>` : ''}</span>
+    </div>`).join('')}</div>` : '';
+
+  const prioritiesHtml = priorities.length ? `<ol class="aw-priorities">${priorities.map((p) => {
+    const clickable = awRowIsClickable(p);
+    const body = `<div class="aw-priority-body"><strong>${escHtml(String(p.title || ''))}</strong>${p.subtitle ? `<span>${escHtml(String(p.subtitle))}</span>` : ''}</div>${p.status ? `<span class="aw-status ${escHtml(String(p.status))}">${escHtml(String(p.status))}</span>` : ''}`;
+    if (!clickable) return `<li><div class="aw-row-head">${body}</div></li>`;
+    return `<li>${awClickableHead(p, body)}${awDetailShell(p)}</li>`;
+  }).join('')}</ol>` : '';
+
+  const teamsHtml = teams.length ? `<div class="aw-teams">${teams.map((t) => `
+    <div class="aw-team-row"><span class="aw-team-icon">${escHtml(String(t.icon || '🏠'))}</span><div class="aw-team-body"><strong>${escHtml(String(t.name || ''))}</strong>${t.detail ? `<span>${escHtml(String(t.detail))}</span>` : ''}</div>${t.status ? `<span class="aw-status ${escHtml(String(t.status))}">${escHtml(String(t.status))}</span>` : ''}</div>`).join('')}</div>` : '';
+
+  const activeHtml = activeWork.length ? `<div class="aw-active">${activeWork.map((w) => {
+    const body = `<div class="aw-active-body"><strong>${escHtml(String(w.title || ''))}</strong>${w.progressLabel ? `<span>${escHtml(String(w.progressLabel))}</span>` : ''}</div>${w.status ? `<span class="aw-status ${escHtml(String(w.status))}">${escHtml(String(w.status))}</span>` : ''}`;
+    if (awRowIsClickable(w)) return `<div class="aw-active-item">${awClickableHead(w, body)}${awDetailShell(w)}</div>`;
+    return w.href
+      ? `<a class="aw-active-row" href="${escHtml(String(w.href))}">${body}</a>`
+      : `<div class="aw-active-row">${body}</div>`;
+  }).join('')}</div>` : '';
+
+  const head = (greeting || title || subtitle) ? `<div class="aw-head">${greeting ? `<div class="aw-greeting">${escHtml(greeting)}</div>` : ''}${title ? `<div class="aw-title">${escHtml(title)}</div>` : ''}${subtitle ? `<div class="aw-subtitle">${escHtml(subtitle)}</div>` : ''}</div>` : '';
+
+  return `<div class="agent-work-card">${head}${summaryHtml}${prioritiesHtml}${teamsHtml}${activeHtml}</div>`;
+}
+
+// A row is interactive when it links to a background task.
+function awRowIsClickable(item) {
+  return !!(item && typeof item === 'object' && String(item.taskId || '').trim());
+}
+
+function awClickableHead(item, bodyHtml) {
+  const taskId = escHtml(String(item.taskId || ''));
+  return `<div class="aw-row-head aw-clickable" data-aw-task="${taskId}" role="button" tabindex="0" onclick="awToggleDetail(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();awToggleDetail(this);}">${bodyHtml}<span class="aw-chevron" aria-hidden="true">▾</span></div>`;
+}
+
+function awDetailShell() {
+  return `<div class="aw-detail" hidden></div>`;
+}
+
+async function awToggleDetail(headEl) {
+  try {
+    const wrap = headEl.parentElement;
+    const detail = wrap && wrap.querySelector('.aw-detail');
+    if (!detail) return;
+    const taskId = headEl.getAttribute('data-aw-task') || '';
+    if (detail.hasAttribute('hidden')) {
+      detail.removeAttribute('hidden');
+      headEl.classList.add('aw-open');
+      if (!detail.getAttribute('data-loaded')) await awLoadTaskDetail(taskId, detail);
+    } else {
+      detail.setAttribute('hidden', '');
+      headEl.classList.remove('aw-open');
+    }
+  } catch (err) {
+    console.warn('[agent_work] toggle failed', err);
+  }
+}
+
+async function awLoadTaskDetail(taskId, container) {
+  container.innerHTML = '<div class="aw-detail-loading">Loading…</div>';
+  try {
+    const data = await api('/api/bg-tasks/' + encodeURIComponent(taskId));
+    const task = (data && data.task) ? data.task : (data || {});
+    container.setAttribute('data-loaded', '1');
+    container.innerHTML = awRenderTaskDetail(taskId, task);
+  } catch (err) {
+    container.removeAttribute('data-loaded');
+    container.innerHTML = `<div class="aw-detail-loading">Could not load task: ${escHtml(String(err && err.message ? err.message : err))}</div>`;
+  }
+}
+
+function awRenderTaskDetail(taskId, task) {
+  const status = String(task.status || 'unknown');
+  const plan = Array.isArray(task.plan) ? task.plan : [];
+  const total = plan.length;
+  const step = total ? Math.min((Number(task.currentStepIndex) || 0) + 1, total) : 0;
+  const stepLine = total ? `Step ${step}/${total}` : '';
+  const issue = String(task.pauseReason || '').trim();
+  const summary = String(task.finalSummary || '').trim();
+  const prompt = String(task.prompt || '').trim();
+  const prop = task.proposalExecution && typeof task.proposalExecution === 'object' ? task.proposalExecution : null;
+  const propSummary = prop ? String(prop.summary || prop.title || '').trim() : '';
+
+  const meta = [
+    `<span class="aw-status ${escHtml(status)}">${escHtml(status)}</span>`,
+    stepLine ? `<span class="aw-detail-step">${escHtml(stepLine)}</span>` : '',
+  ].filter(Boolean).join('');
+
+  const rows = [
+    issue ? `<div class="aw-detail-row"><b>Blocker:</b> ${escHtml(issue.slice(0, 400))}</div>` : '',
+    summary ? `<div class="aw-detail-row"><b>Summary:</b> ${escHtml(summary.slice(0, 600))}</div>` : '',
+    propSummary ? `<div class="aw-detail-row"><b>Proposal:</b> ${escHtml(propSummary.slice(0, 600))}</div>` : '',
+    (!summary && prompt) ? `<div class="aw-detail-row aw-detail-prompt"><b>Task:</b> ${escHtml(prompt.slice(0, 400))}${prompt.length > 400 ? '…' : ''}</div>` : '',
+  ].filter(Boolean).join('');
+
+  const canResume = ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'failed', 'queued'].includes(status);
+  const canPause = status === 'running';
+  const idArg = encodeInlineJsString(taskId);
+  const actions = [
+    canResume ? `<button class="aw-act aw-act-primary" onclick="awTaskAction(${idArg}, 'resume', this)">Resume</button>` : '',
+    canPause ? `<button class="aw-act" onclick="awTaskAction(${idArg}, 'pause', this)">Pause</button>` : '',
+    status === 'failed' ? `<button class="aw-act" onclick="awTaskAction(${idArg}, 'restart', this)">Restart</button>` : '',
+    `<button class="aw-act aw-act-danger" onclick="awTaskAction(${idArg}, 'delete', this)">Delete</button>`,
+  ].filter(Boolean).join('');
+
+  const composer = `<div class="aw-msg">
+    <input type="text" class="aw-msg-input" placeholder="Message this task's agent…" onkeydown="if(event.key==='Enter'){awSendTaskMessage(${idArg}, this);}">
+    <button class="aw-act" onclick="awSendTaskMessage(${idArg}, this)">Send</button>
+  </div>`;
+
+  return `<div class="aw-detail-meta">${meta}</div>${rows}<div class="aw-detail-actions">${actions}</div>${composer}`;
+}
+
+async function awTaskAction(taskId, action, btn) {
+  const detail = btn && btn.closest('.aw-detail');
+  const headEl = detail && detail.parentElement ? detail.parentElement.querySelector('.aw-row-head') : null;
+  try {
+    if (action === 'delete') {
+      if (!confirm('Delete this task? This cannot be undone.')) return;
+      await api('/api/bg-tasks/' + encodeURIComponent(taskId), { method: 'DELETE' });
+      if (detail) detail.innerHTML = '<div class="aw-detail-loading">Task deleted.</div>';
+      if (headEl) headEl.classList.add('aw-row-removed');
+      showToast?.('Task deleted', taskId, 'success', 3000);
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    await api('/api/bg-tasks/' + encodeURIComponent(taskId) + '/' + action, { method: 'POST' });
+    showToast?.(`Task ${action}`, taskId, 'success', 3000);
+    if (detail) { detail.removeAttribute('data-loaded'); await awLoadTaskDetail(taskId, detail); }
+  } catch (err) {
+    showToast?.('Action failed', String(err && err.message ? err.message : err), 'error', 4000);
+    if (btn) { btn.disabled = false; }
+  }
+}
+
+async function awSendTaskMessage(taskId, el) {
+  const detail = el && el.closest('.aw-detail');
+  const input = detail ? detail.querySelector('.aw-msg-input') : null;
+  const message = input ? String(input.value || '').trim() : '';
+  if (!message) return;
+  try {
+    if (input) input.disabled = true;
+    const res = await api('/api/bg-tasks/' + encodeURIComponent(taskId) + '/message', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    });
+    if (input) { input.value = ''; input.disabled = false; }
+    showToast?.(res && res.resumed ? 'Message sent — task resumed' : 'Message sent', taskId, 'success', 3000);
+    if (detail) { detail.removeAttribute('data-loaded'); await awLoadTaskDetail(taskId, detail); }
+  } catch (err) {
+    if (input) input.disabled = false;
+    showToast?.('Message failed', String(err && err.message ? err.message : err), 'error', 4000);
+  }
 }
 
 function renderArtifacts(artifacts) {
@@ -9298,8 +10102,9 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
         ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
         : `${isWorkerHandoff ? '<div class="msg-role voice-handoff-role">Voice Agent to Worker</div>' : ''}${renderUserMessageContent(msg)}`);
     const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
+    const assistantQuestionHtml = !isUser ? renderInlinePrometheusQuestion(msg.questionRequest) : '';
     const assistantContentHtml = !isUser
-      ? `${assistantApprovalHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
+      ? `${assistantApprovalHtml}${assistantQuestionHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
       : userContentHtml;
     const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
     const actionsHtml = options.readonly || isSideBoundary ? '' : renderMessageActions(msg, originalIndex);
@@ -9309,10 +10114,11 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
         ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
         <div class="msg-bubble-stack">
           ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
-          <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${msg.approvalRequest && !msg.content ? ' msg-body-approval-only' : ''}">
+          <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${(msg.approvalRequest || msg.questionRequest) && !msg.content ? ' msg-body-approval-only' : ''}">
                 ${!isUser ? renderAssistantWorkTimer(msg) : ''}
-                ${!isUser && !(msg.approvalRequest && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
+                ${!isUser && !((msg.approvalRequest || msg.questionRequest) && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
                 ${assistantContentHtml}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderRichArtifacts(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedVideos(msg) : ''}
@@ -9322,7 +10128,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
               </div>
-              ${msg.approvalRequest && !msg.content ? '' : actionsHtml}
+              ${(msg.approvalRequest || msg.questionRequest) && !msg.content ? '' : actionsHtml}
         </div>
       </div>
     </div>`;
@@ -9469,10 +10275,40 @@ function flushStreamingRenderFor(sessionId, renderFn) {
   if (typeof renderFn === 'function') { try { renderFn(); } catch {} }
 }
 
+// Capture/restore scroll state of any open process panels across a full
+// innerHTML rebuild, so streaming re-renders don't yank the user's scroll or
+// snap an open process log back to the top. Panels that were scrolled to the
+// bottom keep following; panels the user scrolled up in keep their position.
+function captureProcessPanelScroll() {
+  const map = {};
+  try {
+    document.querySelectorAll('#current-turn-process, [id^="proc_msg_"], [id^="proc_"]').forEach((el) => {
+      if (!el || !el.id) return;
+      if (el.style && el.style.display === 'none') return;
+      const atBottom = (el.scrollHeight - (el.scrollTop + el.clientHeight)) <= 24;
+      map[el.id] = { scrollTop: el.scrollTop, atBottom };
+    });
+  } catch {}
+  return map;
+}
+function restoreProcessPanelScroll(map) {
+  if (!map) return;
+  try {
+    Object.keys(map).forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.scrollTop = map[id].atBottom ? el.scrollHeight : map[id].scrollTop;
+    });
+  } catch {}
+}
+
 function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
+  // Preserve scroll positions before the innerHTML rebuild below.
+  const _panelScroll = captureProcessPanelScroll();
+  const _mainScrollTop = container ? container.scrollTop : 0;
   syncAssistantWorkTimer();
   updateSideChatChrome();
 
@@ -9518,12 +10354,17 @@ function renderChatMessages() {
       if (mainPane) mainPane.scrollTop = mainPane.scrollHeight;
       if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
     }
+    restoreProcessPanelScroll(_panelScroll);
     return;
   }
 
   container.classList.remove('side-chat-split-shell');
   container.innerHTML = mainHtml;
+  // innerHTML reset clears scrollTop: stick to bottom unless the user scrolled
+  // up to read, in which case restore their position instead of snapping.
   if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
+  else container.scrollTop = _mainScrollTop;
+  restoreProcessPanelScroll(_panelScroll);
 }
 
 function syncAssistantWorkTimer() {
@@ -9982,12 +10823,14 @@ function processPanelHash(value) {
 }
 
 function processPanelIdForMessage(msg) {
+  // Must stay stable across streaming re-renders, so do NOT include mutating
+  // fields like content/toolLog — otherwise the panel id changes every tick and
+  // the open-state set never matches, snapping the panel closed repeatedly.
   const stable = [
     msg?.timestamp || '',
     msg?.channel || '',
     msg?.channelLabel || '',
-    String(msg?.content || '').slice(0, 500),
-    String(msg?.toolLog || '').slice(0, 500),
+    msg?.role || '',
   ].join('|');
   return `proc_msg_${processPanelHash(stable)}`;
 }
@@ -10256,6 +11099,7 @@ function chatMessageRichnessScore(msg) {
     Array.isArray(msg.canvasFiles) ? msg.canvasFiles.length : 0,
     Array.isArray(msg.fileChanges?.files) ? msg.fileChanges.files.length : 0,
     Array.isArray(msg.productCarousel?.items) ? msg.productCarousel.items.length : 0,
+    Array.isArray(msg.richArtifacts) ? msg.richArtifacts.length : 0,
   ].reduce((sum, value) => sum + value, 0);
 }
 
@@ -10270,6 +11114,7 @@ function mergeChatMessageMetadata(target, source) {
   if (Array.isArray(source.canvasFiles) && source.canvasFiles.length && !target.canvasFiles?.length) target.canvasFiles = source.canvasFiles;
   if (Array.isArray(source.fileChanges?.files) && source.fileChanges.files.length && !target.fileChanges?.files?.length) target.fileChanges = source.fileChanges;
   if (source.productCarousel?.items?.length && !target.productCarousel?.items?.length) target.productCarousel = source.productCarousel;
+  if (Array.isArray(source.richArtifacts) && source.richArtifacts.length && !target.richArtifacts?.length) target.richArtifacts = source.richArtifacts;
   return target;
 }
 
@@ -11581,6 +12426,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 		  let finalArtifacts = [];
 		  let finalFileChanges = null;
 		  let finalProductCarousel = null;
+		  let finalRichArtifacts = null;
 		  const canvasPresentedFiles = []; // file paths presented to canvas this turn
 		  const turnGeneratedImages = [];
 		  const turnGeneratedImageKeys = new Set();
@@ -11589,7 +12435,6 @@ async function sendChat(queuedMessage = null, options = {}) {
 		  const turnThinkingBuffer = [];
 		  const turnThinkingSeen = new Set();
 		  let pendingThinkingBurst = '';
-		  let sawExecuteModeThisTurn = false;
 		  let sawToolActivityThisTurn = false;
 		  const getTurnEntries = () => {
 		    const log = Array.isArray(thisSession?.processLog) ? thisSession.processLog : [];
@@ -11780,7 +12625,6 @@ async function sendChat(queuedMessage = null, options = {}) {
             window.lastAgentMode = event.mode || '-';
             window.lastTurnKind = event.turnKind || window.lastTurnKind;
             if (event.mode === 'execute') {
-              sawExecuteModeThisTurn = true;
               movePreToolAnswerTextIntoPreamble();
             }
             addProcessEntry(
@@ -11812,7 +12656,7 @@ async function sendChat(queuedMessage = null, options = {}) {
                 voiceLatencyFirstTokenLogged = true;
                 logDesktopVoiceLatency(thisSessionId, 'worker first token', voiceLatencyTurnStartedAt, { textLen: chunk.length });
               }
-              const treatAsLiveWorkflowProse = window.useAgentMode && sawExecuteModeThisTurn && !streamState.finalResponseStarted;
+              const treatAsLiveWorkflowProse = window.useAgentMode && !streamState.finalResponseStarted;
               if (treatAsLiveWorkflowProse) {
                 appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', chunk, { append: true });
               } else {
@@ -12335,6 +13179,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
 	            finalFileChanges = event.fileChanges || null;
 	            finalProductCarousel = event.productCarousel || null;
+	            finalRichArtifacts = Array.isArray(event.richArtifacts) ? event.richArtifacts : null;
 	            streamState.activeModelBadge = null; // clear badge when turn completes
 	            break;
 
@@ -12350,6 +13195,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (Array.isArray(event.artifacts)) finalArtifacts = event.artifacts;
 	            if (event.fileChanges) finalFileChanges = event.fileChanges;
 	            if (event.productCarousel) finalProductCarousel = event.productCarousel;
+	            if (Array.isArray(event.richArtifacts)) finalRichArtifacts = event.richArtifacts;
 	            break;
 
           case 'turn_execution_created':
@@ -12373,6 +13219,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        artifacts: finalArtifacts,
 	        fileChanges: finalFileChanges || undefined,
 	        productCarousel: finalProductCarousel || undefined,
+	        richArtifacts: (Array.isArray(finalRichArtifacts) && finalRichArtifacts.length) ? finalRichArtifacts : undefined,
 	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
 	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
 	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
@@ -12391,7 +13238,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	      });
 	    }
     persistSession(thisSessionId);
-    if (finalReply && window.activeChatSessionId === thisSessionId) {
+    if (finalReply && window.activeChatSessionId === thisSessionId && !realtimeAgentDispatch) {
       speakAssistantReply(finalReply).catch((err) => {
         addProcessEntry('warn', `Voice reply failed: ${String(err?.message || err)}`);
       });
@@ -12988,6 +13835,43 @@ function storeRealtimeVoiceSpeed(speed) {
   realtimeVoiceSpeed = normalizeRealtimeVoiceSpeed(speed);
   storeVoiceSetting('realtime_voice_speed', String(realtimeVoiceSpeed));
   return realtimeVoiceSpeed;
+}
+
+function getCurrentRealtimeVoiceSpeed() {
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  if (mode === 'xai') {
+    const speed = Number(desktopVoiceSettings.xaiSpeed || realtimeVoiceSpeed || 1);
+    if (!Number.isFinite(speed)) return 1;
+    return Math.max(0.5, Math.min(2, Math.round(speed * 100) / 100));
+  }
+  return normalizeRealtimeVoiceSpeed(desktopVoiceSettings.realtimeSpeed || realtimeVoiceSpeed);
+}
+
+function sendVoiceAgentRealtimeSpeedUpdate() {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!dc || dc.readyState !== 'open') return false;
+  const speed = getCurrentRealtimeVoiceSpeed();
+  try {
+    if (voiceAgentRealtimeConnection?.provider === 'xai') {
+      dc.send(JSON.stringify({ type: 'session.update', session: { speed } }));
+    } else {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          audio: {
+            output: {
+              voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
+              speed,
+            },
+          },
+        },
+      }));
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeRealtimeNarrationMode(value) {
@@ -15504,6 +16388,7 @@ function onRealtimeVoiceSpeedChanged() {
     : storeRealtimeVoiceSpeed(rawSpeed);
   saveDesktopVoiceSettings(mode === 'xai' ? { xaiSpeed: speed } : { realtimeSpeed: speed });
   if (select) select.value = String(speed);
+  sendVoiceAgentRealtimeSpeedUpdate();
   if (realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) {
     showToast('Realtime speed saved', 'Applies to the next spoken response.', 'info', 1800);
   }
@@ -15770,7 +16655,8 @@ function speakVoiceAgentRealtimeMilestone(text, options = {}) {
           text: [
             '[WORKER_MILESTONE]',
             `Current worker update: ${spoken}`,
-            'Say a short natural progress update only if the user benefits from hearing it.',
+            'If this is a final completion update, give a natural spoken summary with the important outcome, files/areas touched, and any verification or caveat the user should know.',
+            'For in-progress milestones, keep it brief. For final summaries, use enough detail to be genuinely useful instead of forcing a tiny recap.',
             'Do not start new work. Do not repeat the original acknowledgement.',
             '[/WORKER_MILESTONE]',
           ].join('\n'),
@@ -15781,7 +16667,7 @@ function speakVoiceAgentRealtimeMilestone(text, options = {}) {
       type: 'response.create',
       response: {
         output_modalities: ['audio'],
-        instructions: 'You are Prometheus in realtime voice mode. If useful, speak one concise progress update based on the worker milestone. Otherwise say nothing. Speak only normal words and numbers; never vocalize punctuation marks, symbols, emoji, markdown, bullets, or standalone characters.',
+        instructions: 'You are Prometheus in realtime voice mode. Speak a natural update grounded in the worker milestone. For final completion, include the useful details and context, usually a few clear sentences, not a tiny under-20-word recap. For routine progress, keep it brief or say nothing if it is not useful. Speak only normal words and numbers; never vocalize punctuation marks, symbols, emoji, markdown, bullets, or standalone characters.',
       },
     }));
   } catch (err) {
@@ -16364,7 +17250,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
       body: JSON.stringify({
         sessionId: sid,
         voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
-        speed: normalizeRealtimeVoiceSpeed(realtimeVoiceSpeed),
+        speed: getCurrentRealtimeVoiceSpeed(),
         voiceRuntime: wakeGate?.phrase
           ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
           : undefined,
@@ -16448,6 +17334,10 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
         session: {
           type: 'realtime',
           audio: {
+            output: {
+              voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
+              speed: getCurrentRealtimeVoiceSpeed(),
+            },
             input: {
               turn_detection: listenMode === 'always_listening'
                 ? {
@@ -16464,7 +17354,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
         },
       };
       dc.send(JSON.stringify(sessionUpdate));
-      if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] sent session.update', sessionUpdate.session.audio.input);
+      if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] sent session.update', sessionUpdate.session.audio);
     } catch (err) {
       if (window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] session.update failed', err);
     }
@@ -16828,6 +17718,38 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
         return;
       }
     }
+    // A voice show_* tool produced a rich-artifact card — render it into the chat
+    // thread now, and send the model only a lean confirmation (not the full card JSON).
+    const voiceArtifacts = data?.result && Array.isArray(data.result.richArtifacts) ? data.result.richArtifacts : null;
+    if (voiceArtifacts && voiceArtifacts.length) {
+      try {
+        const sid = String(sessionId || window.activeChatSessionId || '').trim();
+        const sess = sid ? getChatSessionById(sid) : null;
+        if (sess) {
+          if (!Array.isArray(sess.history)) sess.history = [];
+          sess.history.push({
+            role: 'ai',
+            content: '',
+            richArtifacts: voiceArtifacts,
+            timestamp: Date.now(),
+            source: 'voice_agent_realtime',
+            channel: 'voice',
+            channelLabel: 'Realtime voice',
+          });
+          try { persistSession(sid); } catch {}
+          if (window.activeChatSessionId === sid) {
+            window.chatHistory = sess.history;
+            try { renderChatMessages(); } catch {}
+          }
+        }
+      } catch (err) { console.warn('[voice-agent-realtime] artifact card render failed', err); }
+      sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({
+        ok: data.result.ok !== false,
+        summary: data.result.summary || 'Card shown.',
+        shown: true,
+      }));
+      return;
+    }
     const toolOutput = name === 'voice_worker_status'
       ? (overlayPendingVoiceAgentRealtimeWorkerPacket(data.result || null, sessionId, 'voice_worker_status_output') || data.result || data.raw || { ok: true })
       : (data.result || data.raw || { ok: true });
@@ -17031,11 +17953,13 @@ function createXaiRealtimePlayback() {
       buffer.copyToChannel(float, 0);
       const src = ctx.createBufferSource();
       src.buffer = buffer;
+      const rate = getCurrentRealtimeVoiceSpeed();
+      try { src.playbackRate.value = rate; } catch {}
       src.connect(ctx.destination);
       const now = ctx.currentTime;
       const startAt = Math.max(now, nextStartTime);
       src.start(startAt);
-      nextStartTime = startAt + buffer.duration;
+      nextStartTime = startAt + (buffer.duration / Math.max(0.25, rate || 1));
       sources.add(src);
       src.onended = () => sources.delete(src);
     },
@@ -17076,7 +18000,7 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
       body: JSON.stringify({
         sessionId: sid,
         voice: normalizeXaiRealtimeVoice(desktopVoiceSettings.serverVoice || realtimeVoiceSelection),
-        speed: Number(desktopVoiceSettings.xaiSpeed || realtimeVoiceSpeed || 1.0),
+        speed: getCurrentRealtimeVoiceSpeed(),
         voiceRuntime: wakeGate?.phrase
           ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
           : undefined,
@@ -17194,6 +18118,7 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
       modalities: ['audio', 'text'],
       instructions: bootstrap.instructions,
       voice: bootstrap.voice,
+      speed: getCurrentRealtimeVoiceSpeed(),
       input_audio_format: 'pcm16',
       output_audio_format: 'pcm16',
       input_audio_transcription: { model: 'grok-stt' },
@@ -34459,6 +35384,235 @@ function renderInlineApprovalRequest(item) {
   </div>`;
 }
 
+function normalizePrometheusQuestionRecord(record = {}, fallback = {}) {
+  const id = String(record.id || record.questionId || fallback.id || fallback.questionId || '').trim();
+  const sessionId = String(record.sourceSessionId || record.sessionId || fallback.sourceSessionId || fallback.sessionId || '').trim();
+  const questions = Array.isArray(record.questions) ? record.questions : (Array.isArray(fallback.questions) ? fallback.questions : []);
+  return {
+    id,
+    sessionId,
+    title: String(record.title || fallback.title || 'Prometheus question').trim(),
+    prompt: String(record.prompt || fallback.prompt || fallback.summary || '').trim(),
+    context: String(record.context || fallback.context || '').trim(),
+    questions: questions.slice(0, 5).map((q, index) => ({
+      id: String(q?.id || `q${index + 1}`).trim() || `q${index + 1}`,
+      label: String(q?.label || q?.question || '').trim(),
+      mode: ['single_select', 'multi_select', 'text'].includes(String(q?.mode || '').trim()) ? String(q.mode).trim() : 'single_select',
+      options: Array.isArray(q?.options) ? q.options.map((opt) => String(opt || '').trim()).filter(Boolean).slice(0, 8) : [],
+      allowOther: q?.allowOther !== false && q?.allow_other !== false,
+      required: q?.required !== false,
+      helpText: String(q?.helpText || q?.help_text || '').trim(),
+    })).filter((q) => q.label),
+    allowGeneralOther: record.allowGeneralOther !== false && fallback.allowGeneralOther !== false,
+    status: String(record.status || fallback.status || 'pending').trim().toLowerCase() || 'pending',
+    answers: Array.isArray(record.answers) ? record.answers : [],
+    generalOther: String(record.generalOther || fallback.generalOther || '').trim(),
+  };
+}
+
+function cssEscapeValue(value) {
+  const raw = String(value || '');
+  if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(raw);
+  return raw.replace(/["\\\]\[]/g, '\\$&');
+}
+
+function renderInlinePrometheusQuestion(item) {
+  if (!item || !item.id) return '';
+  const question = normalizePrometheusQuestionRecord(item);
+  if (!question.id) return '';
+  const pending = question.status === 'pending';
+  const idAttr = escHtml(question.id);
+  const idArg = encodeInlineJsString(question.id);
+  const statusLabel = question.status === 'answered' ? 'answered' : question.status;
+  const answerMap = new Map((question.answers || []).map((answer) => [String(answer?.id || ''), answer || {}]));
+  const questionBlocks = question.questions.map((q, index) => {
+    const answer = answerMap.get(q.id) || {};
+    const qName = `${question.id}__${q.id}`;
+    const qIdArg = encodeInlineJsString(q.id);
+    const selected = Array.isArray(answer.selected) ? answer.selected : [];
+    const other = String(answer.other || '').trim();
+    const text = String(answer.text || '').trim();
+    if (!pending) {
+      const selectedText = selected.length ? selected.join(', ') : '';
+      const answerText = [selectedText, text, other ? `Other: ${other}` : ''].filter(Boolean).join('\n') || 'No answer';
+      return `<div class="chat-approval-scope"><span>${escHtml(q.label)}</span>${escHtml(answerText).replace(/\n/g, '<br>')}</div>`;
+    }
+    const options = (q.options || []).map((option, optIndex) => {
+      const inputId = `${qName}__${optIndex}`;
+      const type = q.mode === 'multi_select' ? 'checkbox' : 'radio';
+      return `<label for="${escHtml(inputId)}" style="display:flex;align-items:center;gap:8px;border:1px solid rgba(56,189,248,0.22);border-radius:8px;padding:7px 9px;background:rgba(255,255,255,0.72);font-size:12px;color:#075985;cursor:pointer">
+        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}" style="margin:0" />
+        <span>${escHtml(option)}</span>
+      </label>`;
+    }).join('');
+    const textInput = q.mode === 'text'
+      ? `<textarea data-question-text="${escHtml(q.id)}" placeholder="Answer..." rows="2" style="width:100%;border:1px solid rgba(56,189,248,0.24);border-radius:8px;padding:8px 9px;font:inherit;font-size:12px;resize:vertical;background:rgba(255,255,255,0.86);color:#075985"></textarea>`
+      : '';
+    const otherInput = q.allowOther
+      ? `<div style="display:flex;gap:6px;align-items:flex-start">
+          ${q.mode !== 'text' ? `<button type="button" onclick="toggleQuestionOther(${idArg}, ${qIdArg})" style="border:1px solid rgba(56,189,248,0.26);background:rgba(14,165,233,0.08);color:#075985;border-radius:8px;padding:7px 9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">Other</button>` : ''}
+          <textarea data-question-other="${escHtml(q.id)}" placeholder="Other..." rows="1" style="${q.mode !== 'text' ? 'display:none;' : ''}width:100%;border:1px solid rgba(56,189,248,0.24);border-radius:8px;padding:8px 9px;font:inherit;font-size:12px;resize:vertical;background:rgba(255,255,255,0.86);color:#075985"></textarea>
+        </div>`
+      : '';
+    return `<div style="display:flex;flex-direction:column;gap:7px;margin-top:${index ? 10 : 0}px">
+      <div style="font-size:12px;font-weight:800;color:#075985;line-height:1.35">${escHtml(q.label)}${q.required ? '' : ' <span style="font-weight:600;opacity:.7">(optional)</span>'}</div>
+      ${q.helpText ? `<div class="chat-approval-subdetail">${escHtml(q.helpText)}</div>` : ''}
+      ${options ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px">${options}</div>` : ''}
+      ${textInput}
+      ${otherInput}
+    </div>`;
+  }).join('');
+  return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}">
+    <div class="chat-approval-head">
+      <div>
+        <div class="chat-approval-kicker">${pending ? 'Prometheus question' : 'Question result'}</div>
+        <div class="chat-approval-title">${escHtml(question.title || 'Prometheus question')}</div>
+      </div>
+      <div class="chat-approval-badges">
+        <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
+      </div>
+    </div>
+    ${question.prompt ? `<div class="chat-approval-detail">${escHtml(question.prompt)}</div>` : ''}
+    ${question.context ? `<div class="chat-approval-subdetail">${escHtml(question.context)}</div>` : ''}
+    ${questionBlocks}
+    ${pending && question.allowGeneralOther ? `<div style="margin-top:10px"><textarea data-question-general-other="1" placeholder="Anything else..." rows="2" style="width:100%;border:1px solid rgba(56,189,248,0.24);border-radius:8px;padding:8px 9px;font:inherit;font-size:12px;resize:vertical;background:rgba(255,255,255,0.86);color:#075985"></textarea></div>` : ''}
+    ${pending
+      ? `<div class="chat-approval-actions">
+          <button class="chat-approval-btn chat-approval-approve" type="button" onclick="submitInlinePrometheusQuestion(${idArg})">Submit</button>
+          <button class="chat-approval-btn chat-approval-deny" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
+        </div>`
+      : `<div class="chat-approval-resolved">This question was ${escHtml(statusLabel)}.</div>`}
+  </div>`;
+}
+
+function toggleQuestionOther(questionId, itemId) {
+  const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
+  const other = card?.querySelector?.(`[data-question-other="${cssEscapeValue(itemId)}"]`);
+  if (!other) return;
+  other.style.display = other.style.display === 'none' ? 'block' : 'none';
+  if (other.style.display !== 'none') other.focus();
+}
+
+function collectPrometheusQuestionAnswers(question) {
+  const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
+  if (!card) return { answers: [], generalOther: '' };
+  const answers = question.questions.map((q) => {
+    const checked = Array.from(card.querySelectorAll(`[data-question-id="${cssEscapeValue(q.id)}"]:checked`))
+      .map((input) => String(input.value || '').trim())
+      .filter(Boolean);
+    const text = String(card.querySelector(`[data-question-text="${cssEscapeValue(q.id)}"]`)?.value || '').trim();
+    const other = String(card.querySelector(`[data-question-other="${cssEscapeValue(q.id)}"]`)?.value || '').trim();
+    return { id: q.id, label: q.label, mode: q.mode, selected: q.mode === 'single_select' ? checked.slice(0, 1) : checked, text, other };
+  });
+  const generalOther = String(card.querySelector('[data-question-general-other="1"]')?.value || '').trim();
+  return { answers, generalOther };
+}
+
+function questionFromEventPayload(event = {}, status = '') {
+  const id = String(event.questionId || event.id || event.question?.id || '').trim();
+  const base = event.question && typeof event.question === 'object' ? event.question : {};
+  const question = normalizePrometheusQuestionRecord(base, { ...event, id, status: status || base.status || event.status || 'pending' });
+  if (!question.sessionId) question.sessionId = String(event.sessionId || window.activeChatSessionId || '').trim();
+  if (status) question.status = status;
+  return question;
+}
+
+function upsertInlinePrometheusQuestion(questionInput, options = {}) {
+  const question = normalizePrometheusQuestionRecord(questionInput);
+  if (!question.id) return false;
+  const sessionId = question.sessionId || String(window.activeChatSessionId || '').trim();
+  if (!sessionId) return false;
+  const sess = getChatSessionById(sessionId);
+  if (!sess) return false;
+  if (!Array.isArray(sess.history)) sess.history = [];
+  const existing = sess.history.find((msg) => String(msg?.questionRequest?.id || '') === question.id);
+  if (existing) {
+    existing.questionRequest = { ...(existing.questionRequest || {}), ...question };
+    existing.timestamp = Number(existing.timestamp) || Date.now();
+  } else if (options.create !== false) {
+    sess.history.push({
+      role: 'assistant',
+      content: '',
+      questionRequest: question,
+      timestamp: Date.now(),
+    });
+  }
+  if (window.activeChatSessionId === sessionId) {
+    window.chatHistory = sess.history;
+    renderChatMessages();
+  } else {
+    sess.unread = true;
+  }
+  persistSession(sessionId);
+  return true;
+}
+
+function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
+  const id = String(event.questionId || event.id || event.question?.id || '').trim();
+  if (!id) return;
+  const sessionId = String(event.sessionId || event.question?.sessionId || event.question?.sourceSessionId || window.activeChatSessionId || '').trim();
+  const targetSessions = sessionId ? [getChatSessionById(sessionId)].filter(Boolean) : (window.chatSessions || []);
+  targetSessions.forEach((sess) => {
+    const msg = (sess.history || []).find((entry) => String(entry?.questionRequest?.id || '') === id);
+    if (!msg) return;
+    msg.questionRequest = normalizePrometheusQuestionRecord(event.question || msg.questionRequest, { ...event, id, status });
+    msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
+    persistSession(sess.id);
+  });
+  if (window.activeChatSessionId === sessionId) renderChatMessages();
+}
+
+async function submitInlinePrometheusQuestion(id) {
+  const question = await fetchPrometheusQuestionDetailsById(id);
+  if (!question) {
+    showToast('Question missing', 'Could not load the pending question.', 'error');
+    return;
+  }
+  const payload = collectPrometheusQuestionAnswers(normalizePrometheusQuestionRecord(question));
+  try {
+    const result = await api(`/api/questions/${encodeURIComponent(id)}/submit`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    updateInlinePrometheusQuestionStatus({ questionId: id, sessionId: question.sessionId, question: result.question }, 'answered');
+    await loadSessionApprovals();
+    const resumePrompt = String(result?.resumePrompt || '').trim();
+    if (resumePrompt) {
+      const targetSessionId = String(result?.question?.sessionId || result?.question?.sourceSessionId || window.activeChatSessionId || '').trim();
+      if (targetSessionId && targetSessionId !== window.activeChatSessionId) {
+        window.activeChatSessionId = targetSessionId;
+        setAgentSessionId(targetSessionId);
+        syncActiveChat();
+      }
+      setTimeout(() => sendChat(resumePrompt, { clientRequestId: newChatClientRequestId(targetSessionId || window.activeChatSessionId) }), 100);
+    }
+  } catch (err) {
+    showToast('Question submit failed', String(err?.message || err), 'error');
+  }
+}
+
+async function cancelInlinePrometheusQuestion(id) {
+  try {
+    const result = await api(`/api/questions/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' });
+    updateInlinePrometheusQuestionStatus({ questionId: id, sessionId: result?.question?.sessionId, question: result?.question }, 'cancelled');
+    await loadSessionApprovals();
+  } catch (err) {
+    showToast('Question cancel failed', String(err?.message || err), 'error');
+  }
+}
+
+async function fetchPrometheusQuestionDetailsById(id) {
+  const questionId = String(id || '').trim();
+  if (!questionId) return null;
+  try {
+    const data = await api('/api/questions?status=all');
+    return (data.questions || []).find((item) => String(item.id || '') === questionId) || null;
+  } catch (err) {
+    console.warn('[ChatPage] could not fetch question details:', err);
+    return null;
+  }
+}
+
 async function loadApprovalProcessRun(id, options = {}) {
   const approvalId = String(id || '').trim();
   const body = document.getElementById(`approval-process-${approvalId}`);
@@ -34654,6 +35808,20 @@ async function restorePendingInlineApprovalsForSession(sessionId) {
   }
 }
 
+async function restorePendingInlineQuestionsForSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  try {
+    const data = await api(`/api/questions?status=pending&sessionId=${encodeURIComponent(sid)}`);
+    const questions = Array.isArray(data?.questions) ? data.questions : [];
+    for (const question of questions) {
+      upsertInlinePrometheusQuestion(question, { create: true });
+    }
+  } catch (err) {
+    console.warn('[ChatPage] could not restore pending questions:', err);
+  }
+}
+
 async function loadSessionApprovals() {
   const list = document.getElementById('session-approvals-list');
   const badge = document.getElementById('session-approvals-badge');
@@ -34662,9 +35830,10 @@ async function loadSessionApprovals() {
   if (section) section.style.display = 'none';
   const currentSessionId = String(window.activeChatSessionId || '').trim();
   try {
-    const [approvalData, proposalData] = await Promise.all([
+    const [approvalData, proposalData, questionData] = await Promise.all([
       api('/api/approvals?status=pending').catch(() => ({ approvals: [] })),
       api(`/api/proposals?status=pending&sessionId=${encodeURIComponent(currentSessionId)}`).catch(() => ({ proposals: [] })),
+      api(`/api/questions?status=pending&sessionId=${encodeURIComponent(currentSessionId)}`).catch(() => ({ questions: [] })),
     ]);
     const approvalItems = (approvalData.approvals || [])
       .filter((a) => String(a.sourceSessionId || a.sessionId || '').trim() === currentSessionId)
@@ -34694,7 +35863,10 @@ async function loadSessionApprovals() {
       status: p.status || 'pending',
       approvalType: 'proposal',
     }));
-    const all = [...approvalItems, ...proposalItems];
+    const questionItems = (questionData.questions || [])
+      .filter((q) => String(q.sourceSessionId || q.sessionId || '').trim() === currentSessionId)
+      .map((q) => ({ ...normalizePrometheusQuestionRecord(q), approvalType: 'question' }));
+    const all = [...questionItems, ...approvalItems, ...proposalItems];
     const inlineStreamOwnsApprovals = Boolean(
       currentSessionId
       && window._sessionThinking?.[currentSessionId]
@@ -34712,7 +35884,7 @@ async function loadSessionApprovals() {
       badge.style.display = 'none';
       return;
     }
-    list.innerHTML = all.map(renderSessionApprovalCard).join('');
+    list.innerHTML = all.map((item) => item.approvalType === 'question' ? renderInlinePrometheusQuestion(item) : renderSessionApprovalCard(item)).join('');
     badge.style.display = 'inline-block';
     badge.textContent = String(all.length);
   } catch (err) {
@@ -34757,6 +35929,9 @@ async function resolveSessionApproval(id, action, endpoint, grantScope = '') {
 if (typeof window.loadSessionApprovals !== 'function') window.loadSessionApprovals = loadSessionApprovals;
 if (typeof window.resolveSessionApproval !== 'function') window.resolveSessionApproval = resolveSessionApproval;
 if (typeof window.resolveInlineApproval !== 'function') window.resolveInlineApproval = resolveInlineApproval;
+if (typeof window.submitInlinePrometheusQuestion !== 'function') window.submitInlinePrometheusQuestion = submitInlinePrometheusQuestion;
+if (typeof window.cancelInlinePrometheusQuestion !== 'function') window.cancelInlinePrometheusQuestion = cancelInlinePrometheusQuestion;
+if (typeof window.toggleQuestionOther !== 'function') window.toggleQuestionOther = toggleQuestionOther;
 if (typeof window.loadApprovalProcessRun !== 'function') window.loadApprovalProcessRun = loadApprovalProcessRun;
 if (!window.__promProcessRunHandlersInstalled) {
   window.__promProcessRunHandlersInstalled = true;
@@ -34809,6 +35984,8 @@ window.renderReactSteps = renderReactSteps;
 window.toggleSteps = toggleSteps;
 window.renderAssistantContent = renderAssistantContent;
 window.renderAssistantGeneratedImages = renderAssistantGeneratedImages;
+window.pcUpdateProductCarouselArrows = pcUpdateProductCarouselArrows;
+window.pcScrollLeft = pcScrollLeft;
 window.pcScrollRight = pcScrollRight;
 window.setGeneratedImagePreview = setGeneratedImagePreview;
 // window.getFileIcon — first declaration already exposed above
@@ -34834,6 +36011,10 @@ window.canvasExtractLayersFromSource = canvasExtractLayersFromSource;
 window.canvasOpenCreativeUpload = canvasOpenCreativeUpload;
 window.canvasHandleCreativeUploadInput = canvasHandleCreativeUploadInput;
 window.renderArtifacts = renderArtifacts;
+window.emailComposerSend = emailComposerSend;
+window.emailComposerInsertText = emailComposerInsertText;
+window.emailComposerDiscard = emailComposerDiscard;
+window.emailComposerNotice = emailComposerNotice;
 window.openInFileLocation = openInFileLocation;
 window.renderChatMessages = renderChatMessages;
 window.applyEmptyChatStarterPrompt = applyEmptyChatStarterPrompt;
@@ -35156,6 +36337,7 @@ wsEventBus.on('session_notification', async (msg) => {
       prev.history = reconcileChatHistoryAfterMerge(prev.history || []);
       clearLiveTurnStateForSession(prevId);
       await restorePendingInlineApprovalsForSession(prevId);
+      await restorePendingInlineQuestionsForSession(prevId);
       prev = window.chatSessions.find((s) => s.id === prevId) || prev;
     }
     prev.history = Array.isArray(prev.history) ? prev.history : [];
@@ -35770,6 +36952,7 @@ function handleMainChatStreamEvent(msg = {}) {
           canvasFiles: Array.isArray(evt.canvasFiles) && evt.canvasFiles.length ? evt.canvasFiles : undefined,
           fileChanges: evt.fileChanges || undefined,
           productCarousel: evt.productCarousel || undefined,
+          richArtifacts: Array.isArray(evt.richArtifacts) && evt.richArtifacts.length ? evt.richArtifacts : undefined,
           processEntries: mergeLiveTraceProcessEntries(streamState.liveTraceEntries, sess.processLog.slice(Number(streamState.currentTurnStartIndex || 0))),
         });
       }
@@ -36744,6 +37927,24 @@ wsEventBus.on('coordinator_progress', (msg) => {
       };
       updateInlineApprovalStatusFromEvent(msg, statusByEvent[eventName] || '');
     }
+  });
+});
+
+['question_created', 'question_answered', 'question_cancelled', 'question_expired'].forEach((eventName) => {
+  wsEventBus.on(eventName, async (msg) => {
+    const matchesSession = String(msg.sessionId || msg.question?.sessionId || '').trim() === String(window.activeChatSessionId || '').trim();
+    if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
+    if (eventName === 'question_created' && matchesSession) {
+      const question = msg.question ? questionFromEventPayload(msg, 'pending') : normalizePrometheusQuestionRecord(await fetchPrometheusQuestionDetailsById(msg.questionId), { ...msg, status: 'pending' });
+      upsertInlinePrometheusQuestion(question);
+      return;
+    }
+    const statusByEvent = {
+      question_answered: 'answered',
+      question_cancelled: 'cancelled',
+      question_expired: 'expired',
+    };
+    updateInlinePrometheusQuestionStatus(msg, statusByEvent[eventName] || '');
   });
 });
 

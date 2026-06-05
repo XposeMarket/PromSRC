@@ -1,10 +1,6 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "product-carousel-builder",
-  "name": "Product Carousel Builder",
-  "description": "Reusable workflow for extracting, curating, and displaying product recommendations with Prometheus product carousels.",
-  "version": "1.0.0",
   "triggers": [
     "product carousel",
     "show carousel",
@@ -16,57 +12,20 @@
     "find products",
     "shopping search",
     "compare products",
-    "Amazon products",
-    "popular products"
-  ],
-  "categories": [
-    "shopping",
-    "research",
-    "browser",
-    "visual-output"
-  ],
-  "requiredTools": [
-    "browser_automation",
-    "web",
-    "skills"
+    "amazon products",
+    "popular products",
+    "best products under",
+    "best laptops under",
+    "best gaming laptops",
+    "best products right now",
+    "buying guide products"
   ],
   "resources": [
     {
-      "path": "examples/amazon-mens-shampoo-carousel.md",
-      "type": "example",
-      "description": "Worked example based on an Amazon men’s shampoo search, including extraction fields and carousel curation logic.",
-      "triggers": [
-        "amazon shampoo",
-        "men shampoo",
-        "amazon carousel",
-        "shopping carousel"
-      ],
-      "autoInject": true,
-      "injectMode": "summary_then_content",
-      "maxInjectChars": 3000
+      "path": "references/research-first-shopping-flow.md",
+      "type": "doc",
+      "description": "Guardrail from Raul's 2026-06-05 correction: research current best models first, then product-search exact candidates for broad/high-consideration shopping requests."
     }
   ],
-  "toolBinding": {
-    "requiredTools": [
-      "browser_automation"
-    ],
-    "recommendedToolCategories": [
-      "browser_automation"
-    ],
-    "defaultWorkflow": [
-      "Extract candidates from product source",
-      "Curate 3–8 distinct products",
-      "Call show_product_carousel"
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "browser": true,
-    "workspaceRead": false,
-    "workspaceWrite": false,
-    "externalSideEffects": false
-  },
-  "status": "ready",
-  "lifecycle": "active",
-  "ownership": "prometheus-owned"
+  "id": "product-carousel-builder"
 }

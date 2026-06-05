@@ -665,6 +665,62 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'ask_prometheus_questions',
+        description:
+          'Ask the user 1-5 structured clarification questions and wait for their response before continuing the workflow. ' +
+          'Use this when a decision, preference, missing requirement, or tradeoff would materially improve the next step. ' +
+          'Each question can be single_select, multi_select, or text. Include concise options for select questions and allow Other unless it would be unsafe or nonsensical. ' +
+          'The question appears as an interactive Prometheus Question card in chat and Telegram; Telegram option buttons can capture the user\'s next message for Other.',
+        parameters: {
+          type: 'object',
+          required: ['title', 'prompt', 'questions'],
+          properties: {
+            title: { type: 'string', description: 'Short card title shown to the user, max ~180 chars.' },
+            prompt: { type: 'string', description: 'Warm concise explanation of why Prometheus needs this answer.' },
+            context: { type: 'string', description: 'Optional short context about the task or decision.' },
+            allow_general_other: { type: 'boolean', description: 'Whether to show an extra Anything else field for the whole card. Defaults true.' },
+            questions: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 5,
+              items: {
+                type: 'object',
+                required: ['id', 'label', 'mode'],
+                properties: {
+                  id: { type: 'string', description: 'Stable snake_case answer key.' },
+                  label: { type: 'string', description: 'The user-facing question.' },
+                  mode: { type: 'string', enum: ['single_select', 'multi_select', 'text'], description: 'single_select for one choice, multi_select for several, text for open-ended.' },
+                  options: { type: 'array', items: { type: 'string' }, description: '2-8 concise options for select questions. Not needed for text questions.' },
+                  allowOther: { type: 'boolean', description: 'Whether this question has an Other option/text. Defaults true.' },
+                  required: { type: 'boolean', description: 'Whether an answer is needed before submit. Defaults true.' },
+                  helpText: { type: 'string', description: 'Optional tiny helper text.' },
+                },
+              },
+            },
+            ttl_ms: { type: 'number', description: 'Optional expiry in milliseconds. Defaults to several hours.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'await_prometheus_question_response',
+        description:
+          'Resume waiting for a pending Prometheus Question after handling a steer/interruption. ' +
+          'Returns immediately if the question was already answered. Use only with a question_id returned by ask_prometheus_questions.',
+        parameters: {
+          type: 'object',
+          required: ['question_id'],
+          properties: {
+            question_id: { type: 'string', description: 'The Prometheus Question ID to resume waiting for.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'request_final_action_approval',
         description:
           'Ask the user for one-shot approval before triggering a high-impact final UI action such as Post, Send, Publish, Submit, Purchase, Transfer, Delete, or Checkout. ' +
@@ -1355,6 +1411,337 @@ export function getCisSystemTools(): any[] {
                   productUrl:  { type: 'string', description: 'URL to the product page — used as the card link' },
                   merchant:    { type: 'string', description: 'Store name, e.g. "Amazon", "Best Buy"' },
                   confidence:  { type: 'number', description: 'Optional provider/model confidence from 0-1 when available' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_agent_work',
+        description: 'Display a native Prometheus "agent work" status card in the chat UI — an operator snapshot of schedules, priorities, team activity, and in-flight work. Use this when the user asks what is going on, what their priorities are, for a daily/operator snapshot, or after gathering live state (e.g. via automation_dashboard, schedules, background tasks, or team snapshots). Synthesize the rows yourself from the data you gathered — do not invent data you have not looked up. Keep each list tight (2–6 items).',
+        parameters: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['snapshot', 'running', 'team_update', 'priority_list'], description: 'Which flavor of card this is. Default "snapshot".' },
+            greeting: { type: 'string', description: 'Optional short greeting, e.g. "Good morning."' },
+            title: { type: 'string', description: 'Optional card title, e.g. "Operator snapshot".' },
+            subtitle: { type: 'string', description: 'Optional one-line subtitle.' },
+            summaryRows: {
+              type: 'array',
+              description: 'High-level summary rows (e.g. "3 schedules today").',
+              items: {
+                type: 'object',
+                required: ['title'],
+                properties: {
+                  icon: { type: 'string', description: 'One of: calendar, users, clipboard, check, bolt, clock, flag, sparkles.' },
+                  title: { type: 'string', description: 'Row headline, e.g. "3 schedules today".' },
+                  subtitle: { type: 'string', description: 'Supporting detail, e.g. "Brain Dream, Weekly Radar".' },
+                },
+              },
+            },
+            priorities: {
+              type: 'array',
+              description: 'Numbered priority list for the operator. Attach taskId/jobId/proposalId so the row becomes clickable (expands an inline detail drawer with resume/pause/delete/message actions).',
+              items: {
+                type: 'object',
+                required: ['title'],
+                properties: {
+                  title: { type: 'string', description: 'Priority name, e.g. "Run Brain Dream".' },
+                  subtitle: { type: 'string', description: 'One short line of context.' },
+                  status: { type: 'string', description: 'Optional status, e.g. "ready", "running", "blocked".' },
+                  taskId: { type: 'string', description: 'Optional background task id — makes the row clickable with task actions (resume/pause/delete/message).' },
+                  jobId: { type: 'string', description: 'Optional scheduled job id this row links to.' },
+                  agentId: { type: 'string', description: 'Optional agent id this row belongs to.' },
+                  proposalId: { type: 'string', description: 'Optional proposal id — clicking shows the proposal summary.' },
+                },
+              },
+            },
+            teams: {
+              type: 'array',
+              description: 'Team activity rows.',
+              items: {
+                type: 'object',
+                required: ['name'],
+                properties: {
+                  name: { type: 'string', description: 'Team name.' },
+                  detail: { type: 'string', description: 'Short status line, e.g. "2 proposals in review.".' },
+                  icon: { type: 'string', description: 'Optional emoji icon.' },
+                  status: { type: 'string', description: 'Optional status, e.g. "active", "idle".' },
+                  agentId: { type: 'string', description: 'Optional team/agent id this row links to.' },
+                },
+              },
+            },
+            activeWork: {
+              type: 'array',
+              description: 'In-flight work items (tasks/jobs currently running). Attach taskId to make the row clickable with live detail + actions.',
+              items: {
+                type: 'object',
+                required: ['title'],
+                properties: {
+                  id: { type: 'string', description: 'Optional task/job id.' },
+                  title: { type: 'string', description: 'Work item title.' },
+                  status: { type: 'string', description: 'Optional status label.' },
+                  progressLabel: { type: 'string', description: 'Optional progress text, e.g. "Step 2 of 4".' },
+                  href: { type: 'string', description: 'Optional link into the task/team/schedule page.' },
+                  taskId: { type: 'string', description: 'Optional background task id — enables the inline detail drawer + resume/pause/delete/message actions.' },
+                  jobId: { type: 'string', description: 'Optional scheduled job id this row links to.' },
+                  agentId: { type: 'string', description: 'Optional agent id this row belongs to.' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_sources',
+        description:
+          'Display a row of source/news/research cards in the chat UI (like a news carousel). Use after web_search / web_fetch / browser research when you want to present the sources visually — articles, references, citations, or findings. You curate the list (3–8 recommended). Each item needs at least a title or url.',
+        parameters: {
+          type: 'object',
+          required: ['items'],
+          properties: {
+            title: { type: 'string', description: 'Optional heading shown above the cards, e.g. "Latest OpenAI news".' },
+            layout: { type: 'string', enum: ['cards', 'list'], description: 'cards (default, horizontal image cards) or list (compact vertical rows).' },
+            items: {
+              type: 'array',
+              description: 'Source cards to display (3–8 recommended).',
+              items: {
+                type: 'object',
+                required: ['title'],
+                properties: {
+                  title: { type: 'string', description: 'Headline / source title.' },
+                  publisher: { type: 'string', description: 'Publisher or site name, e.g. "Reuters".' },
+                  url: { type: 'string', description: 'Link to the source — used as the card link.' },
+                  imageUrl: { type: 'string', description: 'Optional thumbnail/hero image URL.' },
+                  snippet: { type: 'string', description: 'Short summary/excerpt.' },
+                  publishedAt: { type: 'string', description: 'Optional human or ISO date, e.g. "Yesterday" or "2026-06-04".' },
+                  badge: { type: 'string', description: 'Optional small label, e.g. "Reddit", "Official".' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_market',
+        description:
+          'Fetch live crypto/memecoin prices from CoinGecko (free, no key) and display them as a market card (one or many coins, with 7-day sparkline, 24h change, and market cap). Use for "price of bitcoin", "show me BTC/ETH/SOL", memecoins like PEPE/WIF/BONK, or a portfolio snapshot. Pass tickers (btc, eth, doge) or CoinGecko ids (dogwifcoin) — use the full CoinGecko id for obscure tokens. NOTE: CoinGecko covers crypto only; for equities/stocks, fall back to web_search and present with show_sources or plain text.',
+        parameters: {
+          type: 'object',
+          required: ['coins'],
+          properties: {
+            coins: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Coin tickers or CoinGecko ids, e.g. ["btc","eth","pepe"] or ["dogwifcoin"]. 1–12 coins.',
+            },
+            vs_currency: { type: 'string', description: 'Quote currency. Default "usd".' },
+            sparkline: { type: 'boolean', description: 'Include 7-day sparkline data. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_stocks',
+        description:
+          'Fetch live stock/equity/ETF/index quotes (keyless, Yahoo Finance) and display them as a market card — price, day change, and a 1-month sparkline, one or many tickers. Use for "price of AAPL", "show me TSLA NVDA SPY", a watchlist, or investing/portfolio snapshots. For crypto/memecoins use show_market instead.',
+        parameters: {
+          type: 'object',
+          required: ['symbols'],
+          properties: {
+            symbols: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Ticker symbols, e.g. ["AAPL","TSLA","SPY"]. 1–12 symbols. Use Yahoo-style suffixes for non-US (e.g. "SHOP.TO").',
+            },
+            range: { type: 'string', description: 'Sparkline history range, e.g. "5d","1mo","6mo","1y". Default "1mo".' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_weather',
+        description:
+          'Fetch a live forecast from Open-Meteo (free, no key) and display a weather card (current conditions + 10-day daily + hourly trend). Use for "weather in X", "forecast", "is it going to rain". Pass a location name (geocoded automatically) or explicit latitude/longitude.',
+        parameters: {
+          type: 'object',
+          properties: {
+            location: { type: 'string', description: 'Place name, e.g. "Frederick, MD" or "Tokyo". Geocoded automatically.' },
+            latitude: { type: 'number', description: 'Optional explicit latitude (use with longitude instead of location).' },
+            longitude: { type: 'number', description: 'Optional explicit longitude.' },
+            unit: { type: 'string', enum: ['F', 'C'], description: 'Temperature unit. Default F.' },
+            days: { type: 'number', description: 'Forecast days, 1–16. Default 10.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_comparison',
+        description:
+          'Display a structured side-by-side comparison table in the chat UI. Use to compare options, products, repos, configs, plans, or models. You fill columns and rows yourself. Optionally highlight a "winner" column.',
+        parameters: {
+          type: 'object',
+          required: ['columns', 'rows'],
+          properties: {
+            title: { type: 'string', description: 'Optional table heading.' },
+            columns: {
+              type: 'array',
+              description: 'Column definitions. The first column is the row label/feature name.',
+              items: {
+                type: 'object',
+                required: ['key', 'label'],
+                properties: {
+                  key: { type: 'string', description: 'Field key used in each row object.' },
+                  label: { type: 'string', description: 'Column header text.' },
+                },
+              },
+            },
+            rows: {
+              type: 'array',
+              description: 'Row objects keyed by column key, e.g. {"feature":"Price","optionA":"$10","optionB":"$12"}.',
+              items: { type: 'object' },
+            },
+            labelKey: { type: 'string', description: 'Optional key of the sticky first/label column. Defaults to the first column.' },
+            highlightColumn: { type: 'string', description: 'Optional column key to visually highlight as the recommended/winning option.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_chart',
+        description:
+          'Minimal native SVG line/bar/area chart (no axes ticks/gridlines/value labels). For most data charts PREFER the `chart-visualizer` skill instead — it renders polished Chart.js charts with axes, labels, gridlines, and tooltips. Only use show_chart for a deliberately minimal inline sparkline-style chart, or when Chart.js is unavailable.',
+        parameters: {
+          type: 'object',
+          required: ['series'],
+          properties: {
+            title: { type: 'string', description: 'Optional chart heading.' },
+            chartType: { type: 'string', enum: ['line', 'bar', 'area'], description: 'Chart style. Default line.' },
+            series: {
+              type: 'array',
+              description: 'One or more data series.',
+              items: {
+                type: 'object',
+                required: ['points'],
+                properties: {
+                  label: { type: 'string', description: 'Series name (shown in legend).' },
+                  color: { type: 'string', description: 'Optional CSS color, e.g. "#22c55e".' },
+                  points: {
+                    type: 'array',
+                    description: 'Data points.',
+                    items: {
+                      type: 'object',
+                      required: ['x', 'y'],
+                      properties: {
+                        x: { description: 'X value (number or label string).' },
+                        y: { type: 'number', description: 'Y value.' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            xLabel: { type: 'string', description: 'Optional X axis label.' },
+            yLabel: { type: 'string', description: 'Optional Y axis label.' },
+            unit: { type: 'string', description: 'Optional value unit suffix, e.g. "$", "%".' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_run_result',
+        description:
+          'Display a finished-task result card: a summary of what a task/run produced, with file pills and links, plus a Rerun action when a taskId is given. Use after a background task or job completes to present the outcome cleanly. Pass taskId so the card can rerun and show live status.',
+        parameters: {
+          type: 'object',
+          required: ['title'],
+          properties: {
+            title: { type: 'string', description: 'Card title, e.g. "Weekly Opportunity Radar — done".' },
+            taskId: { type: 'string', description: 'Background task id — enables Rerun + live status refresh.' },
+            status: { type: 'string', description: 'Outcome status, e.g. "complete", "failed".' },
+            summary: { type: 'string', description: 'What the task produced / key result.' },
+            files: {
+              type: 'array',
+              description: 'Files the task produced.',
+              items: {
+                anyOf: [
+                  { type: 'string' },
+                  { type: 'object', required: ['path'], properties: { path: { type: 'string' }, label: { type: 'string' } } },
+                ],
+              },
+            },
+            links: {
+              type: 'array',
+              description: 'External links related to the result.',
+              items: { type: 'object', required: ['href'], properties: { label: { type: 'string' }, href: { type: 'string' } } },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_prediction_market',
+        description:
+          'Fetch live prediction-market data from Polymarket (keyless, read-only) and display a prediction-market card — questions with outcome probabilities, volume, and close date. Use for "odds of X", "what does Polymarket say about Y", election/sports/crypto/news betting odds, or trending prediction markets. Pass a query to search, a slug for a specific market, or neither for trending. This is read-only data; placing bets is a separate gated action.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Topic to search, e.g. "2028 election", "bitcoin 100k", "super bowl". Omit for trending markets.' },
+            slug: { type: 'string', description: 'Optional exact Polymarket market slug for one specific market.' },
+            limit: { type: 'number', description: 'Max markets to show (1–12). Default 6.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_map',
+        description:
+          'Display a map card (OpenStreetMap, keyless) with one or more location markers — for local/place results like "pizza near me", store locations, or any geographic answer. Each marker may carry lat/lng directly, or an address that will be geocoded. Markers are listed below the map with name, category, rating, and links.',
+        parameters: {
+          type: 'object',
+          required: ['markers'],
+          properties: {
+            title: { type: 'string', description: 'Optional heading, e.g. "Best pizza near Frederick".' },
+            center: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } }, description: 'Optional explicit center. Defaults to the marker centroid.' },
+            zoom: { type: 'number', description: 'Optional zoom level (1–18).' },
+            markers: {
+              type: 'array',
+              description: '1–20 location markers.',
+              items: {
+                type: 'object',
+                required: ['label'],
+                properties: {
+                  label: { type: 'string', description: 'Place name.' },
+                  lat: { type: 'number', description: 'Latitude (preferred — avoids geocoding).' },
+                  lng: { type: 'number', description: 'Longitude.' },
+                  address: { type: 'string', description: 'Street address (geocoded if lat/lng absent).' },
+                  category: { type: 'string', description: 'Optional category, e.g. "Pizza".' },
+                  rating: { type: 'number', description: 'Optional 0–5 rating.' },
+                  url: { type: 'string', description: 'Optional website/details URL.' },
                 },
               },
             },

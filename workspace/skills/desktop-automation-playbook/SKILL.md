@@ -496,7 +496,7 @@ Do not rely on macros for fragile, constantly changing UIs unless you also verif
 | Website interaction in Chrome session | browser tools |
 | Native Windows app or OS dialog | desktop tools |
 | Terminal / build / git / scripts | `run_command` |
-| Reading website content only | `web_search` + `web_fetch` |
+| Reading website content only | `web_search({ fetch_top_k })`, `web_fetch_batch`, or one `web_fetch` |
 | Need exact desktop UI roles and bounds | `desktop_get_accessibility_tree` |
 | Need visible text from a native app | `desktop_get_window_text` |
 | Repetitive desktop input sequence | desktop macro tools |

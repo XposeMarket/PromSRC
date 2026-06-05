@@ -13,7 +13,7 @@ This skill routes visual requests to the correct specialized skill. Read this fi
 
 | What the user wants | Skill to use |
 |---|---|
-| Data chart — bar, line, pie, scatter, radar | **`chart-visualizer`** |
+| Data chart — bar, line, pie, scatter, radar, area | **`chart-visualizer`** |
 | Architecture diagram, system map, box-and-arrow, component diagram | **`svg-diagrams`** |
 | Interactive widget, dashboard, calculator, step-through, slider, form | **`html-interactive`** |
 | Flowchart, sequence diagram, ERD, Gantt, state machine, class diagram | **`mermaid-diagrams`** |

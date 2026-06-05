@@ -106,13 +106,15 @@ interface TeamDeps {
 // Pending chat context — when user taps "Chat" on an agent/manager,
 // their NEXT plain message is routed here (one-shot) then cleared.
 interface PendingChatEntry {
-  type: 'agent' | 'manager' | 'agent_direct' | 'agent_edit_prompt' | 'agent_edit_model' | 'task_chat' | 'schedule_edit_prompt' | 'schedule_edit_pattern';
+  type: 'agent' | 'manager' | 'agent_direct' | 'agent_edit_prompt' | 'agent_edit_model' | 'task_chat' | 'schedule_edit_prompt' | 'schedule_edit_pattern' | 'prometheus_question_other';
   teamId?: string;
   agentId?: string;    // only for type='agent'
   taskId?: string;
   scheduleId?: string;
   agentName?: string;
   teamName?: string;
+  questionId?: string;
+  questionItemId?: string;
 }
 
 interface StopTargetEntry {
@@ -483,6 +485,7 @@ export class TelegramChannel {
   private screenshotBrowserSelections = new Map<string, { sessionId: string; createdAt: number }>();
   private processedTelegramUpdateIds = new Set<number>();
   private processedTelegramMessageKeys = new Map<string, number>();
+  private questionSelections = new Map<string, Record<string, { selected: string[]; other?: string; text?: string }>>();
 
   // ── Human-feel messaging (inbound debounce + outbound block streaming + humanDelay + abort) ──
   /** Tunables. Can be hot-overridden from config later; sensible defaults below. */
@@ -3057,6 +3060,108 @@ export class TelegramChannel {
     }
   }
 
+  private getQuestionSelectionKey(userId: number, questionId: string): string {
+    return `${userId}:${questionId}`;
+  }
+
+  private getQuestionSelections(userId: number, questionId: string): Record<string, { selected: string[]; other?: string; text?: string }> {
+    const key = this.getQuestionSelectionKey(userId, questionId);
+    const current = this.questionSelections.get(key);
+    if (current) return current;
+    const next: Record<string, { selected: string[]; other?: string; text?: string }> = {};
+    this.questionSelections.set(key, next);
+    return next;
+  }
+
+  private buildQuestionKeyboard(record: {
+    id: string;
+    status?: string;
+    questions?: Array<{ id: string; label: string; mode: string; options?: string[]; allowOther?: boolean }>;
+  }, userId: number): any[][] {
+    if (record.status && record.status !== 'pending') {
+      return [[{ text: `✅ ${record.status}`, callback_data: 'noop' }]];
+    }
+    const key = idKey(record.id);
+    const selections = this.getQuestionSelections(userId, record.id);
+    const rows: any[][] = [];
+    const questions = Array.isArray(record.questions) ? record.questions.slice(0, 5) : [];
+    questions.forEach((question, qIndex) => {
+      const state = selections[question.id] || { selected: [] };
+      const options = Array.isArray(question.options) ? question.options.slice(0, 8) : [];
+      for (const [optIndex, option] of options.entries()) {
+        const selected = state.selected.includes(option);
+        rows.push([{
+          text: this.compactTelegramButtonText(`${selected ? '✓ ' : ''}${option}`, 48),
+          callback_data: `pq:sel:${key}:${qIndex}:${optIndex}`,
+        }]);
+      }
+      if (question.allowOther !== false) {
+        rows.push([{ text: state.other ? `✓ Other: ${this.compactTelegramButtonText(state.other, 36)}` : 'Other...', callback_data: `pq:other:${key}:${qIndex}` }]);
+      }
+    });
+    rows.push([
+      { text: '✅ Submit answers', callback_data: `pq:submit:${key}` },
+      { text: '❌ Cancel', callback_data: `pq:cancel:${key}` },
+    ]);
+    return rows;
+  }
+
+  private formatPrometheusQuestionCard(record: {
+    id: string;
+    title?: string;
+    prompt?: string;
+    context?: string;
+    sessionId?: string;
+    originLabel?: string;
+    questions?: Array<{ id: string; label: string; mode: string; options?: string[]; allowOther?: boolean; helpText?: string }>;
+  }): string {
+    const lines = [
+      `❓ <b>${this.tgEscape(record.title || 'Prometheus Question')}</b>`,
+      ``,
+      `<b>ID:</b> <code>${this.tgEscape(record.id)}</code>`,
+      record.originLabel ? `<b>Origin:</b> ${this.tgEscape(record.originLabel)}` : '',
+      record.sessionId ? `<b>Session:</b> <code>${this.tgEscape(record.sessionId)}</code>` : '',
+      ``,
+      this.tgEscape(record.prompt || 'Prometheus needs a little more direction.'),
+      record.context ? `\n<i>${this.tgEscape(record.context)}</i>` : '',
+      ``,
+      ...(Array.isArray(record.questions) ? record.questions.slice(0, 5).map((q, idx) => {
+        const mode = q.mode === 'multi_select' ? 'choose one or more' : q.mode === 'text' ? 'text answer' : 'choose one';
+        const opts = Array.isArray(q.options) && q.options.length
+          ? `\n${q.options.slice(0, 8).map((opt) => `• ${this.tgEscape(opt)}`).join('\n')}`
+          : '';
+        return `<b>${idx + 1}. ${this.tgEscape(q.label)}</b> <i>(${mode})</i>${opts}${q.helpText ? `\n${this.tgEscape(q.helpText)}` : ''}`;
+      }) : []),
+      ``,
+      `Tap option buttons below. For <b>Other</b>, tap Other and send your next message.`,
+    ].filter(Boolean);
+    return lines.join('\n').slice(0, 4000);
+  }
+
+  async sendPrometheusQuestion(record: {
+    id: string;
+    title?: string;
+    prompt?: string;
+    context?: string;
+    sessionId?: string;
+    originLabel?: string;
+    status?: string;
+    questions?: Array<{ id: string; label: string; mode: string; options?: string[]; allowOther?: boolean; helpText?: string }>;
+  }): Promise<void> {
+    if (!this.config.enabled || !this.config.botToken) return;
+    for (const userId of this.config.allowedUserIds) {
+      this.getQuestionSelections(userId, record.id);
+      await this.apiCall('sendMessage', {
+        chat_id: userId,
+        text: this.formatPrometheusQuestionCard(record),
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: this.buildQuestionKeyboard(record, userId) },
+      }).catch((err: any) => {
+        console.error(`[Telegram] Failed to send Prometheus question ${record.id} to ${userId}: ${err?.message}`);
+      });
+    }
+  }
+
   private enqueueProgressMessage(chatId: number, text: string): void {
     const previous = this.progressMessageQueues.get(chatId) || Promise.resolve();
     const next = previous
@@ -3746,6 +3851,130 @@ export class TelegramChannel {
 	        return;
 	      }
 	    }
+
+	    // ── rp: repair approve/reject buttons ──────────────────────────────────
+	    if (data.startsWith('pq:')) {
+      const parts = data.split(':');
+      const action = parts[1];
+      const questionId = idResolve(parts[2] || '') || '';
+      if (!questionId) {
+        await this.sendMessage(chatId, '❌ Prometheus question not found. The gateway may have restarted; use the web UI or ask Prometheus to resend it.');
+        return;
+      }
+      const { getPrometheusQuestionQueue, submitPrometheusQuestionResponse } = await import('../prometheus-questions');
+      const queue = getPrometheusQuestionQueue();
+      const question = queue.get(questionId);
+      if (!question) {
+        await this.sendMessage(chatId, `❌ Prometheus question <code>#${this.tgEscape(questionId)}</code> not found.`);
+        return;
+      }
+      if (question.status !== 'pending') {
+        await this.apiCall('editMessageReplyMarkup', {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [[{ text: `✅ ${question.status}`, callback_data: 'noop' }]] },
+        }).catch(() => {});
+        return;
+      }
+      const selections = this.getQuestionSelections(userId, question.id);
+
+      if (action === 'sel') {
+        const qIndex = Number(parts[3]);
+        const optIndex = Number(parts[4]);
+        const item = question.questions[qIndex];
+        const option = item?.options?.[optIndex];
+        if (!item || !option) {
+          await this.sendMessage(chatId, '❌ That question option is no longer available.');
+          return;
+        }
+        const state = selections[item.id] || { selected: [] };
+        if (item.mode === 'multi_select') {
+          state.selected = state.selected.includes(option)
+            ? state.selected.filter((value) => value !== option)
+            : [...state.selected, option];
+        } else {
+          state.selected = [option];
+        }
+        selections[item.id] = state;
+        this.questionSelections.set(this.getQuestionSelectionKey(userId, question.id), selections);
+        await this.apiCall('editMessageReplyMarkup', {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: this.buildQuestionKeyboard(question, userId) },
+        }).catch(() => {});
+        return;
+      }
+
+      if (action === 'other') {
+        const qIndex = Number(parts[3]);
+        const item = question.questions[qIndex];
+        if (!item) {
+          await this.sendMessage(chatId, '❌ That question is no longer available.');
+          return;
+        }
+        this.pendingChat.set(userId, {
+          type: 'prometheus_question_other',
+          questionId: question.id,
+          questionItemId: item.id,
+        });
+        await this.sendMessage(chatId, `✍️ Send your next message for <b>Other</b> on:\n${this.tgEscape(item.label)}`);
+        return;
+      }
+
+      if (action === 'cancel') {
+        const cancelled = queue.cancel(question.id, 'telegram');
+        if (cancelled) {
+          try {
+            const { broadcastWS } = await import('../comms/broadcaster');
+            broadcastWS({ type: 'question_cancelled', sessionId: cancelled.sessionId, taskId: cancelled.taskId, questionId: cancelled.id, question: cancelled });
+          } catch {}
+        }
+        this.questionSelections.delete(this.getQuestionSelectionKey(userId, question.id));
+        await this.apiCall('editMessageReplyMarkup', {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [[{ text: '❌ Cancelled', callback_data: 'noop' }]] },
+        }).catch(() => {});
+        await this.sendMessage(chatId, `❌ Prometheus question <code>#${this.tgEscape(question.id)}</code> cancelled.`);
+        return;
+      }
+
+      if (action === 'submit') {
+        const answers = question.questions.map((item) => {
+          const state = selections[item.id] || { selected: [] };
+          return {
+            id: item.id,
+            label: item.label,
+            mode: item.mode,
+            selected: item.mode === 'single_select' ? (state.selected || []).slice(0, 1) : (state.selected || []),
+            other: state.other || '',
+            text: state.text || '',
+          };
+        });
+        const result = submitPrometheusQuestionResponse({
+          questionId: question.id,
+          answers,
+          resolvedBy: 'telegram',
+        });
+        if (!result.success) {
+          await this.sendMessage(chatId, `❌ Question submit failed: ${this.tgEscape(result.error || 'unknown error')}`);
+          return;
+        }
+        this.questionSelections.delete(this.getQuestionSelectionKey(userId, question.id));
+        await this.apiCall('editMessageReplyMarkup', {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [[{ text: '✅ Submitted', callback_data: 'noop' }]] },
+        }).catch(() => {});
+        await this.sendMessage(chatId, `✅ Sent your answer to Prometheus.`);
+        if (result.resumePrompt) {
+          await this.sendMessage(chatId, `↩️ The original run was not live, so Prometheus will resume this in chat.`);
+        }
+        return;
+      }
+
+      return;
+    }
 
 	    // ── rp: repair approve/reject buttons ──────────────────────────────────
 	    if (data.startsWith('rp:')) {
@@ -6095,6 +6324,53 @@ export class TelegramChannel {
           await this.sendMessage(chatId, job ? `✅ Schedule cron updated to <code>${cronExpr}</code>.` : `❌ Schedule not found or invalid.`);
         } catch (err: any) {
           await this.sendMessage(chatId, `❌ Schedule update failed: ${err.message}`);
+        }
+      } else if (pending.type === 'prometheus_question_other') {
+        try {
+          const { getPrometheusQuestionQueue, submitPrometheusQuestionResponse } = await import('../prometheus-questions');
+          const questionId = String(pending.questionId || '').trim();
+          const itemId = String(pending.questionItemId || '').trim();
+          const queue = getPrometheusQuestionQueue();
+          const question = queue.get(questionId);
+          if (!question || question.status !== 'pending') {
+            await this.sendMessage(chatId, '❌ That Prometheus question is no longer pending.');
+            return;
+          }
+          const item = question.questions.find((q: any) => String(q.id || '') === itemId);
+          if (!item) {
+            await this.sendMessage(chatId, '❌ That question item is no longer available.');
+            return;
+          }
+          const selections = this.getQuestionSelections(userId, question.id);
+          selections[item.id] = {
+            ...(selections[item.id] || { selected: [] }),
+            other: text.trim(),
+          };
+          if (item.mode === 'text') selections[item.id].text = text.trim();
+          this.questionSelections.set(this.getQuestionSelectionKey(userId, question.id), selections);
+
+          if (question.questions.length === 1) {
+            const result = submitPrometheusQuestionResponse({
+              questionId: question.id,
+              answers: [{
+                id: item.id,
+                label: item.label,
+                mode: item.mode,
+                selected: selections[item.id].selected || [],
+                other: selections[item.id].other || '',
+                text: selections[item.id].text || '',
+              }],
+              resolvedBy: 'telegram',
+            });
+            this.questionSelections.delete(this.getQuestionSelectionKey(userId, question.id));
+            await this.sendMessage(chatId, result.success
+              ? '✅ Sent your Other answer to Prometheus.'
+              : `❌ Question submit failed: ${this.tgEscape(result.error || 'unknown error')}`);
+          } else {
+            await this.sendMessage(chatId, `✅ Captured Other for: ${this.tgEscape(item.label)}\nTap <b>Submit answers</b> on the question card when ready.`);
+          }
+        } catch (err: any) {
+          await this.sendMessage(chatId, `❌ Could not capture Other answer: ${this.tgEscape(err.message || err)}`);
         }
       }
       // After one-shot, return to normal — do NOT fall through to handleChat

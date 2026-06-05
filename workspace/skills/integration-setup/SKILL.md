@@ -60,20 +60,25 @@ web_fetch("https://github.com/modelcontextprotocol/servers/tree/main/src/<servic
 ```
 If not found in the official registry, broaden the search:
 ```
-web_search("<service> MCP server site:github.com")
-web_search("<service> model context protocol npm")
+web_search("<service> MCP server site:github.com", fetch_top_k: 3)
+web_search("<service> model context protocol npm", fetch_top_k: 3)
 ```
 Look for the npm package name, required env vars, and what tools it exposes.
 
+When several candidate docs/repos look relevant, fetch them together:
+```
+web_fetch_batch({ urls: ["https://docs.example.com/api", "https://github.com/org/repo"] })
+```
+
 **2b. If no MCP server exists, check for webhook support:**
 ```
-web_search("<service> webhook setup API")
-web_search("<service> outgoing webhook documentation")
+web_search("<service> webhook setup API", fetch_top_k: 3)
+web_search("<service> outgoing webhook documentation", fetch_top_k: 3)
 ```
 
 **2c. Find credential requirements:**
 ```
-web_search("<service> personal access token OR API key OR OAuth setup")
+web_search("<service> personal access token OR API key OR OAuth setup", fetch_top_k: 3)
 ```
 
 **2d. Build and save the definition file:**

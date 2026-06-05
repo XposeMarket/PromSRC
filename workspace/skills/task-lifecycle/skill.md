@@ -1,14 +1,16 @@
 ---
 name: Task Lifecycle
-description: Current guide for choosing between inline execution, interactive plans, ephemeral background agents, durable task runs, delegated subagents, and team coordination. Covers task_control, run_task_now, background_spawn, and modern task-selection rules.
+description: Guide for (a) choosing the right execution mode — inline, interactive plans, ephemeral background agents, durable task runs, delegated subagents, team coordination — and (b) reading Prometheus's own internal state (agents, tasks, jobs, teams, recent work) via automation_dashboard and the granular tools, then rendering it with show_agent_work. Covers task_control, run_task_now, background_spawn, automation_dashboard, agent_list, schedule_job_*, and show_agent_work.
 emoji: 📋
-version: 3.0.0
-triggers: create task, background task, multi-step, long running, check tasks, task status, stalled, resume task, complete task, task list, existing task, task control, declare plan, background_spawn, run_task_now, subagent, team
+version: 4.0.0
+triggers: create task, background task, multi-step, long running, check tasks, task status, stalled, resume task, complete task, task list, existing task, task control, declare plan, background_spawn, run_task_now, subagent, team, what's going on, what is going on, my priorities, operator snapshot, what have the agents done, what has everyone done, agent work, what are my subagents doing, status snapshot, what's running, morning snapshot, show me the work, internal status
 ---
 
 # Task Lifecycle Playbook
 
-Prometheus now has **multiple execution modes**. The key is choosing the right one instead of forcing everything into one system.
+Prometheus now has **multiple execution modes** plus a set of **internal-state read tools**. This skill covers both: pick the right execution mode for *doing* work, and use the right read tools for *reporting on* work.
+
+If the user is asking about Prometheus's own state ("what's going on", "what are my priorities", "what have the agents done", "what's running") jump to **Reading internal state** below — that is the common, expensive-to-get-wrong path.
 
 ---
 
@@ -100,6 +102,75 @@ Do not manually manage teams from main chat when the coordinator path is availab
 | One focused specialist | `spawn_subagent` |
 | Multi-agent coordination | `ask_team_coordinator` |
 | User explicitly wants visible step plan | `declare_plan` |
+
+---
+
+## Reading internal state (agents, tasks, jobs, teams, work done)
+
+This is how Prometheus answers questions about **itself** — its agents, scheduled jobs, background tasks, teams, and what work has been produced. Get this right and one tool call replaces six.
+
+### Start here: `automation_dashboard` is the single snapshot
+
+For almost every "what's going on / what are my priorities / what have the agents done / what's running" question, call **`automation_dashboard` first**. It returns ONE joined snapshot:
+
+- `agents[]` — the roster joined with each agent's scheduled jobs, background tasks, recent runs, and **last produced output**
+- `teams[]` — managed teams with members, their jobs, and recent tasks
+- `scheduledJobs[]` — jobs with health + last result
+- `tasks[]` — background tasks with status/step/finalSummary
+- `internalWatches[]`, `eventQueue[]`, and aggregate `counts`
+
+Knobs:
+- `depth: "full"` — return **untruncated** output/results. Use this when the user wants to actually read the work product (drafts, approval packets, summaries). Default `summary` is compact.
+- `agent_id: "<id>"` — focus the snapshot on a single agent (its jobs, tasks, recent runs, last output).
+- `include: ["agents","teams","outputs"]` — narrow which sections to compute when you only need part of it.
+- `limit`, `include_done` — as before.
+
+**Do NOT** chain `agent_list` + `task_control(list)` + `task_control(get)` + `schedule_job_detail` + `schedule_job_history` to assemble this by hand. That was the old way and burns 6–10 calls. `automation_dashboard` already joins it. Use `depth:"full"` once instead of re-fetching detail tools to un-truncate output.
+
+### When to drop to the granular tools
+
+Use these only for **control/mutation** or **deep single-entity inspection** that the snapshot doesn't cover:
+
+| Tool | Use it for |
+|---|---|
+| `agent_list` | Just need IDs/descriptions before spawning/dispatching (not for "what have they done"). |
+| `agent_info` | Full config of ONE agent (instructions, constraints, tool access). |
+| `task_control(get)` | Step/status metadata + control entry point for ONE task. For the produced output, use `automation_dashboard(depth:"full")` or `schedule_job_detail`. |
+| `task_control(list/latest)` | Quick task list when you explicitly don't need the agent/team join. Note: it also bundles scheduled jobs. |
+| `task_control(resume/rerun/pause/cancel/delete)` | Acting on a task. |
+| `schedule_job_detail` | Deep dive on ONE job: config, prompt, latest result, linked tasks, watches, events, schedule memory. |
+| `schedule_job_history` | Per-run history (status/duration/errors/output) for ONE job. |
+| `schedule_job_log_search` | Search run logs across jobs by text/status/date. |
+| `schedule_job(list/create/update/...)`, `schedule_job_patch/outputs/stuck_control` | Managing/editing/unsticking jobs. |
+| `team_manage(list)` | Team config (members) when you don't need the joined rollup. |
+| `background_status` / `background_progress` | Polling an ephemeral `background_spawn` agent mid-turn (rarely needed — results auto-merge). |
+
+Rule of thumb: **snapshot for reporting, granular tools for acting.**
+
+### Render it: `show_agent_work`
+
+After you've gathered the snapshot, present it with the **`show_agent_work`** tool — a native operator card (greeting, summary rows, numbered priorities, team rows, active work) shown in chat. Use it when the user asks for a snapshot, priorities, "what's going on", a morning/startup status, or "what have the agents done".
+
+Workflow:
+1. `automation_dashboard({ depth: "full" })` (or `agent_id`-scoped) to gather real state.
+2. Synthesize the card from what you actually found — **do not invent** rows. Keep each list tight (2–6 items).
+3. Call `show_agent_work` with the fields you have:
+   - `greeting` / `title` — e.g. "Good morning." / "Subagent work snapshot"
+   - `summaryRows[]` — `{ icon, title, subtitle }` (icons: calendar, users, clipboard, check, bolt, clock, flag, sparkles)
+   - `priorities[]` — `{ title, subtitle, status }` (status: ready, running, blocked, idle, done)
+   - `teams[]` — `{ name, detail, status }`
+   - `activeWork[]` — `{ title, status, progressLabel, href }` for in-flight tasks/jobs
+4. **Attach `taskId` to any priority/activeWork row that maps to a real background task** (you have the IDs from `automation_dashboard`). This makes the row clickable in the UI: it expands an inline drawer showing live status/step/summary with Resume / Pause / Restart / Delete buttons and a box to message that task's agent. Also pass `jobId`/`agentId`/`proposalId` when relevant. Without `taskId` the row is static text.
+5. Add a short text reply alongside the card for anything that doesn't fit the rows.
+
+Don't call `show_agent_work` with fabricated data or for unrelated questions — it's for reporting real internal state. Plain text is fine when there's nothing structured to show.
+
+### Build / update status (NOT git status)
+
+`automation_dashboard` returns a `build` field: `{ version, channel, updateAvailable, latestVersion, repo? }`.
+- When `build.updateAvailable` is true, you may surface a row like "Update available → vX.Y.Z" in the snapshot. This is the only build/version signal end users should ever see.
+- `build.repo` (local git working-tree state — modified/untracked counts) exists **only in dev builds** and is for the developer's own use. **Never** put repo/git/uncommitted-files state into an operator snapshot or any user-facing card — it's dev noise and must not appear for end users.
+- Do **not** run `git status` yourself to populate the snapshot. Use the `build` field. If you're not in a dev build there is nothing repo-related to report — show the update status instead.
 
 ---
 
@@ -232,6 +303,9 @@ Important current behavior:
 - Treating `declare_plan` as mandatory for every multi-step task
 - Spawning a subagent when the work is actually multi-agent and should go to the team coordinator
 - Asking a team to do what one direct tool call could do immediately
+- Hand-assembling internal state with `agent_list` + `task_control` + `schedule_job_*` instead of one `automation_dashboard` call
+- Re-fetching detail tools to un-truncate output instead of passing `depth:"full"` to `automation_dashboard`
+- Calling `show_agent_work` with invented rows, or using it for questions that aren't about Prometheus's own state
 
 ---
 
@@ -244,3 +318,8 @@ Choose the lightest execution mode that safely fits the job:
 - `spawn_subagent` for one specialist
 - `ask_team_coordinator` for real multi-agent coordination
 - `declare_plan` only when a visible plan is actually needed
+
+And to **report on** Prometheus's own state:
+- `automation_dashboard` (one joined snapshot) → optionally `depth:"full"` / `agent_id`
+- granular `schedule_job_*` / `task_control` / `agent_info` only for control or deep single-entity inspection
+- `show_agent_work` to render the snapshot as an operator card — with real data, never invented

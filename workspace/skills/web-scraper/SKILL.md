@@ -22,6 +22,8 @@ Structured patterns for scraping websites correctly — without getting blocked,
 | Collect text from paginated or infinite scroll pages | `browser_scroll_collect(...)` — multi-scroll + deduplicated text |
 | Quick page text extraction (includes iframes) | `browser_get_page_text()` — all visible text |
 | Read static page or document | `web_fetch(url)` — Prometheus built-in, fast |
+| Read several static pages/documents | `web_fetch_batch({ urls })` — parallel fetch with one result per URL |
+| Search then read likely sources | `web_search({ query, fetch_top_k: 2-5 })` — compact discovery + fetch pass |
 | Intercept API payloads rendered on page | `browser_intercept_network(...)` — inspect XHR/fetch responses |
 
 **When you need code (batch processing, complex transformation, or Prometheus tools insufficient):**
@@ -105,6 +107,28 @@ browser_get_page_text()
 - Snapshot shows very few elements
 - Page has iframe content not visible in DOM
 - You need readable text, not clickable refs
+
+### 3.5. Batch Source Fetch — `web_fetch_batch(...)`
+
+Best for: static source pages, docs, articles, search-result verification, and small crawls where interaction is not required.
+
+```javascript
+web_fetch_batch({
+  urls: [
+    "https://example.com/page-a",
+    "https://example.com/page-b"
+  ],
+  max_chars: 6000,
+  concurrency: 4
+})
+```
+
+Use this before browser scraping when:
+- You already have several URLs from search results.
+- The pages are likely text/HTML and do not require login or JS interaction.
+- You need evidence from multiple pages, not DOM refs.
+
+If the batch output is empty, nav-only, blocked, or JS-rendered, escalate to `browser_get_page_text`, `browser_extract_structured`, network interception, or a Playwright script.
 
 ### 4. Network Interception — `browser_intercept_network(...)`
 

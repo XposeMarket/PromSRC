@@ -1181,6 +1181,7 @@ export interface HandleChatResult {
   canvasFiles?: string[];
   fileChanges?: any;
   productCarousel?: { title: string; items: any[] };
+  richArtifacts?: import('../rich-artifacts').RichArtifact[];
 }
 
 // ─── Orchestration session stats stubs (multi-agent system removed) ───────────

@@ -108,6 +108,7 @@
     };
   })();
 </script>
+<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>
 </head>
 <body class="auth-pending">
 <canvas id="ember-canvas" aria-hidden="true"></canvas>
@@ -2034,9 +2035,9 @@
   </div>
   <div class="topbar-right">
 
-    <!-- ── Update Available pill ── hidden until electron-updater fires ── -->
+    <!-- ── Update Available pill ── hidden until electron-updater reports work ── -->
     <div id="update-pill" class="status-pill" style="
-      display:none;cursor:pointer;position:relative;
+      display:none;cursor:pointer;position:relative;z-index:10020;
       background:rgba(249,115,22,0.10);
       border-color:rgba(249,115,22,0.35);
       color:#f97316;
@@ -2046,36 +2047,38 @@
         <path d="M6 9V2M3 5l3-3 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         <path d="M1.5 10.5h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
-      <span style="font-weight:600;font-size:12px">Update Available</span>
+      <span id="update-pill-label" style="font-weight:600;font-size:12px">Update Available</span>
 
       <!-- Dropdown panel -->
       <div id="update-dropdown" style="
         display:none;
-        position:absolute;
-        top:calc(100% + 10px);
-        right:0;
+        position:fixed;
         background:var(--panel,#17171a);
         border:1px solid rgba(249,115,22,0.3);
         border-radius:12px;
         padding:16px;
-        min-width:230px;
+        width:min(280px,calc(100vw - 24px));
         box-shadow:0 12px 32px rgba(0,0,0,.6);
-        z-index:9999;
+        z-index:100000;
         text-align:left;
         color:var(--fg,#e2e8f0);
       " onclick="event.stopPropagation()">
-        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--muted,#64748b);margin-bottom:6px">NEW RELEASE</div>
-        <div id="update-version-text" style="font-size:15px;font-weight:700;color:var(--fg,#e2e8f0);margin-bottom:14px">Version —</div>
-        <button onclick="if(window.prometheusUpdater) window.prometheusUpdater.installUpdate()" style="
+        <div id="update-kicker" style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--muted,#64748b);margin-bottom:6px">PROMETHEUS UPDATE</div>
+        <div id="update-version-text" style="font-size:15px;font-weight:700;color:var(--fg,#e2e8f0);margin-bottom:8px">Checking for updates</div>
+        <div id="update-status-text" style="font-size:11px;line-height:1.5;color:var(--muted,#64748b);margin-bottom:12px">Prometheus will download the latest release before installing.</div>
+        <div id="update-progress-wrap" style="display:none;height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;margin-bottom:12px">
+          <div id="update-progress-fill" style="height:100%;width:0%;background:#f97316;border-radius:999px;transition:width .2s ease"></div>
+        </div>
+        <button id="update-action-btn" onclick="handleUpdateAction(event)" style="
           width:100%;background:#f97316;color:#0a0a0a;
           border:none;border-radius:8px;padding:9px 14px;
           font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.03em;
           transition:background .15s;
         " onmouseover="this.style.background='#ea6c10'" onmouseout="this.style.background='#f97316'">
-          Relaunch to Update
+          Check for Update
         </button>
-        <div style="font-size:10px;color:var(--muted,#64748b);margin-top:8px;text-align:center">
-          App will restart and apply the update
+        <div id="update-footnote" style="font-size:10px;color:var(--muted,#64748b);margin-top:8px;text-align:center">
+          Prometheus will restart after install
         </div>
       </div>
     </div>
@@ -2357,8 +2360,7 @@
         <input id="memory-image-input" type="file" accept="image/*" style="display:none" />
         <button class="memory-action-btn memory-action-btn--primary" type="button" onclick="openAddMemoryDrawer()">+ Add Memory</button>
         <button class="memory-action-btn" type="button" onclick="triggerMemoryImageInput()">Image Shape</button>
-        <button id="memory-set-default-btn" class="memory-action-btn" type="button" style="opacity:0.4" onclick="toggleDefaultShape()">Set as Default</button>
-        <button class="memory-action-btn" type="button" onclick="shuffleMemoryGraph()">Shuffle Nodes</button>
+        <button id="memory-set-default-btn" class="memory-action-btn" type="button" style="opacity:0.4" onclick="toggleDefaultShape()">Set Image Default</button>
         <button class="memory-action-btn" type="button" onclick="refreshMemoryGraph(true)">Refresh Index</button>
       </div>
     </div>
@@ -2380,6 +2382,35 @@
           <div class="memory-side-panel-title">Controls</div>
           <button class="memory-panel-collapse-btn" type="button" onclick="toggleMemoryControlsPanel()">&times;</button>
         </div>
+        <section class="memory-panel-card memory-particle-controls">
+          <div class="memory-panel-header-line">
+            <div class="memory-panel-title">Controls</div>
+            <div class="memory-panel-hint">live shaderless canvas</div>
+          </div>
+          <div class="memory-particle-modes">
+            <button class="memory-particle-mode-btn active" type="button" data-memory-particle-mode="galaxy">Galaxy</button>
+            <button class="memory-particle-mode-btn" type="button" data-memory-particle-mode="sphere">Sphere</button>
+            <button class="memory-particle-mode-btn" type="button" data-memory-particle-mode="wave">Wave</button>
+            <button class="memory-particle-mode-btn" type="button" data-memory-particle-mode="tunnel">Tunnel</button>
+          </div>
+          <div class="memory-control-stack">
+            <label class="memory-control memory-control-row">
+              <span>Speed</span>
+              <input id="memory-particle-speed" type="range" min="0" max="200" step="1" value="35" />
+              <div id="memory-particle-speed-value" class="memory-control-value">35</div>
+            </label>
+            <label class="memory-control memory-control-row">
+              <span>Depth</span>
+              <input id="memory-particle-depth" type="range" min="160" max="900" step="10" value="740" />
+              <div id="memory-particle-depth-value" class="memory-control-value">740</div>
+            </label>
+            <label class="memory-control memory-control-row">
+              <span>Glow</span>
+              <input id="memory-particle-glow" type="range" min="0" max="100" step="1" value="20" />
+              <div id="memory-particle-glow-value" class="memory-control-value">20</div>
+            </label>
+          </div>
+        </section>
         <section class="memory-panel-card">
           <div class="memory-panel-title">Filters</div>
           <div class="memory-control-stack">
@@ -2402,23 +2433,11 @@
               <input id="memory-organize-type" type="checkbox" />
               <span>Organize by type</span>
             </label>
-          </div>
-        </section>
-        <section class="memory-panel-card">
-          <div class="memory-panel-title">Forces</div>
-          <div class="memory-control-stack">
-            <label class="memory-control">
-              <span>Repulsion</span>
-              <input id="memory-force-repulsion" type="range" min="20" max="220" step="1" value="90" />
+            <label class="memory-control memory-check memory-sub-check">
+              <input id="memory-separate-type" type="checkbox" />
+              <span>Separate</span>
             </label>
-            <label class="memory-control">
-              <span>Link stiffness</span>
-              <input id="memory-force-link" type="range" min="1" max="100" step="1" value="26" />
-            </label>
-            <label class="memory-control">
-              <span>Collision</span>
-              <input id="memory-force-collision" type="range" min="0" max="100" step="1" value="24" />
-            </label>
+            <button id="memory-save-settings" class="memory-filter-save-btn" type="button">Save Settings</button>
           </div>
         </section>
       </aside>
@@ -4202,6 +4221,36 @@
             </label>
           </div>
 
+          <div id="channel-notification-settings" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+            <div class="right-section-title" style="margin-bottom:8px">Response Complete Notifications</div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:0 0 8px;cursor:pointer">
+              <input type="checkbox" id="settings-ch-notify-enabled" />
+              Enable completion alerts
+            </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
+                <input type="checkbox" id="settings-ch-notify-mobile" />
+                Mobile
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
+                <input type="checkbox" id="settings-ch-notify-desktop" />
+                Desktop
+              </label>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
+                <input type="checkbox" id="settings-ch-notify-summary" />
+                Summary
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
+                <input type="checkbox" id="settings-ch-notify-link" />
+                Chat link
+              </label>
+            </div>
+            <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Summary max characters</label>
+            <input id="settings-ch-notify-maxchars" type="number" min="80" max="1200" step="20" placeholder="420" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+          </div>
+
           <div style="display:flex;gap:8px;margin-top:12px">
             <button class="btn btn-sm" id="channel-test-btn" onclick="testSelectedChannel()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test</button>
             <button class="btn btn-sm" onclick="saveSelectedChannelSettings()" style="background:var(--brand);color:#fff;border:1px solid var(--brand)">Save</button>
@@ -4957,6 +5006,10 @@ const CHANNEL_DEFS = [
   { key: 'whatsapp',  label: 'WhatsApp',  icon: CHANNEL_ICONS.whatsapp,  color: '#25D366', desc: 'Chats via WhatsApp' },
   { key: 'terminal',  label: 'CLI',       icon: CHANNEL_ICONS.terminal,  color: '#6B7280', desc: 'Terminal /new sessions' },
 ];
+const IS_PUBLIC_WEB_UI = window.PROMETHEUS_PUBLIC_BUILD === true;
+const VISIBLE_CHANNEL_DEFS = IS_PUBLIC_WEB_UI
+  ? CHANNEL_DEFS.filter(c => c.key !== 'terminal')
+  : CHANNEL_DEFS;
 
 function _getSessionChannel(s) {
   const direct = String(s.channel || '').toLowerCase();
@@ -5042,7 +5095,7 @@ function _renderChannelHub() {
   // Count sessions + unread per channel
   const counts = {};
   const unreads = {};
-  CHANNEL_DEFS.forEach(c => { counts[c.key] = 0; unreads[c.key] = 0; });
+  VISIBLE_CHANNEL_DEFS.forEach(c => { counts[c.key] = 0; unreads[c.key] = 0; });
 
   (window.chatSessions || []).forEach(s => {
     const ch = _getSessionChannel(s);
@@ -5070,7 +5123,7 @@ function _renderChannelHub() {
     });
   });
 
-  el.innerHTML = CHANNEL_DEFS.map(c => {
+  el.innerHTML = VISIBLE_CHANNEL_DEFS.map(c => {
     const count   = counts[c.key] || 0;
     const unread  = unreads[c.key] || 0;
     const isEmpty = count === 0;
@@ -7000,45 +7053,175 @@ let _errBackdrop = null;
 // ── Auto-Update pill ────────────────────────────────────────────────────────
 (function() {
   var _dropdownOpen = false;
+  var _updaterState = { status: 'idle', supported: false, progress: 0 };
+  var _outsideClickHandler = null;
+
+  function updateEls() {
+    return {
+      pill: document.getElementById('update-pill'),
+      label: document.getElementById('update-pill-label'),
+      dd: document.getElementById('update-dropdown'),
+      kicker: document.getElementById('update-kicker'),
+      version: document.getElementById('update-version-text'),
+      status: document.getElementById('update-status-text'),
+      progressWrap: document.getElementById('update-progress-wrap'),
+      progressFill: document.getElementById('update-progress-fill'),
+      btn: document.getElementById('update-action-btn'),
+      footnote: document.getElementById('update-footnote'),
+    };
+  }
+
+  function placeUpdateDropdown() {
+    var els = updateEls();
+    if (!els.pill || !els.dd) return;
+    if (els.dd.parentElement !== document.body) {
+      document.body.appendChild(els.dd);
+    }
+    var rect = els.pill.getBoundingClientRect();
+    var width = Math.min(280, Math.max(230, window.innerWidth - 24));
+    var left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width));
+    els.dd.style.width = width + 'px';
+    els.dd.style.left = left + 'px';
+    els.dd.style.top = Math.min(window.innerHeight - 12, rect.bottom + 10) + 'px';
+  }
+
+  function closeUpdateDropdown() {
+    var els = updateEls();
+    if (els.dd) els.dd.style.display = 'none';
+    _dropdownOpen = false;
+    if (_outsideClickHandler) {
+      document.removeEventListener('click', _outsideClickHandler);
+      _outsideClickHandler = null;
+    }
+  }
 
   window.toggleUpdateDropdown = function(e) {
     if (e) e.stopPropagation();
-    var dd = document.getElementById('update-dropdown');
-    if (!dd) return;
+    var els = updateEls();
+    if (!els.dd) return;
     _dropdownOpen = !_dropdownOpen;
-    dd.style.display = _dropdownOpen ? 'block' : 'none';
+    els.dd.style.display = _dropdownOpen ? 'block' : 'none';
     if (_dropdownOpen) {
+      placeUpdateDropdown();
       // close when clicking anywhere outside the pill
       setTimeout(function() {
-        document.addEventListener('click', function outsideClick(ev) {
-          var pill = document.getElementById('update-pill');
-          if (pill && !pill.contains(ev.target)) {
-            dd.style.display = 'none';
-            _dropdownOpen = false;
-            document.removeEventListener('click', outsideClick);
+        _outsideClickHandler = function outsideClick(ev) {
+          if (els.pill && !els.pill.contains(ev.target) && els.dd && !els.dd.contains(ev.target)) {
+            closeUpdateDropdown();
           }
-        });
+        };
+        document.addEventListener('click', _outsideClickHandler);
       }, 0);
     }
   };
 
-  function showUpdatePill(info) {
-    var pill = document.getElementById('update-pill');
-    var vt   = document.getElementById('update-version-text');
-    if (!pill) return;
-    if (info && info.version && vt) {
-      vt.textContent = 'Version ' + info.version;
+  window.handleUpdateAction = async function(e) {
+    if (e) e.stopPropagation();
+    if (!window.prometheusUpdater) return;
+    var status = String(_updaterState.status || 'idle');
+    try {
+      if (status === 'ready') {
+        await window.prometheusUpdater.installUpdate();
+        return;
+      }
+      if (status === 'checking' || status === 'downloading' || status === 'installing') return;
+      await window.prometheusUpdater.checkForUpdates();
+    } catch (err) {
+      applyUpdateState({
+        supported: true,
+        status: 'error',
+        message: err && err.message ? err.message : 'Update action failed.',
+      });
     }
-    pill.style.display = 'flex';
+  };
+
+  function shouldShowPill(state) {
+    return ['checking', 'downloading', 'ready', 'error', 'installing'].includes(String(state.status || ''));
+  }
+
+  function applyUpdateState(state) {
+    _updaterState = Object.assign({}, _updaterState, state || {});
+    var els = updateEls();
+    if (!els.pill) return;
+
+    var status = String(_updaterState.status || 'idle');
+    var version = String(_updaterState.version || '').trim();
+    var progress = Math.max(0, Math.min(100, Number(_updaterState.progress || 0)));
+    var message = String(_updaterState.message || '').trim();
+
+    els.pill.style.display = shouldShowPill(_updaterState) ? 'flex' : 'none';
+    if (els.label) {
+      els.label.textContent =
+        status === 'checking' ? 'Checking...' :
+        status === 'downloading' ? 'Downloading...' :
+        status === 'installing' ? 'Installing...' :
+        status === 'error' ? 'Update Issue' :
+        'Update Available';
+    }
+    if (els.kicker) els.kicker.textContent = status === 'ready' ? 'NEW RELEASE' : 'PROMETHEUS UPDATE';
+    if (els.version) {
+      els.version.textContent = version
+        ? 'Version ' + version
+        : (status === 'idle' ? 'Prometheus is up to date' : 'Checking for updates');
+    }
+    if (els.status) {
+      els.status.textContent = message || (
+        status === 'ready' ? 'Downloaded and ready to install.' :
+        status === 'downloading' ? 'Downloading the latest Prometheus release...' :
+        status === 'checking' ? 'Checking the release feed now...' :
+        status === 'installing' ? 'Prometheus is closing to apply the update...' :
+        status === 'error' ? 'Could not complete the update check.' :
+        'Prometheus will download the latest release before installing.'
+      );
+    }
+    if (els.progressWrap) els.progressWrap.style.display = status === 'downloading' ? 'block' : 'none';
+    if (els.progressFill) els.progressFill.style.width = progress + '%';
+    if (els.btn) {
+      var busy = status === 'checking' || status === 'downloading' || status === 'installing';
+      els.btn.disabled = busy;
+      els.btn.style.opacity = busy ? '0.68' : '1';
+      els.btn.style.cursor = busy ? 'wait' : 'pointer';
+      els.btn.textContent =
+        status === 'ready' ? 'Relaunch to Update' :
+        status === 'error' ? 'Try Again' :
+        status === 'checking' ? 'Checking...' :
+        status === 'downloading' ? 'Downloading ' + progress + '%' :
+        status === 'installing' ? 'Installing...' :
+        'Check for Update';
+    }
+    if (els.footnote) {
+      els.footnote.textContent = status === 'ready'
+        ? 'Prometheus will close, install, and reopen'
+        : 'Prometheus will restart after install';
+    }
+    if (_dropdownOpen) placeUpdateDropdown();
   }
 
   // Wire up as soon as preload bridge is available.
   // The preload runs before the page, so window.prometheusUpdater exists at DOMContentLoaded.
   if (window.prometheusUpdater) {
+    if (typeof window.prometheusUpdater.onState === 'function') {
+      window.prometheusUpdater.onState(applyUpdateState);
+    }
+    if (typeof window.prometheusUpdater.getState === 'function') {
+      window.prometheusUpdater.getState().then(applyUpdateState).catch(function() {});
+    }
     window.prometheusUpdater.onUpdateReady(function(info) {
-      showUpdatePill(info);
+      applyUpdateState(Object.assign({ status: 'ready', progress: 100 }, info || {}));
     });
+    if (typeof window.prometheusUpdater.onDownloadProgress === 'function') {
+      window.prometheusUpdater.onDownloadProgress(function(progress) {
+        applyUpdateState({ status: 'downloading', progress: progress });
+      });
+    }
+    if (typeof window.prometheusUpdater.onUpdateError === 'function') {
+      window.prometheusUpdater.onUpdateError(function(message) {
+        applyUpdateState({ status: 'error', message: message });
+      });
+    }
   }
+  window.addEventListener('resize', function() { if (_dropdownOpen) placeUpdateDropdown(); });
+  window.addEventListener('scroll', function() { if (_dropdownOpen) placeUpdateDropdown(); }, true);
 })();
 
 </script>

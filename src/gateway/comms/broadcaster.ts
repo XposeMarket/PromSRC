@@ -155,6 +155,7 @@ export type TelegramChannelConfig = {
   streamMode: 'full' | 'partial';
   personas: Record<string, TelegramPersonaConfig>;
   teamRooms: Record<string, TelegramTeamRoomConfig>;
+  completionNotifications: ChannelCompletionNotificationConfig;
 };
 
 export type TelegramPersonaConfig = {
@@ -185,6 +186,7 @@ export type DiscordChannelConfig = {
   guildId: string;
   channelId: string;
   webhookUrl: string;
+  completionNotifications: ChannelCompletionNotificationConfig;
 };
 
 export type WhatsAppChannelConfig = {
@@ -195,6 +197,7 @@ export type WhatsAppChannelConfig = {
   verifyToken: string;
   webhookSecret: string;
   testRecipient: string;
+  completionNotifications: ChannelCompletionNotificationConfig;
 };
 
 export type ChannelsConfig = {
@@ -203,9 +206,30 @@ export type ChannelsConfig = {
   whatsapp: WhatsAppChannelConfig;
 };
 
+export type ChannelCompletionNotificationConfig = {
+  enabled: boolean;
+  desktop: boolean;
+  mobile: boolean;
+  includeSummary: boolean;
+  includeLink: boolean;
+  summaryMaxChars: number;
+};
+
 function resolveToken(raw: string | undefined): string {
   if (!raw) return '';
   return getConfig().resolveSecret(raw) || '';
+}
+
+export function normalizeCompletionNotificationConfig(raw: any): ChannelCompletionNotificationConfig {
+  const maxChars = Number(raw?.summaryMaxChars);
+  return {
+    enabled: raw?.enabled === true,
+    desktop: raw?.desktop === true,
+    mobile: raw?.mobile === true,
+    includeSummary: raw?.includeSummary !== false,
+    includeLink: raw?.includeLink === true,
+    summaryMaxChars: Number.isFinite(maxChars) ? Math.max(80, Math.min(1200, Math.floor(maxChars))) : 420,
+  };
 }
 
 export function normalizeTelegramConfig(raw: any): TelegramChannelConfig {
@@ -259,6 +283,7 @@ export function normalizeTelegramConfig(raw: any): TelegramChannelConfig {
     streamMode: raw?.streamMode === 'partial' ? 'partial' : 'full',
     personas,
     teamRooms,
+    completionNotifications: normalizeCompletionNotificationConfig(raw?.completionNotifications),
   };
 }
 
@@ -270,6 +295,7 @@ export function normalizeDiscordConfig(raw: any): DiscordChannelConfig {
     guildId: String(raw?.guildId || ''),
     channelId: String(raw?.channelId || ''),
     webhookUrl: resolveToken(raw?.webhookUrl) || String(raw?.webhookUrl || ''),
+    completionNotifications: normalizeCompletionNotificationConfig(raw?.completionNotifications),
   };
 }
 
@@ -282,6 +308,7 @@ export function normalizeWhatsAppConfig(raw: any): WhatsAppChannelConfig {
     verifyToken: resolveToken(raw?.verifyToken) || String(raw?.verifyToken || ''),
     webhookSecret: resolveToken(raw?.webhookSecret) || String(raw?.webhookSecret || ''),
     testRecipient: String(raw?.testRecipient || ''),
+    completionNotifications: normalizeCompletionNotificationConfig(raw?.completionNotifications),
   };
 }
 
@@ -355,6 +382,12 @@ export async function sendWhatsAppNotification(text: string): Promise<void> {
 // telegramChannel is a server-v2 singleton — injected at init time
 let _telegramChannel: any = null;
 export function setTelegramChannelForBroadcaster(tc: any): void { _telegramChannel = tc; }
+
+export async function sendTelegramNotification(text: string): Promise<void> {
+  const content = String(text || '').trim();
+  if (!content) return;
+  await _telegramChannel?.sendToAllowed(content);
+}
 
 export function sendTeamNotificationToChannels(text: string, teamId?: string): void {
   const content = String(text || '').trim();

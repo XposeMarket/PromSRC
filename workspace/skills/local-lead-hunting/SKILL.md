@@ -32,6 +32,8 @@ Do **not** use this skill for generic market research, competitor writeups, or o
 
 Do not start by scraping random search snippets and guessing. Start from real local listings, confirm the business is real, inspect the site, record evidence, and only then decide whether the opportunity is worth deeper analysis or outreach.
 
+Use browser tools for the listings/map workflow and live site inspection. Use `web_search({ fetch_top_k })` or `web_fetch_batch` for supporting research such as reviews, directory pages, competitor pages, and multiple candidate websites that do not need interaction.
+
 The workflow must be **persistent**. Save findings to workspace files as you go. Do not leave important findings only in chat.
 
 ---
@@ -175,6 +177,8 @@ For each candidate:
    - messaging clarity
    - obvious technical / SEO gaps
 
+For batches of candidate website URLs, use `web_fetch_batch` to collect first-pass text evidence quickly before deciding which sites deserve browser inspection or deeper analysis.
+
 ### Phase 3 — Deep analysis for promising leads
 Only for stronger candidates:
 1. run a deeper website analysis
@@ -258,7 +262,7 @@ For **Xpose Market revenue prospecting** (or similar systematic agency lead-hunt
 5. **Do not silently skip them or treat them as unscreened.**
 
 **If browser visual inspection is unavailable** (e.g., Playwright Chromium missing in runtime, headless shell not installed):
-1. Fall back to text-only screening (web_fetch, web_search snippets, official site text extraction).
+1. Fall back to text-only screening (`web_fetch_batch` for candidate URLs, `web_search({ fetch_top_k })` for supporting evidence, one-off `web_fetch` for a single official site).
 2. **Explicitly mark the candidate as "text-screened only"** in the evidence note.
 3. Add a flag: `visual_inspection: blocked` or similar in the record.
 4. Document the blocker reason.

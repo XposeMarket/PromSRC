@@ -77,6 +77,15 @@ Skill write safety is built into `SkillsManager`:
 - ledger entries include `skillId`, `changeType`, `evidence`, `beforeHash`, `afterHash`, `appliedBy`, `status`, `snapshotDir`, `changedPaths`, and `reason`
 - `skill_manifest_write`, `skill_resource_write`, and `skill_resource_delete` accept ledger metadata including `changeType`, `evidence`, `appliedBy`, and `reason`
 
+2026-06-05 batch web research skill alignment:
+
+- `web-researcher` is the canonical skill for `web_search({ fetch_top_k })`, `web_fetch_batch`, and single-URL `web_fetch` routing
+- `browser-automation-playbook` and `desktop-automation-playbook` now explicitly say normal web reading belongs to web fetch tools before browser/desktop automation
+- `web-scraper`, `browse-sh-web-skills`, `x-post-fetch-and-media`, and `x-browser-automation-playbook` include batch-fetch guidance for multiple URLs or multiple X status URLs
+- research/business skills updated with the new path include `website-intelligence`, `local-lead-hunting`, `competitor-profile`, `polymarket-research`, `product-carousel-builder`, `connector-builder`, `integration-setup`, and `ai-surface-smoke-research`
+- connector-oriented skill manifests that already listed `web_search`/`web_fetch` now also list `web_fetch_batch` where applicable
+- stale "web_search + web_fetch" guidance was scanned out of live non-history skill files after the update
+
 Brain Dream skill evolution rules:
 
 - existing skills can be updated automatically by Brain Thought or Brain Dream only when the change is low-risk, bounded, and backed by session evidence

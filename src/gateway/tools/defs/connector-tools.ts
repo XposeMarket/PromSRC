@@ -8,7 +8,7 @@ import { loadObsidianBridgeState } from '../../obsidian/bridge.js';
 
 // Map from connector ID to available tool names (for discovery)
 export const CONNECTOR_TOOL_MAP: Record<string, string[]> = {
-  gmail: ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels'],
+  gmail: ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_prepare_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels'],
   github: ['connector_github_list_repos', 'connector_github_list_issues', 'connector_github_create_issue', 'connector_github_create_repo', 'connector_github_list_prs', 'connector_github_search'],
   slack: ['connector_slack_list_channels', 'connector_slack_send_message', 'connector_slack_get_history', 'connector_slack_search'],
   notion: ['connector_notion_search', 'connector_notion_get_page', 'connector_notion_create_page', 'connector_notion_query_database'],
@@ -156,8 +156,26 @@ export function getConnectorToolDefs(): any[] {
     {
       type: 'function',
       function: {
+        name: 'connector_gmail_prepare_email',
+        description: '[Gmail] Prepare an editable email draft composer in chat. Use this by default when the user asks to draft, write, compose, or prepare an email, so they can review/edit and click Send.',
+        parameters: {
+          type: 'object', required: ['to', 'subject', 'body'],
+          properties: {
+            to: { type: 'string', description: 'Recipient email address (or comma-separated for multiple)' },
+            subject: { type: 'string', description: 'Email subject line' },
+            body: { type: 'string', description: 'Plain text email body' },
+            cc: { type: 'string', description: 'CC recipients (comma-separated)' },
+            bcc: { type: 'string', description: 'BCC recipients (comma-separated)' },
+            attachments: { type: 'array', items: { type: 'object' }, description: 'Optional attachment metadata. Sending attachments is not yet supported by Gmail delivery.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'connector_gmail_send_email',
-        description: '[Gmail] Send an email from the connected Gmail account.',
+        description: '[Gmail] Send an email from the connected Gmail account. Use only when the user clearly asked to send now; otherwise use connector_gmail_prepare_email.',
         parameters: {
           type: 'object', required: ['to', 'subject', 'body'],
           properties: {

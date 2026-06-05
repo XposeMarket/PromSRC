@@ -123,7 +123,7 @@ Capability-handled families currently include:
 - teams/agents: `agent_*`, `spawn_subagent`, `message_subagent`, `dispatch_team_agent`, `team_manage`, `ask_team_coordinator`, `set_agent_model`, `get_agent_models`, team chat/status/artifact tools
 - memory: `business_context_mode`, `memory_*`, `write_note`
 - platform: `mcp__*`, `mcp_server_manage`, `connector_*`, `connector_list`, composite management and saved composites
-- web/media: `web_search*`, `web_fetch`, `download_url`, `download_media`, `generate_image`, `generate_video`, `analyze_image`, `analyze_video`, `video_analyze_imported_video`, `save_site_shortcut`
+- web/media: `web_search*`, `web_fetch`, `web_fetch_batch`, `download_url`, `download_media`, `generate_image`, `generate_video`, `analyze_image`, `analyze_video`, `video_analyze_imported_video`, `save_site_shortcut`
 
 Direct executor switch handlers still own lower-level or specialized families:
 
@@ -187,6 +187,7 @@ Current web/media tool surface includes:
 - `web_search_single`
 - `web_search_multi`
 - `web_fetch`
+- `web_fetch_batch`
 - `download_url`
 - `download_media`
 - `generate_image`
@@ -197,15 +198,29 @@ Current web/media tool surface includes:
 
 Current behavior:
 
-- `web_fetch` reads full page content after `web_search`
+- `web_fetch` reads full page content for one URL after `web_search`
+- `web_fetch_batch` reads several URLs in parallel and returns one result per URL with partial-failure details; default guidance is small focused batches, usually 2-5 URLs, hard-capped in the tool implementation
+- `web_search`, `web_search_single`, and `web_search_multi` accept `fetch_top_k` and `fetch_max_chars` so a search can fetch its top result URLs in the same call
 - `web_fetch` has special handling for X/Twitter status URLs and attempts attached-media download plus analysis automatically
+- for multiple X/Twitter status URLs, route first to `web_fetch_batch`; for one X/Twitter status URL, route first to `web_fetch`
 - `download_url` is for direct file/image/PDF links
 - `download_media` is for media-page extraction via `yt-dlp`
 - `generate_image` supports provider override `auto | openai | openai_codex | xai`
 - `generate_video` supports the configured video generation provider/model path, currently xAI-backed by default
 - `analyze_video` samples frames and can extract audio/transcripts when local tools are available
 - web/media execution is now handled by `webMediaCapabilityExecutor` before the fallback switch path
+- `webMediaCapabilityExecutor` handles `web_fetch_batch` for subagents and capability-routed sessions, not only the top-level registry
 - Image/video provider selection must not be tied to the current chat LLM provider. If the user is chatting with Grok, Claude, or another model, `generate_image` and `generate_video` should still be able to use any configured media endpoint whose credentials exist in config/vault/OAuth.
+
+Implementation facts for the 2026-06-05 batch research update:
+
+- runtime implementation lives in `src/tools/web.ts` as `executeWebFetchBatch(...)` plus `maybeAttachFetchedSearchResults(...)`
+- top-level registry import/registration is in `src/tools/registry.ts`
+- chat tool schemas are exposed in `src/gateway/tools/defs/file-web-memory.ts`
+- subagent/capability routing is in `src/gateway/agents-runtime/capabilities/web-media-executor.ts`
+- `web_fetch_batch` args are `urls`, optional `max_chars`, and optional `concurrency`
+- `web_search` batch-read args are `fetch_top_k` and `fetch_max_chars`
+- verification run after implementation: `npm run build:backend`, plus a local compiled runtime smoke test of `executeWebFetchBatch` using two `data:text/plain` URLs; both passed
 
 ## 12) Product Carousel
 

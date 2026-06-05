@@ -175,4 +175,18 @@ Session defaults include rolling compaction settings under `config.session`.
 ## 14) Maintenance Rule For This File
 
 If architecture changes, update this file only after reading the exact `src` files that implement the change. Do not rely on old notes or assumptions.
+## 15) Memory Graph UI and Workspace File Indexing Update
+
+Verified/updated on 2026-06-05.
+
+- The Memory page graph was revamped from a flat 2D canvas into a bright 3D particle graph with `Galaxy`, `Sphere`, `Wave`, and `Tunnel` controls.
+- Graph settings persist locally; current defaults are speed `35`, depth `740`, and glow `20`.
+- Hover/select behavior remains active, and connected edges brighten around hovered/selected nodes.
+- `Organize by type` groups same-color/type nodes while keeping the active 3D shape; `Separate` is a distinct separated-card layout mode and disables shape controls while active.
+- Workspace files now enter the evidence index as `workspace_file` records under `workspace/files/...`.
+- Root-level workspace files are prioritized first, followed by human-useful roots such as `downloads`, `uploads`, `generated`, `creative-projects`, `outputs`, `assets`, `entities`, `skills`, `Brain`, `memory`, `projects`, `proposals`, `tasks`, `teams`, `self`, and `.prometheus`.
+- `workspace/audit` is excluded from workspace-file scanning because audit evidence is indexed through its own roots; dependency/build/cache folders are skipped.
+- Text workspace files are chunked/search-indexed/embedded through the memory index path; binary or non-text files are represented as metadata-only records.
+- Current workspace-file scanning still has a `12000` file cap. Long-term direction: add a dedicated workspace inventory/search layer so all files are browsable/searchable from Memory without rendering every file as a graph particle.
+
 

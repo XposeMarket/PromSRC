@@ -49,6 +49,14 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
 import { spawnAgent } from '../../agents/spawner';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, type TurnOrigin } from '../session';
+import { collectRichArtifacts, productCarouselToArtifact } from '../rich-artifacts';
+import { getConnector, isConnectorConnected } from '../../integrations/connector-registry.js';
+import type { GmailConnector } from '../../integrations/connectors/gmail.js';
+import { executeMarketLookup } from '../../tools/market';
+import { executeStockLookup } from '../../tools/stocks';
+import { executeWeatherLookup } from '../../tools/weather';
+import { executePolymarketLookup } from '../../tools/polymarket';
+import { executeMapLookup } from '../../tools/mapcard';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
 import { createToolObservationsFromResults, formatToolObservationsForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
 import { hookBus } from '../hooks';
@@ -60,6 +68,7 @@ import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance,
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
 import { getVerificationFlowManager, getApprovalQueue } from '../verification-flow';
+import { getPrometheusQuestionQueue } from '../prometheus-questions';
 import { getErrorAnalyzer } from '../errors/error-analyzer';
 import { getErrorHistory } from '../errors/error-history';
 import { getRetryStrategy } from '../retry-strategy';
@@ -152,6 +161,7 @@ import {
   setSchedulerBroadcast,
   setSchedulerRunAgentFn,
 } from '../../scheduler';
+import { automationDashboardTool } from '../scheduling/schedule-admin-tools';
 import { TelegramChannel } from '../comms/telegram-channel';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import { executeXaiImageVisionSummary } from '../tools/handlers/xai-handlers.js';
@@ -963,6 +973,7 @@ import {
   normalizeDiscordConfig,
   normalizeWhatsAppConfig,
 } from '../comms/broadcaster';
+import { notifyChatCompletion } from '../notifications/completion-bridge';
 
 import {
   getSessionSkillWindows,
@@ -5971,6 +5982,14 @@ RULES:
         return undefined;
       };
       const finalProductCarousel = collectProductCarousel();
+      // Rich artifacts lane (additive). Collect any artifacts emitted by tools,
+      // then fold the legacy product carousel into a `products` artifact so the
+      // new render path covers it without touching every carousel emit site.
+      const finalRichArtifacts = collectRichArtifacts(allToolResults as any[]);
+      if (finalProductCarousel && !finalRichArtifacts.some((a) => a.type === 'products')) {
+        const productsArtifact = productCarouselToArtifact(finalProductCarousel);
+        if (productsArtifact) finalRichArtifacts.unshift(productsArtifact);
+      }
       const finalFileChanges = collectTurnFileChanges(allToolResults as any[], workspacePath);
 
       const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(finalText);
@@ -5986,6 +6005,7 @@ RULES:
         canvasFiles: finalCanvasFiles.length > 0 ? finalCanvasFiles : undefined,
         fileChanges: finalFileChanges,
         productCarousel: finalProductCarousel || undefined,
+        richArtifacts: finalRichArtifacts.length > 0 ? finalRichArtifacts : undefined,
       };
     }
 
@@ -7533,7 +7553,7 @@ async function runInteractiveTurn(
   const existingMainChatStream = getMainChatStream(sessionId);
   const localMainChatStream = existingMainChatStream?.active ? null : beginMainChatStream(sessionId);
   let localMainChatStreamCompleted = false;
-  const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any } | null | undefined): void => {
+  const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[] } | null | undefined): void => {
     if (!localMainChatStream || localMainChatStreamCompleted) return;
     localMainChatStreamCompleted = true;
     appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, 'done', {
@@ -7548,6 +7568,7 @@ async function runInteractiveTurn(
       canvasFiles: result?.canvasFiles,
       fileChanges: result?.fileChanges,
       productCarousel: result?.productCarousel,
+      richArtifacts: result?.richArtifacts,
     });
   };
   const upstreamSendSSE = sendSSE;
@@ -7776,6 +7797,7 @@ async function runInteractiveTurn(
       canvasFiles: Array.isArray(result.canvasFiles) && result.canvasFiles.length ? result.canvasFiles : undefined,
       fileChanges: result.fileChanges || undefined,
       productCarousel: result.productCarousel || undefined,
+      richArtifacts: Array.isArray(result.richArtifacts) && result.richArtifacts.length ? result.richArtifacts : undefined,
       toolLog: toolLogText || undefined,
     }, {
       disableCompactionCheck: isSubagentChatSession,
@@ -8996,12 +9018,68 @@ function voiceToolResult(ok: boolean, summary: string, data: Record<string, any>
   }, null, 2);
 }
 
+const VOICE_SHOW_ARTIFACT_TOOLS = new Set([
+  'show_weather', 'show_market', 'show_stocks', 'show_prediction_market', 'show_map',
+  'show_sources', 'show_comparison', 'show_chart', 'show_product_carousel', 'show_agent_work', 'show_run_result',
+]);
+
+// Build a rich-artifact + spoken summary for a voice show_* tool call. The artifact
+// is returned to the client (in the tool result) so it renders a card in chat while
+// the realtime model speaks the summary. Read/fetch tools hit keyless APIs; the rest
+// are assembled from the model-provided args.
+async function buildVoiceShowArtifact(name: string, args: Record<string, any>): Promise<{ ok: boolean; summary: string; artifact: any | null }> {
+  const fromLookup = (tr: any, fallback: string) => ({
+    ok: tr?.success !== false,
+    summary: String(tr?.stdout || tr?.error || fallback),
+    artifact: tr?.extra?.richArtifacts?.[0] || null,
+  });
+  switch (name) {
+    case 'show_weather':
+      return fromLookup(await executeWeatherLookup({ location: args.location, latitude: args.latitude, longitude: args.longitude, unit: args.unit, days: args.days }), 'Weather unavailable.');
+    case 'show_market':
+      return fromLookup(await executeMarketLookup({ coins: args.coins ?? args.symbols ?? args.query, vs_currency: args.vs_currency, sparkline: args.sparkline }), 'Market data unavailable.');
+    case 'show_stocks':
+      return fromLookup(await executeStockLookup({ symbols: args.symbols ?? args.tickers ?? args.query, range: args.range }), 'Stock data unavailable.');
+    case 'show_prediction_market':
+      return fromLookup(await executePolymarketLookup({ query: args.query, slug: args.slug, limit: args.limit }), 'No prediction markets found.');
+    case 'show_map':
+      return fromLookup(await executeMapLookup({ markers: Array.isArray(args.markers) ? args.markers : [], center: args.center, zoom: args.zoom, title: args.title }), 'Map unavailable.');
+    case 'show_product_carousel': {
+      const artifact = productCarouselToArtifact({ title: args.title, items: Array.isArray(args.items) ? args.items : [] });
+      return { ok: !!artifact, summary: artifact ? `Showing ${artifact.items.length} product(s).` : 'No products to show.', artifact };
+    }
+    case 'show_sources': {
+      const items = (Array.isArray(args.items) ? args.items : []).filter((it: any) => it && (it.title || it.url));
+      if (!items.length) return { ok: false, summary: 'No sources to show.', artifact: null };
+      return { ok: true, summary: `Showing ${items.length} source(s).`, artifact: { id: `sources-${Date.now()}`, type: 'sources', title: args.title, layout: args.layout === 'list' ? 'list' : 'cards', items } };
+    }
+    case 'show_comparison': {
+      const columns = (Array.isArray(args.columns) ? args.columns : []).filter((c: any) => c && c.key);
+      const rows = Array.isArray(args.rows) ? args.rows : [];
+      if (!columns.length || !rows.length) return { ok: false, summary: 'Nothing to compare.', artifact: null };
+      return { ok: true, summary: `Comparison of ${rows.length} item(s).`, artifact: { id: `comparison-${Date.now()}`, type: 'comparison', title: args.title, columns, rows, labelKey: args.labelKey, highlightColumn: args.highlightColumn } };
+    }
+    case 'show_chart': {
+      const series = (Array.isArray(args.series) ? args.series : []).filter((s: any) => s && Array.isArray(s.points) && s.points.length);
+      if (!series.length) return { ok: false, summary: 'No chart data.', artifact: null };
+      return { ok: true, summary: 'Showing the chart.', artifact: { id: `chart-${Date.now()}`, type: 'chart', title: args.title, chartType: ['line', 'bar', 'area'].includes(args.chartType) ? args.chartType : 'line', series, xLabel: args.xLabel, yLabel: args.yLabel, unit: args.unit } };
+    }
+    case 'show_agent_work':
+      return { ok: true, summary: 'Here is the snapshot.', artifact: { id: `agent_work-${Date.now()}`, type: 'agent_work', greeting: args.greeting, title: args.title, subtitle: args.subtitle, summaryRows: args.summaryRows, priorities: args.priorities, teams: args.teams, activeWork: args.activeWork } };
+    case 'show_run_result':
+      return { ok: true, summary: String(args.title || 'Task complete.'), artifact: { id: `run_result-${Date.now()}`, type: 'run_result', title: String(args.title || 'Task complete'), taskId: args.taskId, status: args.status, summary: args.summary, files: args.files, links: args.links } };
+    default:
+      return { ok: false, summary: 'Unknown card.', artifact: null };
+  }
+}
+
 const VOICE_SKILL_INSTRUCTIONS_MAX_CHARS = 7000;
 const VOICE_SKILL_RESOURCE_MAX_CHARS = 5000;
 
 const VOICE_TOOL_EQUIVALENTS: Record<string, string> = {
   web_search: 'voice_web_search',
   web_fetch: 'voice_web_fetch',
+  automation_dashboard: 'voice_automation_dashboard',
   browser_open: 'voice_browser_open',
   browser_snapshot: 'voice_browser_snapshot',
   browser_screenshot: 'voice_browser_screenshot',
@@ -9290,6 +9368,66 @@ function summarizeVoiceMemorySearch(raw: any): Record<string, any> {
       why: compactVoiceText(hit?.whyMatched || hit?.summary || hit?.snippet || hit?.text || hit?.content || '', 360),
       source: compactVoiceText(hit?.sourceType || hit?.source_type || hit?.layer || '', 80),
     })),
+  };
+}
+
+function summarizeVoiceAutomationDashboard(data: any): Record<string, any> {
+  const counts = data?.counts && typeof data.counts === 'object' ? data.counts : {};
+  const jobs = Array.isArray(data?.scheduledJobs) ? data.scheduledJobs : [];
+  const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+  const watches = Array.isArray(data?.internalWatches) ? data.internalWatches : [];
+  const events = Array.isArray(data?.eventQueue) ? data.eventQueue : [];
+  const teams = Array.isArray(data?.teams) ? data.teams : [];
+  const agents = Array.isArray(data?.agents) ? data.agents : [];
+  const attentionJobs = jobs
+    .filter((job: any) => !['healthy', 'running'].includes(String(job?.health?.state || '').toLowerCase()))
+    .slice(0, 5)
+    .map((job: any) => ({
+      id: compactVoiceText(job?.id || '', 120),
+      name: compactVoiceText(job?.name || job?.id || '', 180),
+      state: compactVoiceText(job?.health?.state || job?.status || '', 80),
+      nextRun: job?.nextRun || null,
+      blocker: compactVoiceText(job?.health?.blockerReason || job?.pausedReason || '', 240),
+    }));
+  const activeTasks = tasks
+    .filter((task: any) => /queued|running|paused|stalled|needs_assistance|awaiting_user_input|waiting_subagent/i.test(String(task?.status || '')))
+    .slice(0, 6)
+    .map((task: any) => ({
+      id: compactVoiceText(task?.id || '', 120),
+      title: compactVoiceText(task?.title || task?.id || '', 220),
+      status: compactVoiceText(task?.status || '', 80),
+      step: task?.step || null,
+      total_steps: task?.total_steps || null,
+      agentId: compactVoiceText(task?.agentId || '', 120),
+    }));
+  const activeWatches = watches
+    .filter((watch: any) => String(watch?.status || '').toLowerCase() === 'active')
+    .slice(0, 5)
+    .map((watch: any) => ({
+      id: compactVoiceText(watch?.id || '', 120),
+      label: compactVoiceText(watch?.label || watch?.id || '', 220),
+      target: watch?.target || null,
+      expiresAt: watch?.expiresAt || null,
+    }));
+  const agentHighlights = agents.slice(0, 6).map((agent: any) => ({
+    id: compactVoiceText(agent?.id || '', 120),
+    name: compactVoiceText(agent?.name || agent?.id || '', 140),
+    jobs: Number(agent?.jobCount || 0),
+    tasks: Number(agent?.taskCount || 0),
+    lastOutput: compactVoiceText(agent?.lastOutput || '', 300),
+  }));
+  return {
+    generatedAt: data?.generatedAt || '',
+    depth: data?.depth || 'summary',
+    counts,
+    jobsByHealth: counts.jobsByHealth || {},
+    tasksByStatus: counts.tasksByStatus || {},
+    attentionJobs,
+    activeTasks,
+    activeWatches,
+    pendingEventCount: events.length,
+    teamCount: teams.length,
+    agentHighlights,
   };
 }
 
@@ -9947,6 +10085,28 @@ function buildVoiceToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'voice_automation_dashboard',
+        description: 'Read-only voice wrapper around automation_dashboard v2. Use for "what is going on", "what are my priorities", "what have the agents done", operator snapshots, scheduled-job/task/watch/team status, and morning/daily automation summaries. Prefer this over Worker handoff for quick internal-state questions. This only reads automation state; use Worker for mutations/control.',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max jobs/tasks/watches/events per section. Default 12 for voice, capped at 50.' },
+            include_done: { type: 'boolean', description: 'Include completed/cancelled internal watches, not just active watches.' },
+            depth: { type: 'string', enum: ['summary', 'full'], description: 'summary is compact; full includes more produced output/result text.' },
+            agent_id: { type: 'string', description: 'Optional agent id to focus the snapshot.' },
+            include: {
+              type: 'array',
+              items: { type: 'string', enum: ['agents', 'teams', 'outputs'] },
+              description: 'Optional sections to include. Default is all.',
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'voice_worker_status',
         description: 'Read the freshest Prometheus worker/run status and current context packet. Use for status/update/progress questions like "what are you doing", "where are we", "what happened", or "how is the worker going". This is read-only and must NOT steer or interrupt the worker.',
         parameters: {
@@ -9983,12 +10143,105 @@ function buildVoiceToolDefinitions(): any[] {
         },
       },
     },
+    // ── Rich artifact cards (render a visual card in chat while you speak) ──────
+    {
+      type: 'function',
+      function: {
+        name: 'show_weather',
+        description: 'Show a live weather forecast card (Open-Meteo, keyless) in chat and speak the gist. Use for weather/forecast questions. Pass a location name.',
+        parameters: { type: 'object', properties: { location: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, unit: { type: 'string', enum: ['F', 'C'] }, days: { type: 'number' } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_market',
+        description: 'Show a live crypto/memecoin price card (CoinGecko, keyless). Use for bitcoin/eth/memecoin prices. Pass tickers or CoinGecko ids.',
+        parameters: { type: 'object', required: ['coins'], properties: { coins: { type: 'array', items: { type: 'string' } }, vs_currency: { type: 'string' }, sparkline: { type: 'boolean' } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_stocks',
+        description: 'Show a live stock/ETF/index quote card (Yahoo Finance, keyless). Use for equity prices/watchlists. Pass ticker symbols.',
+        parameters: { type: 'object', required: ['symbols'], properties: { symbols: { type: 'array', items: { type: 'string' } }, range: { type: 'string' } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_prediction_market',
+        description: 'Show a Polymarket prediction-market card (keyless, read-only) with outcome probabilities. Use for "odds of X" / prediction-market questions. Pass a query.',
+        parameters: { type: 'object', properties: { query: { type: 'string' }, slug: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_map',
+        description: 'Show a map card (OpenStreetMap, keyless) with location markers. Use for local/place results. Markers take lat/lng or an address.',
+        parameters: { type: 'object', required: ['markers'], properties: { title: { type: 'string' }, center: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } } }, zoom: { type: 'number' }, markers: { type: 'array', items: { type: 'object', required: ['label'], properties: { label: { type: 'string' }, lat: { type: 'number' }, lng: { type: 'number' }, address: { type: 'string' }, category: { type: 'string' }, rating: { type: 'number' }, url: { type: 'string' } } } } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_sources',
+        description: 'Show a sources/news card from items you already gathered. Use to present articles/citations visually.',
+        parameters: { type: 'object', required: ['items'], properties: { title: { type: 'string' }, layout: { type: 'string', enum: ['cards', 'list'] }, items: { type: 'array', items: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, publisher: { type: 'string' }, url: { type: 'string' }, imageUrl: { type: 'string' }, snippet: { type: 'string' }, publishedAt: { type: 'string' }, badge: { type: 'string' } } } } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_comparison',
+        description: 'Show a side-by-side comparison table you assemble. Use to compare options/products/plans.',
+        parameters: { type: 'object', required: ['columns', 'rows'], properties: { title: { type: 'string' }, columns: { type: 'array', items: { type: 'object', required: ['key', 'label'], properties: { key: { type: 'string' }, label: { type: 'string' } } } }, rows: { type: 'array', items: { type: 'object' } }, labelKey: { type: 'string' }, highlightColumn: { type: 'string' } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_chart',
+        description: 'Show a minimal native line/bar/area chart from numeric series you provide.',
+        parameters: { type: 'object', required: ['series'], properties: { title: { type: 'string' }, chartType: { type: 'string', enum: ['line', 'bar', 'area'] }, series: { type: 'array', items: { type: 'object', required: ['points'], properties: { label: { type: 'string' }, color: { type: 'string' }, points: { type: 'array', items: { type: 'object', required: ['x', 'y'], properties: { x: {}, y: { type: 'number' } } } } } } }, xLabel: { type: 'string' }, yLabel: { type: 'string' }, unit: { type: 'string' } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_product_carousel',
+        description: 'Show a product carousel card from product items you gathered (title + productUrl each).',
+        parameters: { type: 'object', required: ['items'], properties: { title: { type: 'string' }, items: { type: 'array', items: { type: 'object', required: ['title', 'productUrl'], properties: { title: { type: 'string' }, price: { type: 'string' }, description: { type: 'string' }, rating: { type: 'number' }, reviews: { type: 'number' }, tag: { type: 'string' }, imageUrl: { type: 'string' }, productUrl: { type: 'string' }, merchant: { type: 'string' } } } } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_agent_work',
+        description: 'Show an operator-snapshot card (greeting, summary rows, priorities, teams, active work). Prefer voice_automation_dashboard to GATHER the data first, then render it here.',
+        parameters: { type: 'object', properties: { greeting: { type: 'string' }, title: { type: 'string' }, subtitle: { type: 'string' }, summaryRows: { type: 'array', items: { type: 'object', properties: { icon: { type: 'string' }, title: { type: 'string' }, subtitle: { type: 'string' } } } }, priorities: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, subtitle: { type: 'string' }, status: { type: 'string' }, taskId: { type: 'string' } } } }, teams: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, detail: { type: 'string' }, status: { type: 'string' } } } }, activeWork: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, status: { type: 'string' }, progressLabel: { type: 'string' }, taskId: { type: 'string' } } } } }, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_run_result',
+        description: 'Show a finished-task result card (summary, files, links) you assemble.',
+        parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, taskId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' }, files: { type: 'array', items: {} }, links: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, href: { type: 'string' } } } } }, additionalProperties: false },
+      },
+    },
   ];
 }
 
 async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
   const workspacePath = getConfig().getWorkspacePath();
   try {
+    if (VOICE_SHOW_ARTIFACT_TOOLS.has(name)) {
+      const built = await buildVoiceShowArtifact(name, args || {});
+      return voiceToolResult(built.ok, built.summary, built.artifact ? { richArtifacts: [built.artifact] } : {});
+    }
     if (name === 'voice_web_search') {
       const query = String(args.query || '').trim();
       if (!query) return voiceToolResult(false, 'Search query is required.');
@@ -10691,6 +10944,40 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       }, workspacePath, { telegramChannel: _telegramChannel, broadcastWS }, sessionId);
       return voiceToolResult(!delivered.error, delivered.result);
     }
+    if (name === 'voice_automation_dashboard') {
+      if (!_cronScheduler) return voiceToolResult(false, 'Automation scheduler is not ready yet.');
+      const limit = Math.min(50, Math.max(1, Number(args.limit || 12) || 12));
+      const depth = String(args.depth || 'summary').toLowerCase() === 'full' ? 'full' : 'summary';
+      const raw = automationDashboardTool(_cronScheduler, {
+        ...args,
+        limit,
+        depth,
+      });
+      const ok = raw.success !== false;
+      const snapshot = raw.data || {};
+      const summary = summarizeVoiceAutomationDashboard(snapshot);
+      const jobsByHealth = summary.jobsByHealth && typeof summary.jobsByHealth === 'object'
+        ? Object.entries(summary.jobsByHealth).map(([state, count]) => `${state}: ${count}`).join(', ')
+        : '';
+      const tasksByStatus = summary.tasksByStatus && typeof summary.tasksByStatus === 'object'
+        ? Object.entries(summary.tasksByStatus).map(([status, count]) => `${status}: ${count}`).join(', ')
+        : '';
+      const spokenSummary = ok
+        ? [
+            `Automation snapshot loaded: ${summary.counts?.jobs ?? 0} jobs, ${summary.counts?.watches ?? 0} watches, ${summary.pendingEventCount ?? 0} pending events.`,
+            jobsByHealth ? `Job health: ${jobsByHealth}.` : '',
+            tasksByStatus ? `Tasks: ${tasksByStatus}.` : '',
+            summary.attentionJobs?.length ? `${summary.attentionJobs.length} scheduled job(s) need attention.` : '',
+            summary.activeTasks?.length ? `${summary.activeTasks.length} active task(s) are in flight.` : '',
+          ].filter(Boolean).join(' ')
+        : (raw.error || raw.message || 'Automation dashboard failed.');
+      return voiceToolResult(ok, spokenSummary, {
+        dashboardSummary: summary,
+        dashboard: snapshot,
+        message: raw.message || '',
+        error: raw.error || '',
+      });
+    }
     if (name === 'voice_worker_status') {
       const providedPacket = args?.contextPacket && typeof args.contextPacket === 'object' ? args.contextPacket : null;
       const providedSessionId = String(providedPacket?.sessionId || '').trim();
@@ -10909,6 +11196,17 @@ function findVoiceToolFallbackRequest(transcript: string): { name: string; args:
   if (endsWithQuietRequest && !mentionsQuietAsExample) {
     return { name: 'voice_enter_quiet_mode', args: { reason: 'User asked Prometheus to go quiet at the end of a voice turn.' } };
   }
+  if (/\b(?:automation|operator|agent|agents?|task|tasks?|schedule|scheduled|jobs?|priorit(?:y|ies)|what'?s going on|morning|daily)\b/i.test(text)
+    && /\b(?:dashboard|snapshot|status|overview|summary|priorit(?:y|ies)|what'?s going on|what has everyone done|what are.*doing|running|active|stuck|blocked)\b/i.test(text)) {
+    return {
+      name: 'voice_automation_dashboard',
+      args: {
+        limit: /\b(full|deep|detail|detailed|everything|all)\b/i.test(text) ? 25 : 12,
+        depth: /\b(full|deep|detail|detailed|everything|all)\b/i.test(text) ? 'full' : 'summary',
+        include_done: /\b(done|completed|finished|cancelled|canceled|history|all)\b/i.test(text),
+      },
+    };
+  }
   if (/\b(?:scroll|move)\s+(?:the\s+)?(?:browser|page|website|site|tab)?\s*(up|down)\b/i.test(text)) {
     const dir = (text.match(/\b(up|down)\b/i)?.[1] || 'down').toLowerCase();
     return { name: 'voice_browser_scroll', args: { direction: dir === 'up' ? 'up' : 'down', include_screenshot: true } };
@@ -11097,6 +11395,7 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. When a relevant skill is found or injected by trigger context, load it before acting; follow it only through voice_* tools and hand off to Worker for non-voice capabilities.',
     '- voice_memory_search: read-only recall for previous decisions, project history, preferences, and "what did we decide" questions.',
     '- voice_timer: create/list/cancel/reschedule one-shot timers. Timer execution itself happens later through the Worker.',
+    '- voice_automation_dashboard: read-only automation_dashboard v2 snapshot for operator questions: what is going on, priorities, agents/tasks/jobs/watches/teams status, morning/daily snapshots, stuck/blocked automation, or what everyone has done. Use it directly; dispatch Worker only for mutations/control or deeper repairs.',
     '- voice_browser_open / voice_browser_snapshot / voice_browser_screenshot: open and observe the Prometheus browser. Open accepts explicit URLs/domains or browser search queries and returns DOM refs plus a screenshot preview; snapshot returns @ref targets; screenshot gives visual context.',
     '- voice_browser_click / voice_browser_vision_click: click browser UI by @ref/selector/saved element or screenshot coordinate, then observe. Explicit user-authorized social posts/messages are allowed when the content and destination are clear. Use Worker for uploads/downloads, purchases/payments, destructive actions, or account settings/security changes.',
     '- voice_browser_fill / voice_browser_type / voice_browser_vision_type / voice_browser_press_key / voice_browser_scroll / voice_browser_wait: live browser input/navigation, then observe. Use these to draft and submit explicit user-authorized social posts/messages when content and destination are clear. Use Worker for passwords, payment info, files, durable account settings/security changes, destructive actions, or purchases.',
@@ -11317,6 +11616,7 @@ function estimateStoredThreadFootprint(sessionId: string, session: any, profile:
       canvasFiles: msg?.canvasFiles,
       fileChanges: msg?.fileChanges,
       productCarousel: msg?.productCarousel,
+      richArtifacts: msg?.richArtifacts,
     };
     attachmentMetadataTokens += estimateJsonTokensForModel(attachmentBits, profile);
   }
@@ -11534,6 +11834,7 @@ function buildFastRouteSpokenReply(toolName: string, toolResult: any): string {
     case 'voice_enter_quiet_mode': return summary || 'Quiet mode is ready.';
     case 'voice_set_quiet_until': return summary || 'Quiet mode is ready.';
     case 'voice_timer': return summary || 'Timer set.';
+    case 'voice_automation_dashboard': return summary || 'Automation snapshot loaded.';
     case 'voice_browser_open': return summary || 'Browser opened.';
     case 'voice_browser_scroll': return summary || 'Browser scrolled.';
     case 'voice_browser_screenshot': return summary || 'Browser screenshot captured.';
@@ -13080,6 +13381,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     args.voiceAgentMemory ? '' : '',
     '## When to call which tool',
     '- voice_web_search: quick factual/current lookup. Multi mode for latest/current/news/compare.',
+    '- Visual cards (render a card in the app while you speak the gist — keep speech short, the card carries the detail): show_weather (forecast), show_market (crypto/memecoins), show_stocks (equities/ETFs), show_prediction_market (Polymarket odds), show_map (places/locations), show_sources (news/citations you gathered), show_comparison (side-by-side table), show_chart (line/bar/area from numbers), show_product_carousel (products), show_agent_work (operator snapshot — gather via voice_automation_dashboard first), show_run_result (finished-task summary). All keyless and read-only; call them directly instead of dispatching the Worker for these.',
     '- voice_web_fetch: one clean text URL only. Social/video/auth pages must be dispatched to Worker.',
     '- voice_write_note: only when the user explicitly asks to remember/jot/note something.',
     '- voice_agent_memory: read or update workspace/VOICEAGENT.md only when the user explicitly asks to inspect or change live voice-agent routing/spoken-behavior memory. Use append for small additions; use replace only when the user asks to rewrite the file.',
@@ -13089,6 +13391,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
     '- voice_memory_search: read-only recall for prior decisions, project history, preferences.',
     '- voice_timer: create/list/cancel one-shot timers.',
+    '- voice_automation_dashboard: read-only automation_dashboard v2 snapshot for operator questions: what is going on, priorities, agents/tasks/jobs/watches/teams status, morning/daily snapshots, stuck/blocked automation, or what everyone has done. Use it directly; dispatch Worker only for mutations/control or deeper repairs.',
     '- voice_browser_open / voice_browser_snapshot / voice_browser_screenshot: open and observe the Prometheus browser. Open accepts explicit URLs/domains or browser search queries and returns DOM refs and a screenshot preview; snapshot gives @ref targets; screenshot gives visual context.',
     '- voice_browser_click / voice_browser_vision_click / voice_browser_fill / voice_browser_type / voice_browser_vision_type / voice_browser_press_key / voice_browser_scroll / voice_browser_wait: live browser UI control. Use these for fast Jarvis-style navigation, input, drafting, and explicit user-authorized social posts/messages when content and destination are clear. Hand off to Worker for uploads, downloads, password/payment entry, purchases/payments, destructive actions, account settings/security changes, or anything involving files.',
     '- voice_desktop_screenshot / voice_desktop_list_windows / voice_desktop_focus_window / voice_desktop_window_control / voice_desktop_find_app / voice_desktop_launch_app: observe, find, focus, minimize, maximize, restore, close, and launch desktop apps/windows.',
@@ -13104,7 +13407,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- If the user asks something answerable from your context (memory, identity, recall, small talk) — answer directly, no tool.',
     '- If the user asks for status/progress/context about the active Worker — call voice_worker_status, then answer from that result. Do not send the status question to the Worker as a steer.',
     '- Skill scout rule: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call the matching voice_browser_* or voice_desktop_* tool immediately.',
-    '- If the user wants quick voice-scope work — call the matching voice_* or skill_* tool, then narrate the result.',
+    '- If the user wants quick voice-scope work — call the matching voice_* or skill_* tool, then narrate the result. For automation/operator status snapshots, call voice_automation_dashboard.',
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_agent_memory instead of voice_write_note.',
     '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app shows the handoff and the worker will report progress.',
     '- If the user interrupts an active worker with an actual correction, new constraint, pause, or direction change — call steer_active_worker.',
@@ -13827,6 +14130,82 @@ router.post('/api/mobile/voice/interruption', (req, res) => {
   }
 });
 
+function splitComposerEmailList(value: any): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildSentEmailComposerArtifact(args: any, sent: { id?: string; threadId?: string }, gmail: GmailConnector) {
+  const now = new Date().toISOString();
+  let accountEmail = '';
+  try {
+    const tokens = (gmail as any)?.loadTokens?.();
+    accountEmail = tokens?.account_email ? String(tokens.account_email) : '';
+  } catch {}
+  const recipients = splitComposerEmailList(args.to);
+  return {
+    id: String(args.artifactId || args.id || `email-sent-${Date.now()}`),
+    type: 'email_composer',
+    provider: 'gmail',
+    mode: 'sent',
+    status: 'sent',
+    title: 'Email sent',
+    subtitle: recipients.length ? `To ${recipients.join(', ')}` : 'Sent',
+    source: 'Gmail',
+    accountEmail,
+    to: recipients,
+    cc: splitComposerEmailList(args.cc),
+    bcc: splitComposerEmailList(args.bcc),
+    subject: String(args.subject || '').trim(),
+    body: String(args.body || ''),
+    attachments: Array.isArray(args.attachments) ? args.attachments : [],
+    messageId: sent.id,
+    threadId: sent.threadId,
+    createdAt: String(args.createdAt || now),
+    sentAt: now,
+  };
+}
+
+router.post('/api/connectors/gmail/send-composer', async (req, res) => {
+  try {
+    if (!isConnectorConnected('gmail')) {
+      res.status(400).json({ success: false, error: 'Gmail is not connected.' });
+      return;
+    }
+    const body = req.body || {};
+    const to = splitComposerEmailList(body.to).join(', ');
+    const subject = String(body.subject || '').trim();
+    const emailBody = String(body.body || '');
+    if (!to) {
+      res.status(400).json({ success: false, error: 'Recipient required.' });
+      return;
+    }
+    if (!subject) {
+      res.status(400).json({ success: false, error: 'Subject required.' });
+      return;
+    }
+    const gmail = getConnector('gmail') as unknown as GmailConnector;
+    const sent = await gmail.sendEmail(
+      to,
+      subject,
+      emailBody,
+      splitComposerEmailList(body.cc).join(', ') || undefined,
+      splitComposerEmailList(body.bcc).join(', ') || undefined,
+    );
+    res.json({
+      success: true,
+      messageId: sent.id,
+      threadId: sent.threadId,
+      artifact: buildSentEmailComposerArtifact(body, sent, gmail),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err || 'Failed to send email.') });
+  }
+});
+
 router.post('/api/chat/steer', (req, res) => {
   try {
     const body = req.body || {};
@@ -13875,6 +14254,15 @@ router.post('/api/chat/steer', (req, res) => {
         .filter((a) => a.sessionId === sessionId && a.approvalKind === 'dev_source_edit');
       for (const pending of pendingApprovals) {
         approvalQueue.notifySteer(pending.id, message);
+      }
+    } catch { /* best effort */ }
+
+    try {
+      const questionQueue = getPrometheusQuestionQueue();
+      const pendingQuestions = questionQueue.listPending()
+        .filter((q) => q.sessionId === sessionId);
+      for (const pending of pendingQuestions) {
+        questionQueue.notifySteer(pending.id, message);
       }
     } catch { /* best effort */ }
 
@@ -14050,6 +14438,17 @@ router.post('/api/chat', async (req, res) => {
         attachRuntimeProcessEntriesToLatestAssistant(resolvedSessionId, runtimeProcessEntries);
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
+          if (turnOrigin.channel === 'mobile' || turnOrigin.channel === 'web') {
+            const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
+            const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+            notifyChatCompletion({
+              sessionId: resolvedSessionId,
+              source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',
+              finalText: result.text,
+              requestOrigin: host ? `${proto}://${host}` : undefined,
+              clientRequestId,
+            });
+          }
 	      sendSSE('final', {
         text: result.text,
         artifacts: result.artifacts,
@@ -14058,6 +14457,7 @@ router.post('/api/chat', async (req, res) => {
         canvasFiles: result.canvasFiles,
         fileChanges: result.fileChanges,
         productCarousel: result.productCarousel,
+        richArtifacts: result.richArtifacts,
       });
 	      sendSSE('done', {
         reply: result.text, mode: result.type,
@@ -14070,6 +14470,7 @@ router.post('/api/chat', async (req, res) => {
         canvasFiles: result.canvasFiles,
         fileChanges: result.fileChanges,
         productCarousel: result.productCarousel,
+        richArtifacts: result.richArtifacts,
       });
     }
 		  } catch (err: any) {

@@ -212,6 +212,19 @@ function _startMobileNewVoiceDraft() {
   return MOBILE_CHAT_SESSION_ID;
 }
 
+function _isMobileNewChatDraftActiveForVoice() {
+  const chatSid = String(__pmChat.activeSessionId || '').trim();
+  const voiceSid = String(__pmVoice?.targetSessionId || '').trim();
+  const draftThread = Array.isArray(__pmChat.threads?.[MOBILE_CHAT_SESSION_ID])
+    ? __pmChat.threads[MOBILE_CHAT_SESSION_ID]
+    : [];
+  const forcedDraftTarget = __pmVoice?.targetSessionForced === true
+    && (!voiceSid || voiceSid === MOBILE_CHAT_SESSION_ID);
+  return chatSid === MOBILE_CHAT_SESSION_ID
+    || forcedDraftTarget
+    || (voiceSid === MOBILE_CHAT_SESSION_ID && draftThread.length === 0);
+}
+
 function _serverRoleToMobileRole(role) {
   return String(role || '').toLowerCase() === 'user' ? 'user' : 'ai';
 }
@@ -260,6 +273,7 @@ function _mapServerMessageToMobile(m, index = -1) {
     files: Array.isArray(m?.canvasFiles) ? m.canvasFiles : [],
     fileChanges: m?.fileChanges && typeof m.fileChanges === 'object' ? m.fileChanges : undefined,
     productCarousel: m?.productCarousel && typeof m.productCarousel === 'object' ? m.productCarousel : undefined,
+    richArtifacts: Array.isArray(m?.richArtifacts) && m.richArtifacts.length ? m.richArtifacts : undefined,
     sideChatBoundary: m?.sideChatBoundary === true,
     voiceAgentWorkerHandoff: m?.voiceAgentWorkerHandoff === true,
     source: String(m?.source || ''),
@@ -812,6 +826,9 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   mergeList('artifacts');
   _mergeMobileMediaIntoMessage(target, _collectMessageMedia(source));
   _mergeMobileProductCarouselIntoMessage(target, source.productCarousel);
+  if (Array.isArray(source.richArtifacts) && source.richArtifacts.length && !(Array.isArray(target.richArtifacts) && target.richArtifacts.length)) {
+    target.richArtifacts = source.richArtifacts;
+  }
   if (!target.fileChanges && source.fileChanges) target.fileChanges = source.fileChanges;
   if (!target.approvalRequest && source.approvalRequest) target.approvalRequest = source.approvalRequest;
   if (!String(target.body?.text || '').trim() && String(source.body?.text || source.content || '').trim()) {
@@ -1906,6 +1923,518 @@ function _renderMobileProductCarousel(message) {
   </div>`;
 }
 
+function _mobileEmailList(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(',');
+  return raw.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function _renderMobileEmailComposerArtifact(a) {
+  if (!a || typeof a !== 'object') return '';
+  const id = String(a.id || `email_${Date.now().toString(36)}`).trim();
+  const status = String(a.status || a.mode || 'draft').toLowerCase();
+  const sent = status === 'sent' || String(a.mode || '').toLowerCase() === 'sent';
+  const readonly = sent ? ' readonly' : '';
+  const disabled = sent ? ' disabled' : '';
+  const open = sent ? '' : ' open';
+  const title = sent ? 'Email sent' : 'Email draft';
+  const to = _mobileEmailList(a.to).join(', ');
+  const cc = _mobileEmailList(a.cc).join(', ');
+  const bcc = _mobileEmailList(a.bcc).join(', ');
+  const subject = String(a.subject || '').trim();
+  const body = String(a.body || '').trim();
+  const attachments = Array.isArray(a.attachments) ? a.attachments.filter(Boolean) : [];
+  const sentMeta = [
+    a.sentAt ? new Date(a.sentAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '',
+    a.messageId ? `Message ${String(a.messageId).slice(0, 18)}` : '',
+  ].filter(Boolean).join(' · ');
+  return `<details class="pm-email-composer-card ${sent ? 'is-sent' : 'is-draft'}" data-email-composer-id="${escapeHtml(id)}"${open}>
+    <summary class="pm-email-composer-summary">
+      <span class="pm-email-composer-dot">${sent ? '✓' : '✉'}</span>
+      <span><strong>${escapeHtml(title)}</strong><em>${escapeHtml(subject || '(no subject)')}</em>${sentMeta ? `<small>${escapeHtml(sentMeta)}</small>` : ''}</span>
+    </summary>
+    <div class="pm-email-composer-panel">
+      <label class="pm-email-composer-field"><span>To</span><input type="text" data-email-field="to" value="${escapeHtml(to)}"${readonly} autocomplete="off"></label>
+      <div class="pm-email-composer-two">
+        <label class="pm-email-composer-field"><span>Cc</span><input type="text" data-email-field="cc" value="${escapeHtml(cc)}"${readonly} autocomplete="off"></label>
+        <label class="pm-email-composer-field"><span>Bcc</span><input type="text" data-email-field="bcc" value="${escapeHtml(bcc)}"${readonly} autocomplete="off"></label>
+      </div>
+      <label class="pm-email-composer-field"><span>Subject</span><input type="text" data-email-field="subject" value="${escapeHtml(subject)}"${readonly} autocomplete="off"></label>
+      <textarea class="pm-email-composer-body" data-email-field="body" rows="9"${readonly}>${escapeHtml(body)}</textarea>
+      ${attachments.length ? `<div class="pm-email-composer-attachments">${attachments.map((att) => {
+        const name = String(att?.name || att?.filename || 'Attachment').trim();
+        const size = att?.size ? ` · ${_formatBytes(Number(att.size) || 0)}` : '';
+        return `<span>${ICONS.paperclip}${escapeHtml(name)}${escapeHtml(size)}</span>`;
+      }).join('')}</div>` : ''}
+      <div class="pm-email-composer-actions">
+        ${sent ? `<span class="pm-email-composer-sent">Sent from Gmail</span>` : `<button type="button" class="pm-email-composer-send" data-email-composer-action="send">${ICONS.send}<span>Send</span></button>`}
+        <button type="button" class="pm-email-composer-tool" data-email-composer-action="format" title="Format">Aa</button>
+        <button type="button" class="pm-email-composer-tool" data-email-composer-action="emoji" title="Emoji">☺</button>
+        <button type="button" class="pm-email-composer-tool" data-email-composer-action="attach" title="Attach">${ICONS.paperclip}</button>
+        <button type="button" class="pm-email-composer-tool" data-email-composer-action="image" title="Insert image">${ICONS.image}</button>
+        <button type="button" class="pm-email-composer-tool danger" data-email-composer-action="discard" title="Discard"${disabled}>${ICONS.trash}</button>
+      </div>
+    </div>
+  </details>`;
+}
+
+function _findMobileEmailComposerArtifact(artifactId) {
+  const id = String(artifactId || '').trim();
+  if (!id) return null;
+  const threads = __pmChat.threads && typeof __pmChat.threads === 'object' ? __pmChat.threads : {};
+  for (const [sessionId, thread] of Object.entries(threads)) {
+    if (!Array.isArray(thread)) continue;
+    for (const message of thread) {
+      const artifacts = Array.isArray(message?.richArtifacts) ? message.richArtifacts : [];
+      const artifact = artifacts.find((item) => item?.type === 'email_composer' && String(item.id || '') === id);
+      if (artifact) return { sessionId, thread, message, artifact };
+    }
+  }
+  return null;
+}
+
+function _mobileEmailComposerPayload(card) {
+  const get = (name) => String(card?.querySelector?.(`[data-email-field="${name}"]`)?.value || '').trim();
+  return {
+    artifactId: String(card?.getAttribute?.('data-email-composer-id') || '').trim(),
+    sessionId: String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID,
+    to: get('to'),
+    cc: get('cc'),
+    bcc: get('bcc'),
+    subject: get('subject'),
+    body: get('body'),
+  };
+}
+
+function _setMobileEmailComposerNotice(card, message, kind = 'info') {
+  if (!card) return;
+  let notice = card.querySelector('.pm-email-composer-notice');
+  if (!notice) {
+    notice = document.createElement('div');
+    notice.className = 'pm-email-composer-notice';
+    card.querySelector('.pm-email-composer-panel')?.appendChild(notice);
+  }
+  notice.textContent = String(message || '');
+  notice.dataset.kind = kind;
+  notice.hidden = !message;
+}
+
+async function _sendMobileEmailComposer(button) {
+  const card = button?.closest?.('.pm-email-composer-card');
+  const payload = _mobileEmailComposerPayload(card);
+  if (!payload.to) {
+    _setMobileEmailComposerNotice(card, 'Add at least one recipient.', 'error');
+    return;
+  }
+  if (!payload.subject) {
+    _setMobileEmailComposerNotice(card, 'Add a subject before sending.', 'error');
+    return;
+  }
+  button.disabled = true;
+  const previous = button.innerHTML;
+  button.innerHTML = `${ICONS.send}<span>Sending</span>`;
+  _setMobileEmailComposerNotice(card, '', 'info');
+  try {
+    const data = await mobileGatewayFetch('/api/connectors/gmail/send-composer', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (!data?.success) throw new Error(data?.error || 'Could not send email');
+    const found = _findMobileEmailComposerArtifact(payload.artifactId);
+    if (found?.artifact && data.artifact) Object.assign(found.artifact, data.artifact);
+    const sid = found?.sessionId || payload.sessionId;
+    const thread = found?.thread || __pmChat.threads?.[sid] || _activeMobileThread();
+    if (sid && Array.isArray(thread)) {
+      updateMobileChatSessionHistory(sid, _mobileHistoryForServer(thread)).catch((err) => {
+        console.warn('[mobile email composer] failed to sync sent email card:', err);
+      });
+    }
+    pmToast('Email sent', 'success');
+    _renderMobileChatSessionNow(sid);
+  } catch (err) {
+    _setMobileEmailComposerNotice(card, err?.message || 'Could not send email.', 'error');
+    button.disabled = false;
+    button.innerHTML = previous;
+  }
+}
+
+function _handleMobileEmailComposerAction(button) {
+  const action = String(button?.getAttribute?.('data-email-composer-action') || '').trim();
+  const card = button?.closest?.('.pm-email-composer-card');
+  if (!action || !card) return;
+  if (action === 'send') {
+    _sendMobileEmailComposer(button);
+    return;
+  }
+  if (action === 'discard') {
+    card.remove();
+    pmToast('Draft hidden', 'info');
+    return;
+  }
+  _setMobileEmailComposerNotice(card, action === 'attach' ? 'Attachments are managed by Prometheus for now.' : 'You can edit the draft text directly.', 'info');
+}
+
+function _renderMobileRichArtifacts(message) {
+  const artifacts = Array.isArray(message?.richArtifacts) ? message.richArtifacts : [];
+  if (!artifacts.length) return '';
+  return artifacts.map((a) => {
+    switch (a?.type) {
+      case 'products': return _renderMobileProductCarousel({ productCarousel: { title: a.title, items: a.items } });
+      case 'agent_work': return _renderMobileAgentWork(a);
+      case 'sources': return _renderMobileSources(a);
+      case 'stocks': return _renderMobileMarket(a);
+      case 'weather': return _renderMobileWeather(a);
+      case 'comparison': return _renderMobileComparison(a);
+      case 'chart': return _renderMobileChart(a);
+      case 'run_result': return _renderMobileRunResult(a);
+      case 'map': return _renderMobileMap(a);
+      case 'prediction_market': return _renderMobilePredictionMarket(a);
+      case 'email_composer': return _renderMobileEmailComposerArtifact(a);
+      default: return '';
+    }
+  }).join('');
+}
+
+function _renderMobilePredictionMarket(a) {
+  const items = Array.isArray(a?.items) ? a.items.filter(Boolean) : [];
+  if (!items.length) return '';
+  const title = String(a?.title || 'Polymarket').trim();
+  const cards = items.map((it) => {
+    const outcomes = Array.isArray(it.outcomes) ? it.outcomes.slice(0, 6) : [];
+    const binary = outcomes.length === 2 && /^(yes|no)$/i.test(String(outcomes[0]?.label || ''));
+    const rows = outcomes
+      .slice()
+      .sort((x, y) => (Number(y.price) || 0) - (Number(x.price) || 0))
+      .map((o) => {
+        const pct = Number.isFinite(Number(o.price)) ? Math.round(Number(o.price) * 100) : null;
+        return `<div class="pm-pmkt-outcome">
+          <div class="pm-pmkt-outcome-top"><span>${escapeHtml(String(o.label || ''))}</span><span class="pm-pmkt-pct">${pct != null ? pct + '%' : '—'}</span></div>
+          <div class="pm-pmkt-bar"><div class="pm-pmkt-bar-fill${binary && /^yes$/i.test(String(o.label)) ? ' yes' : (binary ? ' no' : '')}" style="width:${pct != null ? pct : 0}%"></div></div>
+        </div>`;
+      }).join('');
+    const end = it.endDate ? new Date(it.endDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+    const icon = it.icon ? `<img class="pm-pmkt-icon" src="${escapeHtml(String(it.icon))}" alt="" loading="lazy">` : '';
+    const inner = `<div class="pm-pmkt-q">${icon}<span>${escapeHtml(String(it.question || ''))}</span></div><div class="pm-pmkt-outcomes">${rows}</div>${end ? `<div class="pm-pmkt-meta">Ends ${escapeHtml(end)}</div>` : ''}`;
+    return it.url
+      ? `<a class="pm-pmkt-card" href="${escapeHtml(String(it.url))}" target="_blank" rel="noopener noreferrer">${inner}</a>`
+      : `<div class="pm-pmkt-card">${inner}</div>`;
+  }).join('');
+  return `<div class="pm-prediction-market"><div class="pm-pmkt-heading">${escapeHtml(title)}</div><div class="pm-pmkt-cards">${cards}</div><div class="pm-pmkt-source">Polymarket · read-only</div></div>`;
+}
+
+function _renderMobileWeather(a) {
+  if (!a || typeof a !== 'object') return '';
+  const loc = String(a.location || '').trim();
+  const unit = String(a.unit || 'F').toUpperCase();
+  const cur = a.current || {};
+  const daily = Array.isArray(a.daily) ? a.daily : [];
+  if (!loc && !daily.length) return '';
+  const days = daily.map((d) => `
+    <div class="pm-wx-day">
+      <div class="pm-wx-day-name">${escapeHtml(String(d.day || ''))}</div>
+      <div class="pm-wx-day-icon">${escapeHtml(String(d.icon || '🌡️'))}</div>
+      <div class="pm-wx-day-hi">${d.high != null ? escapeHtml(String(d.high)) + '°' : ''}</div>
+      <div class="pm-wx-day-lo">${d.low != null ? escapeHtml(String(d.low)) + '°' : ''}</div>
+    </div>`).join('');
+  return `<div class="pm-weather">
+    <div class="pm-wx-head">
+      <div class="pm-wx-loc">${escapeHtml(loc)}</div>
+      <div class="pm-wx-now">${cur.temp != null ? escapeHtml(String(cur.temp)) + '°' + escapeHtml(unit) : ''}</div>
+      <div class="pm-wx-cond">${escapeHtml(String(cur.icon || ''))} ${escapeHtml(String(cur.condition || ''))}</div>
+    </div>
+    ${days ? `<div class="pm-wx-days">${days}</div>` : ''}
+  </div>`;
+}
+
+function _renderMobileComparison(a) {
+  const columns = Array.isArray(a?.columns) ? a.columns.filter((c) => c && c.key) : [];
+  const rows = Array.isArray(a?.rows) ? a.rows : [];
+  if (!columns.length || !rows.length) return '';
+  const title = String(a?.title || '').trim();
+  const labelKey = String(a?.labelKey || columns[0].key);
+  const highlight = String(a?.highlightColumn || '');
+  const head = `<tr>${columns.map((c) => `<th class="${c.key === highlight ? 'pm-cmp-hl' : ''}">${escapeHtml(String(c.label || c.key))}</th>`).join('')}</tr>`;
+  const body = rows.map((r) => `<tr>${columns.map((c) => {
+    const v = r[c.key];
+    const cell = (v === true) ? '✓' : (v === false) ? '—' : (v == null ? '' : String(v));
+    return `<td class="${c.key === highlight ? 'pm-cmp-hl' : ''}${c.key === labelKey ? ' pm-cmp-label' : ''}">${escapeHtml(cell)}</td>`;
+  }).join('')}</tr>`).join('');
+  return `<div class="pm-comparison">${title ? `<div class="pm-cmp-heading">${escapeHtml(title)}</div>` : ''}<div class="pm-cmp-scroll"><table class="pm-cmp-table"><thead>${head}</thead><tbody>${body}</tbody></table></div></div>`;
+}
+
+const PM_CHART_COLORS = ['#5a91ff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4'];
+function _renderMobileChart(a) {
+  const series = Array.isArray(a?.series) ? a.series.filter((s) => s && Array.isArray(s.points) && s.points.length) : [];
+  if (!series.length) return '';
+  const title = String(a?.title || '').trim();
+  const type = ['line', 'bar', 'area'].includes(a?.chartType) ? a.chartType : 'line';
+  const W = 320, H = 150, pad = 8;
+  const allY = series.flatMap((s) => s.points.map((p) => Number(p.y)).filter((n) => Number.isFinite(n)));
+  const minY = Math.min(0, ...allY), maxY = Math.max(...allY), rangeY = (maxY - minY) || 1;
+  const maxLen = Math.max(...series.map((s) => s.points.length));
+  const innerW = W - pad * 2, innerH = H - pad * 2;
+  const xAt = (i) => pad + (maxLen <= 1 ? innerW / 2 : (i / (maxLen - 1)) * innerW);
+  const yAt = (y) => pad + innerH - ((Number(y) - minY) / rangeY) * innerH;
+  let body = '';
+  if (type === 'bar') {
+    const groupW = innerW / maxLen;
+    const barW = Math.max(2, (groupW / series.length) * 0.7);
+    series.forEach((s, si) => {
+      const color = s.color || PM_CHART_COLORS[si % PM_CHART_COLORS.length];
+      s.points.forEach((p, i) => {
+        const x = pad + i * groupW + si * (groupW / series.length);
+        const y = yAt(p.y), y0 = yAt(0);
+        body += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.abs(y0 - y).toFixed(1)}" fill="${color}" rx="1.5"/>`;
+      });
+    });
+  } else {
+    series.forEach((s, si) => {
+      const color = s.color || PM_CHART_COLORS[si % PM_CHART_COLORS.length];
+      const d = s.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(p.y).toFixed(1)}`).join(' ');
+      if (type === 'area') body += `<path d="${d} L${xAt(s.points.length - 1).toFixed(1)},${yAt(minY).toFixed(1)} L${xAt(0).toFixed(1)},${yAt(minY).toFixed(1)} Z" fill="${color}" opacity="0.14"/>`;
+      body += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+    });
+  }
+  const legend = (series.length > 1 || series[0].label)
+    ? `<div class="pm-chart-legend">${series.map((s, si) => `<span><i style="background:${s.color || PM_CHART_COLORS[si % PM_CHART_COLORS.length]}"></i>${escapeHtml(String(s.label || `Series ${si + 1}`))}</span>`).join('')}</div>`
+    : '';
+  return `<div class="pm-chart">${title ? `<div class="pm-chart-heading">${escapeHtml(title)}</div>` : ''}<svg class="pm-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${body}</svg>${legend}</div>`;
+}
+
+function _renderMobileRunResult(a) {
+  if (!a || typeof a !== 'object') return '';
+  const title = String(a.title || 'Task complete').trim();
+  const status = String(a.status || '').trim();
+  const summary = String(a.summary || '').trim();
+  const files = Array.isArray(a.files) ? a.files : [];
+  const links = Array.isArray(a.links) ? a.links : [];
+  const filePills = files.map((f) => {
+    const p = String(f.path || '').trim();
+    if (!p) return '';
+    return `<span class="pm-rr-file">📄 ${escapeHtml(String(f.label || p.split(/[\\/]/).pop() || p))}</span>`;
+  }).join('');
+  const linkPills = links.map((l) => `<a class="pm-rr-link" href="${escapeHtml(String(l.href))}" target="_blank" rel="noopener noreferrer">${escapeHtml(String(l.label || l.href))} ↗</a>`).join('');
+  return `<div class="pm-run-result">
+    <div class="pm-rr-head"><span>✅</span><strong>${escapeHtml(title)}</strong>${status ? `<span class="pm-aw-status ${escapeHtml(status.toLowerCase())}">${escapeHtml(status)}</span>` : ''}</div>
+    ${summary ? `<div class="pm-rr-summary">${escapeHtml(summary)}</div>` : ''}
+    ${filePills ? `<div class="pm-rr-files">${filePills}</div>` : ''}
+    ${linkPills ? `<div class="pm-rr-links">${linkPills}</div>` : ''}
+  </div>`;
+}
+
+function _renderMobileMap(a) {
+  if (!a || typeof a !== 'object') return '';
+  const markers = Array.isArray(a.markers) ? a.markers : [];
+  if (!markers.length) return '';
+  const title = String(a.title || '').trim();
+  const located = markers.filter((m) => Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng)));
+  const c = a.center || located[0] || {};
+  const lat = Number(c.lat), lng = Number(c.lng);
+  const span = 0.06;
+  const src = Number.isFinite(lat) ? `https://www.openstreetmap.org/export/embed.html?bbox=${lng - span},${lat - span},${lng + span},${lat + span}&layer=mapnik${located[0] ? `&marker=${located[0].lat},${located[0].lng}` : ''}` : '';
+  const list = markers.map((m, i) => {
+    const name = String(m.label || `Location ${i + 1}`);
+    const cat = String(m.category || '').trim();
+    const rating = Number.isFinite(Number(m.rating)) ? `★ ${Number(m.rating).toFixed(1)}` : '';
+    const addr = String(m.address || '').trim();
+    const dirHref = (Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng)))
+      ? `https://www.google.com/maps/search/?api=1&query=${m.lat},${m.lng}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name + ' ' + addr)}`;
+    return `<div class="pm-map-marker"><div class="pm-map-num">${i + 1}</div><div><div class="pm-map-top"><strong>${escapeHtml(name)}</strong>${rating ? `<span class="pm-map-rating">${escapeHtml(rating)}</span>` : ''}</div>${(cat || addr) ? `<div class="pm-map-sub">${[escapeHtml(cat), escapeHtml(addr)].filter(Boolean).join(' · ')}</div>` : ''}<a class="pm-map-link" href="${escapeHtml(dirHref)}" target="_blank" rel="noopener noreferrer">Directions ↗</a></div></div>`;
+  }).join('');
+  return `<div class="pm-map">${title ? `<div class="pm-map-heading">${escapeHtml(title)}</div>` : ''}${src ? `<div class="pm-map-frame-wrap"><iframe class="pm-map-frame" src="${escapeHtml(src)}" loading="lazy"></iframe></div>` : ''}<div class="pm-map-markers">${list}</div></div>`;
+}
+
+function _renderMobileSources(a) {
+  const items = Array.isArray(a?.items) ? a.items.filter(Boolean) : [];
+  if (!items.length) return '';
+  const title = String(a?.title || '').trim();
+  const cards = items.map((it) => {
+    const url = String(it.url || '').trim();
+    const img = String(it.imageUrl || '').trim();
+    const publisher = String(it.publisher || '').trim();
+    const headline = String(it.title || url || 'Source').trim();
+    const date = String(it.publishedAt || '').trim();
+    const inner = `
+      ${img ? `<div class="pm-src-img-wrap"><img class="pm-src-img" src="${escapeHtml(img)}" alt="" loading="lazy"></div>` : ''}
+      <div class="pm-src-body">
+        ${publisher ? `<div class="pm-src-publisher">${escapeHtml(publisher)}</div>` : ''}
+        <strong class="pm-src-title">${escapeHtml(headline)}</strong>
+        ${date ? `<div class="pm-src-date">${escapeHtml(date)}</div>` : ''}
+      </div>`;
+    return url
+      ? `<a class="pm-src-card" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
+      : `<div class="pm-src-card">${inner}</div>`;
+  }).join('');
+  return `<div class="pm-sources">${title ? `<div class="pm-src-heading">${escapeHtml(title)}</div>` : ''}<div class="pm-src-track">${cards}</div></div>`;
+}
+
+function _renderMobileMarket(a) {
+  const items = Array.isArray(a?.items) ? a.items.filter(Boolean) : [];
+  if (!items.length) return '';
+  const title = String(a?.title || '').trim();
+  const rows = items.map((it) => {
+    const up = Number(it.changePct) >= 0;
+    const pct = Number.isFinite(Number(it.changePct))
+      ? `<span class="pm-mk-delta ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} ${Math.abs(Number(it.changePct)).toFixed(2)}%</span>`
+      : '';
+    const logo = it.logoUrl ? `<img class="pm-mk-logo" src="${escapeHtml(String(it.logoUrl))}" alt="" loading="lazy">` : '';
+    let price = '';
+    const n = Number(it.price);
+    if (Number.isFinite(n)) {
+      const digits = n < 1 ? (n < 0.01 ? 6 : 4) : 2;
+      price = `${n.toFixed(digits)} ${escapeHtml(String(it.currency || 'USD'))}`;
+    }
+    return `<div class="pm-mk-row">
+      <div class="pm-mk-id">${logo}<div class="pm-mk-id-text"><strong>${escapeHtml(String(it.symbol || ''))}</strong>${it.name ? `<span>${escapeHtml(String(it.name))}</span>` : ''}</div></div>
+      <div class="pm-mk-figures"><div class="pm-mk-price">${price}</div>${pct}</div>
+    </div>`;
+  }).join('');
+  const src = String(a?.source || (items[0] && items[0].source) || 'CoinGecko');
+  return `<div class="pm-market">${title ? `<div class="pm-mk-heading">${escapeHtml(title)}</div>` : ''}${rows}<div class="pm-mk-source">${escapeHtml(src)}</div></div>`;
+}
+
+function _renderMobileAgentWork(a) {
+  if (!a || typeof a !== 'object') return '';
+  const greeting = String(a.greeting || '').trim();
+  const title = String(a.title || '').trim();
+  const summaryRows = Array.isArray(a.summaryRows) ? a.summaryRows : [];
+  const priorities = Array.isArray(a.priorities) ? a.priorities : [];
+  const teams = Array.isArray(a.teams) ? a.teams : [];
+  const activeWork = Array.isArray(a.activeWork) ? a.activeWork : [];
+  if (!greeting && !title && !summaryRows.length && !priorities.length && !teams.length && !activeWork.length) return '';
+  let out = '';
+  if (greeting || title) {
+    out += `<div class="pm-agent-work-head">${greeting ? `<strong>${escapeHtml(greeting)}</strong>` : ''}${title ? `<span>${escapeHtml(title)}</span>` : ''}</div>`;
+  }
+  if (summaryRows.length) {
+    out += `<div class="pm-summary-rows">${summaryRows.map(s => `
+      <div class="pm-summary-row">
+        <span class="pm-icon">${ICONS[s.icon] || ICONS.clipboard}</span>
+        <span class="pm-meta"><strong>${escapeHtml(String(s.title || ''))}</strong><span>${escapeHtml(String(s.subtitle || ''))}</span></span>
+      </div>`).join('')}</div>`;
+  }
+  if (priorities.length) {
+    out += `<ol class="pm-numbered">${priorities.map((n, i) => {
+      const inner = `<span class="pm-num">${i+1}</span><div><strong>${escapeHtml(String(n.title || ''))}</strong><span>${escapeHtml(String(n.subtitle || ''))}</span></div>`;
+      if (_awmClickable(n)) {
+        return `<li class="pm-aw-item">${_awmHead(n, inner)}${_awmShell()}</li>`;
+      }
+      return `<li>${inner}</li>`;
+    }).join('')}</ol>`;
+  }
+  if (teams.length) {
+    out += `<div class="pm-team-rows">${teams.map(t => `
+      <div class="pm-team-row"><span class="pm-team-icon">${escapeHtml(String(t.icon || '🏠'))}</span><div><strong>${escapeHtml(String(t.name || ''))}</strong><span>${escapeHtml(String(t.detail || ''))}</span></div></div>
+    `).join('')}</div>`;
+  }
+  if (activeWork.length) {
+    out += `<div class="pm-team-rows">${activeWork.map(w => {
+      const body = `<span class="pm-team-icon">⚙️</span><div><strong>${escapeHtml(String(w.title || ''))}</strong><span>${escapeHtml(String(w.progressLabel || w.status || ''))}</span></div>`;
+      if (_awmClickable(w)) {
+        return `<div class="pm-aw-item">${_awmHead(w, body)}${_awmShell()}</div>`;
+      }
+      return w.href
+        ? `<a class="pm-team-row" href="${escapeHtml(String(w.href))}">${body}</a>`
+        : `<div class="pm-team-row">${body}</div>`;
+    }).join('')}</div>`;
+  }
+  return out;
+}
+
+// ── Mobile agent_work interactivity (mirrors desktop) ────────────────────────
+function _awmClickable(item) {
+  return !!(item && typeof item === 'object' && String(item.taskId || '').trim());
+}
+function _awmHead(item, innerHtml) {
+  const taskId = escapeHtml(String(item.taskId || ''));
+  return `<div class="pm-team-row pm-aw-head" data-aw-task="${taskId}" onclick="_awmToggle(this)">${innerHtml}<span class="pm-aw-chevron">▾</span></div>`;
+}
+function _awmShell() {
+  return `<div class="pm-aw-detail" hidden></div>`;
+}
+async function _awmToggle(headEl) {
+  try {
+    const wrap = headEl.parentElement;
+    const detail = wrap && wrap.querySelector('.pm-aw-detail');
+    if (!detail) return;
+    const taskId = headEl.getAttribute('data-aw-task') || '';
+    if (detail.hasAttribute('hidden')) {
+      detail.removeAttribute('hidden');
+      headEl.classList.add('pm-aw-open');
+      if (!detail.getAttribute('data-loaded')) await _awmLoad(taskId, detail);
+    } else {
+      detail.setAttribute('hidden', '');
+      headEl.classList.remove('pm-aw-open');
+    }
+  } catch (err) { console.warn('[agent_work mobile] toggle failed', err); }
+}
+async function _awmLoad(taskId, container) {
+  container.innerHTML = '<div class="pm-aw-loading">Loading…</div>';
+  try {
+    const data = await window.api('/api/bg-tasks/' + encodeURIComponent(taskId));
+    const task = (data && data.task) ? data.task : (data || {});
+    container.setAttribute('data-loaded', '1');
+    const status = String(task.status || 'unknown');
+    const plan = Array.isArray(task.plan) ? task.plan : [];
+    const total = plan.length;
+    const step = total ? Math.min((Number(task.currentStepIndex) || 0) + 1, total) : 0;
+    const issue = String(task.pauseReason || '').trim();
+    const summary = String(task.finalSummary || '').trim();
+    const idJson = JSON.stringify(taskId);
+    const canResume = ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'failed', 'queued'].includes(status);
+    const canPause = status === 'running';
+    const acts = [
+      canResume ? `<button class="pm-aw-act primary" onclick='_awmAction(${idJson},"resume",this)'>Resume</button>` : '',
+      canPause ? `<button class="pm-aw-act" onclick='_awmAction(${idJson},"pause",this)'>Pause</button>` : '',
+      status === 'failed' ? `<button class="pm-aw-act" onclick='_awmAction(${idJson},"restart",this)'>Restart</button>` : '',
+      `<button class="pm-aw-act danger" onclick='_awmAction(${idJson},"delete",this)'>Delete</button>`,
+    ].filter(Boolean).join('');
+    container.innerHTML = `
+      <div class="pm-aw-meta"><span class="pm-aw-status ${escapeHtml(status)}">${escapeHtml(status)}</span>${total ? `<span class="pm-aw-step">Step ${step}/${total}</span>` : ''}</div>
+      ${issue ? `<div class="pm-aw-row"><b>Blocker:</b> ${escapeHtml(issue.slice(0, 300))}</div>` : ''}
+      ${summary ? `<div class="pm-aw-row"><b>Summary:</b> ${escapeHtml(summary.slice(0, 400))}</div>` : ''}
+      <div class="pm-aw-actions">${acts}</div>
+      <div class="pm-aw-msg"><input type="text" class="pm-aw-msg-input" placeholder="Message this task's agent…"><button class="pm-aw-act" onclick='_awmSend(${idJson},this)'>Send</button></div>`;
+  } catch (err) {
+    container.removeAttribute('data-loaded');
+    container.innerHTML = `<div class="pm-aw-loading">Could not load task.</div>`;
+  }
+}
+async function _awmAction(taskId, action, btn) {
+  const detail = btn && btn.closest('.pm-aw-detail');
+  try {
+    if (action === 'delete') {
+      if (!confirm('Delete this task?')) return;
+      await window.api('/api/bg-tasks/' + encodeURIComponent(taskId), { method: 'DELETE' });
+      if (detail) detail.innerHTML = '<div class="pm-aw-loading">Task deleted.</div>';
+      return;
+    }
+    if (btn) btn.disabled = true;
+    await window.api('/api/bg-tasks/' + encodeURIComponent(taskId) + '/' + action, { method: 'POST' });
+    if (detail) { detail.removeAttribute('data-loaded'); await _awmLoad(taskId, detail); }
+  } catch (err) {
+    if (btn) btn.disabled = false;
+  }
+}
+async function _awmSend(taskId, el) {
+  const detail = el && el.closest('.pm-aw-detail');
+  const input = detail ? detail.querySelector('.pm-aw-msg-input') : null;
+  const message = input ? String(input.value || '').trim() : '';
+  if (!message) return;
+  try {
+    if (input) input.disabled = true;
+    await window.api('/api/bg-tasks/' + encodeURIComponent(taskId) + '/message', { method: 'POST', body: JSON.stringify({ message }) });
+    if (detail) { detail.removeAttribute('data-loaded'); await _awmLoad(taskId, detail); }
+  } catch (err) {
+    if (input) input.disabled = false;
+  }
+}
+if (typeof window !== 'undefined') {
+  window._awmToggle = _awmToggle;
+  window._awmAction = _awmAction;
+  window._awmSend = _awmSend;
+}
+
 function _renderChatMessageHtml(m, index = -1) {
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
@@ -1974,7 +2503,10 @@ function _renderChatMessageHtml(m, index = -1) {
     inner += `<div class="pm-chat-approvals-inline">${activeApprovals.map((approval) => _renderMobileApprovalCard(approval, { compact: true })).join('')}</div>`;
   }
   if (b.browseState) inner += _renderBrowseCard(b.browseState);
-  inner += _renderMobileProductCarousel(m);
+  inner += _renderMobileRichArtifacts(m);
+  if (!(Array.isArray(m.richArtifacts) && m.richArtifacts.some((a) => a?.type === 'products'))) {
+    inner += _renderMobileProductCarousel(m);
+  }
   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
   inner += _renderMobileFileChanges(m.fileChanges);
   inner += _renderMobileProcess(_mobileProcessEntriesWithLiveTrace(m, m.processEntries || b.processEntries), { collapsed: m.streaming && answerStarted });
@@ -2051,6 +2583,10 @@ function _renderChatAttachmentPreviews(files, removable = true) {
       const src = f.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(f.workspacePath || ''))}`;
       return `<div class="pm-attach-chip image">${remove}<img src="${escapeHtml(src)}" alt=""><span><strong>${name}</strong><em>${meta}</em></span></div>`;
     }
+    if (f.kind === 'video' && (f.dataUrl || f.workspacePath)) {
+      const src = f.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(f.workspacePath || ''))}`;
+      return `<div class="pm-attach-chip video">${remove}<video src="${escapeHtml(src)}" muted playsinline preload="metadata"></video><span><strong>${name}</strong><em>${meta}</em></span></div>`;
+    }
     return `<div class="pm-attach-chip">${remove}<span class="pm-attach-file">${ICONS.clipboard}</span><span><strong>${name}</strong><em>${meta}</em></span></div>`;
   }).join('');
   return items ? `<div class="pm-attach-list">${items}</div>` : '';
@@ -2102,6 +2638,9 @@ async function _normalizeMobileFile(file) {
     const dataUrl = await _fileToDataUrl(file);
     return { ...base, kind: 'image', dataUrl, base64: dataUrl.replace(/^data:[^;]+;base64,/, '') };
   }
+  if (mimeType.startsWith('video/')) {
+    return { ...base, kind: 'video' };
+  }
   if (_isTextLike(file) && file.size <= 220_000) {
     return { ...base, kind: 'text', text: await _fileToText(file) };
   }
@@ -2150,6 +2689,7 @@ async function _uploadMobileChatAttachments(files = []) {
           workspacePath,
           relPath: r?.relPath || '',
           isImage: f.kind === 'image',
+          isVideo: f.kind === 'video',
           binary: f.kind !== 'text',
           mimeType,
           base64: f.kind === 'image' ? base64 : undefined,
@@ -2161,6 +2701,7 @@ async function _uploadMobileChatAttachments(files = []) {
         ext,
         workspacePath: '',
         isImage: f.kind === 'image',
+        isVideo: f.kind === 'video',
         binary: f.kind !== 'text',
         mimeType: f.mimeType || '',
         error: err?.message || String(err || 'Upload failed'),
@@ -2185,9 +2726,31 @@ function _buildMobileFileContextNote(uploadResults = []) {
 function _renderThread(threadEl) {
   _dedupeMobileAssistantTurns(__pmChat.thread);
   _reindexMobileThread(__pmChat.thread);
+  // Preserve which process-log <details> the user has opened, plus their inner
+  // scroll, across this full innerHTML rebuild — otherwise streaming re-renders
+  // snap the process log closed and reset its scroll every tick.
+  const openProc = {};
+  try {
+    threadEl.querySelectorAll('details.pm-process-stream[open]').forEach((d) => {
+      const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
+      if (idx == null) return;
+      const full = d.querySelector('.pm-process-full');
+      openProc[idx] = { scrollTop: full ? full.scrollTop : 0 };
+    });
+  } catch {}
   threadEl.innerHTML = __pmChat.thread
     .map((msg, index) => _isMobileHiddenVoiceDraftMessage(msg, index) ? '' : _renderChatMessageHtml(msg, index))
     .join('');
+  try {
+    Object.keys(openProc).forEach((idx) => {
+      const msgEl = threadEl.querySelector(`[data-msg-index="${idx}"]`);
+      const d = msgEl?.querySelector('details.pm-process-stream');
+      if (!d) return;
+      d.setAttribute('open', '');
+      const full = d.querySelector('.pm-process-full');
+      if (full) full.scrollTop = openProc[idx].scrollTop;
+    });
+  } catch {}
   threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
   });
@@ -2803,7 +3366,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     </div>
     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
     <form class="pm-composer" id="pm-composer">
-      <input id="pm-file-input" type="file" multiple accept="image/*,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
+      <input id="pm-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-chat-slash-popover" id="pm-chat-slash-popover" hidden></div>
       <div class="pm-skill-trigger-pill" id="pm-skill-trigger-pill" hidden aria-live="polite"></div>
       <div class="pm-attach-tray" id="pm-attach-tray" hidden></div>
@@ -3778,6 +4341,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.text) {
           aiTurn.finalResponseStarted = true;
           aiTurn.body.text = String(evt.text);
@@ -3789,6 +4353,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.reply && !String(aiTurn.body.text || '').trim()) {
           aiTurn.finalResponseStarted = true;
           aiTurn.body.text = String(evt.reply);
@@ -4379,6 +4944,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.text) {
           aiTurn.finalResponseStarted = true;
           aiTurn.body.text = String(evt.text);
@@ -4389,6 +4955,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.reply && !String(aiTurn.body.text || '').trim()) {
           aiTurn.finalResponseStarted = true;
           aiTurn.body.text = String(evt.reply);
@@ -4958,9 +5525,42 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const onMainChatStreamEvent = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return;
     if (__pmChat.activeSessionId !== requestedSession) return;
-    _markMobileSessionRunning(requestedSession, true);
     const activeThread = _activeMobileThread();
     const incomingClientRequestId = String(msg.data?.clientRequestId || '').trim();
+    const eventType = String(msg.event || '');
+    if (eventType === 'user_message') {
+      const ownClientRequestId = String(__pmChat.sentClientRequestIds?.[requestedSession] || '').trim();
+      if (incomingClientRequestId && incomingClientRequestId === ownClientRequestId) return;
+      const payload = msg.data?.message && typeof msg.data.message === 'object' ? msg.data.message : {};
+      const text = String(payload.content || payload.text || payload.body?.text || '').trim();
+      const attachments = Array.isArray(payload.attachmentPreviews)
+        ? payload.attachmentPreviews
+        : (Array.isArray(payload.body?.attachments) ? payload.body.attachments : []);
+      const ts = Number(payload.timestamp || msg.at || Date.now()) || Date.now();
+      const previousUser = [...activeThread].reverse().find((turn) => turn?.role === 'user');
+      const previousText = String(previousUser?.body?.text || previousUser?.content || '').trim();
+      const previousTs = Number(previousUser?.timestamp || 0);
+      const isDuplicate = previousUser
+        && previousText === text
+        && Math.abs(previousTs - ts) < 10000;
+      if (!isDuplicate && (text || attachments.length)) {
+        activeThread.push({
+          role: 'user',
+          time: _nowTime(),
+          timestamp: ts,
+          body: { text, attachments },
+          content: text,
+          attachmentPreviews: attachments,
+          _clientRequestId: incomingClientRequestId,
+        });
+        _reindexMobileThread(activeThread);
+        renderThreadNow();
+      }
+      _markMobileSessionRunning(requestedSession, true);
+      setBusy(true);
+      return;
+    }
+    _markMobileSessionRunning(requestedSession, true);
     let aiTurn = incomingClientRequestId
       ? activeThread.find((turn) => turn?.role === 'ai' && turn.streaming && String(turn._clientRequestId || '') === incomingClientRequestId)
       : null;
@@ -5172,6 +5772,14 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   });
 
   threadEl?.addEventListener('click', (event) => {
+    const emailComposerBtn = event.target.closest?.('[data-email-composer-action]');
+    if (emailComposerBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      _handleMobileEmailComposerAction(emailComposerBtn);
+      return;
+    }
+
     const msgActionBtn = event.target.closest?.('[data-msg-action][data-msg-index]');
     if (msgActionBtn) {
       event.preventDefault();
@@ -8632,6 +9240,33 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
         const dims = p.width && p.height ? ` ${p.width}x${p.height}` : '';
         __pmRealtimeAgent.enqueuePreviews([{ kind: 'image', name: `${label}${dims}.png`, dataUrl: p.dataUrl, mimeType: p.mimeType || 'image/png' }], { transient: true });
       } catch {}
+    }
+    // A voice show_* tool produced a rich-artifact card — render it into the mobile
+    // chat thread and send the model only a lean confirmation (not the full card).
+    const voiceArtifacts = result?.result && Array.isArray(result.result.richArtifacts) ? result.result.richArtifacts : null;
+    if (voiceArtifacts && voiceArtifacts.length) {
+      try {
+        const sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+        if (sid) {
+          if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
+          __pmChat.threads[sid].push({
+            role: 'ai',
+            streaming: false,
+            time: _nowTime(),
+            timestamp: Date.now(),
+            body: { sender: 'Prometheus', text: '' },
+            content: '',
+            richArtifacts: voiceArtifacts,
+            source: 'voice_agent_realtime',
+            channel: 'voice',
+          });
+          _renderMobileChatSessionNow(sid);
+        }
+      } catch (err) { _voiceDebug('realtime-agent-artifact-render-failed', { error: String(err?.message || err) }); }
+      const cardSummary = String(result.result.summary || 'Card shown.');
+      _finishRealtimeAgentRecentCommand(recentCmd, true, cardSummary);
+      _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: result.result.ok !== false, summary: cardSummary, shown: true }));
+      return;
     }
     const toolOutput = name === 'voice_worker_status'
       ? (_overlayPendingMobileRealtimeAgentWorkerPacket(result.result || null, sessionId, 'voice_worker_status_output') || result.result || result.raw || { ok: true })
@@ -12184,6 +12819,23 @@ export async function renderVoicePage(page, ctx) {
     const finalText = String(text || '').trim();
     if (!finalText) { _setStatus('Ready', 'Tap and hold the mic to speak'); _setOrbState(null); return; }
     let activeVoiceRuntime = __pmVoice.activeVoiceRuntime || null;
+    const voiceNewChatDraft = _isMobileNewChatDraftActiveForVoice();
+    if (voiceNewChatDraft) {
+      if (activeVoiceRuntime?.isStreamActive === true) activeVoiceRuntime.isStreamActive = false;
+      activeVoiceRuntime = null;
+      __pmVoice.activeVoiceRuntime = null;
+      __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
+      __pmChat.threads[MOBILE_CHAT_SESSION_ID] = Array.isArray(__pmChat.threads[MOBILE_CHAT_SESSION_ID])
+        ? __pmChat.threads[MOBILE_CHAT_SESSION_ID]
+        : [];
+      __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = Array.isArray(__pmChat.attachments[MOBILE_CHAT_SESSION_ID])
+        ? __pmChat.attachments[MOBILE_CHAT_SESSION_ID]
+        : [];
+      __pmVoice.targetSessionId = MOBILE_CHAT_SESSION_ID;
+      __pmVoice.targetSessionLabel = 'Mobile - New Chat';
+      __pmVoice.targetSessionChannel = 'mobile';
+      __pmVoice.targetSessionForced = true;
+    }
     const forcedVoiceTarget = __pmVoice.targetSessionForced
       ? String(__pmVoice.targetSessionId || '').trim()
       : '';
@@ -12197,8 +12849,10 @@ export async function renderVoicePage(page, ctx) {
       __pmVoice.activeVoiceRuntime = null;
       activeVoiceRuntime = null;
     }
-    _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'mobile_submit_speech_start', originalUserPrompt: finalText });
-    let targetSessionId = activeVoiceRuntime?.isStreamActive === true && activeVoiceRuntime?.sessionId
+    _prewarmMobileVoiceWorkerContext({ sessionId: voiceNewChatDraft ? MOBILE_CHAT_SESSION_ID : (__pmVoice.targetSessionId || __pmChat.activeSessionId), source: 'mobile_submit_speech_start', originalUserPrompt: finalText });
+    let targetSessionId = voiceNewChatDraft
+      ? MOBILE_CHAT_SESSION_ID
+      : activeVoiceRuntime?.isStreamActive === true && activeVoiceRuntime?.sessionId
       ? String(activeVoiceRuntime.sessionId).trim()
       : await _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced });
     if (targetSessionId === MOBILE_CHAT_SESSION_ID) {
@@ -13802,7 +14456,7 @@ function _renderMobileAgentComposerHtml(prefix, placeholder) {
   const id = String(prefix || 'pm-agent-chat');
   return `
     <form class="pm-composer pm-agent-chat-composer" id="${id}-form" style="position:relative;left:auto;right:auto;bottom:auto;margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;box-shadow:none;">
-      <input id="${id}-file-input" type="file" multiple accept="image/*,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
+      <input id="${id}-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-attach-tray" id="${id}-attach-tray" hidden></div>
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn" id="${id}-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
@@ -13971,6 +14625,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
+      if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
       message._progress = ok ? '' : `${action} failed`;
       _pushMobileStreamProcessEntry(message, ok ? 'result' : 'error', `${action}${text ? ` -> ${text}` : ' complete'}`, evt.actor ? { actor: evt.actor } : null);
       return true;
@@ -14007,6 +14662,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
+      if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
       if (text && !String(message.content || '').trim()) {
         message.content = text;
         message.text = text;
@@ -14020,6 +14676,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
+      if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
       if (text && !String(message.content || '').trim()) {
         message.content = text;
         message.text = text;
@@ -14293,7 +14950,7 @@ async function _renderTeamChatTab(slot, teamId) {
       attachmentPreviews = uploadResults.map((r, idx) => ({
         ...(files[idx] || {}),
         name: r.name || files[idx]?.name || 'attachment',
-        kind: r.isImage ? 'image' : (files[idx]?.kind || 'file'),
+        kind: r.isImage ? 'image' : (r.isVideo ? 'video' : (files[idx]?.kind || 'file')),
         workspacePath: r.workspacePath || files[idx]?.workspacePath,
         path: r.workspacePath || files[idx]?.path,
         dataUrl: files[idx]?.dataUrl,
@@ -15650,7 +16307,7 @@ async function _renderMoreAudit(page, { navigate }) {
 
 async function _renderMoreMemory(page, { navigate }) {
   const restoreDesktopMemoryIds = _parkDesktopMemoryIds();
-  const extras = `<span class="pm-spacer"></span><button class="pm-icon-btn" type="button" onclick="shuffleMemoryGraph()" aria-label="Shuffle" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.spark}</button><button class="pm-icon-btn" type="button" onclick="refreshMemoryGraph(true)" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
+  const extras = `<span class="pm-spacer"></span><button class="pm-icon-btn" type="button" onclick="refreshMemoryGraph(true)" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Memory Graph', leftIcon: 'back', onBack: () => navigate('#mobile/more'), online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body pm-mobile-memory-body" id="pm-memory-body">
@@ -15659,7 +16316,7 @@ async function _renderMoreMemory(page, { navigate }) {
           <input id="memory-image-input" type="file" accept="image/*" style="display:none" />
           <button class="memory-action-btn memory-action-btn--primary" type="button" onclick="openAddMemoryDrawer()">+ Add Memory</button>
           <button class="memory-action-btn" type="button" onclick="triggerMemoryImageInput()">Image Shape</button>
-          <button id="memory-set-default-btn" class="memory-action-btn" type="button" style="opacity:0.4" onclick="toggleDefaultShape()">Set Default</button>
+          <button id="memory-set-default-btn" class="memory-action-btn" type="button" style="opacity:0.4" onclick="toggleDefaultShape()">Set Image Default</button>
         </div>
         <div class="memory-page-body">
           <div class="memory-graph-panel">
@@ -15679,6 +16336,35 @@ async function _renderMoreMemory(page, { navigate }) {
               <div class="memory-side-panel-title">Controls</div>
               <button class="memory-panel-collapse-btn" type="button" onclick="toggleMemoryControlsPanel()">&times;</button>
             </div>
+            <section class="memory-panel-card memory-particle-controls">
+              <div class="memory-panel-header-line">
+                <div class="memory-panel-title">Controls</div>
+                <div class="memory-panel-hint">live shaderless canvas</div>
+              </div>
+              <div class="memory-particle-modes">
+                <button class="memory-particle-mode-btn active" type="button" data-memory-particle-mode="galaxy">Galaxy</button>
+                <button class="memory-particle-mode-btn" type="button" data-memory-particle-mode="sphere">Sphere</button>
+                <button class="memory-particle-mode-btn" type="button" data-memory-particle-mode="wave">Wave</button>
+                <button class="memory-particle-mode-btn" type="button" data-memory-particle-mode="tunnel">Tunnel</button>
+              </div>
+              <div class="memory-control-stack">
+                <label class="memory-control memory-control-row">
+                  <span>Speed</span>
+                  <input id="memory-particle-speed" type="range" min="0" max="200" step="1" value="35" />
+                  <div id="memory-particle-speed-value" class="memory-control-value">35</div>
+                </label>
+                <label class="memory-control memory-control-row">
+                  <span>Depth</span>
+                  <input id="memory-particle-depth" type="range" min="160" max="900" step="10" value="740" />
+                  <div id="memory-particle-depth-value" class="memory-control-value">740</div>
+                </label>
+                <label class="memory-control memory-control-row">
+                  <span>Glow</span>
+                  <input id="memory-particle-glow" type="range" min="0" max="100" step="1" value="20" />
+                  <div id="memory-particle-glow-value" class="memory-control-value">20</div>
+                </label>
+              </div>
+            </section>
             <section class="memory-panel-card">
               <div class="memory-panel-title">Filters</div>
               <div class="memory-control-stack">
@@ -15699,23 +16385,11 @@ async function _renderMoreMemory(page, { navigate }) {
                   <input id="memory-organize-type" type="checkbox" />
                   <span>Organize by type</span>
                 </label>
-              </div>
-            </section>
-            <section class="memory-panel-card">
-              <div class="memory-panel-title">Forces</div>
-              <div class="memory-control-stack">
-                <label class="memory-control">
-                  <span>Repulsion</span>
-                  <input id="memory-force-repulsion" type="range" min="20" max="220" step="1" value="90" />
+                <label class="memory-control memory-check memory-sub-check">
+                  <input id="memory-separate-type" type="checkbox" />
+                  <span>Separate</span>
                 </label>
-                <label class="memory-control">
-                  <span>Link stiffness</span>
-                  <input id="memory-force-link" type="range" min="1" max="100" step="1" value="26" />
-                </label>
-                <label class="memory-control">
-                  <span>Collision</span>
-                  <input id="memory-force-collision" type="range" min="0" max="100" step="1" value="24" />
-                </label>
+                <button id="memory-save-settings" class="memory-filter-save-btn" type="button">Save Settings</button>
               </div>
             </section>
           </aside>
@@ -17818,7 +18492,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       attachmentPreviews = uploadResults.map((r, idx) => ({
         ...(files[idx] || {}),
         name: r.name || files[idx]?.name || 'attachment',
-        kind: r.isImage ? 'image' : (files[idx]?.kind || 'file'),
+        kind: r.isImage ? 'image' : (r.isVideo ? 'video' : (files[idx]?.kind || 'file')),
         workspacePath: r.workspacePath || files[idx]?.workspacePath,
         path: r.workspacePath || files[idx]?.path,
         dataUrl: files[idx]?.dataUrl,

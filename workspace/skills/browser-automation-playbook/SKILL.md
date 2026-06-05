@@ -1,6 +1,6 @@
 ---
 name: Browser Automation Playbook
-description: Current operating guide for Prometheus browser automation. Covers visual-first execution, DOM refs, vision fallback, keyboard flows, uploads/downloads, media capture, structured extraction, network interception, and when to use browser tools versus web_search/web_fetch/download tools.
+description: Current operating guide for Prometheus browser automation. Covers visual-first execution, DOM refs, vision fallback, keyboard flows, uploads/downloads, media capture, structured extraction, network interception, and when to use browser tools versus web_search/web_fetch_batch/web_fetch/download tools.
 emoji: 🌐
 version: 4.2.0
 triggers: browser, browser_open, browser_click, browser_fill, browser_type, browser_snapshot, browser_snapshot_delta, browser_scroll, browser_scroll_collect, browser_scroll_collect_v2, browser_drag, browser_press_key, browser_key, browser_wait, browser_close, browser_upload_file, browser_click_and_download, browser_send_to_telegram, browser_vision, browser_run_js, browser_intercept_network, browser_element_watch, browser_extract_structured, browser_get_page_text, browser_get_focused_item, browser_teach_verify, save_site_shortcut, observe, browser observation modes, navigate, web page, click button, fill form, login, submit form, upload file, download image, download video, media download, scrape page, automate website, browser automation
@@ -13,7 +13,8 @@ Read this before any browser automation task.
 This skill is for **interactive website work**: navigating pages, clicking controls, filling forms, handling JS-heavy UIs, uploading files, downloading assets, collecting text from dynamic pages, and completing browser-side workflows.
 
 **Do not use browser tools for normal web research by default.**
-- Research / reading docs / articles / static pages → `web_search` then `web_fetch`
+- Research / reading docs / articles / static pages → `web_search`, then `web_fetch_batch` for several URLs or `web_fetch` for one URL
+- Search-and-read pass where top results are good enough → `web_search({ fetch_top_k: 2-5 })`
 - Interactive site use / logged-in flows / clicking / typing / scrolling / JS apps → `browser_*`
 - Direct asset download from a known file URL → `download_url`
 - Media extraction from a supported media page (X, YouTube, Instagram, TikTok, etc.) → `download_media`
@@ -86,7 +87,7 @@ If a scroll is blocked, do **not** keep retrying blind scrolls. Re-anchor with a
 ### 4) Browser is for interaction, not generic reading
 If the user wants information from the web and no interaction is required:
 - first use `web_search`
-- then `web_fetch`
+- then use `web_search({ fetch_top_k })`, `web_fetch_batch`, or `web_fetch`
 
 Open a browser only when interaction or live UI state matters.
 
@@ -147,6 +148,9 @@ Do not overuse browser clicking for media when a direct download tool is cleaner
 
 ### Adjacent media tools often paired with browser work
 These are not `browser_*` tools, but they belong in the practical browser/media workflow:
+- `web_search(query, fetch_top_k?)` — discover current sources; with `fetch_top_k`, fetch top result pages in the same call
+- `web_fetch_batch(urls, max_chars?, concurrency?)` — fetch several source URLs in parallel; use before browser tools for non-interactive research
+- `web_fetch(url)` — fetch one known URL; for X/Twitter status URLs, returns X-aware post/thread payloads
 - `download_url(url, filename?, output_dir?)` — direct download of a known asset URL into the workspace
 - `download_media(url, output_dir?, audio_only?)` — extract media from supported pages using yt-dlp
 - `analyze_image(file_path, prompt?)` — inspect a downloaded image with vision
@@ -546,7 +550,7 @@ If the user needs to see what the browser currently shows, use `browser_send_to_
 
 | Situation | Best tool / workflow |
 |---|---|
-| Read article/doc page | `web_search` → `web_fetch` |
+| Read article/doc page | `web_search({ fetch_top_k })`, `web_fetch_batch`, or one `web_fetch` |
 | Click through a live website | `browser_open(..., observe:"snapshot")` + snapshot-driven actions |
 | Need cheap orientation after navigation/click | `observe:"compact"` |
 | Need only SPA changes | `browser_snapshot_delta()` or action `observe:"delta"` |

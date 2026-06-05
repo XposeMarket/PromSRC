@@ -29,6 +29,20 @@ Other current task facts:
 - proposal tasks are run with a proposal-specific runtime mode and session ID
 - task delivery knows how to report team proposal results back into team chat
 
+Paused task recovery ownership and chat mirroring:
+
+- paused/failed recovery is task-owned, not only session-owned
+- main/background tasks recover through the main paused-task chat and can resume, rerun, cancel, or accept more user guidance as the main agent
+- standalone subagent tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat or on the subagent page
+- team subagent tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat, the team room, or the matching member direct thread
+- team manager/executor tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat or team manager/team chat
+- `task-recovery.ts` now includes owner reply sessions for main task sessions, standalone `subagent_chat_*` sessions, team member room/direct sessions, and team manager/coordinator sessions
+- `task-router.ts` owns recovery selection and mirroring through `findRecoveryTaskForSubagentChat`, `findRecoveryTaskForTeamChatTarget`, `handleTaskRecoveryMessage`, and task-recovery mirroring into subagent/team chat stores
+- `channels.router.ts` intercepts standalone subagent chat and channel turns when the addressed subagent owns a blocked task, then routes the turn through task recovery instead of starting unrelated subagent work
+- `teams.router.ts` intercepts team room/member/manager chat turns when the addressed team or member owns a blocked task, then routes the turn through task recovery instead of starting unrelated team work
+- `TaskRecoveryConversationTurn.source` includes `subagent_chat` and `team_chat` so the task panel can preserve where guidance came from
+- recovery assistant sessions stay constrained to recovery: they may discuss the paused task, synthesize resume guidance, or trigger resume/rerun/cancel, but should not do unrelated work from that recovery session
+
 Proposal sandbox lifecycle details that are now implemented:
 
 - a sandboxed proposal must complete a successful build before promotion back into the live repo

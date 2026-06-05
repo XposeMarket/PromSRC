@@ -39,6 +39,11 @@
       "path": "examples/amazon-mens-shampoo-carousel.md",
       "type": "example",
       "description": "Worked example based on an Amazon men’s shampoo search, including extraction fields and carousel curation logic."
+    },
+    {
+      "path": "references/research-first-shopping-flow.md",
+      "type": "doc",
+      "description": "Guardrail from Raul's 2026-06-05 correction: research current best models first, then product-search exact candidates for broad/high-consideration shopping requests."
     }
   ]
 }

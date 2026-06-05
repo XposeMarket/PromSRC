@@ -36,6 +36,7 @@ export interface ChatMessage {
     reviews?: number; tag?: string; imageUrl?: string; imagePath?: string;
     productUrl: string; merchant?: string;
   }> };
+  richArtifacts?: import('./rich-artifacts').RichArtifact[];
 }
 
 export interface TurnOrigin {

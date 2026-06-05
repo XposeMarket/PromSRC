@@ -68,6 +68,7 @@ export type PauseReason =
   | 'awaiting_user_input'  // task paused because it needs clarification from the user
   | 'awaiting_command_approval'  // task is waiting on a run_command approval card
   | 'awaiting_final_action_approval'  // task is waiting before an irreversible UI action
+  | 'awaiting_prometheus_question_response'  // task is waiting on a Prometheus question card
   | 'recovering_from_build_error'  // agent is recovering from a build error
   | 'blocked_on_repair';  // waiting for a linked repair proposal/task to finish
 
@@ -117,7 +118,7 @@ export interface TaskRecoveryConversationTurn {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-  source?: 'pause_analysis' | 'chat' | 'task_panel' | 'team_manager' | 'system';
+  source?: 'pause_analysis' | 'chat' | 'task_panel' | 'subagent_chat' | 'team_chat' | 'team_manager' | 'system';
 }
 
 export interface TaskPauseSnapshotStep {

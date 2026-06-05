@@ -2,9 +2,9 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "web-researcher",
   "name": "Web Researcher",
-  "description": "Current Prometheus playbook for web_search/web_fetch research, multi-engine search, source fetching, X/Twitter URL fetching, and escalation to browser/scraper tools when needed.",
+  "description": "Current Prometheus playbook for web_search, web_fetch_batch/web_fetch research, multi-engine search, source fetching, X/Twitter URL fetching, and escalation to browser/scraper tools when needed.",
   "emoji": "🔎",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "entrypoint": "SKILL.md",
   "triggers": [
     "web research",
@@ -16,6 +16,7 @@
     "find sources",
     "source this",
     "web_fetch",
+    "web_fetch_batch",
     "fetch url",
     "fetch this page",
     "read this article",
@@ -34,6 +35,7 @@
   ],
   "requiredTools": [
     "web",
+    "web_fetch_batch",
     "skills"
   ],
   "permissions": {

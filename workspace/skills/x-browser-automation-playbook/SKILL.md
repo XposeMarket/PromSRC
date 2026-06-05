@@ -15,6 +15,7 @@ This skill covers the tested browser flows for interaction on X **and** the rout
 - Never use `browser_navigate` — it does not exist. Use `browser_open`.
 - `browser_type` exists and is used for contenteditable/rich-text areas. For standard inputs, use `browser_fill`.
 - **For X post or thread URLs that the user wants to read/fetch, start with `web_fetch` and stop there unless the user explicitly asks for more.** Browser is for interaction; `web_fetch` is the default retrieval path for X URL content.
+- **For several X post/thread URLs, use `web_fetch_batch` first.** Treat each URL independently and open the browser only for interaction, auth-specific context, or failed/insufficient fetch output.
 - **For X posts with image attachment during posting, prefer clipboard-image paste on Windows:** `desktop_set_clipboard({ file_path: "<absolute-path>", mode: "image" })`, focus the composer, then `desktop_press_key("Ctrl+V")`.
 - **Speed rule:** prefer bulk or keyboard workflows over repeated click/snapshot loops.
 - **Snapshot rule:** only call `browser_snapshot()` when you need new @refs after text-only tools or when state is unclear.
@@ -26,6 +27,7 @@ This skill covers the tested browser flows for interaction on X **and** the rout
 ## Fast Defaults (Use These First)
 
 - **Read/fetch an X post URL:** `web_fetch({ url: "<x post url>" })`
+- **Read/fetch several X post URLs:** `web_fetch_batch({ urls: ["<x post url>", "..."] })`
 - **If `web_fetch` returned the content cleanly:** answer from it and stop
 - **Collection on X.com:** `browser_scroll_collect({ scrolls: 8-15, multiplier: 1.75, delay_ms: 1200-2000 })`
 - **Liking:** keyboard flow = `j` navigation + `browser_get_focused_item()` verification + `l` like
@@ -43,6 +45,8 @@ Use these routing rules to avoid overlap and mis-selection:
   - Examples: compose/post tweets, like/reply/retweet/quote workflows, opening bookmarks, X feed interaction loops, X-specific keyboard shortcuts.
 - **Plain X status URL retrieval → start with `web_fetch`.**
   - If `web_fetch` already returned the text/thread content, do not escalate further by default.
+- **Multiple plain X status URLs → start with `web_fetch_batch`.**
+  - Use browser only for URLs whose fetched result is empty, blocked, or where Raul asks for live interaction/context.
 - **Local or already-downloaded video understanding → `video-analysis-and-transcription`.**
   - Examples: watch this saved clip, transcribe this downloaded MP4, summarize what happens in this X video after download.
 - **General browser workflows across non-X sites → `browser-automation-playbook`.**
@@ -73,9 +77,16 @@ Use this when the user says things like **webfetch this**, **fetch this tweet**,
 4. If the returned payload already gives the text needed, answer from that directly without opening the browser
 5. Stop there unless the user explicitly asks for download, analysis, or interaction
 
+For several X URLs:
+
+1. Run `web_fetch_batch({ urls: ["https://x.com/<user>/status/<id>", "..."] })`
+2. Read the per-URL result objects
+3. Answer with one concise status/content block per URL
+4. Escalate only the failed or insufficient URLs to browser, and only if the user needs more than the batch retrieved
+
 ### Default rule
 
-For a normal X URL fetch request, **`web_fetch` is the complete path**.
+For a normal X URL fetch request, **`web_fetch` is the complete path**. For a list of X URLs, **`web_fetch_batch` is the complete first path**.
 
 Do not turn it into a browser flow unless:
 - `web_fetch` failed or returned unusable output, or

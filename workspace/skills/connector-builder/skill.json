@@ -24,6 +24,7 @@
   "requiredTools": [
     "web_search",
     "web_fetch",
+    "web_fetch_batch",
     "terminal",
     "connector_list"
   ],

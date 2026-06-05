@@ -7,6 +7,6 @@
   "entrypoint": "SKILL.md",
   "triggers": ["import knowledge", "ingest docs", "index notes", "import repo docs", "add to memory"],
   "categories": ["prometheus", "memory", "knowledge", "ingestion"],
-  "requiredTools": ["advanced_memory", "workspace_write", "web_search", "web_fetch"],
+  "requiredTools": ["advanced_memory", "workspace_write", "web_search", "web_fetch", "web_fetch_batch"],
   "permissions": { "workspaceRead": true, "workspaceWrite": true, "externalSideEffects": true }
 }

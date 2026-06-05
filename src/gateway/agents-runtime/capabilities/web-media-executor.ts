@@ -1,4 +1,5 @@
 import {
+  executeWebFetchBatch,
   executeWebFetch,
   webSearch,
 } from '../../../tools/web';
@@ -18,6 +19,7 @@ const WEB_MEDIA_TOOL_NAMES = new Set([
   'web_search_single',
   'web_search_multi',
   'web_fetch',
+  'web_fetch_batch',
   'download_url',
   'download_media',
   'generate_image',
@@ -106,6 +108,8 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           multi_engine: typeof args.multi_engine === 'boolean' ? args.multi_engine : undefined,
           provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
+          fetch_top_k: args.fetch_top_k != null ? Number(args.fetch_top_k) : undefined,
+          fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
         });
         return { name, args, result, error: false };
       }
@@ -115,6 +119,8 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           multi_engine: false,
           provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
+          fetch_top_k: args.fetch_top_k != null ? Number(args.fetch_top_k) : undefined,
+          fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
         });
         return { name, args, result, error: false };
       }
@@ -123,6 +129,8 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
         const result = await webSearch(args.query || '', {
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           provider: 'multi' as any,
+          fetch_top_k: args.fetch_top_k != null ? Number(args.fetch_top_k) : undefined,
+          fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
         });
         return { name, args, result, error: false };
       }
@@ -189,6 +197,21 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           || result.startsWith('Fetch timed')
           || /"success"\s*:\s*false/.test(result);
         return { name, args, result, error: looksLikeFailure, data: webFetchResult.data };
+      }
+
+      case 'web_fetch_batch': {
+        const toolResult = await executeWebFetchBatch({
+          urls: Array.isArray(args.urls) ? args.urls.map((url: any) => String(url)) : [],
+          max_chars: args.max_chars != null ? Number(args.max_chars) : undefined,
+          concurrency: args.concurrency != null ? Number(args.concurrency) : undefined,
+        });
+        return {
+          name,
+          args,
+          result: toolResult.stdout || toolResult.error || 'web_fetch_batch returned no content.',
+          error: toolResult.success !== true,
+          data: toolResult.data,
+        };
       }
 
       case 'download_url': {

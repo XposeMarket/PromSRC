@@ -85,3 +85,11 @@ Current browser tool surface also includes:
 - `browser_teach_verify`
 
 Browser site knowledge now includes named elements, item roots, and extraction schemas via `src/gateway/browser-site-knowledge.ts`. `browser_extract_structured` can use an inline schema or a saved schema name.
+
+Browser-vs-web routing after the 2026-06-05 batch research update:
+
+- normal research, article/doc reading, static source verification, and multi-source reading should start with `web_search({ fetch_top_k })`, `web_fetch_batch`, or one `web_fetch`
+- browser automation is for interaction, logged-in state, live UI state, JS-heavy pages, screenshots/visual QA, structured DOM extraction, and workflows that require clicking/typing/scrolling
+- if the task is several known URLs with no interaction requirement, use `web_fetch_batch` before opening browser tabs
+- if the task is one X/Twitter status URL, use `web_fetch` first; if it is several X/Twitter status URLs, use `web_fetch_batch` first
+- escalate from web fetch tools to browser tools only when output is empty, blocked, noisy/nav-only, JS-rendered, auth-specific, or the user explicitly asked to operate the website

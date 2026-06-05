@@ -4,7 +4,7 @@ Use this skill for normal web research, current information, source discovery, s
 
 The default Prometheus research path is:
 
-> `web_search` for discovery → `web_fetch` for source text → answer from fetched evidence.
+> `web_search` for discovery → `web_fetch_batch` for several source URLs or `web_fetch` for one URL → answer from fetched evidence.
 
 Do **not** use browser automation for normal reading unless the page is interactive, login-gated, JavaScript-rendered in a way `web_fetch` cannot handle, or the user explicitly asks to operate the website.
 
@@ -26,6 +26,11 @@ Observed behavior:
 Default use:
 ```json
 web_search({ "query": "latest official docs for <topic>" })
+```
+
+Search and fetch top results in one call:
+```json
+web_search({ "query": "latest official docs for <topic>", "fetch_top_k": 3, "fetch_max_chars": 4000 })
 ```
 
 Targeted source search:
@@ -102,6 +107,29 @@ Use `web_fetch` when:
 - Pulling source text from a known URL.
 - Avoiding browser overhead for non-interactive research.
 
+### `web_fetch_batch` for multiple URLs
+
+Use `web_fetch_batch` when a search produces several promising URLs and the research answer needs full source text from more than one page.
+
+Default use:
+```json
+web_fetch_batch({
+  "urls": [
+    "https://primary-source.example/page",
+    "https://secondary-source.example/page"
+  ],
+  "max_chars": 6000,
+  "concurrency": 4
+})
+```
+
+Batch rules:
+- Prefer `web_search({ ..., "fetch_top_k": 2-5 })` when the top results are clearly the ones to read.
+- Prefer `web_fetch_batch` when you want to choose exact URLs from search results.
+- Keep batches focused: 2-5 URLs for most research, up to 10 for broad source surveys, hard max 20.
+- Treat per-URL failures as partial evidence, not total failure; continue from successful fetched pages.
+- For X/Twitter status URLs, individual `web_fetch` remains the clearest path unless the user gives several X URLs to inspect.
+
 ### `web_fetch` on X/Twitter status URLs
 
 Observed behavior:
@@ -132,9 +160,9 @@ X URL rule:
 |---|---|---|
 | Discover current sources | `web_search` | Try alternate query/source targeting if results are weak |
 | Read a known article/doc URL | `web_fetch` | Use browser text extraction if fetch is empty/noisy/JS-blocked |
-| Verify facts from search results | `web_fetch` on the primary URLs | Add more sources if claims conflict |
+| Verify facts from search results | `web_search` with `fetch_top_k` or `web_fetch_batch` on selected URLs | Add more sources if claims conflict |
 | Fetch/read X status URL | `web_fetch` | Browser only for interaction, auth-specific content, or failed/empty fetch |
-| Reddit research | `web_search` with `site:reddit.com` → `web_fetch` | Browser not needed by default |
+| Reddit research | `web_search` with `site:reddit.com` + `fetch_top_k`, or `web_fetch_batch` for selected threads | Browser only for interactive/auth-specific Reddit work |
 | JS-heavy page/app | Browser tools (`browser_get_page_text`, snapshot, extraction) | Use `web_fetch` only if it can read the static content |
 | Structured extraction/listings | `browser_extract_structured` or `browser_scroll_collect` | Use scraper scripts only if native tools are insufficient |
 | Download/analyze files/media from known URLs | media/download tools | Do not use browser if direct URL works |
@@ -181,8 +209,14 @@ Important:
 
 Never treat a snippet as enough when the source is fetchable.
 
+For one source:
 ```json
 web_fetch({ "url": "https://primary-source.example/page" })
+```
+
+For several sources:
+```json
+web_fetch_batch({ "urls": ["https://source-one.example/page", "https://source-two.example/page"] })
 ```
 
 ### 4. Cross-check when necessary
@@ -216,7 +250,7 @@ Prometheus `web_search` may run configured providers in parallel. Observed provi
 Use this as an operational signal:
 - Multi-engine is good for breadth and freshness.
 - TinyFish appears to broaden/strengthen the combined result set, especially for agent/web-infrastructure queries, official docs, X/status discovery, and local/business lookups.
-- The exposed `web_search` schema currently only accepts `query`, so true single-provider A/B testing is not available from the assistant tool call unless provider-selection fields are exposed later.
+- `web_search` supports provider selection and can also fetch top result URLs with `fetch_top_k`; use that for compact search-and-read passes.
 - Because the current output is blended multi-engine, compare TinyFish by observing before/after provider banners and result quality, not by claiming exact per-result attribution.
 - Compared with the earlier Tavily+Brave-only behavior, TinyFish+Tavily+Brave produced strong official-source results for OpenAI pricing/model docs, found TinyFish's own docs immediately, surfaced X status URLs in search results, and produced useful local business/review/domain results.
 - Google provider was not shown in the tested banner. Google as a source/domain can still appear in results; that does not prove Google provider usage.
@@ -230,7 +264,7 @@ Pattern for complex research:
 1. Broad current query.
 2. Official/source-targeted query.
 3. Independent verification query, if needed.
-4. Fetch 1–3 best URLs.
+4. Fetch 1–5 best URLs with `fetch_top_k` or `web_fetch_batch`.
 5. Synthesize only after fetches return.
 
 ---
@@ -318,6 +352,7 @@ Observed result type: captured thread tweets plus downloaded/analyzed media when
 
 | Date | Version | Change |
 |---|---:|---|
+| 2026-06-05 | 1.0.3 | Added `web_fetch_batch` and `web_search({ fetch_top_k })` guidance for batch source fetching and compact search-and-read workflows. |
 | 2026-05-08 | 1.0.2 | Added TinyFish multi-engine test notes: confirmed banner changed to `[Multi-engine: tinyfish+tavily+brave]`, documented observed result-quality changes, single-provider limitation, and comparison cautions versus Tavily/Brave/Google. |
 | 2026-05-08 | 1.0.1 | Added explicit Google/provider testing correction: never use Google-owned `site:` restrictions as proof of Google provider usage; provider identity must come from tool metadata/banner, not result domains. |
 | 2026-05-08 | 1.0.0 | Created dedicated web research/search skill after live testing `web_search`, normal `web_fetch`, docs `web_fetch`, and X-aware `web_fetch` including media download/analysis behavior. |

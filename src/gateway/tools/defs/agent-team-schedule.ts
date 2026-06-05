@@ -741,13 +741,25 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'automation_dashboard',
-        description: 'Return one unified automation snapshot: scheduled jobs with health, recent tasks, internal watches, pending event queue, and aggregate counts.',
+        description:
+          'Return ONE unified internal-state snapshot — the single tool for "what is going on", "what has everyone done", "what are my priorities", or an operator/morning snapshot. ' +
+          'Joins the agent roster with each agent\'s scheduled jobs, background tasks, recent runs, and last produced output; also returns managed teams with members, scheduled jobs (with health), recent tasks, internal watches, the pending event queue, and aggregate counts. ' +
+          'Prefer this over chaining agent_list + task_control(list/get) + schedule_job_detail/history — one call answers the operator questions and is the data source for the show_agent_work card. ' +
+          'Use depth:"full" to get untruncated output/results, agent_id to focus on one agent, and include to narrow which sections are returned. Drop to the granular schedule_job_* / task_control tools only for control/mutation or deep single-entity inspection. '
+          + 'The "build" field reports app version + whether an update is available (build.updateAvailable / build.latestVersion); build.repo (local git working-tree state) is present ONLY in dev builds and must never be surfaced to end users — prefer the update signal for any operator snapshot.',
         parameters: {
           type: 'object',
           required: [],
           properties: {
-            limit: { type: 'number', description: 'Max jobs/tasks/watches/events to return. Default 25.' },
+            limit: { type: 'number', description: 'Max jobs/tasks/watches/events per section. Default 25.' },
             include_done: { type: 'boolean', description: 'Include completed/cancelled internal watches, not just active watches.' },
+            depth: { type: 'string', enum: ['summary', 'full'], description: 'summary (default) caps produced output/results for a compact snapshot; full returns untruncated output for reading actual work product.' },
+            agent_id: { type: 'string', description: 'Optional: focus the snapshot on a single agent (its jobs, tasks, recent runs, last output). Omits the teams section.' },
+            include: {
+              type: 'array',
+              items: { type: 'string', enum: ['agents', 'teams', 'outputs'] },
+              description: 'Optional: narrow which extra sections to compute. Default is all. "agents" = per-agent joined view, "teams" = team rollups, "outputs" = recent runs + last produced output per agent.',
+            },
           },
         },
       },
@@ -759,12 +771,13 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Spawn a one-time ephemeral background agent (full tool-capable LLM call) to run a task in parallel while you continue your primary work. ' +
           'Result is automatically merged into your final response — NEVER call background_join manually.\n\n' +
-          'PREFER FOR SIDECAR WORK: independent memory writes, codebase scans, web research, and other data gathering that can run while the main flow continues.\n\n' +
+          'PREFER FOR ASAP/URGENT PARALLEL WORK: when work needs to start immediately but should not block your current tool sequence, use background_spawn instead of subagent_spawn. ' +
+          'Good fits include independent memory writes, codebase scans, web research, and other data gathering that can run while the main flow continues.\n\n' +
           'USE WHEN all 3 conditions are true:\n' +
           '  1. The work is independent of your primary tool sequence (no shared dependencies)\n' +
           '  2. It can start right now with everything it needs (all context is in the prompt)\n' +
           '  3. You do NOT need its result before your immediate next action\n\n' +
-          'DO NOT USE WHEN: the result is required to choose your next step, or this IS your primary blocking task.\n\n' +
+          'DO NOT USE WHEN: the result is required to choose your next step, this IS your primary blocking task, or you need a durable named subagent/persona.\n\n' +
           'PROMPT MUST BE FULLY SELF-CONTAINED — the bg agent has no session history. Include file paths, ' +
           'exact content, specific tool calls, and all parameters. Never say "what we discussed" or "the current task."',
         parameters: {

@@ -144,7 +144,7 @@ function readMemoryNoteMetadata(workspacePath: string, sourcePath: string) {
 router.get('/api/memory/graph', (_req: Request, res: Response) => {
   try {
     const workspacePath = getWorkspacePath();
-    scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
+    scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 12000 });
     const graph = readCachedGraphSnapshot(workspacePath);
     const store = graph.nodes.length <= 500 ? readIndexStore(workspacePath) : { records: {}, chunks: {} };
     const degree = new Map<string, number>();
@@ -172,7 +172,7 @@ router.get('/api/memory/graph', (_req: Request, res: Response) => {
         projectId: node.projectId || record?.projectId || null,
         durability: Number(node.durability ?? record?.durability ?? 0.5),
         degree: degree.get(node.id) || 0,
-        summary: summarize(chunk?.text || ''),
+        summary: summarize(node.summary || chunk?.text || ''),
       };
     });
 
@@ -214,7 +214,8 @@ router.get('/api/memory/record/:recordId', (req: Request, res: Response) => {
       return;
     }
     const resolvedRecordId = String(payload.record?.id || recordId);
-    const related = getRelatedMemory(workspacePath, resolvedRecordId, 10);
+    const includeRelated = String(req.query?.related || '1') !== '0';
+    const related = includeRelated ? getRelatedMemory(workspacePath, resolvedRecordId, 10) : [];
     const resolvedTimestamp = payload.record?.timestamp
       || (payload.record?.timestampMs ? new Date(payload.record.timestampMs).toISOString() : '')
       || payload.record?.updatedAt
@@ -299,7 +300,7 @@ router.post('/api/memory/create', (req: Request, res: Response) => {
       body: content,
     }), 'utf-8');
 
-    refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, syncSqlite: true });
+    refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 12000, syncSqlite: true });
     const store = readIndexStore(workspacePath);
     const record = Object.values(store.records || {}).find((item) => item.sourcePath === sourcePath) || null;
 
@@ -320,7 +321,7 @@ router.post('/api/memory/create', (req: Request, res: Response) => {
 router.post('/api/memory/refresh', (_req: Request, res: Response) => {
   try {
     const workspacePath = getWorkspacePath();
-    const result = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, syncSqlite: true });
+    const result = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 12000, syncSqlite: true });
     res.json({ success: true, ...result, sqlite: getSqliteMemoryStatus(workspacePath) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to refresh memory index' });
@@ -336,3 +337,4 @@ router.get('/api/memory/sqlite/status', (_req: Request, res: Response) => {
 });
 
 export { router };
+
