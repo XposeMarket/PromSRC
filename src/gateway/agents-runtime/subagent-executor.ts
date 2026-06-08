@@ -11579,6 +11579,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }
           };
 
+          // Snapshot existing teams so we can verify the coordinator actually
+          // created one. The coordinator is a sub-session that can hallucinate a
+          // "team created" summary without ever calling team_manage(create); if we
+          // return success unconditionally the main agent reports a phantom team
+          // that never appears in the UI.
+          const beforeTeamIds = new Set(listManagedTeams().map((t: any) => String(t.id)));
+          const coordStartedAt = Date.now();
+
           const result = await deps.handleChat(
             goal + (extraContext ? `\n\nAdditional context: ${extraContext}` : ''),
             coordSessionId,
@@ -11590,11 +11598,37 @@ export async function executeTool(name: string, args: any, workspacePath: string
             'background_task',
           );
 
+          const createdTeams = listManagedTeams().filter((t: any) => {
+            if (beforeTeamIds.has(String(t.id))) return false;
+            return t.originatingSessionId === originatingSessionId
+              || Number(t.createdAt || 0) >= coordStartedAt;
+          });
+
+          if (createdTeams.length === 0) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: false,
+                error: 'Coordinator finished but no team was actually created (no team_manage(action="create") persisted). Do NOT tell the user a team was created. Retry ask_team_coordinator, or create the team directly with spawn_subagent + team_manage(action="create").',
+                coordinator_summary: String(result?.text || '').slice(0, 1200),
+                originating_session: originatingSessionId,
+              }, null, 2),
+              error: true,
+            };
+          }
+
           return {
             name,
             args,
             result: JSON.stringify({
               success: true,
+              teams_created: createdTeams.map((t: any) => ({
+                team_id: String(t.id),
+                name: String(t.name || ''),
+                purpose: String(t.purpose || '').slice(0, 300),
+                agent_count: Array.isArray(t.subagentIds) ? t.subagentIds.length : 0,
+              })),
               coordinator_summary: String(result?.text || '').slice(0, 1200),
               originating_session: originatingSessionId,
               next_step: 'ask_user_for_first_task_before_starting_team',

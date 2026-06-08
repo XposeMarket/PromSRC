@@ -1,0 +1,8 @@
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_001.jpg'
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_002.jpg'
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_003.jpg'
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_004.jpg'
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_005.jpg'
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_006.jpg'
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_007.jpg'
+file 'C:/Users/rafel/PromSRC/workspace/analysis/prometheus-release-thread-04-web-operator/quick_contact_sheet_labeled/tile_008.jpg'

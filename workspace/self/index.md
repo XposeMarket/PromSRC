@@ -46,6 +46,7 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
 | 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
 | 35 | Onboarding System, Replay, Dev Test, Migration Boundary | [19-onboarding-system.md](19-onboarding-system.md) |
+| 36 | Rich Chat Artifacts (cards), Data Tools, Voice Integration | [20-rich-artifacts.md](20-rich-artifacts.md) |
 | Feature Index | Product/feature catalog for copy, launch posts, onboarding, and capability lookup | [feature-index/README.md](feature-index/README.md) |
 
 Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.

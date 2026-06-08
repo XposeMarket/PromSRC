@@ -3012,6 +3012,37 @@ body.side-chat-split-active #chat-view > .chat-input-area {
 .chat-approval-card-high { border-left-color: #f59e0b; }
 .chat-approval-card-medium { border-left-color: #d6b272; }
 .chat-approval-card-low { border-left-color: #22c55e; }
+
+/* Prometheus question card — themeable controls (dark-mode default-friendly) */
+.chat-question-card { border-left-color: #38bdf8; }
+.chat-question-card .pq-block { display: flex; flex-direction: column; gap: 7px; }
+.chat-question-card .pq-q-label { font-size: 12px; font-weight: 700; line-height: 1.35; }
+.chat-question-card .pq-optional { font-weight: 500; opacity: 0.6; }
+.chat-question-card .pq-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.chat-question-card .pq-option {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  border: 1px solid var(--line, rgba(148,163,184,0.28));
+  border-radius: 8px; padding: 7px 9px; font-size: 12px;
+  background: rgba(127,127,127,0.06); color: var(--text);
+}
+.chat-question-card .pq-option:hover { border-color: #38bdf8; background: rgba(56,189,248,0.10); }
+.chat-question-card .pq-option input { margin: 0; accent-color: #38bdf8; }
+.chat-question-card .pq-other-row { display: flex; gap: 6px; align-items: flex-start; }
+.chat-question-card .pq-other-toggle {
+  border: 1px solid var(--line, rgba(148,163,184,0.28));
+  background: rgba(56,189,248,0.10); color: var(--text);
+  border-radius: 8px; padding: 7px 9px; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer;
+}
+.chat-question-card .pq-input {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid var(--line, rgba(148,163,184,0.28)); border-radius: 8px;
+  padding: 8px 9px; font: inherit; font-size: 12px; resize: vertical;
+  background: rgba(127,127,127,0.06); color: var(--text);
+}
+.chat-question-card .pq-input::placeholder { opacity: 0.5; }
+:root[data-theme="dark"] .chat-question-card .pq-option,
+:root[data-theme="dark"] .chat-question-card .pq-input { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.14); }
+:root[data-theme="dark"] .chat-question-card .pq-option:hover { background: rgba(56,189,248,0.16); border-color: #38bdf8; }
 .chat-approval-card-denied,
 .chat-approval-card-rejected,
 .chat-approval-card-failed,

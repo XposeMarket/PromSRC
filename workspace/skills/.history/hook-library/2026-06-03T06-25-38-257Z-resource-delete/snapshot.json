@@ -1,0 +1,13 @@
+{
+  "skillId": "hook-library",
+  "reason": "resource-delete",
+  "createdAt": "2026-06-03T06:25:38.262Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hook-library",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/workflows/hook-library-2026-06-02.md"
+  ],
+  "hash": "ce28a83c980a7a28"
+}

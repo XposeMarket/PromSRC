@@ -1,6 +1,7 @@
 import { getMCPManager } from '../../mcp-manager';
 import { buildConnectorStatus } from '../../tool-builder';
-import { handleConnectorTool } from '../../tools/handlers/connector-handlers';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/legacy-connector-adapter';
+import { getExtensionRuntimeRegistry } from '../../../extensions/runtime-registry';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 
@@ -212,7 +213,9 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
     }
 
     if (name.startsWith('connector_') && name !== 'connector_list') {
-      const connResult = await handleConnectorTool(name, args);
+      // Route through the extension registry (native connectors own execution).
+      ensurePrometheusExtensionRuntimeLoaded();
+      const connResult = await getExtensionRuntimeRegistry().executeTool(name, args);
       return { name, args, ...connResult };
     }
 

@@ -190,6 +190,10 @@ export interface SessionListOptions {
   channel?: Session['channel'];
   limit?: number;
   offset?: number;
+  // When true and channel is 'web', also include automated scheduled-task
+  // sessions (auto_*, stored under the 'system' channel) so the mobile
+  // "Computer" view surfaces the same scheduled-task threads as desktop.
+  includeAutomated?: boolean;
 }
 
 export interface SessionListPage {
@@ -774,7 +778,10 @@ function rebuildSessionIndex(): SessionIndex {
   return index;
 }
 
-function getSortedSessionSummaries(channel?: Session['channel']): SessionSummary[] {
+function getSortedSessionSummaries(
+  channel?: Session['channel'],
+  includeAutomated?: boolean,
+): SessionSummary[] {
   ensureSessionDir();
   let index = loadSessionIndex();
   const hasSessionFiles = fs.readdirSync(SESSION_DIR).some((f) => f.endsWith('.json') && f !== '_index.json');
@@ -791,9 +798,17 @@ function getSortedSessionSummaries(channel?: Session['channel']): SessionSummary
       index = rebuildSessionIndex();
     }
   }
+  // When the 'web' (Computer) channel is requested with includeAutomated,
+  // also admit automated scheduled-task sessions (auto_*) that live under the
+  // 'system' channel — they are the per-job continuous threads.
+  const admitAutomated = includeAutomated === true && channel === 'web';
   return Object.values(index.summaries)
     .filter((summary) => !INTERNAL_SESSION_ID_RE.test(summary.id))
-    .filter((summary) => !channel || summary.channel === channel)
+    .filter((summary) => {
+      if (!channel) return true;
+      if (summary.channel === channel) return true;
+      return admitAutomated && summary.channel === 'system' && /^auto_/i.test(summary.id);
+    })
     .filter((summary) => summary.messageCount > 0 || summary.channel === 'mobile')
     .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0));
 }
@@ -802,7 +817,7 @@ export function listSessionSummaries(channel?: Session['channel']): SessionSumma
 export function listSessionSummaries(options: SessionListOptions): SessionListPage;
 export function listSessionSummaries(input?: Session['channel'] | SessionListOptions): SessionSummary[] | SessionListPage {
   const options = typeof input === 'object' && input !== null ? input : { channel: input };
-  const sorted = getSortedSessionSummaries(options.channel);
+  const sorted = getSortedSessionSummaries(options.channel, options.includeAutomated);
   if (typeof input !== 'object' || input === null) return sorted;
 
   const limit = Number.isFinite(Number(options.limit))
@@ -1967,6 +1982,83 @@ export function deleteSession(id: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * One-time migration: fold legacy per-run automated sessions
+ * (`auto_<jobId>_<timestamp>`) into the stable per-job thread (`auto_<jobId>`),
+ * preserving chronological history, then delete the per-run files.
+ *
+ * Scheduled jobs originally spawned a fresh session every run, producing one
+ * "Automated Task" chat per run. They now use a single stable session per job.
+ * This consolidates the historical clutter so the UI shows one thread per job.
+ *
+ * Returns the number of legacy per-run sessions consolidated.
+ */
+export function consolidateLegacyAutomatedSessions(): number {
+  ensureSessionDir();
+  let files: string[];
+  try {
+    files = fs.readdirSync(SESSION_DIR).filter((f) => f.endsWith('.json') && f !== '_index.json');
+  } catch {
+    return 0;
+  }
+
+  // Group legacy per-run files by jobId. Legacy id shape: auto_<jobId>_<digits>.
+  // The stable id is auto_<jobId> (no trailing _<digits>). jobId itself may
+  // contain underscores, so we strip a trailing _<digits> run suffix.
+  const legacyByJob = new Map<string, Array<{ id: string; ts: number }>>();
+  for (const file of files) {
+    const id = file.slice(0, -5);
+    const m = /^auto_(.+)_(\d{10,})$/i.exec(id);
+    if (!m) continue;
+    const jobId = m[1];
+    const ts = Number(m[2]) || 0;
+    if (!legacyByJob.has(jobId)) legacyByJob.set(jobId, []);
+    legacyByJob.get(jobId)!.push({ id, ts });
+  }
+
+  let consolidated = 0;
+  for (const [jobId, runs] of legacyByJob) {
+    runs.sort((a, b) => a.ts - b.ts);
+    const stableId = `auto_${jobId}`;
+    const stable = getSession(stableId);
+    if (!Array.isArray(stable.history)) stable.history = [];
+    const seen = new Set(
+      stable.history.map((m) => `${m.role} ${m.timestamp || ''} ${String(m.content || '').slice(0, 200)}`),
+    );
+
+    for (const run of runs) {
+      if (run.id === stableId) continue;
+      let legacyHistory: ChatMessage[] = [];
+      try {
+        const data = JSON.parse(fs.readFileSync(getSessionPath(run.id), 'utf-8'));
+        legacyHistory = Array.isArray(data?.history) ? data.history : [];
+      } catch {
+        legacyHistory = [];
+      }
+      for (const msg of legacyHistory) {
+        const key = `${msg.role} ${msg.timestamp || ''} ${String(msg.content || '').slice(0, 200)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        stable.history.push(msg);
+      }
+      if (deleteSession(run.id)) consolidated++;
+    }
+
+    if (consolidated > 0 || runs.length > 0) {
+      // Sort merged history chronologically and persist the stable thread.
+      stable.history.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+      stable.channel = stable.channel || inferChannelFromSessionId(stableId);
+      stable.autoTitleLocked = true;
+      flushSession(stableId);
+    }
+  }
+
+  if (consolidated > 0) {
+    console.log(`[session] Consolidated ${consolidated} legacy automated session(s) into stable per-job threads`);
+  }
+  return consolidated;
 }
 
 export function renameSession(id: string, title: string): SessionSummary | null {

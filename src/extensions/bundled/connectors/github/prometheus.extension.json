@@ -6,22 +6,45 @@
   "category": "Dev",
   "enabledByDefault": true,
   "docsUrl": "https://github.com/settings/applications/new",
-  "tags": ["github", "code", "oauth"],
+  "tags": [
+    "github",
+    "code",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/github"
+    "binding": "integrations/connectors/github",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#24292E",
     "permissions": [
-      { "icon": "<>", "label": "Read pull requests, issues, and commits" },
-      { "icon": "->", "label": "Post comments with approval" },
-      { "icon": "+", "label": "Create and update issues" },
-      { "icon": "?", "label": "Search repos and code" }
+      {
+        "icon": "<>",
+        "label": "Read pull requests, issues, and commits"
+      },
+      {
+        "icon": "->",
+        "label": "Post comments with approval"
+      },
+      {
+        "icon": "+",
+        "label": "Create and update issues"
+      },
+      {
+        "icon": "?",
+        "label": "Search repos and code"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_github"],
-    "capabilities": ["repositories", "pull_requests", "issues"],
+    "toolNamespaces": [
+      "connector_github"
+    ],
+    "capabilities": [
+      "repositories",
+      "pull_requests",
+      "issues"
+    ],
     "tools": [
       "connector_github_list_repos",
       "connector_github_list_issues",

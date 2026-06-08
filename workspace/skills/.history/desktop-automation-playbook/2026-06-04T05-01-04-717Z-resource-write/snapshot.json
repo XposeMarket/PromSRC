@@ -1,0 +1,12 @@
+{
+  "skillId": "desktop-automation-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-06-04T05:01:04.720Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\desktop-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "4b266f72b013c6af"
+}

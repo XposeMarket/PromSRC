@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { buildExtensionsCatalog } from '../../extensions/catalog-service.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter.js';
+import { buildMcpServerConfigFromPreset, listMcpPresets } from '../../extensions/mcp-preset-service.js';
 import { reloadExtensions } from '../../extensions/reload.js';
 import {
   installUserPlugin,
@@ -31,6 +33,36 @@ router.get('/api/extensions/catalog', (req, res) => {
     res.json({ success: true, catalog });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to build extension catalog' });
+  }
+});
+
+// List MCP presets (bundled + user) from the registry — the source of truth for
+// quick-setup / Connections "Add MCP". Each carries the credential fields the
+// user must supply.
+router.get('/api/extensions/mcp-presets', (_req, res) => {
+  try {
+    ensurePrometheusExtensionRuntimeLoaded();
+    res.json({ success: true, presets: listMcpPresets() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to list MCP presets' });
+  }
+});
+
+// Resolve a preset id + credentials into a concrete MCP server config (the shape
+// the MCP manager launches). Body: { id, credentials? }
+router.post('/api/extensions/mcp-presets/build', (req, res) => {
+  try {
+    ensurePrometheusExtensionRuntimeLoaded();
+    const id = String((req.body || {}).id || '').trim();
+    if (!id) {
+      res.status(400).json({ success: false, error: 'id is required' });
+      return;
+    }
+    const credentials = (req.body || {}).credentials;
+    const config = buildMcpServerConfigFromPreset(id, credentials && typeof credentials === 'object' ? credentials : {});
+    res.json({ success: true, config });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to build MCP preset config' });
   }
 });
 

@@ -4,12 +4,14 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { ToolResult } from '../types.js';
-import { getConfig } from '../config/config.js';
+
 import { getActiveWorkspace } from './workspace-context.js';
 import { getProvider, getPrimaryModel } from '../providers/factory.js';
 import { contentToString } from '../providers/content-utils.js';
 import { buildVisionImagePart, primarySupportsVision } from '../gateway/vision-chat.js';
 import { resolveRuntimeBinary } from '../runtime/dependencies.js';
+import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline.js';
+import { getConfig } from '../config/config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -88,6 +90,14 @@ function inferMimeType(filePath: string): string {
     default:
       return 'application/octet-stream';
   }
+}
+function buildCreativeStorage() {
+  const workspacePath = getWorkspaceRoot();
+  const rootAbsPath = path.join(workspacePath, 'creative-projects', 'default');
+  const creativeDir = path.join(rootAbsPath, 'prometheus-creative');
+  require('fs').mkdirSync(creativeDir, { recursive: true });
+  const rootRelPath = 'creative-projects/default';
+  return { workspacePath, rootAbsPath, rootRelPath, creativeDir };
 }
 
 function normalizeAnalysisMode(value?: unknown): 'quick' | 'detail' | 'both' {
@@ -398,7 +408,23 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       };
     }
 
-    const transcript = analyzerResult?.transcript?.available ? String(analyzerResult.transcript.text || '').trim() : '';
+    let transcript = analyzerResult?.transcript?.available ? String(analyzerResult.transcript.text || '').trim() : '';
+    
+    // Fallback to creative transcription if Python script didn't provide transcript
+    if (!transcript && args?.transcribe !== false) {
+      try {
+        const storage = buildCreativeStorage();
+        const result = await creativeTranscribeAudio(storage, {
+          source: absPath,
+          provider: 'openai', // Use OpenAI Whisper by default
+        });
+        transcript = result.text;
+      } catch (error) {
+        // Silent fallback - if creative transcription fails, continue without transcript
+        console.warn(`Creative transcription fallback failed for ${absPath}:`, error);
+      }
+    }
+    
     const relFrames = framePaths.map((framePath: string) => relPath(workspaceRoot, framePath));
     const quick = videoSummary?.quick || null;
     const detail = videoSummary?.detail || null;

@@ -8,7 +8,8 @@
   "docsUrl": "https://dashboard.stripe.com/apikeys",
   "tags": ["stripe", "payments", "api key"],
   "runtime": {
-    "binding": "integrations/connectors/stripe"
+    "binding": "integrations/connectors/stripe",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#635BFF",

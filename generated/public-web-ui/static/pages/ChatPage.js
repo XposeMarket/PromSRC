@@ -10302,12 +10302,62 @@ function restoreProcessPanelScroll(map) {
   } catch {}
 }
 
+// Preserve in-progress answers in pending Prometheus question cards across the
+// full innerHTML rebuild — otherwise a streaming re-render wipes the user's
+// selections/typed text a few seconds after they tap an option.
+function captureQuestionDraftState() {
+  const out = {};
+  try {
+    document.querySelectorAll('[data-question-id]').forEach((card) => {
+      // Only the card root carries data-question-id with a child input structure.
+      const qid = card.getAttribute('data-question-id');
+      if (!qid || !card.classList || !card.classList.contains('chat-question-card')) return;
+      const state = { checked: [], texts: {}, others: {}, general: '' };
+      card.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked').forEach((el) => {
+        state.checked.push(`${el.getAttribute('data-question-id') || ''}::${el.value}`);
+      });
+      card.querySelectorAll('[data-question-text]').forEach((el) => { state.texts[el.getAttribute('data-question-text')] = el.value || ''; });
+      card.querySelectorAll('[data-question-other]').forEach((el) => { state.others[el.getAttribute('data-question-other')] = { value: el.value || '', hidden: el.hasAttribute('hidden') }; });
+      const gen = card.querySelector('[data-question-general-other="1"]');
+      if (gen) state.general = gen.value || '';
+      out[qid] = state;
+    });
+  } catch {}
+  return out;
+}
+function restoreQuestionDraftState(map) {
+  if (!map) return;
+  try {
+    Object.keys(map).forEach((qid) => {
+      const sel = (window.CSS && CSS.escape) ? CSS.escape(qid) : qid;
+      const card = document.querySelector(`.chat-question-card[data-question-id="${sel}"]`);
+      if (!card) return;
+      const state = map[qid];
+      const want = new Set(state.checked || []);
+      card.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((el) => {
+        if (want.has(`${el.getAttribute('data-question-id') || ''}::${el.value}`)) el.checked = true;
+      });
+      Object.entries(state.texts || {}).forEach(([id, val]) => {
+        const el = card.querySelector(`[data-question-text="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+        if (el) el.value = val;
+      });
+      Object.entries(state.others || {}).forEach(([id, info]) => {
+        const el = card.querySelector(`[data-question-other="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+        if (el) { el.value = info.value || ''; if (!info.hidden) el.removeAttribute('hidden'); }
+      });
+      const gen = card.querySelector('[data-question-general-other="1"]');
+      if (gen) gen.value = state.general || '';
+    });
+  } catch {}
+}
+
 function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
   // Preserve scroll positions before the innerHTML rebuild below.
   const _panelScroll = captureProcessPanelScroll();
+  const _questionDraft = captureQuestionDraftState();
   const _mainScrollTop = container ? container.scrollTop : 0;
   syncAssistantWorkTimer();
   updateSideChatChrome();
@@ -10355,6 +10405,7 @@ function renderChatMessages() {
       if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
     }
     restoreProcessPanelScroll(_panelScroll);
+    restoreQuestionDraftState(_questionDraft);
     return;
   }
 
@@ -10365,6 +10416,7 @@ function renderChatMessages() {
   if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
   else container.scrollTop = _mainScrollTop;
   restoreProcessPanelScroll(_panelScroll);
+  restoreQuestionDraftState(_questionDraft);
 }
 
 function syncAssistantWorkTimer() {
@@ -35440,24 +35492,24 @@ function renderInlinePrometheusQuestion(item) {
     const options = (q.options || []).map((option, optIndex) => {
       const inputId = `${qName}__${optIndex}`;
       const type = q.mode === 'multi_select' ? 'checkbox' : 'radio';
-      return `<label for="${escHtml(inputId)}" style="display:flex;align-items:center;gap:8px;border:1px solid rgba(56,189,248,0.22);border-radius:8px;padding:7px 9px;background:rgba(255,255,255,0.72);font-size:12px;color:#075985;cursor:pointer">
-        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}" style="margin:0" />
+      return `<label for="${escHtml(inputId)}" class="pq-option">
+        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}" />
         <span>${escHtml(option)}</span>
       </label>`;
     }).join('');
     const textInput = q.mode === 'text'
-      ? `<textarea data-question-text="${escHtml(q.id)}" placeholder="Answer..." rows="2" style="width:100%;border:1px solid rgba(56,189,248,0.24);border-radius:8px;padding:8px 9px;font:inherit;font-size:12px;resize:vertical;background:rgba(255,255,255,0.86);color:#075985"></textarea>`
+      ? `<textarea data-question-text="${escHtml(q.id)}" placeholder="Answer..." rows="2" class="pq-input"></textarea>`
       : '';
     const otherInput = q.allowOther
-      ? `<div style="display:flex;gap:6px;align-items:flex-start">
-          ${q.mode !== 'text' ? `<button type="button" onclick="toggleQuestionOther(${idArg}, ${qIdArg})" style="border:1px solid rgba(56,189,248,0.26);background:rgba(14,165,233,0.08);color:#075985;border-radius:8px;padding:7px 9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">Other</button>` : ''}
-          <textarea data-question-other="${escHtml(q.id)}" placeholder="Other..." rows="1" style="${q.mode !== 'text' ? 'display:none;' : ''}width:100%;border:1px solid rgba(56,189,248,0.24);border-radius:8px;padding:8px 9px;font:inherit;font-size:12px;resize:vertical;background:rgba(255,255,255,0.86);color:#075985"></textarea>
+      ? `<div class="pq-other-row">
+          ${q.mode !== 'text' ? `<button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})">Other</button>` : ''}
+          <textarea data-question-other="${escHtml(q.id)}" placeholder="Other..." rows="1" class="pq-input pq-other-input"${q.mode !== 'text' ? ' hidden' : ''}></textarea>
         </div>`
       : '';
-    return `<div style="display:flex;flex-direction:column;gap:7px;margin-top:${index ? 10 : 0}px">
-      <div style="font-size:12px;font-weight:800;color:#075985;line-height:1.35">${escHtml(q.label)}${q.required ? '' : ' <span style="font-weight:600;opacity:.7">(optional)</span>'}</div>
+    return `<div class="pq-block" style="margin-top:${index ? 10 : 0}px">
+      <div class="pq-q-label">${escHtml(q.label)}${q.required ? '' : ' <span class="pq-optional">(optional)</span>'}</div>
       ${q.helpText ? `<div class="chat-approval-subdetail">${escHtml(q.helpText)}</div>` : ''}
-      ${options ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px">${options}</div>` : ''}
+      ${options ? `<div class="pq-options">${options}</div>` : ''}
       ${textInput}
       ${otherInput}
     </div>`;
@@ -35465,7 +35517,7 @@ function renderInlinePrometheusQuestion(item) {
   return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}">
     <div class="chat-approval-head">
       <div>
-        <div class="chat-approval-kicker">${pending ? 'Prometheus question' : 'Question result'}</div>
+        <div class="chat-approval-kicker">${pending ? (question.questions.length > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question') : 'Question result'}</div>
         <div class="chat-approval-title">${escHtml(question.title || 'Prometheus question')}</div>
       </div>
       <div class="chat-approval-badges">
@@ -35475,7 +35527,7 @@ function renderInlinePrometheusQuestion(item) {
     ${question.prompt ? `<div class="chat-approval-detail">${escHtml(question.prompt)}</div>` : ''}
     ${question.context ? `<div class="chat-approval-subdetail">${escHtml(question.context)}</div>` : ''}
     ${questionBlocks}
-    ${pending && question.allowGeneralOther ? `<div style="margin-top:10px"><textarea data-question-general-other="1" placeholder="Anything else..." rows="2" style="width:100%;border:1px solid rgba(56,189,248,0.24);border-radius:8px;padding:8px 9px;font:inherit;font-size:12px;resize:vertical;background:rgba(255,255,255,0.86);color:#075985"></textarea></div>` : ''}
+    ${pending && question.allowGeneralOther ? `<div style="margin-top:10px"><textarea data-question-general-other="1" placeholder="Anything else..." rows="2" class="pq-input"></textarea></div>` : ''}
     ${pending
       ? `<div class="chat-approval-actions">
           <button class="chat-approval-btn chat-approval-approve" type="button" onclick="submitInlinePrometheusQuestion(${idArg})">Submit</button>
@@ -35489,8 +35541,7 @@ function toggleQuestionOther(questionId, itemId) {
   const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
   const other = card?.querySelector?.(`[data-question-other="${cssEscapeValue(itemId)}"]`);
   if (!other) return;
-  other.style.display = other.style.display === 'none' ? 'block' : 'none';
-  if (other.style.display !== 'none') other.focus();
+  if (other.hasAttribute('hidden')) { other.removeAttribute('hidden'); other.focus(); } else { other.setAttribute('hidden', ''); }
 }
 
 function collectPrometheusQuestionAnswers(question) {
@@ -37932,9 +37983,11 @@ wsEventBus.on('coordinator_progress', (msg) => {
 
 ['question_created', 'question_answered', 'question_cancelled', 'question_expired'].forEach((eventName) => {
   wsEventBus.on(eventName, async (msg) => {
-    const matchesSession = String(msg.sessionId || msg.question?.sessionId || '').trim() === String(window.activeChatSessionId || '').trim();
     if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
-    if (eventName === 'question_created' && matchesSession) {
+    if (eventName === 'question_created') {
+      // Insert into the question's OWN session (upsert handles non-active sessions
+      // by marking unread) — do not gate on the currently-focused session, or
+      // questions from background tasks / subagents never render.
       const question = msg.question ? questionFromEventPayload(msg, 'pending') : normalizePrometheusQuestionRecord(await fetchPrometheusQuestionDetailsById(msg.questionId), { ...msg, status: 'pending' });
       upsertInlinePrometheusQuestion(question);
       return;

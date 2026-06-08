@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "product-carousel-builder",
+  "name": "Product Carousel Builder",
+  "description": "Reusable workflow for extracting, curating, and displaying product recommendations with Prometheus product carousels.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "product carousel",
+    "show carousel",
+    "shopping carousel",
+    "amazon carousel",
+    "product recommendations",
+    "show products",
+    "product cards",
+    "find products",
+    "shopping search",
+    "compare products"
+  ],
+  "categories": [
+    "shopping",
+    "research",
+    "browser",
+    "visual-output"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "web",
+    "skills"
+  ],
+  "permissions": {
+    "browser": true,
+    "workspaceRead": false,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "examples/amazon-mens-shampoo-carousel.md",
+      "type": "example",
+      "description": "Worked example based on an Amazon men’s shampoo search, including extraction fields and carousel curation logic."
+    }
+  ]
+}

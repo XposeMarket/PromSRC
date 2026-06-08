@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Harbor Paws Adoption Center | Find Your New Best Friend</title>
+  <meta name="description" content="A warm, trustworthy landing page for a local dog adoption center helping families meet adoptable dogs, volunteer, foster, and donate." />
+  <link rel="preconnect" href="https://images.unsplash.com" />
+  <style>
+    :root {
+      --ink: #24312c;
+      --muted: #64736e;
+      --cream: #fbf6ec;
+      --paper: #fffdf8;
+      --sage: #d9eadf;
+      --sage-dark: #577868;
+      --clay: #c86b4e;
+      --clay-dark: #9f4a35;
+      --gold: #e4b75b;
+      --line: rgba(36, 49, 44, 0.14);
+      --shadow: 0 24px 80px rgba(44, 56, 50, 0.16);
+      --radius-xl: 34px;
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--cream);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    img { display: block; max-width: 100%; }
+
+    .page-shell {
+      overflow: hidden;
+      position: relative;
+    }
+
+    .page-shell::before {
+      content: "";
+      position: absolute;
+      inset: -220px -180px auto auto;
+      width: 520px;
+      height: 520px;
+      background: radial-gradient(circle, rgba(228, 183, 91, 0.30), transparent 68%);
+      pointer-events: none;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      backdrop-filter: blur(18px);
+      background: rgba(251, 246, 236, 0.84);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .nav-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 850;
+      letter-spacing: -0.03em;
+      font-size: 1.1rem;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 15px;
+      background: var(--ink);
+      color: var(--cream);
+      display: grid;
+      place-items: center;
+      box-shadow: 0 10px 30px rgba(36, 49, 44, 0.22);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 26px;
+      color: var(--muted);
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+
+    .nav-links a:hover { color: var(--ink); }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border: 0;
+      border-radius: 999px;
+      padding: 14px 20px;
+      font-weight: 850;
+      cursor: pointer;
+      transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease;
+      font-size: 0.97rem;
+      white-space: nowrap;
+    }
+
+    .button:hover { transform: translateY(-2px); }
+    .button-primary {
+      color: #fff;
+      background: var(--clay);
+      box-shadow: 0 16px 36px rgba(200, 107, 78, 0.28);
+    }
+    .button-primary:hover { background: var(--clay-dark); }
+    .button-secondary {
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 12px 28px rgba(36, 49, 44, 0.08);
+    }
+
+    .hero {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 78px 24px 54px;
+      display: grid;
+      grid-template-columns: 1.02fr 0.98fr;
+      gap: 54px;
+      align-items: center;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 13px;
+      border-radius: 999px;
+      background: rgba(217, 234, 223, 0.9);
+      color: var(--sage-dark);
+      font-size: 0.88rem;
+      font-weight: 850;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--clay);
+      box-shadow: 0 0 0 5px rgba(200, 107, 78, 0.12);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(3.1rem, 7vw, 6.2rem);
+      line-height: 0.93;
+      letter-spacing: -0.075em;
+      max-width: 720px;
+    }
+
+    .hero-copy {
+      margin: 24px 0 0;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2vw, 1.24rem);
+      max-width: 590px;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 32px;
+    }
+
+    .trust-row {
+      margin-top: 34px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 13px;
+      max-width: 590px;
+    }
+
+    .trust-card {
+      padding: 17px;
+      border: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.72);
+      border-radius: var(--radius-md);
+    }
+
+    .trust-number {
+      display: block;
+      font-weight: 900;
+      font-size: 1.65rem;
+      letter-spacing: -0.05em;
+    }
+
+    .trust-label {
+      display: block;
+      color: var(--muted);
+      font-size: 0.86rem;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    .hero-visual {
+      position: relative;
+      min-height: 620px;
+    }
+
+    .photo-stack {
+      position: relative;
+      height: 100%;
+      min-height: 620px;
+      border-radius: 44px;
+      background: var(--sage);
+      padding: 18px;
+      box-shadow: var(--shadow);
+      transform: rotate(1.2deg);
+    }
+
+    .main-photo {
+      height: 100%;
+      min-height: 584px;
+      border-radius: 32px;
+      object-fit: cover;
+      width: 100%;
+      filter: saturate(0.96) contrast(1.02);
+    }
+
+    .adoption-card {
+      position: absolute;
+      left: -34px;
+      bottom: 46px;
+      width: min(330px, 80%);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      box-shadow: 0 24px 60px rgba(36, 49, 44, 0.20);
+      transform: rotate(-3deg);
+    }
+
+    .dog-mini {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .dog-mini img {
+      width: 72px;
+      height: 72px;
+      border-radius: 22px;
+      object-fit: cover;
+    }
+
+    .dog-mini h3, .dog-card h3 {
+      margin: 0;
+      font-size: 1.15rem;
+      letter-spacing: -0.03em;
+    }
+
+    .dog-mini p, .dog-card p { margin: 4px 0 0; color: var(--muted); }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .tag {
+      padding: 7px 10px;
+      background: rgba(217, 234, 223, 0.78);
+      color: var(--sage-dark);
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 850;
+    }
+
+    .visit-card {
+      position: absolute;
+      top: 42px;
+      right: -20px;
+      width: 210px;
+      background: var(--ink);
+      color: var(--cream);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      box-shadow: 0 22px 55px rgba(36, 49, 44, 0.24);
+      transform: rotate(-2deg);
+    }
+
+    .visit-card strong {
+      display: block;
+      font-size: 1.4rem;
+      letter-spacing: -0.04em;
+      margin-bottom: 5px;
+    }
+
+    section {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 74px 24px;
+    }
+
+    .section-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 30px;
+      margin-bottom: 28px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 3.4rem);
+      line-height: 1;
+      letter-spacing: -0.06em;
+    }
+
+    .section-heading p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 430px;
+      font-size: 1.02rem;
+    }
+
+    .dog-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .dog-card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: 0 16px 42px rgba(36, 49, 44, 0.08);
+    }
+
+    .dog-card img {
+      width: 100%;
+      height: 260px;
+      object-fit: cover;
+    }
+
+    .dog-card-body { padding: 20px; }
+
+    .dog-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .status {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(228, 183, 91, 0.2);
+      color: #8b6420;
+      font-size: 0.75rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .process-band {
+      background: var(--ink);
+      color: var(--cream);
+      max-width: none;
+      margin: 26px 0 0;
+      padding: 0;
+    }
+
+    .process-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 76px 24px;
+    }
+
+    .process-inner .section-heading p { color: rgba(251, 246, 236, 0.72); }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 28px;
+    }
+
+    .step {
+      border: 1px solid rgba(251, 246, 236, 0.18);
+      background: rgba(255, 255, 255, 0.055);
+      border-radius: var(--radius-lg);
+      padding: 22px;
+    }
+
+    .step-number {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      background: var(--gold);
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+      font-weight: 950;
+      margin-bottom: 22px;
+    }
+
+    .step h3 { margin: 0 0 8px; letter-spacing: -0.03em; }
+    .step p { margin: 0; color: rgba(251, 246, 236, 0.72); }
+
+    .support-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .support-card {
+      min-height: 300px;
+      border-radius: var(--radius-xl);
+      padding: 30px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-shadow: 0 16px 42px rgba(36, 49, 44, 0.08);
+    }
+
+    .support-card:nth-child(2) { background: var(--sage); }
+    .support-card h3 {
+      margin: 0;
+      font-size: 2rem;
+      letter-spacing: -0.055em;
+      line-height: 1;
+    }
+    .support-card p { color: var(--muted); max-width: 470px; }
+
+    .support-icon {
+      position: absolute;
+      right: 24px;
+      bottom: 18px;
+      font-size: 6rem;
+      opacity: 0.12;
+      transform: rotate(-10deg);
+    }
+
+    .story {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 42px;
+      align-items: center;
+    }
+
+    .story img {
+      border-radius: var(--radius-xl);
+      height: 520px;
+      width: 100%;
+      object-fit: cover;
+      box-shadow: var(--shadow);
+    }
+
+    .quote {
+      font-size: clamp(1.7rem, 3vw, 3rem);
+      line-height: 1.05;
+      letter-spacing: -0.06em;
+      margin: 0;
+    }
+
+    .quote-credit { margin-top: 24px; color: var(--muted); font-weight: 760; }
+
+    .cta {
+      padding-top: 30px;
+      padding-bottom: 92px;
+    }
+
+    .cta-box {
+      border-radius: 42px;
+      background: linear-gradient(135deg, var(--clay), #df9566);
+      color: #fff;
+      padding: clamp(32px, 7vw, 70px);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 32px;
+      align-items: center;
+      box-shadow: 0 30px 80px rgba(200, 107, 78, 0.26);
+    }
+
+    .cta-box h2 { max-width: 720px; }
+    .cta-box p { margin: 18px 0 0; max-width: 620px; color: rgba(255, 255, 255, 0.82); }
+    .cta-box .button-secondary { border: 0; color: var(--clay-dark); }
+
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 28px 24px 42px;
+      color: var(--muted);
+    }
+
+    .footer-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      flex-wrap: wrap;
+      font-weight: 700;
+    }
+
+    @media (max-width: 920px) {
+      .nav-links { display: none; }
+      .hero {
+        grid-template-columns: 1fr;
+        padding-top: 52px;
+      }
+      .hero-visual, .photo-stack { min-height: 520px; }
+      .main-photo { min-height: 484px; }
+      .dog-grid, .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .support-grid, .story, .cta-box { grid-template-columns: 1fr; }
+      .section-heading { align-items: start; flex-direction: column; }
+      .story img { height: 420px; }
+    }
+
+    @media (max-width: 620px) {
+      .nav-inner { padding: 12px 16px; }
+      .brand span { display: none; }
+      .hero, section { padding-left: 16px; padding-right: 16px; }
+      .hero { padding-top: 42px; gap: 34px; }
+      h1 { font-size: 3.25rem; }
+      .trust-row { grid-template-columns: 1fr; }
+      .hero-visual, .photo-stack { min-height: 430px; }
+      .main-photo { min-height: 394px; border-radius: 24px; }
+      .photo-stack { border-radius: 32px; transform: none; }
+      .visit-card { right: 8px; top: 18px; width: 174px; }
+      .adoption-card { left: 8px; bottom: 20px; width: calc(100% - 34px); }
+      .dog-grid, .steps { grid-template-columns: 1fr; }
+      .dog-card img { height: 235px; }
+      .process-inner { padding: 58px 16px; }
+      .support-card { min-height: 260px; padding: 24px; }
+      .story img { height: 330px; }
+      .cta { padding-bottom: 64px; }
+      .cta-box { border-radius: 30px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="nav">
+      <div class="nav-inner">
+        <a class="brand" href="#top" aria-label="Harbor Paws home">
+          <span class="brand-mark" aria-hidden="true">🐾</span>
+          <span>Harbor Paws</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary navigation">
+          <a href="#dogs">Meet the dogs</a>
+          <a href="#process">Adoption process</a>
+          <a href="#support">Support us</a>
+          <a href="#visit">Visit</a>
+        </nav>
+        <a class="button button-primary" href="#dogs">Adopt today</a>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <div class="eyebrow"><span class="eyebrow-dot"></span> Local shelter • Open daily 10–6</div>
+          <h1 id="hero-title">Every good dog deserves a front porch.</h1>
+          <p class="hero-copy">Harbor Paws Adoption Center helps rescued dogs find safe, loving homes nearby. Meet friendly pups, talk with trained matchmakers, and leave with a plan built around your life.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#dogs">See adoptable dogs</a>
+            <a class="button button-secondary" href="#visit">Schedule a visit</a>
+          </div>
+          <div class="trust-row" aria-label="Shelter impact stats">
+            <div class="trust-card"><span class="trust-number">1,240+</span><span class="trust-label">dogs placed locally</span></div>
+            <div class="trust-card"><span class="trust-number">97%</span><span class="trust-label">adopter follow-up rate</span></div>
+            <div class="trust-card"><span class="trust-number">42</span><span class="trust-label">dogs ready this week</span></div>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-label="Happy rescue dog at the adoption center">
+          <div class="photo-stack">
+            <img class="main-photo" src="https://images.unsplash.com/photo-1552053831-71594a27632d?auto=format&fit=crop&w=1100&q=86" alt="Golden retriever smiling outside" />
+          </div>
+          <aside class="visit-card" aria-label="Visit information">
+            <strong>Walk-ins welcome</strong>
+            Same-day meet-and-greets for approved adopters.
+          </aside>
+          <aside class="adoption-card" aria-label="Featured dog card">
+            <div class="dog-mini">
+              <img src="https://images.unsplash.com/photo-1548199973-03cce0bbc87b?auto=format&fit=crop&w=300&q=85" alt="Two happy dogs sitting together" />
+              <div>
+                <h3>Milo & Junie</h3>
+                <p>Bonded pair • Gentle • House-trained</p>
+              </div>
+            </div>
+            <div class="tags">
+              <span class="tag">Great with kids</span>
+              <span class="tag">Medium energy</span>
+              <span class="tag">Ready now</span>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="dogs" aria-labelledby="dogs-title">
+        <div class="section-heading">
+          <h2 id="dogs-title">Meet a few waiting tails.</h2>
+          <p>Each dog is vaccinated, temperament-screened, and supported by our adoption team before going home.</p>
+        </div>
+        <div class="dog-grid">
+          <article class="dog-card">
+            <img src="https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?auto=format&fit=crop&w=800&q=86" alt="Small tan dog looking at camera" />
+            <div class="dog-card-body">
+              <div class="dog-meta"><h3>Penny</h3><span class="status">New arrival</span></div>
+              <p>Sweet, curious, and happiest curled beside someone. Best for a calm home.</p>
+              <div class="tags"><span class="tag">2 years</span><span class="tag">Small</span><span class="tag">Cuddly</span></div>
+            </div>
+          </article>
+          <article class="dog-card">
+            <img src="https://images.unsplash.com/photo-1537151608828-ea2b11777ee8?auto=format&fit=crop&w=800&q=86" alt="Large dog standing in a field" />
+            <div class="dog-card-body">
+              <div class="dog-meta"><h3>Atlas</h3><span class="status">Staff pick</span></div>
+              <p>Trail buddy, fetch professional, and loyal shadow. Loves active families.</p>
+              <div class="tags"><span class="tag">4 years</span><span class="tag">Large</span><span class="tag">Active</span></div>
+            </div>
+          </article>
+          <article class="dog-card">
+            <img src="https://images.unsplash.com/photo-1517423440428-a5a00ad493e8?auto=format&fit=crop&w=800&q=86" alt="Puppy sitting on a blanket" />
+            <div class="dog-card-body">
+              <div class="dog-meta"><h3>Rosie</h3><span class="status">Foster ready</span></div>
+              <p>Bright puppy energy with a soft side. Needs structure, play, and patience.</p>
+              <div class="tags"><span class="tag">7 months</span><span class="tag">Medium</span><span class="tag">Playful</span></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="process" class="process-band" aria-labelledby="process-title">
+        <div class="process-inner">
+          <div class="section-heading">
+            <h2 id="process-title">Adoption without the guesswork.</h2>
+            <p>We move quickly, but carefully. The goal is a home that works for the dog and the adopter.</p>
+          </div>
+          <div class="steps">
+            <article class="step"><div class="step-number">1</div><h3>Apply online</h3><p>Tell us about your home, schedule, pets, and experience.</p></article>
+            <article class="step"><div class="step-number">2</div><h3>Meet your match</h3><p>Visit the center and spend time with dogs that fit your lifestyle.</p></article>
+            <article class="step"><div class="step-number">3</div><h3>Go home prepared</h3><p>Leave with medical records, food notes, training tips, and support contacts.</p></article>
+            <article class="step"><div class="step-number">4</div><h3>Stay connected</h3><p>Our team checks in after adoption so little problems do not become big ones.</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section id="support" aria-labelledby="support-title">
+        <div class="section-heading">
+          <h2 id="support-title">Not adopting today? You can still help.</h2>
+          <p>Fosters, volunteers, donors, and local partners keep dogs safe while they wait.</p>
+        </div>
+        <div class="support-grid">
+          <article class="support-card">
+            <div>
+              <h3>Become a foster</h3>
+              <p>Open your home temporarily and give a dog a quieter place to heal, learn, and show their real personality.</p>
+            </div>
+            <a class="button button-primary" href="mailto:hello@harborpaws.local?subject=Foster%20Application">Start fostering</a>
+            <span class="support-icon" aria-hidden="true">🏡</span>
+          </article>
+          <article class="support-card">
+            <div>
+              <h3>Donate supplies</h3>
+              <p>Food, blankets, leashes, enrichment toys, and medical funds directly support dogs in our care.</p>
+            </div>
+            <a class="button button-secondary" href="mailto:hello@harborpaws.local?subject=Donation%20Question">View wish list</a>
+            <span class="support-icon" aria-hidden="true">🦴</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="story" aria-labelledby="story-title">
+        <img src="https://images.unsplash.com/photo-1598133894008-61f7fdb8cc3a?auto=format&fit=crop&w=900&q=86" alt="Person hugging a rescue dog" />
+        <div>
+          <h2 id="story-title">Built for second chances.</h2>
+          <p class="quote">“They helped us find a dog who fit our apartment, our work schedule, and our very nervous cat. We felt supported from the first visit.”</p>
+          <p class="quote-credit">— Maya R., adopter of Benny</p>
+        </div>
+      </section>
+
+      <section id="visit" class="cta" aria-labelledby="cta-title">
+        <div class="cta-box">
+          <div>
+            <h2 id="cta-title">Come meet your new best friend this week.</h2>
+            <p>Visit Harbor Paws Adoption Center at 214 Maple Street. Open daily from 10 AM to 6 PM, with late meet-and-greets every Thursday.</p>
+          </div>
+          <a class="button button-secondary" href="mailto:hello@harborpaws.local?subject=Schedule%20a%20Visit">Schedule a visit</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-inner">
+        <span>© 2026 Harbor Paws Adoption Center</span>
+        <span>214 Maple Street • (555) 013-PAWS • hello@harborpaws.local</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

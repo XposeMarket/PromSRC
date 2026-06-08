@@ -6,21 +6,41 @@
   "category": "Storage",
   "enabledByDefault": true,
   "docsUrl": "https://console.cloud.google.com/",
-  "tags": ["google drive", "storage", "oauth"],
+  "tags": [
+    "google drive",
+    "storage",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/google-drive"
+    "binding": "integrations/connectors/google-drive",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#0F9D58",
     "permissions": [
-      { "icon": "[]", "label": "Read files, folders, and docs" },
-      { "icon": "+", "label": "Create and update files with approval" },
-      { "icon": "?", "label": "Search across Drive" }
+      {
+        "icon": "[]",
+        "label": "Read files, folders, and docs"
+      },
+      {
+        "icon": "+",
+        "label": "Create and update files with approval"
+      },
+      {
+        "icon": "?",
+        "label": "Search across Drive"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_gdrive"],
-    "capabilities": ["documents", "storage", "files"],
+    "toolNamespaces": [
+      "connector_gdrive"
+    ],
+    "capabilities": [
+      "documents",
+      "storage",
+      "files"
+    ],
     "tools": [
       "connector_gdrive_list_files",
       "connector_gdrive_get_file",

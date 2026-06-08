@@ -93,6 +93,12 @@ export async function loadMobileApprovals(status = 'pending') {
   return Array.isArray(r?.approvals) ? r.approvals : [];
 }
 
+export async function loadMobileQuestions(status = 'pending') {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+  const r = await mfetch(`/api/questions${qs}`);
+  return Array.isArray(r?.questions) ? r.questions : [];
+}
+
 export async function approveMobileApproval(id, grantScope = '') {
   const scope = String(grantScope || '').trim();
   return mfetch(`/api/approvals/${encodeURIComponent(id)}/approve`, {
@@ -1112,6 +1118,12 @@ export async function loadMobileSessionPage({ channel = 'mobile', limit = MOBILE
     limit: String(requestedLimit),
     offset: String(requestedOffset),
   });
+  // The "Computer" (web) channel mirrors the desktop main-chat view, which
+  // includes automated scheduled-task sessions (auto_*). Ask the server to
+  // fold those in so per-job scheduled threads appear on mobile too.
+  if (requestedChannel === 'web') {
+    params.set('includeAutomated', '1');
+  }
   const r = await mfetch(`/api/sessions?${params.toString()}`);
   return _normalizeSessionPageResponse(r, { channel: requestedChannel, limit: requestedLimit, offset: requestedOffset });
 }

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "hyperframes-registry",
+  "name": "hyperframes-registry",
+  "description": "Install and wire registry blocks and components into HyperFrames compositions. Use when running hyperframes add, installing a block or component, wiring an installed item into index.html, or working with hyperframes.json. Covers the add command, install locations, block sub-composition wiring, component snippet merging, and registry discovery.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "hyperframes-registry"
+  ],
+  "categories": [
+    "generic",
+    "imported"
+  ],
+  "requiredTools": [],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": false,
+    "desktop": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/current-catalog-snapshot-2026-06-04.md",
+      "type": "reference",
+      "description": "Fetched 2026-06-04 HyperFrames registry snapshot with category routing for captions, transitions, social UI, VFX, code snippets, and examples."
+    }
+  ]
+}

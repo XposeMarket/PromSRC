@@ -1,0 +1,8 @@
+{
+  "name": "prometheus-release-practice",
+  "entry": "index.html",
+  "width": 1080,
+  "height": 1920,
+  "duration": 28,
+  "fps": 30
+}

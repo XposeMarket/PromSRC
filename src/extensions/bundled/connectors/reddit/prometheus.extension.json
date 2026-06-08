@@ -6,21 +6,41 @@
   "category": "Social",
   "enabledByDefault": true,
   "docsUrl": "https://www.reddit.com/prefs/apps",
-  "tags": ["reddit", "community", "oauth"],
+  "tags": [
+    "reddit",
+    "community",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/reddit"
+    "binding": "integrations/connectors/reddit",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#FF4500",
     "permissions": [
-      { "icon": "?", "label": "Read posts and comments from subreddits" },
-      { "icon": "@", "label": "Monitor brand mentions" },
-      { "icon": "->", "label": "Draft posts and comments with approval" }
+      {
+        "icon": "?",
+        "label": "Read posts and comments from subreddits"
+      },
+      {
+        "icon": "@",
+        "label": "Monitor brand mentions"
+      },
+      {
+        "icon": "->",
+        "label": "Draft posts and comments with approval"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_reddit"],
-    "capabilities": ["community", "research", "social"],
+    "toolNamespaces": [
+      "connector_reddit"
+    ],
+    "capabilities": [
+      "community",
+      "research",
+      "social"
+    ],
     "tools": [
       "connector_reddit_get_posts",
       "connector_reddit_search",

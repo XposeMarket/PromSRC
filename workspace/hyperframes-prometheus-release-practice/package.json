@@ -1,0 +1,11 @@
+{
+  "name": "hyperframes-prometheus-release-practice",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Prometheus Ash & Archive HyperFrames release practice promo",
+  "scripts": {
+    "lint": "node ../../scripts/run-hyperframes.js lint .",
+    "inspect": "node ../../scripts/run-hyperframes.js inspect .",
+    "render": "node ../../scripts/run-hyperframes.js render . --output final.mp4"
+  }
+}

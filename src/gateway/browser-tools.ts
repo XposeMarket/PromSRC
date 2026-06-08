@@ -3664,7 +3664,7 @@ async function extractStructuredFromPage(
         const uniqueImageUrls = Array.from(new Set(imageUrls));
         const videoNode = tw.querySelector('[data-testid="videoPlayer"] video, video') as any;
         const rawVideoSrc = normalize(videoNode?.currentSrc || videoNode?.src || '', 1200);
-        const videoSrc = rawVideoSrc && !/^blob:/i.test(rawVideoSrc) ? toAbs(rawVideoSrc) : '';
+        const videoSrc = rawVideoSrc ? toAbs(rawVideoSrc) : '';  // Keep blob: URLs for downstream processing
         const videoPoster = normalize(
           videoNode?.getAttribute?.('poster')
             || (tw.querySelector('[data-testid="videoPlayer"] img') as any)?.currentSrc
@@ -3675,7 +3675,7 @@ async function extractStructuredFromPage(
         const hasVideo = !!(tw.querySelector('[data-testid="videoPlayer"]') || tw.querySelector('video'));
         const media = [
           ...uniqueImageUrls.map((mediaUrl: string) => ({ type: 'image' as const, url: mediaUrl })),
-          ...(hasVideo ? [{ type: 'video' as const, url: videoSrc || undefined, previewUrl: videoPoster || undefined }] : []),
+          ...(hasVideo ? [{ type: 'video' as const, url: videoSrc || videoPoster || undefined, previewUrl: videoPoster || undefined }] : []),
         ];
         const hasImage = uniqueImageUrls.length > 0 || hasVideo;
 
@@ -9129,6 +9129,8 @@ function buildSnapshotDelta(prevSnapshot: string, newSnapshot: string, pass: num
 }
 
 export async function fetchXThread(sessionId: string, url: string): Promise<string> {
+  // Normalize /video/N direct links to base tweet URL for proper extraction
+  const normalizedUrl = url.replace(/\/video\/\d+(\?|$)/, '$1');
   // Use unique session ID for X scraping, isolated from main session
   const xSessionId = `x_scrape_${Date.now()}`;
   const resolvedXSessionId = resolveSessionId(xSessionId);
@@ -9152,7 +9154,7 @@ export async function fetchXThread(sessionId: string, url: string): Promise<stri
 
   try {
     const session = await getOrCreateSession(resolvedXSessionId);
-    await session.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+    await session.page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 });
     await Promise.race([
       session.page.waitForSelector('article[data-testid="tweet"]', { timeout: 2500 }).catch(() => null),
       session.page.waitForTimeout(900),

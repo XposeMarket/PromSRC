@@ -14526,12 +14526,16 @@ router.get('/api/sessions', async (req, res) => {
       }
     }
 
+    const includeAutomated = req.query.includeAutomated === '1'
+      || req.query.includeAutomated === 'true';
+
     const hasPaging = req.query.limit != null || req.query.offset != null;
     if (hasPaging) {
       const page = listSessionSummaries({
         channel: channel as any,
         limit: Number(req.query.limit),
         offset: Number(req.query.offset),
+        includeAutomated,
       });
       res.json(markActiveRunsOnSessionList(page));
       return;

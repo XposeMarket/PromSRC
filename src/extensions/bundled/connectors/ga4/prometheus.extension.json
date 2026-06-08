@@ -8,7 +8,8 @@
   "docsUrl": "https://console.cloud.google.com/",
   "tags": ["ga4", "analytics", "oauth"],
   "runtime": {
-    "binding": "integrations/connectors/google-analytics"
+    "binding": "integrations/connectors/google-analytics",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#F59E0B",

@@ -1,0 +1,13 @@
+{
+  "skillId": "prometheus-x-growth-operator",
+  "reason": "resource-write",
+  "createdAt": "2026-06-03T04:41:13.481Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-x-growth-operator",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/workflows/prometheus-x-growth-operator-2026-06-02.md"
+  ],
+  "hash": "3399730aae5b3f87"
+}

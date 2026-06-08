@@ -25,7 +25,7 @@ import {
   loadMobileMoreSummary, loadMobileHubOverview, loadMobileAuditRuns, loadMobileMemoryOverview,
   applyMobileSkillCuratorSuggestion, denyMobileSkillCuratorSuggestion,
   loadMobileProposals, loadMobileProposal, approveMobileProposal, denyMobileProposal,
-  loadMobileApprovals, approveMobileApproval, denyMobileApproval,
+  loadMobileApprovals, approveMobileApproval, denyMobileApproval, loadMobileQuestions,
   loadMobileProcessRuns, loadMobileProcessRunLog, rerunMobileProcessRun, killMobileProcessRun, submitMobileProcessInput,
   uploadMobileTextFile, uploadMobileBinaryFile,
   loadMobileCommandModels, loadMobileStopTargets, stopMobileMainChat, stopMobileRuntime,
@@ -274,6 +274,7 @@ function _mapServerMessageToMobile(m, index = -1) {
     fileChanges: m?.fileChanges && typeof m.fileChanges === 'object' ? m.fileChanges : undefined,
     productCarousel: m?.productCarousel && typeof m.productCarousel === 'object' ? m.productCarousel : undefined,
     richArtifacts: Array.isArray(m?.richArtifacts) && m.richArtifacts.length ? m.richArtifacts : undefined,
+    questionRequest: m?.questionRequest && typeof m.questionRequest === 'object' ? m.questionRequest : undefined,
     sideChatBoundary: m?.sideChatBoundary === true,
     voiceAgentWorkerHandoff: m?.voiceAgentWorkerHandoff === true,
     source: String(m?.source || ''),
@@ -831,6 +832,7 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   }
   if (!target.fileChanges && source.fileChanges) target.fileChanges = source.fileChanges;
   if (!target.approvalRequest && source.approvalRequest) target.approvalRequest = source.approvalRequest;
+  if (!target.questionRequest && source.questionRequest) target.questionRequest = source.questionRequest;
   if (!String(target.body?.text || '').trim() && String(source.body?.text || source.content || '').trim()) {
     if (!target.body || typeof target.body !== 'object') target.body = { text: '' };
     target.body.text = String(source.body?.text || source.content || '');
@@ -1425,12 +1427,38 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   }
 }
 
+// Live-update an open scheduled-task ("Automated: …") thread when a new run
+// completes. Scheduled jobs now use one stable session per job (auto_<jobId>),
+// so each run appends to the same thread. If the user is currently viewing that
+// thread we refresh it in place; otherwise the list re-fetch on drawer open
+// picks it up. We deliberately do NOT yank the user into the thread.
+async function _applyMobileScheduledNotification(msg = {}) {
+  const sid = String(msg.sessionId || '').trim();
+  if (!sid || !/^auto_/i.test(sid)) return;
+  const session = await loadMobileChatSession(sid).catch(() => null);
+  const history = Array.isArray(session?.history) ? session.history : [];
+  const mapped = _mapServerHistoryToMobile(history);
+  const localThread = __pmChat.threads?.[sid] || [];
+  __pmChat.threads[sid] = _mergeMobileThreadLocalArtifacts(mapped, localThread);
+  if (String(__pmChat.activeSessionId || '').trim() === sid) {
+    _activeMobileThread();
+    const threadEl = document.getElementById('pm-chat-thread');
+    const bodyEl = document.getElementById('pm-chat-body');
+    if (threadEl) _flushThreadRender(threadEl, bodyEl, sid);
+    markMobileChatSessionRead(sid, Date.now()).catch(() => {});
+  }
+}
+
 if (!window.__pmMobileSessionNotificationBridgeInstalled) {
   window.__pmMobileSessionNotificationBridgeInstalled = true;
   wsEventBus.on('session_notification', (msg = {}) => {
     if (String(msg.source || '') === 'hot_restart') {
       _applyMobileHotRestartNotification(msg).catch((err) => {
         pmToast(`Restart message sync failed: ${err?.message || err}`, 'error');
+      });
+    } else if (String(msg.source || '') === 'schedule') {
+      _applyMobileScheduledNotification(msg).catch((err) => {
+        console.warn('[mobile] scheduled notification sync failed:', err?.message || err);
       });
     }
   });
@@ -2435,6 +2463,156 @@ if (typeof window !== 'undefined') {
   window._awmSend = _awmSend;
 }
 
+// ── Prometheus questions (mobile) — mirrors the desktop inline question card ──
+function _normalizeMobileQuestion(input, extra = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const id = String(src.id || extra.questionId || extra.id || '').trim();
+  const questions = (Array.isArray(src.questions) ? src.questions : []).map((q, i) => ({
+    id: String(q?.id || `q${i + 1}`),
+    label: String(q?.label || q?.question || ''),
+    mode: q?.mode === 'multi_select' ? 'multi_select' : q?.mode === 'text' ? 'text' : 'single_select',
+    options: Array.isArray(q?.options) ? q.options.map((o) => String(o)) : [],
+    allowOther: q?.allowOther !== false,
+    required: q?.required !== false,
+    helpText: q?.helpText ? String(q.helpText) : '',
+  })).filter((q) => q.label);
+  return {
+    id,
+    sessionId: String(src.sessionId || src.sourceSessionId || extra.sessionId || '').trim(),
+    title: String(src.title || 'Prometheus question'),
+    prompt: String(src.prompt || ''),
+    context: String(src.context || ''),
+    questions,
+    allowGeneralOther: src.allowGeneralOther !== false,
+    status: String(extra.status || src.status || 'pending'),
+    answers: Array.isArray(src.answers) ? src.answers : [],
+  };
+}
+
+function _renderMobileQuestionCard(item) {
+  const q = _normalizeMobileQuestion(item);
+  if (!q.id || !q.questions.length) return '';
+  const pending = q.status === 'pending';
+  const idJson = JSON.stringify(q.id);
+  const answerMap = new Map((q.answers || []).map((a) => [String(a?.id || ''), a || {}]));
+  const blocks = q.questions.map((qq) => {
+    const ans = answerMap.get(qq.id) || {};
+    if (!pending) {
+      const sel = Array.isArray(ans.selected) ? ans.selected : [];
+      const txt = [sel.join(', '), String(ans.text || ''), ans.other ? `Other: ${ans.other}` : ''].filter(Boolean).join(' · ') || 'No answer';
+      return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
+    }
+    const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')">${escapeHtml(opt)}</button>`).join('');
+    const textArea = qq.mode === 'text' ? `<textarea class="pm-q-input" data-pm-q-text rows="2" placeholder="Answer..."></textarea>` : '';
+    const otherArea = qq.allowOther ? `${qq.mode !== 'text' ? `<button type="button" class="pm-q-other-toggle" onclick="_mobileQuestionToggleOther(this)">Other…</button>` : ''}<textarea class="pm-q-input pm-q-other" data-pm-q-other rows="1" placeholder="Other..."${qq.mode !== 'text' ? ' hidden' : ''}></textarea>` : '';
+    return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
+      <div class="pm-q-label">${escapeHtml(qq.label)}${qq.required ? '' : ' <span class="pm-q-optional">(optional)</span>'}</div>
+      ${qq.helpText ? `<div class="pm-q-help">${escapeHtml(qq.helpText)}</div>` : ''}
+      ${opts ? `<div class="pm-q-opts">${opts}</div>` : ''}
+      ${textArea}${otherArea}
+    </div>`;
+  }).join('');
+  return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}">
+    <div class="pm-q-head"><span class="pm-q-kicker">${pending ? (q.questions.length > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question') : 'Question result'}</span><span class="pm-q-status pm-q-status-${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></div>
+    <div class="pm-q-title">${escapeHtml(q.title)}</div>
+    ${q.prompt ? `<div class="pm-q-prompt">${escapeHtml(q.prompt)}</div>` : ''}
+    ${q.context ? `<div class="pm-q-context">${escapeHtml(q.context)}</div>` : ''}
+    ${blocks}
+    ${pending && q.allowGeneralOther ? `<textarea class="pm-q-input" data-pm-q-general rows="2" placeholder="Anything else..."></textarea>` : ''}
+    ${pending
+      ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" onclick="_submitMobileQuestion(${idJson})">Submit</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
+      : `<div class="pm-q-resolved">This question was ${escapeHtml(q.status)}.</div>`}
+  </div>`;
+}
+
+function _mobileQuestionToggleOption(btn, mode) {
+  if (!btn) return;
+  if (mode === 'single_select') {
+    const wrap = btn.parentElement;
+    if (wrap) wrap.querySelectorAll('.pm-q-opt.selected').forEach((el) => { if (el !== btn) el.classList.remove('selected'); });
+    btn.classList.add('selected');
+  } else {
+    btn.classList.toggle('selected');
+  }
+}
+function _mobileQuestionToggleOther(btn) {
+  const ta = btn?.parentElement?.querySelector('[data-pm-q-other]') || btn?.nextElementSibling;
+  if (!ta) return;
+  if (ta.hasAttribute('hidden')) { ta.removeAttribute('hidden'); ta.focus(); } else { ta.setAttribute('hidden', ''); }
+}
+function _collectMobileQuestionAnswers(q) {
+  const card = document.querySelector(`[data-pm-q-card="${(window.CSS && CSS.escape) ? CSS.escape(q.id) : q.id}"]`);
+  if (!card) return { answers: [], generalOther: '' };
+  const answers = q.questions.map((qq) => {
+    const block = card.querySelector(`[data-pm-q="${(window.CSS && CSS.escape) ? CSS.escape(qq.id) : qq.id}"]`);
+    const selected = block ? Array.from(block.querySelectorAll('.pm-q-opt.selected')).map((el) => el.getAttribute('data-pm-q-opt') || '').filter(Boolean) : [];
+    const text = block ? String(block.querySelector('[data-pm-q-text]')?.value || '').trim() : '';
+    const other = block ? String(block.querySelector('[data-pm-q-other]')?.value || '').trim() : '';
+    return { id: qq.id, label: qq.label, mode: qq.mode, selected: qq.mode === 'single_select' ? selected.slice(0, 1) : selected, text, other };
+  });
+  const generalOther = String(card.querySelector('[data-pm-q-general]')?.value || '').trim();
+  return { answers, generalOther };
+}
+async function _submitMobileQuestion(id) {
+  const qid = String(id || '').trim();
+  let record = null;
+  try { const data = await window.api('/api/questions?status=all'); record = (data.questions || []).find((it) => String(it.id || '') === qid) || null; } catch {}
+  const q = _normalizeMobileQuestion(record || { id: qid, questions: [] });
+  const payload = _collectMobileQuestionAnswers(q);
+  try {
+    const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/submit`, { method: 'POST', body: JSON.stringify(payload) });
+    _updateMobileQuestionStatus({ questionId: qid, sessionId: result?.question?.sessionId, question: result?.question }, 'answered');
+  } catch (err) { pmToast?.(`Question submit failed: ${err?.message || err}`, 'error'); }
+}
+async function _cancelMobileQuestion(id) {
+  const qid = String(id || '').trim();
+  try {
+    const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/cancel`, { method: 'POST', body: '{}' });
+    _updateMobileQuestionStatus({ questionId: qid, sessionId: result?.question?.sessionId, question: result?.question }, 'cancelled');
+  } catch (err) { pmToast?.(`Question cancel failed: ${err?.message || err}`, 'error'); }
+}
+function _upsertMobileQuestion(q) {
+  const sid = String(q.sessionId || '').trim();
+  if (!sid || !q.id) return;
+  if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
+  const thread = __pmChat.threads[sid];
+  const existing = thread.find((m) => String(m?.questionRequest?.id || '') === q.id);
+  if (existing) {
+    existing.questionRequest = { ...(existing.questionRequest || {}), ...q };
+  } else {
+    thread.push({ role: 'ai', timestamp: Date.now(), time: _nowTime(), body: { sender: 'Prometheus', text: '' }, content: '', questionRequest: q });
+  }
+  if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
+}
+function _updateMobileQuestionStatus(event, status) {
+  const id = String(event.questionId || event.id || event.question?.id || '').trim();
+  if (!id) return;
+  const sessions = __pmChat.threads || {};
+  for (const sid of Object.keys(sessions)) {
+    const thread = sessions[sid];
+    if (!Array.isArray(thread)) continue;
+    const msg = thread.find((m) => String(m?.questionRequest?.id || '') === id);
+    if (!msg) continue;
+    msg.questionRequest = _normalizeMobileQuestion(event.question || msg.questionRequest, { id, status });
+    msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
+    if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
+  }
+}
+if (typeof window !== 'undefined' && !window.__pmMobileQuestionBridgeInstalled) {
+  window.__pmMobileQuestionBridgeInstalled = true;
+  window._mobileQuestionToggleOption = _mobileQuestionToggleOption;
+  window._mobileQuestionToggleOther = _mobileQuestionToggleOther;
+  window._submitMobileQuestion = _submitMobileQuestion;
+  window._cancelMobileQuestion = _cancelMobileQuestion;
+  wsEventBus.on('question_created', (msg = {}) => {
+    const q = _normalizeMobileQuestion(msg.question || {}, { ...msg, status: 'pending' });
+    if (q.id && q.sessionId) _upsertMobileQuestion(q);
+  });
+  wsEventBus.on('question_answered', (msg = {}) => _updateMobileQuestionStatus(msg, 'answered'));
+  wsEventBus.on('question_cancelled', (msg = {}) => _updateMobileQuestionStatus(msg, 'cancelled'));
+  wsEventBus.on('question_expired', (msg = {}) => _updateMobileQuestionStatus(msg, 'expired'));
+}
+
 function _renderChatMessageHtml(m, index = -1) {
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
@@ -2453,6 +2631,9 @@ function _renderChatMessageHtml(m, index = -1) {
   let inner = _renderMobileWorkTimer(m);
   if (m.approvalRequest) {
     inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
+  }
+  if (m.questionRequest) {
+    inner += _renderMobileQuestionCard(m.questionRequest);
   }
   const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
   const hasLiveTrace = m.streaming && !answerStarted && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length;
@@ -3924,6 +4105,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
             return !sid || sid === requestedSession;
           })
           .forEach((approval) => _upsertMobilePendingApproval(approval));
+        const pendingQuestions = await loadMobileQuestions('pending').catch(() => []);
+        (Array.isArray(pendingQuestions) ? pendingQuestions : [])
+          .filter((q) => {
+            const sid = String(q?.sessionId || q?.sourceSessionId || '').trim();
+            return !sid || sid === requestedSession;
+          })
+          .forEach((q) => _upsertMobileQuestion(_normalizeMobileQuestion(q, { status: 'pending' })));
       }
 
       const activeThread = _activeMobileThread();

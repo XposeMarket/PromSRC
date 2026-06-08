@@ -1,89 +1,49 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "x-browser-automation-playbook",
-  "description": "Use this skill for interactive work on X.com — posting, searching/collecting, opening bookmarks/notifications/profile/Grok, liking/bookmarking focused posts, replying, Grok-via-X OAuth flows, and other live browser actions. Prefer the verified X composite tools first when they fit. For plain X status URLs that the user wants fetched/read, start with web_fetch for one URL or web_fetch_batch for several URLs and answer from that unless more interaction is requested.",
+  "name": "X (Twitter) Browser Automation Playbook",
+  "description": "Use this skill for interactive work on X.com — posting, searching/collecting, opening bookmarks/notifications/profile/Grok, liking/bookmarking focused posts, replying, Grok-via-X OAuth flows, audio/video transcription from X media, and other live browser actions. Prefer the verified X composite tools first when they fit. For plain X status URLs that the user wants fetched/read, start with web_fetch for one URL or web_fetch_batch for several URLs and answer from that unless more interaction is requested.",
   "version": "2.7.1",
   "triggers": [
-    "post on x",
-    "tweet this",
-    "reply to this tweet",
-    "like tweets",
-    "like focused x post",
-    "bookmark focused x post",
-    "search x",
-    "collect tweets",
-    "open x bookmarks",
-    "find my x bookmarks",
-    "go to x bookmarks",
-    "x bookmarks",
-    "open x notifications",
-    "open x profile",
-    "open x grok",
-    "grok via x",
-    "log in to grok via x",
-    "x oauth grok",
-    "grok release thread",
-    "fetch this x post",
-    "read this tweet url",
-    "pull this x thread",
-    "webfetch this x url",
-    "web fetch this x url",
-    "get this tweet"
-  ],
-  "categories": [
-    "browser",
-    "social",
-    "x",
+    "x.com",
+    "twitter.com",
     "twitter",
-    "automation",
-    "composite-tools"
+    "x post",
+    "x thread",
+    "tweet",
+    "twitter thread",
+    "x video",
+    "twitter video",
+    "x audio",
+    "twitter audio",
+    "x spaces",
+    "twitter spaces",
+    "x media transcription",
+    "transcribe x video",
+    "transcribe twitter video",
+    "x browser automation",
+    "twitter browser automation",
+    "x posting",
+    "twitter posting",
+    "x search",
+    "twitter search",
+    "x bookmarks",
+    "twitter bookmarks",
+    "x likes",
+    "twitter likes",
+    "x replies",
+    "twitter replies",
+    "grok via x",
+    "x oauth",
+    "twitter oauth"
   ],
   "requiredTools": [
     "browser_automation",
     "web",
-    "composite_tools"
+    "composite_tools",
+    "media_assets",
+    "creative_mode"
   ],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": []
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [
-      "browser_automation",
-      "web",
-      "composite_tools"
-    ],
-    "recommendedToolCategories": [
-      "browser_automation",
-      "composite_tools"
-    ],
-    "defaultWorkflow": [
-      "For explicit X posting/search/open-page/focused-like/focused-bookmark requests, use the verified x_* composite tools first when available.",
-      "For Grok login or Grok file-upload work, prefer X/Grok OAuth routing when anonymous grok.com blocks the task, then continue from the existing Grok-via-X example.",
-      "For plain X post/thread URL reading, use web_fetch first for one URL and web_fetch_batch first for several URLs.",
-      "Fallback to manual visual-first browser automation only when the composite does not fit or fails."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": true,
-    "shell": false,
-    "externalSideEffects": true
-  },
-  "status": "ready",
-  "lifecycle": "active",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
+  "bestFor": "X.com interactive workflows, X media download and transcription, X posting and engagement, X content collection and analysis",
   "id": "x-browser-automation-playbook"
 }

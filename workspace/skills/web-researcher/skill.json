@@ -69,6 +69,11 @@
       "path": "notes/product-carousel-routing-2026-05-23.md",
       "type": "doc",
       "description": "Routing note: use show_product_carousel for curated shopping/product research results."
+    },
+    {
+      "path": "notes/x-media-extraction-pattern-2026-06-07.md",
+      "type": "doc",
+      "description": "X/Twitter media extraction pattern: use download_media when web_fetch doesn't capture video"
     }
   ]
 }

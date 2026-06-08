@@ -46,7 +46,7 @@ type VoiceOption = {
 
 const OPENAI_TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts';
 const OPENAI_TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy';
-const OPENAI_STT_MODEL = process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe';
+const OPENAI_STT_MODEL = process.env.OPENAI_STT_MODEL || 'whisper-1';
 const ELEVENLABS_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL || 'eleven_flash_v2_5';
 const ELEVENLABS_STT_MODEL = process.env.ELEVENLABS_STT_MODEL || 'scribe_v2';
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';

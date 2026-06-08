@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-x-growth-operator",
+  "name": "Prometheus X Growth Operator",
+  "description": "Operating playbook for running and promoting the Prometheus X/Twitter account with taste, consistency, and safe autonomy. Triggers on: run the Prometheus Twitter page, promote Prometheus on X, create a Prometheus social operator, manage the Prometheus X account, draft Prometheus tweets, build Prometheus audience, social media subagent, X growth agent, Twitter growth agent, daily X posting, reply to AI builders on X, and market Prometheus publicly. Use this when a subagent or Prometheus itself needs to post, draft, reply, research, or build presence for the Prometheus product account without sounding like generic AI marketing.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "run the Prometheus Twitter page",
+    "promote Prometheus on X",
+    "manage Prometheus X account",
+    "Prometheus social operator",
+    "social media subagent",
+    "X growth agent",
+    "Twitter growth agent",
+    "daily X posting",
+    "draft Prometheus tweets",
+    "build Prometheus audience",
+    "reply to AI builders",
+    "market Prometheus publicly"
+  ],
+  "categories": [
+    "social",
+    "growth",
+    "x-twitter",
+    "prometheus",
+    "marketing"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "web",
+    "composite_tools"
+  ],
+  "permissions": {
+    "browser": true,
+    "externalSideEffects": true,
+    "workspaceWrite": true
+  },
+  "resources": [
+    {
+      "path": "templates/daily-run.md",
+      "type": "template",
+      "description": "Checklist for each Prometheus X growth run."
+    },
+    {
+      "path": "templates/approval-packet.md",
+      "type": "template",
+      "description": "Approval packet format for proposed Prometheus X posts and replies."
+    },
+    {
+      "path": "examples/prometheus-post-bank.md",
+      "type": "example",
+      "description": "Starter examples of Prometheus X posts in the desired voice."
+    },
+    {
+      "path": "references/search-queries.md",
+      "type": "reference",
+      "description": "Suggested X search queries and target conversation areas."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "skillId": "browser-automation-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-06-01T16:29:31.028Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\browser-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "notes/browser-session-recovery-2026-05-22.md"
+  ],
+  "hash": "281818123b20163a"
+}

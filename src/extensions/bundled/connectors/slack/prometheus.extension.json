@@ -6,22 +6,45 @@
   "category": "Messaging",
   "enabledByDefault": true,
   "docsUrl": "https://api.slack.com/apps",
-  "tags": ["slack", "messaging", "oauth"],
+  "tags": [
+    "slack",
+    "messaging",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/slack"
+    "binding": "integrations/connectors/slack",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#4A154B",
     "permissions": [
-      { "icon": "#", "label": "Read public and private channel messages" },
-      { "icon": "->", "label": "Post messages with approval" },
-      { "icon": "@", "label": "Monitor mentions and direct messages" },
-      { "icon": "?", "label": "Search message history" }
+      {
+        "icon": "#",
+        "label": "Read public and private channel messages"
+      },
+      {
+        "icon": "->",
+        "label": "Post messages with approval"
+      },
+      {
+        "icon": "@",
+        "label": "Monitor mentions and direct messages"
+      },
+      {
+        "icon": "?",
+        "label": "Search message history"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_slack"],
-    "capabilities": ["messaging", "chat_history", "notifications"],
+    "toolNamespaces": [
+      "connector_slack"
+    ],
+    "capabilities": [
+      "messaging",
+      "chat_history",
+      "notifications"
+    ],
     "tools": [
       "connector_slack_list_channels",
       "connector_slack_send_message",

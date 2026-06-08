@@ -16,16 +16,26 @@ Current MCP features:
 - rejects shell metacharacters in stdio command strings
 - injects connected tools as `mcp__<serverId>__<toolName>`
 
-Quick-setup MCP presets currently include:
+MCP presets are now registry-backed runtime objects (Phase 5). Each
+`mcp_preset` manifest's `mcpPreset` block (transport/command/args/env/url) is
+registered into the extension runtime registry at load by `runtime-loader.ts`.
+The registry is the single source of truth — no hardcoded preset list:
 
-- `supabase`
-- `github`
-- `windows`
-- `brave`
-- `postgres`
-- `sqlite`
-- `filesystem`
-- `memory`
+- `src/extensions/runtime-registry.ts` — `registerMcpPreset` + `getMcpPreset` /
+  `listMcpPresets`
+- `src/extensions/mcp-preset-service.ts` — `listMcpPresets()` (id/name/transport +
+  credential fields) and `buildMcpServerConfigFromPreset(id, credentials)` which
+  resolves empty env slots and `{{credential:<id>:<field>}}` placeholders into a
+  concrete MCP server config
+- routes: `GET /api/extensions/mcp-presets`, `POST /api/extensions/mcp-presets/build`
+- consistency: every `mcp_preset` manifest must have a launchable `mcpPreset`
+  block and be registered (checked in `consistency.ts`)
+
+Bundled presets: `brave`, `filesystem`, `github`, `memory`, `postgres`, `sqlite`,
+`windows`. (`supabase` is referenced in older prompt text but has no manifest;
+add one if it should be a real preset.) The `integration_quick_setup` tool def in
+`cis-system.ts` is currently inert (no executor) — wire it to
+`buildMcpServerConfigFromPreset` if reviving it.
 
 ## 23) Connections and Connectors
 
@@ -41,6 +51,91 @@ Current connector/plugin architecture facts:
 - the migration target is to convert each connector from the legacy adapter into a native `definePrometheusExtension(...)` module with `runtime.entrypoint`, then remove the duplicate old connector maps/handlers
 - validation command for this layer: `npx tsc --noEmit --pretty false`
 - full backend validation command: `npm run build:backend`
+
+### 23B) Native Connector Extension Contract (migration target + state)
+
+As of 2026-06-06 the connector layer is being migrated from the legacy adapter to
+native, manifest-owned extension modules — the same runtime contract user plugins
+already use (§23A). The end state: `src/extensions` is the single source of truth;
+the legacy maps/handlers shrink to migration glue and are then deleted.
+
+Migration status (update as connectors move):
+
+- Native (own a `runtime.entrypoint` module): `stripe`, `ga4`, `gmail`, `github`,
+  `slack`, `notion`, `google_drive`, `reddit`, `hubspot`, `salesforce`, `obsidian`
+- `CONNECTOR_TOOL_MAP` is now `{}`, `getConnectorToolDefs()` returns `[]`, and
+  `handleConnectorTool` is a retired stub — every `connector_*` tool is native and
+  routes through the registry (both `subagent-executor` and `platform-executor`).
+- Out of scope for the connector-handlers migration (separate subsystems):
+  - `x` — `x_api_*` tools are registered by `xai-extension-adapter.ts`; its connector
+    record + `refreshXAITools()` still live in `legacy-connector-adapter.ts`.
+  - `vercel` — `vercel_*` tools are not `connector_*` and live under `integration_admin`.
+  These two keep `legacy-connector-adapter.ts` alive as a narrow bridge; the legacy
+  connector maps/switch themselves are dead.
+- Phase 6 done: `connector-tools.ts` and `connector-handlers.ts` are **deleted**.
+  `legacy-connector-adapter.ts` is now a slim extension bootstrap (load native
+  modules) + X/xAI status-record bridge — no connector maps/handlers. Both
+  `subagent-executor` and `platform-executor` route `connector_*` through the
+  registry.
+
+What "native" means for a bundled connector:
+
+- the manifest (`prometheus.extension.json`) declares `runtime.entrypoint`
+  (e.g. `"./runtime.js"`) and the full `ownership.tools` list
+- a sibling `runtime.ts` exports a `PrometheusExtensionDefinition`
+  (`{ id, register(api) }`) that:
+  - calls `api.registerConnector({ id, name, authType, capabilities, toolNames,
+    isConnected, hasCredentials, describeStatus })` — the connector status record
+  - calls `api.registerTool({ name, description, parameters, connectorId, execute })`
+    once per tool, with the JSON-Schema and an `execute(args, ctx)` closure
+- **auth stays central.** The native `execute` still calls the existing
+  `integrations/connectors/<id>.ts` connector CLASS (via `getConnector(id)`),
+  which owns OAuth token refresh / credential vault access. Native migration moves
+  *schemas + dispatch*, not auth. Only credential-light REST connectors (and user
+  plugins) read secrets directly via `ctx.getCredential`.
+- shared helpers live in `src/extensions/bundled/connectors/_runtime/connector-helpers.ts`
+  (`toolOk`, `toolError`, `notConnected`, `getLiveConnector`, `connectorConnected`).
+
+Required fields when adding/migrating a native connector:
+
+- connector record: `id`, `name`, `kind`, `capabilities`, `toolNames`, `authType`,
+  `isConnected`, `hasCredentials`, `describeStatus`
+- per tool: `name` (prefixed `connector_<id>_`), `description`, `parameters`
+  (JSON Schema), explicit `connectorId`, `execute(args, ctx)` returning
+  `{ result, error }`; read-vs-write intent reflected in description/approval
+
+Which extension surfaces are real today: **tools, connectors, providers, MCP
+presets are real.** `registerRoute`, `registerHook`, `registerMemorySource`,
+`registerContextProvider` exist but are **experimental** — do not depend on them in
+steady-state until a real consumer ships and they get capability scoping.
+
+Guardrails (`src/extensions/consistency.ts`, run at load + via
+`scripts/verify-extensions.ts`):
+
+- every connector manifest `ownership.tools` must match the tools actually
+  registered for that connector
+- connector/provider/MCP-preset ids and tool names must be collision-free
+- `connector_list` status comes only from `getExtensionRuntimeRegistry().buildConnectorStatus()`
+- connected connector tool defs come only from
+  `getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions()`
+- the legacy adapter skips any connector that has a native `runtime.entrypoint`, so
+  native and legacy can never double-register during the transition
+
+Per-connector migration checklist:
+
+1. add `runtime.entrypoint` to the manifest; keep `ownership.tools` complete
+2. create `runtime.ts` (connector record + tool schemas + `execute` closures
+   calling the connector class)
+3. remove the connector from `CONNECTOR_TOOL_MAP` and `getConnectorToolDefs()` in
+   `connector-tools.ts`
+4. remove the connector's branch from `handleConnectorTool` in `connector-handlers.ts`
+5. add a happy-path test and a disconnected/no-credentials test
+6. confirm it appears in `connector_list` and exposes tools only when connected
+7. run `npx tsc --noEmit` and `npx tsx scripts/verify-extensions.ts`
+
+Deprecation: `CONNECTOR_TOOL_MAP`, `getConnectorToolDefs`, and `handleConnectorTool`
+are migration-only and marked `@deprecated`. Do not add new connector branches to
+`handleConnectorTool`; new connectors are native from day one.
 
 OAuth/API-key connector registry currently instantiates:
 

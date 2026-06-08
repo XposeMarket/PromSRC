@@ -1,0 +1,12 @@
+{
+  "skillId": "prometheus-x-growth-operator",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-02T04:52:35.085Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-x-growth-operator",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "0c827104d24d6b31"
+}

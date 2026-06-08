@@ -6,21 +6,43 @@
   "category": "Knowledge",
   "enabledByDefault": true,
   "docsUrl": "https://obsidian.md/",
-  "tags": ["obsidian", "markdown", "notes", "knowledge", "local"],
+  "tags": [
+    "obsidian",
+    "markdown",
+    "notes",
+    "knowledge",
+    "local"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/obsidian"
+    "binding": "integrations/connectors/obsidian",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#7C3AED",
     "permissions": [
-      { "icon": "[]", "label": "Index Markdown notes from selected vaults" },
-      { "icon": "+", "label": "Write back only in assisted or full mode" },
-      { "icon": "?", "label": "Promote tagged notes into operational memory" }
+      {
+        "icon": "[]",
+        "label": "Index Markdown notes from selected vaults"
+      },
+      {
+        "icon": "+",
+        "label": "Write back only in assisted or full mode"
+      },
+      {
+        "icon": "?",
+        "label": "Promote tagged notes into operational memory"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_obsidian"],
-    "capabilities": ["memory", "notes", "knowledge"],
+    "toolNamespaces": [
+      "connector_obsidian"
+    ],
+    "capabilities": [
+      "memory",
+      "notes",
+      "knowledge"
+    ],
     "tools": [
       "connector_obsidian_status",
       "connector_obsidian_connect_vault",

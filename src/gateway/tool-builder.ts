@@ -43,6 +43,9 @@ export const ALL_TOOL_CATEGORIES = [
   'mcp_server_tools',
   'composite_tools',
   'creative_mode',
+  'skills',
+  'model_management',
+  'business',
 ] as const;
 export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
 type InternalToolCategory = ToolCategory;
@@ -94,6 +97,13 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
   composites: 'composite_tools',
   composite_tools: 'composite_tools',
   creative_mode: 'creative_mode',
+  skill_authoring: 'skills',
+  skills: 'skills',
+  model_management: 'model_management',
+  agent_models: 'model_management',
+  models: 'model_management',
+  business: 'business',
+  entities: 'business',
 };
 
 export function normalizeToolCategory(raw: unknown): ToolCategory | null {
@@ -199,6 +209,7 @@ const COMMAND_RUNNER_TOOL_NAMES = new Set([
 ]);
 
 const MEMORY_TOOL_NAMES = new Set([
+  'memory_browse',
   'memory_read_record',
   'memory_search_project',
   'memory_search_timeline',
@@ -220,7 +231,7 @@ const MEDIA_TOOL_NAMES = new Set([
   'download_url',
   'download_media',
   'analyze_image',
-  'analyze_video',
+  // analyze_video promoted to core — always available (not gated behind media_assets)
 ]);
 
 const MEDIA_QUALITY_TOOL_NAMES = new Set([
@@ -267,7 +278,46 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_outputs',
   'schedule_job_patch',
   'schedule_job_stuck_control',
-  'automation_dashboard',
+  // Advanced automation management/diagnostics (schedule_job, automation_dashboard,
+  // and timer remain core; only execution-level scheduling stays always-on).
+  'task_control',
+  'run_task_now',
+  'internal_watch',
+]);
+
+// Skill authoring/packaging/maintenance — read-only skill tools (skill_list,
+// skill_read, skill_resource_list, skill_resource_read) stay core.
+const SKILL_AUTHORING_TOOL_NAMES = new Set([
+  'skill_create',
+  'skill_create_bundle',
+  'skill_import_bundle',
+  'skill_export_bundle',
+  'skill_update_from_source',
+  'skill_manifest_write',
+  'skill_resource_write',
+  'skill_resource_delete',
+  'skill_inspect',
+]);
+
+// Agent fleet / model template administration — switch_model and
+// set_current_model remain core for everyday model switching.
+const MODEL_MANAGEMENT_TOOL_NAMES = new Set([
+  'get_agent_models',
+  'set_agent_model',
+  'list_agent_model_templates',
+  'save_agent_model_template',
+  'update_agent_model_template',
+  'apply_agent_model_template',
+  'select_agent_model_template',
+  'delete_agent_model_template',
+]);
+
+// Business entity lifecycle administration — business_context_mode stays core.
+const BUSINESS_TOOL_NAMES = new Set([
+  'list_entities',
+  'read_entity',
+  'write_entity',
+  'append_entity_event',
 ]);
 
 const CORE_CREATIVE_CONTROL_TOOL_NAMES = new Set([
@@ -324,6 +374,9 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (HYPERFRAMES_TOOL_NAMES.has(name)) return 'creative_mode';
   if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return 'media_quality';
   if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
+  if (SKILL_AUTHORING_TOOL_NAMES.has(name)) return 'skills';
+  if (MODEL_MANAGEMENT_TOOL_NAMES.has(name)) return 'model_management';
+  if (BUSINESS_TOOL_NAMES.has(name)) return 'business';
   if (name.startsWith('creative_')) return 'creative_mode';
   if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
   if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';

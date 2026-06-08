@@ -6,21 +6,40 @@
   "category": "Docs",
   "enabledByDefault": true,
   "docsUrl": "https://www.notion.so/my-integrations",
-  "tags": ["notion", "docs", "oauth"],
+  "tags": [
+    "notion",
+    "docs",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/notion"
+    "binding": "integrations/connectors/notion",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#000000",
     "permissions": [
-      { "icon": "[]", "label": "Read pages, databases, and blocks" },
-      { "icon": "+", "label": "Create and update pages with approval" },
-      { "icon": "?", "label": "Search across the workspace" }
+      {
+        "icon": "[]",
+        "label": "Read pages, databases, and blocks"
+      },
+      {
+        "icon": "+",
+        "label": "Create and update pages with approval"
+      },
+      {
+        "icon": "?",
+        "label": "Search across the workspace"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_notion"],
-    "capabilities": ["documents", "knowledge_base"],
+    "toolNamespaces": [
+      "connector_notion"
+    ],
+    "capabilities": [
+      "documents",
+      "knowledge_base"
+    ],
     "tools": [
       "connector_notion_search",
       "connector_notion_get_page",

@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "product-carousel-builder",
+  "name": "Product Carousel Builder",
+  "description": "Reusable workflow for fast provider-first product search, curation, fallback extraction, and Prometheus product carousels.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "product carousel",
+    "show carousel",
+    "shopping carousel",
+    "amazon carousel",
+    "product recommendations",
+    "show products",
+    "product cards",
+    "find products",
+    "shopping search",
+    "compare products",
+    "product search provider",
+    "shopping API",
+    "product search index"
+  ],
+  "categories": [
+    "shopping",
+    "research",
+    "provider",
+    "browser",
+    "visual-output"
+  ],
+  "requiredTools": [
+    "web",
+    "browser_automation",
+    "skills"
+  ],
+  "permissions": {
+    "browser": true,
+    "workspaceRead": false,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "examples/amazon-mens-shampoo-carousel.md",
+      "type": "example",
+      "description": "Worked example based on an Amazon men’s shampoo search, including extraction fields and carousel curation logic."
+    },
+    {
+      "path": "references/image-requirement.md",
+      "type": "doc",
+      "description": "Best-practice rule requiring product carousel cards to include the first usable product image whenever practical, especially to avoid blank mobile cards."
+    }
+  ]
+}

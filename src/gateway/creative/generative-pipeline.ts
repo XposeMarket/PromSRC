@@ -1396,14 +1396,14 @@ export async function creativeTranscribeAudio(
   } else {
     const candidates = await openAiVoiceAuthCandidates();
     if (!candidates.length) throw new Error('OpenAI transcription is not configured. Add OPENAI_API_KEY/OPENAI_REALTIME_API_KEY, connect OpenAI OAuth, or configure the OpenAI provider.');
-    form.append('model', process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe');
+    form.append('model', process.env.OPENAI_STT_MODEL || 'whisper-1');
     const failures: string[] = [];
     let okResponse: Response | null = null;
     for (const candidate of candidates) {
       const retryForm = new (globalThis as any).FormData();
       retryForm.append('file', new (globalThis as any).Blob([audio], { type: 'audio/mpeg' }), filename);
       if (input.language) retryForm.append('language', input.language);
-      retryForm.append('model', process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe');
+      retryForm.append('model', process.env.OPENAI_STT_MODEL || 'whisper-1');
       const attempt = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${candidate.token}` }, body: retryForm as any });
       if (attempt.ok) {
         okResponse = attempt;

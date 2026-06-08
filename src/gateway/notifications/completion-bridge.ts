@@ -1,4 +1,5 @@
 import { getConfig } from '../../config/config';
+import { getSession, getSessionDisplayTitle } from '../session';
 import {
   resolveChannelsConfig,
   sendDiscordNotification,
@@ -69,11 +70,16 @@ function buildMobileChatLink(sessionId: string, requestOrigin?: string): string 
 }
 
 function buildMessage(input: ChatCompletionNotificationInput, cfg: ChannelCompletionNotificationConfig): string {
-  const sourceLabel = input.source === 'mobile' ? 'Mobile chat' : 'Desktop';
-  const parts = [`${sourceLabel} response complete:`];
+  const sourceLabel = input.source === 'mobile' ? 'Mobile' : 'Desktop';
+  let title = '';
+  try { title = String(getSessionDisplayTitle(getSession(input.sessionId)) || '').trim(); } catch {}
+  const head = title
+    ? `🤖 Prometheus responded to “${title}” (${sourceLabel})`
+    : `🤖 Prometheus responded (${sourceLabel})`;
+  const parts = [head];
   if (cfg.includeSummary !== false) {
     const summary = cleanSummary(input.finalText, cfg.summaryMaxChars);
-    if (summary) parts.push(summary);
+    if (summary) parts.push('', summary);
   }
   if (cfg.includeLink === true) {
     parts.push('', buildMobileChatLink(input.sessionId, input.requestOrigin));

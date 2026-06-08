@@ -800,6 +800,21 @@ export class ConfigManager {
           },
         };
 
+        const mergedTools = loaded.tools
+          ? {
+              ...(DEFAULT_CONFIG.tools || {}),
+              ...loaded.tools,
+              permissions: {
+                ...((DEFAULT_CONFIG.tools as any)?.permissions || {}),
+                ...((loaded.tools as any)?.permissions || {}),
+                shell: {
+                  ...((DEFAULT_CONFIG.tools as any)?.permissions?.shell || {}),
+                  ...((loaded.tools as any)?.permissions?.shell || {}),
+                },
+              },
+            }
+          : DEFAULT_CONFIG.tools;
+
         const merged: PrometheusConfig = {
           ...DEFAULT_CONFIG,
           ...loaded,
@@ -808,7 +823,9 @@ export class ConfigManager {
           video_generation: mergedVideoGeneration,
           channels: mergedChannels as any,
           telegram: (mergedChannels as any).telegram,
+          tools: mergedTools,
         };
+
 
         // Zod validation — warn on bad fields but never crash startup
         const errors = getConfigErrors(merged);
@@ -832,6 +849,9 @@ export class ConfigManager {
   public updateConfig(updates: Partial<PrometheusConfig>): void {
     this.config = { ...this.config, ...updates };
     this.saveConfig();
+  }
+  public reloadConfig(): void {
+    this.config = this.loadConfig();
   }
 
   public saveConfig(): void {

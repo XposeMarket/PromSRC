@@ -6,21 +6,41 @@
   "category": "CRM",
   "enabledByDefault": true,
   "docsUrl": "https://login.salesforce.com/",
-  "tags": ["salesforce", "crm", "oauth"],
+  "tags": [
+    "salesforce",
+    "crm",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/salesforce"
+    "binding": "integrations/connectors/salesforce",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#00A1E0",
     "permissions": [
-      { "icon": "@", "label": "Read accounts, contacts, and opportunities" },
-      { "icon": "=", "label": "Read pipeline and forecast data" },
-      { "icon": "+", "label": "Update records and log activity with approval" }
+      {
+        "icon": "@",
+        "label": "Read accounts, contacts, and opportunities"
+      },
+      {
+        "icon": "=",
+        "label": "Read pipeline and forecast data"
+      },
+      {
+        "icon": "+",
+        "label": "Update records and log activity with approval"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_salesforce"],
-    "capabilities": ["crm", "pipeline", "sales"],
+    "toolNamespaces": [
+      "connector_salesforce"
+    ],
+    "capabilities": [
+      "crm",
+      "pipeline",
+      "sales"
+    ],
     "tools": [
       "connector_salesforce_query",
       "connector_salesforce_search",

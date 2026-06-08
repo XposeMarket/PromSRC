@@ -1,0 +1,12 @@
+{
+  "skillId": "hyperframes",
+  "reason": "resource-write",
+  "createdAt": "2026-06-04T13:20:37.557Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hyperframes",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "b68eb9fa22e98c12"
+}

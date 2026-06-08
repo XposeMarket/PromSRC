@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "polymarket-research",
+  "name": "Polymarket Research",
+  "description": "Query Polymarket prediction-market data using public read-only Gamma, CLOB, and Data APIs; adapted from the Hermes Agent bundled Polymarket skill.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "polymarket",
+    "prediction market",
+    "prediction markets",
+    "betting odds",
+    "event probabilities",
+    "market odds",
+    "market prices",
+    "orderbook",
+    "price history",
+    "what are the odds"
+  ],
+  "categories": [
+    "research",
+    "market-data",
+    "prediction-markets",
+    "trading"
+  ],
+  "requiredTools": [
+    "web",
+    "workspace_write"
+  ],
+  "permissions": {
+    "network": true,
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false,
+    "notes": "Read-only public API access. No trading, wallet auth, order placement, or financial advice."
+  },
+  "resources": [
+    {
+      "path": "references/api-endpoints.md",
+      "type": "reference",
+      "description": "Endpoint reference adapted from Hermes Agent Polymarket skill."
+    },
+    {
+      "path": "scripts/polymarket.py",
+      "type": "example",
+      "description": "Hermes Agent Python CLI helper for read-only Polymarket queries, preserved as reference/example."
+    }
+  ]
+}

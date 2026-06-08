@@ -1,0 +1,12 @@
+{
+  "skillId": "ai-surface-smoke-research",
+  "reason": "resource-write",
+  "createdAt": "2026-05-31T19:52:25.499Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\ai-surface-smoke-research",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "83b6f0886d4aca24"
+}

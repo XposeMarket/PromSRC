@@ -1,0 +1,12 @@
+{
+  "skillId": "dev-debugging",
+  "reason": "resource-write",
+  "createdAt": "2026-05-30T19:03:17.082Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\dev-debugging",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "f6ffe9d23e77bccb"
+}

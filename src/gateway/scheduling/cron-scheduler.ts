@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { addMessage, clearHistory, flushSession, getSession, setWorkspace } from '../session';
+import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getSession, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
@@ -98,6 +98,9 @@ export interface HeartbeatConfig {
 export interface CronStore {
   heartbeat: HeartbeatConfig;
   jobs: CronJob[];
+  // One-time guard: legacy per-run automated sessions consolidated into
+  // stable per-job threads (auto_<jobId>). See consolidateLegacyAutomatedSessions.
+  legacyAutomatedSessionsConsolidated?: boolean;
 }
 
 let _cronSchedulerInstance: CronScheduler | null = null;
@@ -625,6 +628,22 @@ export class CronScheduler {
     this.storePath = deps.storePath;
     this.store = this.loadStore();
     console.log(`[CronScheduler] Loaded ${this.store.jobs.length} jobs from ${this.storePath}`);
+    this.maybeConsolidateLegacyAutomatedSessions();
+  }
+
+  /**
+   * One-time fold of legacy per-run automated sessions (auto_<jobId>_<ts>) into
+   * the stable per-job thread. Guarded by a store flag so it runs only once.
+   */
+  private maybeConsolidateLegacyAutomatedSessions(): void {
+    if (this.store.legacyAutomatedSessionsConsolidated === true) return;
+    try {
+      consolidateLegacyAutomatedSessions();
+    } catch (err: any) {
+      console.warn('[CronScheduler] Legacy automated session consolidation failed:', err?.message || err);
+    }
+    this.store.legacyAutomatedSessionsConsolidated = true;
+    this.saveStore();
   }
 
   // ─── Store I/O ───────────────────────────────────────────────────────────────
@@ -669,6 +688,7 @@ export class CronScheduler {
       return {
         heartbeat: { ...this.defaultStore().heartbeat, ...(parsed.heartbeat || {}) },
         jobs,
+        legacyAutomatedSessionsConsolidated: parsed?.legacyAutomatedSessionsConsolidated === true,
       };
     } catch {
       return this.defaultStore();
@@ -1745,26 +1765,22 @@ export class CronScheduler {
 
     let automatedSession: AutomatedSession | null = null;
     const createAutomatedOutputSession = (): AutomatedSession => {
-      const sessionId = `auto_${job.id}_${Date.now()}`;
-      const title = `${job.name} - ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
-      const session: AutomatedSession = {
-        id: sessionId,
-        title,
-        jobName: job.name,
-        jobId: job.id,
-        automated: true,
-        createdAt: Date.now(),
-        history: [
-          { role: 'user', content: `[Automated Task: ${job.name}]\n\n${job.prompt}` },
-          { role: 'ai', content: resultText },
-        ],
-      };
+      // Stable, deterministic session id per job: every run for the same job
+      // appends to one continuous thread instead of spawning a fresh session.
+      const sessionId = `auto_${job.id}`;
+      const title = `Automated: ${job.name}`;
+      const runLabel = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const userContent = `[Automated Task: ${job.name}]\nRun: ${runLabel}\n\n${job.prompt}`;
+      let fullHistory: Array<{ role: string; content: string }> = [
+        { role: 'user', content: userContent },
+        { role: 'ai', content: resultText },
+      ];
       try {
         setWorkspace(sessionId, getConfig().getWorkspacePath());
-        clearHistory(sessionId);
+        // Append (do NOT clear) so prior runs remain in the same thread.
         addMessage(sessionId, {
           role: 'user',
-          content: `[Automated Task: ${job.name}]\n\n${job.prompt}`,
+          content: userContent,
           timestamp: Date.now() - 1,
           channel: 'system',
         }, {
@@ -1780,10 +1796,28 @@ export class CronScheduler {
           disableCompactionCheck: true,
           disableMemoryFlushCheck: true,
         });
+        // Lock the title to the stable job name so auto-titling never renames it.
+        const liveSession = getSession(sessionId);
+        liveSession.title = title;
+        liveSession.autoTitleLocked = true;
         flushSession(sessionId);
+        // Broadcast the full accumulated thread so the UI shows the whole history.
+        fullHistory = (liveSession.history || []).map((m: any) => ({
+          role: m.role === 'assistant' ? 'ai' : String(m.role || 'user'),
+          content: String(m.content || ''),
+        }));
       } catch (persistErr: any) {
         console.warn(`[CronScheduler] Failed to persist automated session ${sessionId}:`, persistErr?.message || persistErr);
       }
+      const session: AutomatedSession = {
+        id: sessionId,
+        title,
+        jobName: job.name,
+        jobId: job.id,
+        automated: true,
+        createdAt: Date.now(),
+        history: fullHistory,
+      };
       job.lastOutputSessionId = sessionId;
       console.log(`[CronScheduler] Job "${job.name}" produced output -> auto session ${sessionId}`);
 

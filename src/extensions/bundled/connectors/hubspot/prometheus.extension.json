@@ -6,22 +6,45 @@
   "category": "CRM",
   "enabledByDefault": true,
   "docsUrl": "https://developers.hubspot.com/",
-  "tags": ["hubspot", "crm", "oauth"],
+  "tags": [
+    "hubspot",
+    "crm",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/hubspot"
+    "binding": "integrations/connectors/hubspot",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#FF7A59",
     "permissions": [
-      { "icon": "@", "label": "Read contacts, companies, and deals" },
-      { "icon": "=", "label": "Read pipeline and deal stages" },
-      { "icon": "+", "label": "Log activity and update records with approval" },
-      { "icon": "->", "label": "Create follow-up tasks" }
+      {
+        "icon": "@",
+        "label": "Read contacts, companies, and deals"
+      },
+      {
+        "icon": "=",
+        "label": "Read pipeline and deal stages"
+      },
+      {
+        "icon": "+",
+        "label": "Log activity and update records with approval"
+      },
+      {
+        "icon": "->",
+        "label": "Create follow-up tasks"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_hubspot"],
-    "capabilities": ["crm", "deals", "contacts"],
+    "toolNamespaces": [
+      "connector_hubspot"
+    ],
+    "capabilities": [
+      "crm",
+      "deals",
+      "contacts"
+    ],
     "tools": [
       "connector_hubspot_list_contacts",
       "connector_hubspot_get_contact",

@@ -12,9 +12,9 @@ export function getCisSystemTools(): any[] {
     ['prometheus_source_write', 'prometheus_source_write - Prometheus app/source editing tools for approved dev proposal tasks only.'],
     ['workspace_write', 'workspace_write - workspace file mutation and local command/process tools (create_file, replace_lines, run_command, start_process, process_status/process_log/process_wait/process_kill/process_submit, etc.)'],
     ['advanced_memory', 'advanced_memory - memory graph, timeline, project-scoped search, related-record, and index refresh tools.'],
-    ['media_assets', 'media_assets - download and media analysis tools (download_url, download_media, analyze_image, analyze_video).'],
+    ['media_assets', 'media_assets - download and image analysis tools (download_url, download_media, analyze_image). Note: analyze_video is core/always available.'],
     ['media_quality', 'media_quality - image/video validation and render inspection tools (contrast, text overflow, frame renders, caption/audio timing).'],
-    ['automations', 'automations - scheduling and automation operator tools (history, detail, outputs, patching, stuck control, dashboard). schedule_job is core.'],
+    ['automations', 'automations - advanced automation management/diagnostics (history, detail, outputs, patching, stuck control, task_control, run_task_now, internal_watch). schedule_job, timer, and automation_dashboard are core.'],
     ['external_apps', 'external_apps - only tools for currently connected external apps (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian, X/Twitter, xAI/Grok). Use connector_list first.'],
     ['integration_admin', 'integration_admin - MCP server, webhook, and integration setup/admin tools.'],
     ['social_intelligence', 'social_intelligence - social profile intelligence and reporting tools.'],
@@ -22,6 +22,9 @@ export function getCisSystemTools(): any[] {
     ['mcp_server_tools', 'mcp_server_tools - dynamic tools exposed by connected MCP servers (shown as mcp__server__tool). Use only for trusted servers.'],
     ['composite_tools', 'composite_tools - saved multi-step composite tools plus create/get/edit/delete/list composite management tools.'],
     ['creative_mode', 'creative_mode - normal main-chat creative editor tools and workspace selectors.'],
+    ['skills', 'skills - skill authoring, packaging, and maintenance (skill_create, bundles, import/export, manifest/resource writes, skill_inspect). Read-only skill_list/skill_read/skill_resource_list/skill_resource_read are core.'],
+    ['model_management', 'model_management - agent fleet model administration and templates (get/set_agent_model, *_agent_model_template). switch_model and set_current_model are core.'],
+    ['business', 'business - business entity lifecycle administration (list/read/write_entity, append_entity_event). business_context_mode is core.'],
   ];
   const categoryEnum = getPublicBuildAllowedCategories([
     'browser_automation',
@@ -41,6 +44,9 @@ export function getCisSystemTools(): any[] {
     'mcp_server_tools',
     'composite_tools',
     'creative_mode',
+    'skills',
+    'model_management',
+    'business',
   ] as const);
   const requestToolCategoryDescription =
     'Activate a tool category for this session, unlocking those tool schemas for use. ' +

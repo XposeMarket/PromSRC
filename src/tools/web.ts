@@ -6,6 +6,9 @@ import { fetchXThread } from '../gateway/browser-tools.js';
 import { executeDownloadMedia, executeDownloadUrl } from './download-tools.js';
 import { executeAnalyzeImage, executeAnalyzeVideo } from './media-analysis.js';
 import { executeXSearch, xaiHasCredentials } from '../gateway/tools/handlers/xai-handlers.js';
+import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline.js';
+import { getActiveWorkspace } from './workspace-context.js';
+import { getConfig } from '../config/config.js';
 
 type SearchResultItem = { title: string; url: string; snippet: string };
 type StructuredSource = { id: number; tier: 'A' | 'B' | 'C'; title: string; url: string; snippet: string; score: number };
@@ -1257,6 +1260,15 @@ function clipText(value: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n\n[...truncated]`;
 }
+function buildCreativeStorage() {
+  const globalWorkspace = getConfig().getConfig().workspace.path;
+  const workspacePath = getActiveWorkspace(globalWorkspace);
+  const rootAbsPath = path.join(workspacePath, 'creative-projects', 'default');
+  const creativeDir = path.join(rootAbsPath, 'prometheus-creative');
+  fs.mkdirSync(creativeDir, { recursive: true });
+  const rootRelPath = 'creative-projects/default';
+  return { workspacePath, rootAbsPath, rootRelPath, creativeDir };
+}
 
 function reportWebFetchProgress(
   reporter: WebFetchProgressReporter | undefined,
@@ -1425,6 +1437,26 @@ function collectXMediaCandidates(tweets: XFetchedTweet[], fallbackUrl: string): 
   return { imageJobs, videoJobs, hintedTweetCount };
 }
 
+async function getVideoTranscript(filePath: string, existingTranscript?: string): Promise<string | null> {
+  // Use existing transcript if available
+  if (existingTranscript && String(existingTranscript).trim()) {
+    return clipText(String(existingTranscript), 4000);
+  }
+  
+  // Fallback to creative transcription
+  try {
+    const storage = buildCreativeStorage();
+    const transcriptionResult = await creativeTranscribeAudio(storage, {
+      source: filePath,
+      provider: 'openai', // Use OpenAI Whisper by default
+    });
+    return transcriptionResult.text ? clipText(transcriptionResult.text, 4000) : null;
+  } catch (error) {
+    // Silent fallback - if creative transcription fails, continue without transcript
+    console.warn(`Creative transcription fallback failed for video ${filePath}:`, error);
+    return null;
+  }
+}
 async function analyzeDownloadedXMedia(file: XDownloadedMedia): Promise<XMediaAnalysis> {
   if (file.kind === 'image') {
     const result = await executeAnalyzeImage({
@@ -1466,7 +1498,7 @@ async function analyzeDownloadedXMedia(file: XDownloadedMedia): Promise<XMediaAn
       kind: file.kind,
       status: 'analyzed',
       analysis: clipText(String(result.data?.analysis || result.stdout || ''), 2800),
-      transcript: result.data?.transcript ? clipText(String(result.data.transcript), 4000) : null,
+      transcript: await getVideoTranscript(file.rel_path, result.data?.transcript),
       sample_frames: Array.isArray(result.data?.sample_frames) ? result.data.sample_frames.slice(0, 8) : undefined,
       output_dir_rel: result.data?.output_dir_rel ? String(result.data.output_dir_rel) : undefined,
     };

@@ -1,0 +1,14 @@
+{
+  "name": "hyperframes-prometheus-promo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render:frames": "node render-frames.mjs",
+    "encode": "ffmpeg -y -framerate 30 -i frames/frame-%04d.png -c:v libx264 -pix_fmt yuv420p -movflags +faststart final.mp4",
+    "build": "npm run render:frames && npm run encode"
+  },
+  "devDependencies": {
+    "playwright": "latest"
+  }
+}

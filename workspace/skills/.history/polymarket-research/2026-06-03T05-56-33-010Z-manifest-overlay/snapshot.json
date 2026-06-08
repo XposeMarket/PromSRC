@@ -1,0 +1,12 @@
+{
+  "skillId": "polymarket-research",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-03T05:56:33.014Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\polymarket-research",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "945cf906e1ec7d14"
+}

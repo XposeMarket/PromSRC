@@ -3115,27 +3115,54 @@ export class TelegramChannel {
     originLabel?: string;
     questions?: Array<{ id: string; label: string; mode: string; options?: string[]; allowOther?: boolean; helpText?: string }>;
   }): string {
+    const count = Array.isArray(record.questions) ? record.questions.length : 0;
+    const heading = count > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question';
     const lines = [
-      `❓ <b>${this.tgEscape(record.title || 'Prometheus Question')}</b>`,
-      ``,
-      `<b>ID:</b> <code>${this.tgEscape(record.id)}</code>`,
-      record.originLabel ? `<b>Origin:</b> ${this.tgEscape(record.originLabel)}` : '',
-      record.sessionId ? `<b>Session:</b> <code>${this.tgEscape(record.sessionId)}</code>` : '',
+      `❓ <b>${this.tgEscape(heading)}</b>`,
+      record.title ? `<b>${this.tgEscape(record.title)}</b>` : '',
       ``,
       this.tgEscape(record.prompt || 'Prometheus needs a little more direction.'),
       record.context ? `\n<i>${this.tgEscape(record.context)}</i>` : '',
       ``,
-      ...(Array.isArray(record.questions) ? record.questions.slice(0, 5).map((q, idx) => {
-        const mode = q.mode === 'multi_select' ? 'choose one or more' : q.mode === 'text' ? 'text answer' : 'choose one';
-        const opts = Array.isArray(q.options) && q.options.length
-          ? `\n${q.options.slice(0, 8).map((opt) => `• ${this.tgEscape(opt)}`).join('\n')}`
-          : '';
-        return `<b>${idx + 1}. ${this.tgEscape(q.label)}</b> <i>(${mode})</i>${opts}${q.helpText ? `\n${this.tgEscape(q.helpText)}` : ''}`;
-      }) : []),
+      record.originLabel ? `<b>Origin:</b> ${this.tgEscape(record.originLabel)}` : '',
+      `<b>ID:</b> <code>${this.tgEscape(record.id)}</code>`,
       ``,
-      `Tap option buttons below. For <b>Other</b>, tap Other and send your next message.`,
+      `Answer each question below, then tap <b>Submit</b>. For <b>Other</b>, tap Other and send your next message.`,
     ].filter(Boolean);
     return lines.join('\n').slice(0, 4000);
+  }
+
+  // One question's text body (shown above its own option keyboard).
+  private formatPrometheusQuestionItem(item: { label: string; mode: string; helpText?: string }, index: number): string {
+    const mode = item.mode === 'multi_select' ? 'choose one or more' : item.mode === 'text' ? 'text answer' : 'choose one';
+    return [
+      `<b>${index + 1}. ${this.tgEscape(item.label)}</b> <i>(${mode})</i>`,
+      item.helpText ? this.tgEscape(item.helpText) : '',
+    ].filter(Boolean).join('\n').slice(0, 1000);
+  }
+
+  // Option buttons for a SINGLE question (submit/cancel live in the final message).
+  private buildSingleQuestionKeyboard(record: {
+    id: string;
+    status?: string;
+    questions?: Array<{ id: string; label: string; mode: string; options?: string[]; allowOther?: boolean }>;
+  }, qIndex: number, userId: number): any[][] {
+    if (record.status && record.status !== 'pending') return [[{ text: `✅ ${record.status}`, callback_data: 'noop' }]];
+    const key = idKey(record.id);
+    const selections = this.getQuestionSelections(userId, record.id);
+    const question = (record.questions || [])[qIndex];
+    if (!question) return [];
+    const state = selections[question.id] || { selected: [] };
+    const options = Array.isArray(question.options) ? question.options.slice(0, 8) : [];
+    const rows: any[][] = [];
+    for (const [optIndex, option] of options.entries()) {
+      const selected = state.selected.includes(option);
+      rows.push([{ text: this.compactTelegramButtonText(`${selected ? '✓ ' : ''}${option}`, 48), callback_data: `pq:sel:${key}:${qIndex}:${optIndex}` }]);
+    }
+    if (question.allowOther !== false) {
+      rows.push([{ text: state.other ? `✓ Other: ${this.compactTelegramButtonText(state.other, 36)}` : 'Other...', callback_data: `pq:other:${key}:${qIndex}` }]);
+    }
+    return rows;
   }
 
   async sendPrometheusQuestion(record: {
@@ -3149,16 +3176,38 @@ export class TelegramChannel {
     questions?: Array<{ id: string; label: string; mode: string; options?: string[]; allowOther?: boolean; helpText?: string }>;
   }): Promise<void> {
     if (!this.config.enabled || !this.config.botToken) return;
+    const key = idKey(record.id);
+    const questions = Array.isArray(record.questions) ? record.questions.slice(0, 5) : [];
     for (const userId of this.config.allowedUserIds) {
       this.getQuestionSelections(userId, record.id);
-      await this.apiCall('sendMessage', {
-        chat_id: userId,
-        text: this.formatPrometheusQuestionCard(record),
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: this.buildQuestionKeyboard(record, userId) },
-      }).catch((err: any) => {
+      try {
+        // 1) Header bubble (title/prompt/context — no options).
+        await this.apiCall('sendMessage', {
+          chat_id: userId,
+          text: this.formatPrometheusQuestionCard(record),
+          parse_mode: 'HTML',
+        });
+        // 2) One bubble per question: the question text + only its own options.
+        for (const [qIndex, question] of questions.entries()) {
+          await this.apiCall('sendMessage', {
+            chat_id: userId,
+            text: this.formatPrometheusQuestionItem(question, qIndex),
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: this.buildSingleQuestionKeyboard(record, qIndex, userId) },
+          });
+        }
+        // 3) Final bubble: Submit / Cancel.
+        await this.apiCall('sendMessage', {
+          chat_id: userId,
+          text: 'When you have answered above, submit your answers:',
+          reply_markup: { inline_keyboard: [[
+            { text: '✅ Submit answers', callback_data: `pq:submit:${key}` },
+            { text: '❌ Cancel', callback_data: `pq:cancel:${key}` },
+          ]] },
+        });
+      } catch (err: any) {
         console.error(`[Telegram] Failed to send Prometheus question ${record.id} to ${userId}: ${err?.message}`);
-      });
+      }
     }
   }
 
@@ -3900,7 +3949,7 @@ export class TelegramChannel {
         await this.apiCall('editMessageReplyMarkup', {
           chat_id: chatId,
           message_id: messageId,
-          reply_markup: { inline_keyboard: this.buildQuestionKeyboard(question, userId) },
+          reply_markup: { inline_keyboard: this.buildSingleQuestionKeyboard(question, qIndex, userId) },
         }).catch(() => {});
         return;
       }

@@ -129,6 +129,14 @@ export class PrometheusExtensionRuntimeRegistry {
     this.mcpPresets.set(preset.id, { ...preset, extensionId });
   }
 
+  getMcpPreset(id: string): (PrometheusMcpPresetRuntime & { extensionId: string }) | undefined {
+    return this.mcpPresets.get(id);
+  }
+
+  listMcpPresets(): Array<PrometheusMcpPresetRuntime & { extensionId: string }> {
+    return [...this.mcpPresets.values()].sort((a, b) => a.id.localeCompare(b.id));
+  }
+
   getExtension(id: string): PrometheusExtensionRuntimeRecord | undefined {
     return this.extensions.get(id);
   }

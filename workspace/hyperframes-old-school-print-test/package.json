@@ -1,0 +1,10 @@
+{
+  "name": "hyperframes-old-school-print-test",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "npx hyperframes lint",
+    "inspect": "npx hyperframes inspect --samples 8",
+    "render": "npx hyperframes render --output final.mp4 --fps 30 --quality standard"
+  }
+}

@@ -6,22 +6,45 @@
   "category": "Email",
   "enabledByDefault": true,
   "docsUrl": "https://console.cloud.google.com/",
-  "tags": ["google", "email", "oauth"],
+  "tags": [
+    "google",
+    "email",
+    "oauth"
+  ],
   "runtime": {
-    "binding": "integrations/connectors/gmail"
+    "binding": "integrations/connectors/gmail",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#EA4335",
     "permissions": [
-      { "icon": "@", "label": "Read inbox and thread history" },
-      { "icon": "->", "label": "Draft and send emails with approval" },
-      { "icon": "?", "label": "Search emails by sender, subject, or keyword" },
-      { "icon": "[]", "label": "Read and download attachments" }
+      {
+        "icon": "@",
+        "label": "Read inbox and thread history"
+      },
+      {
+        "icon": "->",
+        "label": "Draft and send emails with approval"
+      },
+      {
+        "icon": "?",
+        "label": "Search emails by sender, subject, or keyword"
+      },
+      {
+        "icon": "[]",
+        "label": "Read and download attachments"
+      }
     ]
   },
   "ownership": {
-    "toolNamespaces": ["connector_gmail"],
-    "capabilities": ["email", "inbox", "attachments"],
+    "toolNamespaces": [
+      "connector_gmail"
+    ],
+    "capabilities": [
+      "email",
+      "inbox",
+      "attachments"
+    ],
     "tools": [
       "connector_gmail_list_emails",
       "connector_gmail_get_email",

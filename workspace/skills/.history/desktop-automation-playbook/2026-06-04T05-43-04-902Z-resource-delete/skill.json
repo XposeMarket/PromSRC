@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "desktop-automation-playbook",
+  "name": "Desktop Automation Playbook",
+  "description": "Current operating guide for Prometheus desktop automation on Windows. Covers screenshot-first execution, window targeting, UI Automation, precise clicking, scrolling, typing, verification, macros, and when to use desktop tools versus browser or shell tools.",
+  "version": "4.4.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "desktop",
+    "desktop_screenshot",
+    "desktop_window_screenshot",
+    "desktop_window_control",
+    "desktop_click",
+    "desktop_drag",
+    "desktop_scroll",
+    "desktop_type",
+    "desktop_type_raw",
+    "desktop_press_key",
+    "desktop_find_window",
+    "desktop_focus_window",
+    "desktop_get_accessibility_tree",
+    "desktop_get_window_text",
+    "desktop_get_monitors",
+    "desktop_find_installed_app",
+    "desktop_list_installed_apps",
+    "desktop_launch_app",
+    "desktop_send_to_telegram",
+    "desktop_wait_for_change",
+    "desktop_pixel_watch",
+    "desktop_record_macro",
+    "desktop_replay_macro",
+    "desktop_list_apps",
+    "desktop_list_windows",
+    "desktop_get_window_state",
+    "desktop_window_click",
+    "desktop_window_type",
+    "desktop_window_press_key",
+    "desktop_window_scroll",
+    "desktop_window_drag",
+    "window_id",
+    "window-scoped",
+    "canonical window model",
+    "click screen",
+    "type into app",
+    "open app",
+    "find installed app",
+    "launch app by app_id",
+    "automate desktop",
+    "gui automation",
+    "windows automation",
+    "mouse click",
+    "screenshot anchored click",
+    "coordinate_space",
+    "maximize window",
+    "restore window",
+    "minimize window"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/background-desktop-sandbox-preflight-2026-05-12.md",
+      "type": "doc",
+      "description": "Observed 2026-05-12 guardrail for non-disruptive/background desktop sandbox preflight and runtime-dependent desktop tools."
+    },
+    {
+      "path": "notes/use-existing-user-chrome-for-auth-flows-2026-05-16.md",
+      "type": "doc",
+      "description": "Guardrail for desktop-auth workflows where Raul explicitly needs his existing Chrome profile/window rather than browser automation's isolated profile."
+    },
+    {
+      "path": "notes/desktop-scroll-stale-screenshot-recovery-2026-05-19.md",
+      "type": "doc",
+      "description": "Recovery guardrail for stale screenshot IDs and likely-noop loops during desktop_scroll workflows."
+    },
+    {
+      "path": "notes/tool-availability-fallback-2026-05-21.md",
+      "type": "doc",
+      "description": "Guardrail for recovering when desktop_get_window_text or desktop_get_accessibility_tree are unavailable and screenshot evidence must be used instead."
+    },
+    {
+      "path": "examples/desktop-stress-test-findings-2026-05-24.md",
+      "type": "example",
+      "description": "Real 2026-05-24 Windows desktop stress-test findings, recovery paths, and safe future recipe based on Raul's requested broad desktop-tool test."
+    },
+    {
+      "path": "examples/black-screen-non-vision-routes-2026-05-26.md",
+      "type": "example",
+      "description": "Refined black-screen/display-off desktop automation recovery note with runtime-availability caveat for window-text/accessibility tools."
+    },
+    {
+      "path": "examples/claude-terminal-approval-loop-recovery-2026-05-28.md",
+      "type": "example",
+      "description": "Observed Claude-in-Windows-Terminal approval-loop failure and safer recovery pattern from 2026-05-28 desktop automation run."
+    },
+    {
+      "path": "examples/claude-terminal-input-targeting-2026-05-29.md",
+      "type": "example",
+      "description": "Claude terminal input targeting and close-tab avoidance guardrail from 2026-05-29 desktop correction."
+    },
+    {
+      "path": "references/workflows/desktop-automation-playbook-2026-06-03.md",
+      "type": "doc",
+      "description": "Add workflow recipe to desktop-automation-playbook"
+    }
+  ]
+}

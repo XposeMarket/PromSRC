@@ -1,0 +1,12 @@
+{
+  "skillId": "x-browser-automation-playbook",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-01T22:25:17.572Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\x-browser-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "4bceb636e79af4b8"
+}

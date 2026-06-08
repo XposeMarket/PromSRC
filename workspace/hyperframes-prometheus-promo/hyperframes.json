@@ -1,0 +1,21 @@
+{
+  "name": "Prometheus Promo — Ash & Archive",
+  "entry": "index.html",
+  "compositionId": "prometheus-promo",
+  "width": 1080,
+  "height": 1920,
+  "duration": 45,
+  "frameRate": 30,
+  "artDirection": "Annotated industrial field manual for a local AI command center, not a purple-blue SaaS gradient promo.",
+  "features": [
+    "local runtime",
+    "browser automation",
+    "desktop control",
+    "workspace/source editing",
+    "memory and audit",
+    "skills",
+    "teams and background agents",
+    "scheduling and approvals",
+    "creative HyperFrames/video pipeline"
+  ]
+}

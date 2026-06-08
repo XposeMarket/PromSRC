@@ -18,6 +18,11 @@ type CapabilityHint = {
 
 const NON_VISION_MODEL_RE = /\b(?:spark|codex-spark)\b/i;
 const OLLAMA_VISION_MODEL_RE = /llava|bakllava|moondream|minicpm.?v|qwen.*vl|internvl|phi.*vision|pixtral|cogvlm|granite.*vision|vision/i;
+// xAI/Grok vision support: grok-2-vision and the grok-4 family (incl. grok-4.x,
+// grok-4-fast, grok-4-1) are multimodal. grok-code-* are code-only and the
+// grok-3 family (incl. grok-3-mini) are text-only — exclude those.
+const XAI_NON_VISION_MODEL_RE = /grok-code|grok-3/i;
+const XAI_VISION_MODEL_RE = /grok-(?:2-vision|4)/i;
 
 function readConfiguredProviderAndModel(): { provider: string; model: string; providerCfg: any } {
   const cfg = getConfig().getConfig() as any;
@@ -71,6 +76,16 @@ export function resolvePrimaryModelCapabilities(hint?: CapabilityHint): ModelCap
 
     if (provider === 'ollama') {
       return { provider, model, hasVision: OLLAMA_VISION_MODEL_RE.test(model), source: 'known_model' };
+    }
+
+    if (provider === 'xai') {
+      if (model && XAI_NON_VISION_MODEL_RE.test(model)) {
+        return { provider, model, hasVision: false, source: 'known_model' };
+      }
+      // grok-4.x / grok-4-* / grok-2-vision are multimodal. A non-grok model id
+      // configured under xai (custom endpoint) defaults to vision-capable.
+      const hasVision = model ? (XAI_VISION_MODEL_RE.test(model) || !/^grok-/i.test(model)) : true;
+      return { provider, model, hasVision, source: 'known_model' };
     }
 
     if (provider === 'anthropic' || provider === 'openai' || provider === 'openai_codex' || provider === 'gemini') {
