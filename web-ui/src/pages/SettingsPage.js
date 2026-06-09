@@ -15,6 +15,7 @@ import { escHtml, showToast, showConfirm, log } from '../utils.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
 import { showTutorial } from '../onboarding/tutorial-overlay.js';
+import { renderProviderUsageCard } from './HubPage.js';
 
 const SETTINGS_ICON_PATHS = {
   keyboard: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 9h.01"></path><path d="M10 9h.01"></path><path d="M13 9h.01"></path><path d="M16 9h.01"></path><path d="M7 13h.01"></path><path d="M10 13h.01"></path><path d="M13 13h4"></path><path d="M7 17h10"></path>',
@@ -195,6 +196,7 @@ function setSettingsTab(tab) {
       if (t === tab) {
         const gridTabs = ['system', 'search', 'models'];
         panel.style.display = gridTabs.includes(t) ? 'block' : 'block';
+        if (t === 'system' && typeof window.renderThemePicker === 'function') window.renderThemePicker();
         if (t === 'heartbeat') {
           if (!window.heartbeatSettingsLoaded) loadHeartbeatSettings().catch(() => {});
           else if (window.heartbeatEditor) window.heartbeatEditor.refresh();
@@ -1056,6 +1058,7 @@ function onProviderChange() {
   } else if (provider !== 'openai_codex') {
     refreshProviderModels(provider).catch(() => {});
   }
+  if (typeof renderModelsUsage === 'function') renderModelsUsage();
 }
 
 async function loadModelSettings() {
@@ -1139,11 +1142,72 @@ async function loadModelSettings() {
       loadAgentModelDefaults(),
       loadBrainModelConfig(),
       loadSessionCompactionSettings(),
-    ]).catch(() => {});
+    ]).then(() => { renderModelsUsage(); }).catch(() => {});
   } catch (e) {
     console.warn('loadModelSettings error:', e);
   }
 }
+
+// ─── Models tab: per-provider usage & limits ──────────────────────────────────
+const MODELS_USAGE_LABELS = {
+  ollama: 'Ollama (local)', llama_cpp: 'llama.cpp (local)', lm_studio: 'LM Studio (local)',
+  openai: 'OpenAI', openai_codex: 'OpenAI · ChatGPT / Codex', anthropic: 'Anthropic · Claude',
+  perplexity: 'Perplexity', gemini: 'Google · Gemini', xai: 'xAI · Grok',
+};
+const MODELS_USAGE_LOCAL = new Set(['ollama', 'llama_cpp', 'lm_studio']);
+
+// Collect the distinct providers in active use: the main chat provider plus any
+// provider explicitly assigned to an agent-model-default or brain-system slot.
+function collectInUseProviders() {
+  const ids = [];
+  const seen = new Set();
+  const push = (raw) => {
+    const id = String(raw || '').trim();
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  };
+  const main = document.getElementById('settings-llm-provider');
+  if (main && main.value) push(main.value);
+  document.querySelectorAll('select[id^="amd-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
+  document.querySelectorAll('select[id^="brain-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
+  return ids;
+}
+
+async function renderModelsUsage() {
+  const wrap = document.getElementById('settings-models-usage');
+  const grid = document.getElementById('settings-models-usage-grid');
+  if (!wrap || !grid) return;
+
+  const inUse = collectInUseProviders().filter(id => !MODELS_USAGE_LOCAL.has(id));
+  if (!inUse.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  grid.innerHTML = `<div class="hub-empty">Loading…</div>`;
+
+  const byId = {};
+  try {
+    const r = await api('/api/usage/limits', { timeoutMs: 30000 });
+    (r && Array.isArray(r.providers) ? r.providers : []).forEach(p => { byId[p.provider] = p; });
+  } catch { /* fall through to no-data cards */ }
+
+  const mainId = (document.getElementById('settings-llm-provider') || {}).value || '';
+  const cards = inUse.map(id => {
+    const isPrimary = id === mainId;
+    const data = byId[id];
+    if (data) {
+      const html = renderProviderUsageCard(data);
+      return isPrimary ? html.replace('usage-provider-card"', 'usage-provider-card is-primary"') : html;
+    }
+    // Assigned but no saved credentials → minimal informational card.
+    return `<div class="usage-provider-card${isPrimary ? ' is-primary' : ''}">
+      <div class="usage-provider-head">
+        <span class="usage-provider-name">${escHtml(MODELS_USAGE_LABELS[id] || id)}</span>
+        <span class="usage-provider-badge">no creds</span>
+      </div>
+      <div class="usage-provider-note">Assigned to an agent but no saved API key / token — connect it above to track usage.</div>
+    </div>`;
+  });
+  grid.innerHTML = cards.join('');
+}
+window.renderModelsUsage = renderModelsUsage;
 
 async function loadSessionCompactionSettings() {
   try {
@@ -3778,6 +3842,7 @@ async function amdProviderChange(slotId) {
   const modelSel = document.getElementById('amd-' + slotId + '-model');
   if (!provSel || !modelSel) return;
   const prov = provSel.value;
+  if (typeof renderModelsUsage === 'function') renderModelsUsage();
   if (!prov) {
     modelSel.innerHTML = '<option value="">— use primary model —</option>';
     return;

@@ -36,6 +36,7 @@ let _goals = [];
 let _curator = { suggestions: [], activity: [], pending: 0, quarantined: 0, appliedActivity: 0, observedActivity: 0, loading: false, actingId: '' };
 const _heatmap = { year: 0, month: 0, counts: {} };
 const _stats = { mode: 'overview', range: 'all', tools: null, models: null, loading: false };
+const _providers = { items: [], loading: false, loaded: false };
 try {
   const m = localStorage.getItem('hub_stats_mode');
   if (m === 'overview' || m === 'models') _stats.mode = m;
@@ -574,6 +575,106 @@ function renderStatsTiles() {
   }
   modelsEl.style.display = '';
   if (footnoteEl) footnoteEl.textContent = data.summary || '';
+}
+
+// ─── Connected providers / usage limits ───────────────────────────────────────
+function gaugeClass(pct) {
+  const p = Number(pct) || 0;
+  if (p >= 90) return 'crit';
+  if (p >= 75) return 'warn';
+  return 'ok';
+}
+
+function fmtReset(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const diff = t - Date.now();
+  if (diff <= 0) return 'resets soon';
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `resets in ${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `resets in ${hrs}h`;
+  const days = Math.round(hrs / 24);
+  return `resets in ${days}d`;
+}
+
+function renderUsageGauge(label, pct, resetIso) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  const reset = fmtReset(resetIso);
+  return `
+    <div class="usage-gauge">
+      <div class="usage-gauge-head">
+        <span class="usage-gauge-label">${escHtml(label)}</span>
+        <span class="usage-gauge-pct">${p}%</span>
+      </div>
+      <div class="usage-gauge-track"><div class="usage-gauge-fill ${gaugeClass(p)}" style="width:${p}%"></div></div>
+      ${reset ? `<div class="usage-gauge-reset">${escHtml(reset)}</div>` : ''}
+    </div>
+  `;
+}
+
+// Renders one provider card. Shared shape: { provider, label, source, windows[], budget, tokens, error }.
+export function renderProviderUsageCard(p) {
+  const windows = Array.isArray(p.windows) ? p.windows : [];
+  const tokens = p.tokens || {};
+  let body = '';
+  if (windows.length) {
+    body = windows.map(w => renderUsageGauge(w.label, w.used_percent, w.reset_at)).join('');
+  } else if (p.budget && p.budget.limit_tokens > 0) {
+    body = renderUsageGauge('Monthly budget', p.budget.used_percent, null)
+      + `<div class="usage-gauge-reset">${compactNumber(p.budget.used_tokens)} / ${compactNumber(p.budget.limit_tokens)} tokens</div>`;
+  } else {
+    body = `<div class="usage-provider-note">No limit data — tracking tokens only</div>`;
+  }
+  const badge = p.source === 'live'
+    ? `<span class="usage-provider-badge live">live</span>`
+    : `<span class="usage-provider-badge">tracked</span>`;
+  const err = p.error ? `<div class="usage-provider-err">${escHtml(p.error)}</div>` : '';
+  return `
+    <div class="usage-provider-card" data-provider="${escHtml(p.provider)}">
+      <div class="usage-provider-head">
+        <span class="usage-provider-name">${escHtml(p.label || p.provider)}</span>
+        ${badge}
+      </div>
+      ${body}
+      ${err}
+      <div class="usage-provider-foot">${compactNumber(tokens.total || 0)} tokens · ${compactNumber(tokens.calls || 0)} calls</div>
+    </div>
+  `;
+}
+
+function renderProviders() {
+  const grid = document.getElementById('hub-providers-grid');
+  const section = document.getElementById('hub-providers-section');
+  if (!grid) return;
+  if (_providers.loading && !_providers.loaded) {
+    grid.innerHTML = `<div class="hub-empty">Loading…</div>`;
+    return;
+  }
+  const items = _providers.items || [];
+  if (!items.length) {
+    // Nothing configured — hide the section entirely to avoid an empty block.
+    if (section) section.style.display = 'none';
+    return;
+  }
+  if (section) section.style.display = '';
+  grid.innerHTML = items.map(renderProviderUsageCard).join('');
+}
+
+async function loadProviders() {
+  _providers.loading = true;
+  renderProviders();
+  try {
+    const r = await api('/api/usage/limits', { timeoutMs: 30000 });
+    _providers.items = (r && Array.isArray(r.providers)) ? r.providers : [];
+  } catch {
+    _providers.items = [];
+  } finally {
+    _providers.loading = false;
+    _providers.loaded = true;
+    renderProviders();
+  }
 }
 
 // Skill Curator review queue
@@ -1173,6 +1274,12 @@ function wireHeader() {
     curatorRun._wired = true;
     curatorRun.addEventListener('click', runCuratorReview);
   }
+
+  const provRefresh = document.getElementById('hub-providers-refresh');
+  if (provRefresh && !provRefresh._wired) {
+    provRefresh._wired = true;
+    provRefresh.addEventListener('click', loadProviders);
+  }
 }
 
 export function hubPageActivate() {
@@ -1185,6 +1292,7 @@ export function hubPageActivate() {
   loadGoals();
   loadSkills();
   loadStats();
+  loadProviders();
   loadHeatmap();
   loadWeek();
   loadCuratorSuggestions();

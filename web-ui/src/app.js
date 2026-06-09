@@ -18,30 +18,85 @@
 import { state, THEME_KEY } from './state.js';
 import { runIfNeeded as runOnboardingIfNeeded } from './onboarding/onboarding-controller.js';
 
+// Theme registry is defined in index.html (window.PROM_THEMES) so it loads
+// before any script. Fall back to dark/light if it is somehow unavailable.
+function getThemeList() {
+  return (window.PROM_THEMES && window.PROM_THEMES.length)
+    ? window.PROM_THEMES
+    : [{ id: 'dark', label: 'Default Dark', base: 'dark' }, { id: 'light', label: 'Light', base: 'light' }];
+}
+
+function resolveTheme(id) {
+  const list = getThemeList();
+  return list.find((t) => t.id === id) || list[0];
+}
+
+function nextThemeId(currentId) {
+  const list = getThemeList();
+  const idx = list.findIndex((t) => t.id === currentId);
+  return list[(idx + 1) % list.length].id;
+}
+
 export function getInitialTheme() {
   try {
     const saved = localStorage.getItem(THEME_KEY);
-    if (saved === 'light' || saved === 'dark') return saved;
+    if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
   return 'dark';
 }
 
-export function applyTheme(theme) {
-  const resolved = theme === 'dark' ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-theme', resolved);
+export function applyTheme(themeId) {
+  const theme = resolveTheme(themeId);
+  document.documentElement.setAttribute('data-theme', theme.base);
+  document.documentElement.setAttribute('data-skin', theme.id);
   const toggle = document.getElementById('theme-toggle');
   if (toggle) {
-    toggle.setAttribute('data-theme-state', resolved);
-    const title = resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    toggle.setAttribute('data-theme-state', theme.base);
+    const next = resolveTheme(nextThemeId(theme.id));
+    const title = 'Theme: ' + theme.label + ' — click for ' + next.label;
     toggle.title = title;
     toggle.setAttribute('aria-label', title);
   }
-  try { localStorage.setItem(THEME_KEY, resolved); } catch {}
+  try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
+  try {
+    document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: theme.base } }));
+  } catch {}
+  renderThemePicker();
 }
 
 export function toggleTheme() {
-  const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-  applyTheme(current === 'dark' ? 'light' : 'dark');
+  const current = document.documentElement.getAttribute('data-skin')
+    || document.documentElement.getAttribute('data-theme')
+    || 'dark';
+  applyTheme(nextThemeId(current));
+}
+
+// Select a specific theme by id (used by the Settings appearance picker).
+export function selectTheme(themeId) {
+  applyTheme(themeId);
+}
+
+// Render the theme swatch grid inside Settings → System (no-op if absent).
+export function renderThemePicker() {
+  const grid = document.getElementById('theme-picker-grid');
+  if (!grid) return;
+  const activeId = document.documentElement.getAttribute('data-skin') || 'dark';
+  grid.innerHTML = getThemeList().map((t) => {
+    const active = t.id === activeId;
+    return (
+      '<button type="button" class="theme-swatch' + (active ? ' is-active' : '') + '"'
+      + ' data-theme-id="' + t.id + '" data-skin-preview="' + t.id + '"'
+      + ' onclick="selectTheme(\'' + t.id + '\')"'
+      + ' aria-pressed="' + (active ? 'true' : 'false') + '">'
+      + '<span class="theme-swatch-chip" aria-hidden="true">'
+      + '<span class="tsc tsc-bg"></span><span class="tsc tsc-panel"></span>'
+      + '<span class="tsc tsc-accent"></span>'
+      + '</span>'
+      + '<span class="theme-swatch-label">' + t.label + '</span>'
+      + (active ? '<span class="theme-swatch-check" aria-hidden="true">✓</span>' : '')
+      + '</button>'
+    );
+  }).join('');
 }
 
 // ── Right panel (inline drawer) ───────────────────────────────
@@ -366,6 +421,8 @@ window.setMode = setMode;
 window.toggleTheme = toggleTheme;
 window.applyTheme = applyTheme;
 window.getInitialTheme = getInitialTheme;
+window.selectTheme = selectTheme;
+window.renderThemePicker = renderThemePicker;
 window.toggleMoreMenu = toggleMoreMenu;
 window.toggleMorePopover = toggleMorePopover;
 window.closeMorePopover = closeMorePopover;

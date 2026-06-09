@@ -1353,3 +1353,121 @@
   }
   .hub-skill-search { width: 100%; }
 }
+
+/* ─── Connected Providers / usage limits ──────────────────────────────────── */
+.hub-providers-refresh {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.hub-providers-refresh:hover { color: var(--text); border-color: var(--brand); }
+
+.hub-providers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.usage-provider-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, #fff 0%, #f9fbff 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.usage-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.usage-provider-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.usage-provider-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.usage-provider-badge.live {
+  color: #0d7a3f;
+  border-color: #9ad7b5;
+  background: #eafaf1;
+}
+.usage-provider-note,
+.usage-provider-foot {
+  font-size: 11px;
+  color: var(--muted);
+}
+.usage-provider-foot {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.usage-provider-err {
+  font-size: 11px;
+  color: #c0392b;
+}
+
+.usage-gauge { display: flex; flex-direction: column; gap: 4px; }
+.usage-gauge-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.usage-gauge-label { font-size: 11px; color: var(--muted); }
+.usage-gauge-pct { font-size: 12px; font-weight: 700; color: var(--text); }
+.usage-gauge-track {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--bg-soft, #eef2f8);
+  overflow: hidden;
+}
+.usage-gauge-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
+.usage-gauge-fill.ok { background: linear-gradient(90deg, #4f8cf0, #2f6fe0); }
+.usage-gauge-fill.warn { background: linear-gradient(90deg, #f0b54f, #e08a2f); }
+.usage-gauge-fill.crit { background: linear-gradient(90deg, #f0744f, #e0402f); }
+.usage-gauge-reset { font-size: 10px; color: var(--muted); }
+
+/* Settings → Models usage block reuses the provider card styles */
+.settings-models-usage {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+.settings-models-usage-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.settings-models-usage-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.settings-models-usage .hub-providers-grid { margin-top: 0; }
+.usage-provider-card.is-primary { border-color: #bdd3f6; }
+.usage-provider-role {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: #0d4faf;
+}

@@ -9,7 +9,6 @@ import {
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderCreativePage, renderSubagentsPage, renderSubagentDetailPage,
 } from './mobile-pages.js?v=mobile-abort-button';
-import { renderMobileSettingsPage } from './mobile-settings.js?v=mobile-voice-live-update-fix';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
@@ -88,6 +87,31 @@ export function mobileNavigate(route) {
   }
 }
 
+// Mobile reuses the full desktop Settings modal instead of a separate mobile
+// settings surface. The same #settings-modal markup and SettingsPage.js ship in
+// this bundle, and the shared api() helper attaches the paired-device token, so
+// every desktop settings loader/saver authenticates correctly on a phone.
+// `mobile.css` (scoped to body.pm-mobile-active) presents the modal full-screen.
+function openMobileSettings(tab) {
+  if (typeof window.openSettings === 'function') {
+    try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
+    return true;
+  }
+  console.warn('[mobile settings] desktop Settings modal not available yet');
+  return false;
+}
+window.pmOpenSettings = openMobileSettings;
+
+// Close the desktop Settings modal if it is open. Used when the mobile router
+// navigates to any non-settings page so the overlay never lingers on top of a
+// different mobile screen.
+function closeMobileSettings() {
+  const modal = document.getElementById('settings-modal');
+  if (modal && modal.style.display !== 'none' && typeof window.closeSettings === 'function') {
+    try { window.closeSettings(); } catch {}
+  }
+}
+
 const TAB_FOR_PAGE = {
   chat: 'chat', voice: 'voice', tasks: 'tasks', creative: 'creative',
   schedule: null, teams: null, subagents: null, proposals: null, settings: null, more: null,
@@ -137,6 +161,11 @@ function render() {
   //     unpaired phone can never accidentally hit /api endpoints.
   if (pairCode) page = 'pair';
   else if (!getDeviceToken() && page !== 'pair') page = 'pair';
+
+  // The desktop Settings modal can be opened on top of any mobile page (via the
+  // header gear) without changing the route. Any actual navigation to a
+  // different page should dismiss it so it never lingers over the wrong screen.
+  if (page !== 'settings') closeMobileSettings();
 
   const activeTab = TAB_FOR_PAGE[page] || null;
   const shell = createMobileShell({
@@ -196,7 +225,13 @@ function render() {
       if (arg) return renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return renderTeamsPage(slot, { navigate: mobileNavigate });
     case 'tasks':     return renderTasksPage(slot, { navigate: mobileNavigate });
-    case 'settings':  return renderMobileSettingsPage(slot, { section: arg || '', navigate: mobileNavigate });
+    case 'settings':
+      // Deep links like #mobile/settings or #mobile/settings/models open the
+      // full desktop Settings modal over a chat base, so closing it lands the
+      // user back on chat. `arg` maps directly to a desktop settings tab id.
+      renderChatPage(slot, { navigate: mobileNavigate, sessionId: null });
+      openMobileSettings(arg || undefined);
+      return;
     case 'creative':  return renderCreativePage(slot, { navigate: mobileNavigate });
     case 'subagents':
       if (arg) return renderSubagentDetailPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate, initialTab: extra?.[0] || '' });

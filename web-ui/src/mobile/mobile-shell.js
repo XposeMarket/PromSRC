@@ -1281,7 +1281,12 @@ export function wireHeaderActions(pageEl, { onLeft, onSettings, onBack, onNewCha
       if (a === 'menu') openDrawer();
       else if (a === 'back' && onBack) onBack();
       else if (a === 'settings') {
+        // Open the full desktop Settings modal in place (no route change) so
+        // closing it returns the user to the page they were on. Falls back to
+        // the settings route only if the desktop modal helper is unavailable.
         if (onSettings) onSettings();
+        else if (typeof window.pmOpenSettings === 'function') window.pmOpenSettings();
+        else if (typeof window.openSettings === 'function') window.openSettings();
         else window.location.hash = '#mobile/settings';
       }
       else if (a === 'new-chat' && onNewChat) onNewChat();

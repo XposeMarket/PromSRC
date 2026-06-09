@@ -6582,3 +6582,61 @@ body.pm-mobile-active { overflow: hidden; }
   display: block; margin-top: 6px; font-size: 11px; font-weight: 600;
   color: var(--pm-orange); font-style: italic;
 }
+
+/* ============================================================
+   DESKTOP SETTINGS MODAL — REUSED ON MOBILE
+   The mobile app no longer ships a separate settings surface; it
+   opens the full desktop #settings-modal (markup in index.html +
+   logic in SettingsPage.js, both already loaded in this bundle).
+   These overrides present that modal full-screen with a scrollable
+   tab strip and single-column panels on phones. Everything is
+   scoped under body.pm-mobile-active so the desktop UI is untouched.
+   ============================================================ */
+body.pm-mobile-active #settings-modal {
+  padding: 0 !important;
+  align-items: stretch !important;
+  justify-content: stretch !important;
+  z-index: 100000 !important; /* above the mobile drawer/scrim and tabbar */
+}
+body.pm-mobile-active #settings-modal > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-shadow: none !important;
+  /* Respect iOS safe areas so the close button + footer stay reachable. */
+  padding-top: env(safe-area-inset-top, 0px) !important;
+  padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+}
+
+/* Horizontally scrollable tab strip — ~12 tabs never fit a phone width. */
+body.pm-mobile-active #settings-tabstrip {
+  flex: 0 0 auto !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  -webkit-overflow-scrolling: touch !important;
+  scrollbar-width: none;
+}
+body.pm-mobile-active #settings-tabstrip::-webkit-scrollbar { display: none; }
+body.pm-mobile-active #settings-tabstrip .sidebar-action {
+  flex: 0 0 auto !important;
+  white-space: nowrap !important;
+}
+
+/* Let the active settings panel take the remaining height and scroll. */
+body.pm-mobile-active #settings-modal [id^="settings-panel-"] {
+  grid-template-columns: 1fr !important; /* collapse 2-col grids to 1 col */
+  flex: 1 1 auto !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+/* Keep the sticky Save/Cancel footer tappable. */
+body.pm-mobile-active #settings-save-btn {
+  min-height: 40px !important;
+}

@@ -47,6 +47,9 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
 | 35 | Onboarding System, Replay, Dev Test, Migration Boundary | [19-onboarding-system.md](19-onboarding-system.md) |
 | 36 | Rich Chat Artifacts (cards), Data Tools, Voice Integration | [20-rich-artifacts.md](20-rich-artifacts.md) |
+| 37 | Runtime Prompt Map (all agent surfaces, files, overlaps) | [21-runtime-prompt-map.md](21-runtime-prompt-map.md) |
+| 38 | Runtime Prompt Verbatim Inventory (literal strings + injection map) | [22-runtime-prompt-verbatim.md](22-runtime-prompt-verbatim.md) |
+| 39 | Runtime Context Build Pipeline (assembly order, block by block) | [23-runtime-context-flow.md](23-runtime-context-flow.md) |
 | Feature Index | Product/feature catalog for copy, launch posts, onboarding, and capability lookup | [feature-index/README.md](feature-index/README.md) |
 
 Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.

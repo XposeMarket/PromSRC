@@ -229,6 +229,52 @@ router.get('/api/settings/credentialed-model-providers', (_req, res) => {
   }
 });
 
+const getProviderUsageLimits = (...args: any[]) =>
+  require('../../providers/provider-usage-limits').getProviderUsageLimits(...args);
+
+// GET /api/usage/limits - per-provider usage + subscription limits for every
+// provider the user has saved credentials for (live windows where available,
+// internal token totals + optional manual budget otherwise).
+router.get('/api/usage/limits', async (_req, res) => {
+  try {
+    const ids = listCredentialedModelProviderIds();
+    const data = await getProviderUsageLimits(ids);
+    res.json({ success: true, ...data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// GET /api/settings/usage-budgets - manual monthly token budgets per provider.
+router.get('/api/settings/usage-budgets', (_req, res) => {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const budgets = (cfg?.usage_budgets && typeof cfg.usage_budgets === 'object') ? cfg.usage_budgets : {};
+    res.json({ success: true, budgets });
+  } catch (err: any) {
+    res.json({ success: false, budgets: {}, error: err.message });
+  }
+});
+
+// POST /api/settings/usage-budgets - set or clear a provider's monthly token budget.
+// Body: { provider: string, monthly_token_limit: number }  (0 clears the budget)
+router.post('/api/settings/usage-budgets', (req, res) => {
+  try {
+    const provider = String(req.body?.provider || '').trim();
+    if (!provider) return res.status(400).json({ success: false, error: 'provider required' });
+    const limit = Math.max(0, Math.floor(Number(req.body?.monthly_token_limit || 0)));
+    const conf = getConfig();
+    const cfg = conf.getConfig() as any;
+    const budgets = (cfg.usage_budgets && typeof cfg.usage_budgets === 'object') ? { ...cfg.usage_budgets } : {};
+    if (limit > 0) budgets[provider] = { monthly_token_limit: limit };
+    else delete budgets[provider];
+    conf.updateConfig({ usage_budgets: budgets } as any);
+    res.json({ success: true, budgets });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
 // GET /api/credentials/audit - return last N lines of vault-audit.log (scrubbed)
 router.get('/api/credentials/audit', (_req, res) => {
   const fs = require('fs');

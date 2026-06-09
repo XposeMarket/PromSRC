@@ -39,11 +39,25 @@
 <!-- F2: External CSS (replaces inline <style> block) -->
 <script>
   (() => {
+    // Theme registry — single source of truth (runs before any other script).
+    // Each theme has a structural `base` (dark|light) that drives the existing
+    // dark/light CSS untouched, plus an `id` exposed as data-skin for overrides.
+    window.PROM_THEMES = [
+      { id: 'dark',  label: 'Default Dark',  base: 'dark'  },
+      { id: 'light', label: 'Light',         base: 'light' },
+      { id: 'blue',  label: 'Olympian Blue', base: 'dark'  },
+      { id: 'purple', label: 'Aether Violet', base: 'dark' },
+    ];
+    window.PROM_RESOLVE_THEME = (id) =>
+      window.PROM_THEMES.find((t) => t.id === id) || window.PROM_THEMES[0];
     try {
       const saved = localStorage.getItem('prometheus_theme');
-      document.documentElement.setAttribute('data-theme', saved === 'light' || saved === 'dark' ? saved : 'dark');
+      const theme = window.PROM_RESOLVE_THEME(saved);
+      document.documentElement.setAttribute('data-theme', theme.base);
+      document.documentElement.setAttribute('data-skin', theme.id);
     } catch {
       document.documentElement.setAttribute('data-theme', 'dark');
+      document.documentElement.setAttribute('data-skin', 'dark');
     }
   })();
 </script>
@@ -55,6 +69,7 @@
 <link rel="stylesheet" href="static/styles/projects.css">
 <link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
 <link rel="stylesheet" href="static/styles/mobile.css?v=voice-glass-bottom-glow">
+<link rel="stylesheet" href="static/styles/themes.css?v=blue-theme-1">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <link rel="manifest" href="/manifest.webmanifest">
@@ -2472,6 +2487,14 @@
       </div>
     </div>
 
+    <div class="hub-section" id="hub-providers-section">
+      <div class="hub-skills-topbar">
+        <div class="hub-section-title">Connected Providers</div>
+        <button class="hub-providers-refresh" id="hub-providers-refresh" type="button" title="Refresh usage">↻</button>
+      </div>
+      <div class="hub-providers-grid" id="hub-providers-grid"></div>
+    </div>
+
     <div class="hub-section">
       <div class="hub-skills-topbar">
         <div class="hub-section-title">Top Skills</div>
@@ -3313,7 +3336,7 @@
       <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line)" onclick="closeSettings()">Close</button>
     </div>
 
-	    <div style="padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:8px">
+	    <div id="settings-tabstrip" style="padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:8px">
 	      <button id="settings-tab-system" class="sidebar-action" onclick="setSettingsTab('system')">System</button>
 	      <button id="settings-tab-heartbeat" class="sidebar-action" onclick="setSettingsTab('heartbeat')">Heartbeat</button>
       <button id="settings-tab-search" class="sidebar-action" onclick="setSettingsTab('search')">Search</button>
@@ -3334,6 +3357,14 @@
     </div>
 
 	    <div id="settings-panel-system" style="padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:14px">
+	      <!-- Appearance / Themes -->
+	      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel);grid-column:1/-1">
+	        <div class="right-section-title" style="margin-bottom:6px">Appearance</div>
+	        <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:12px">
+	          Pick a theme for the whole workspace. The theme toggle in the top bar also rotates through these in order.
+	        </div>
+	        <div id="theme-picker-grid"></div>
+	      </div>
 	      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
 	        <div class="right-section-title" style="margin-bottom:8px">Runtime</div>
 	        <div class="info-row"><span class="info-key">Model</span><span class="info-val" id="settings-runtime-model">-</span></div>
@@ -4148,6 +4179,12 @@
 
 	    </div>
 	  </div>
+
+      <div class="settings-models-usage" id="settings-models-usage" style="display:none">
+        <div class="settings-models-usage-title">Usage &amp; Limits</div>
+        <div class="settings-models-usage-sub">Live subscription limits and tracked token usage for the providers your main chat and assigned subagents currently use.</div>
+        <div class="hub-providers-grid" id="settings-models-usage-grid"></div>
+      </div>
 	</div>
 
 	    <div id="settings-panel-channels" style="display:none;padding:14px 16px">
@@ -6940,30 +6977,55 @@ function setButtonState(thinking) {
 
 // ── Canvas Panel + File Upload + Context Pinning — EXTRACTED to ChatPage.js (F3f) ──
 
+function getThemeList() {
+  return (window.PROM_THEMES && window.PROM_THEMES.length)
+    ? window.PROM_THEMES
+    : [{ id: 'dark', label: 'Default Dark', base: 'dark' }, { id: 'light', label: 'Light', base: 'light' }];
+}
+
+function resolveTheme(id) {
+  const list = getThemeList();
+  return list.find((t) => t.id === id) || list[0];
+}
+
+function nextThemeId(currentId) {
+  const list = getThemeList();
+  const idx = list.findIndex((t) => t.id === currentId);
+  return list[(idx + 1) % list.length].id;
+}
+
 function getInitialTheme() {
   try {
     const saved = localStorage.getItem(THEME_KEY);
-    if (saved === 'light' || saved === 'dark') return saved;
+    if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
   return 'dark';
 }
 
-function applyTheme(theme) {
-  const resolved = theme === 'dark' ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-theme', resolved);
+function applyTheme(themeId) {
+  const theme = resolveTheme(themeId);
+  document.documentElement.setAttribute('data-theme', theme.base);
+  document.documentElement.setAttribute('data-skin', theme.id);
   const toggle = document.getElementById('theme-toggle');
   if (toggle) {
-    toggle.setAttribute('data-theme-state', resolved);
-    const title = resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    toggle.setAttribute('data-theme-state', theme.base);
+    const next = resolveTheme(nextThemeId(theme.id));
+    const title = 'Theme: ' + theme.label + ' — click for ' + next.label;
     toggle.title = title;
     toggle.setAttribute('aria-label', title);
   }
-  try { localStorage.setItem(THEME_KEY, resolved); } catch {}
+  try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
+  try {
+    document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: theme.base } }));
+  } catch {}
+  if (typeof window.renderThemePicker === 'function') window.renderThemePicker();
 }
 
 function toggleTheme() {
-  const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-  applyTheme(current === 'dark' ? 'light' : 'dark');
+  const current = document.documentElement.getAttribute('data-skin')
+    || document.documentElement.getAttribute('data-theme')
+    || 'dark';
+  applyTheme(nextThemeId(current));
 }
 
 // ---- Boot ----
@@ -7600,13 +7662,50 @@ let _errBackdrop = null;
 
   let W, H, embers = [], raf;
 
-  const PALETTE = [
-    [200, 100,  18],
-    [170,  72,  10],
-    [210,  88,  20],
-    [155,  60,   8],
-    [225, 110,  30],
-  ];
+  // Per-theme ember palettes (outer glow RGB) + bright core color.
+  // Keyed by data-skin so new themes can recolor the embers.
+  const EMBER_THEMES = {
+    dark: {
+      palette: [
+        [200, 100,  18],
+        [170,  72,  10],
+        [210,  88,  20],
+        [155,  60,   8],
+        [225, 110,  30],
+      ],
+      core: 'rgba(255,210,130,0.92)',
+    },
+    blue: {
+      palette: [
+        [ 40,  96, 190],
+        [ 28,  72, 150],
+        [ 56, 120, 215],
+        [ 22,  58, 128],
+        [ 70, 140, 230],
+      ],
+      core: 'rgba(150,200,255,0.92)',
+    },
+    purple: {
+      palette: [
+        [120,  70, 210],
+        [ 96,  48, 175],
+        [148,  92, 230],
+        [ 78,  40, 150],
+        [165, 110, 240],
+      ],
+      core: 'rgba(208,170,255,0.92)',
+    },
+  };
+
+  function currentSkin() {
+    return document.documentElement.getAttribute('data-skin')
+      || document.documentElement.getAttribute('data-theme')
+      || 'dark';
+  }
+
+  function emberTheme() {
+    return EMBER_THEMES[currentSkin()] || EMBER_THEMES.dark;
+  }
 
   function isDark() {
     return document.documentElement.getAttribute('data-theme') === 'dark';
@@ -7627,7 +7726,8 @@ let _errBackdrop = null;
   }
 
   function mkEmber(colRect) {
-    const [r, g, b] = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+    const palette = emberTheme().palette;
+    const [r, g, b] = palette[Math.floor(Math.random() * palette.length)];
     const maxAlpha  = 0.12 + Math.random() * 0.42;
     const rect = colRect || getColRect() || { left: 0, top: 0, width: W, height: H, bottom: H };
     return {
@@ -7714,7 +7814,7 @@ let _errBackdrop = null;
 
       ctx.beginPath();
       ctx.arc(e.x, e.y, e.size * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255,210,130,0.92)`;
+      ctx.fillStyle = emberTheme().core;
       ctx.fill();
 
       ctx.restore();
@@ -7740,6 +7840,12 @@ let _errBackdrop = null;
     const target = Math.round(Math.max(30, Math.min(65, (colRect.width * colRect.height) / 14000)));
     while (embers.length < target) { const e = mkEmber(colRect); e.life = Math.random() * e.maxLife; embers.push(e); }
     while (embers.length > target + 10) embers.pop();
+  });
+
+  // Recolor embers instantly when the theme changes.
+  document.addEventListener('prom-theme-change', () => {
+    const colRect = getColRect();
+    if (colRect && colRect.width >= 10) initEmbers(colRect);
   });
 
   if (document.readyState === 'loading') {

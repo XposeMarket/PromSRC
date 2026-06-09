@@ -1,0 +1,504 @@
+/**
+ * themes.css — Named theme overrides (data-skin)
+ *
+ * Architecture: dark/light stay 100% untouched. Each named theme picks a
+ * structural base via data-theme (dark|light) so it inherits all existing
+ * dark/light rules, then layers color overrides keyed on data-skin here.
+ *
+ * IMPORTANT: this file must load AFTER base.css / components.css / pages.css
+ * so :root[data-skin="…"] overrides win on equal specificity via source order.
+ */
+
+/* ─────────────────────────────────────────────────────────────────────────
+   OLYMPIAN BLUE  (base: dark)
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="blue"] {
+  --native-color-scheme: dark;
+
+  /* surfaces */
+  --bg: #07101f;
+  --bg-soft: #0c1730;
+  --panel: #122444;
+  --panel-2: #16294e;
+  --line: rgba(120,170,255,0.12);
+  --line-strong: rgba(120,170,255,0.22);
+
+  /* text */
+  --text: #dde8ff;
+  --fg: #dde8ff;
+  --muted: #8da3c9;
+
+  /* brand / accent → electric blue */
+  --brand: #3d8bff;
+  --brand-2: #1e5fd0;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --err: #f87171;
+
+  /* flame accent (reused everywhere for glow/borders) → blue */
+  --flame: #3d8bff;
+  --flame-mid: #6fb0ff;
+  --flame-glow: rgba(80,150,255,0.24);
+  --flame-border: rgba(61,139,255,0.48);
+
+  /* sidebar tokens */
+  --sidebar-bg: rgba(8,16,33,0.82);
+  --sidebar-text: #dce7ff;
+  --sidebar-muted: #8295bb;
+  --sidebar-icon-bg: rgba(120,170,255,0.08);
+  --sidebar-icon-border: rgba(120,170,255,0.14);
+  --sidebar-item-bg: rgba(120,170,255,0.05);
+  --sidebar-item-hover: rgba(61,139,255,0.14);
+  --sidebar-active-bg: rgba(61,139,255,0.20);
+  --sidebar-search-bg: rgba(120,170,255,0.07);
+  --sidebar-seg-bg: rgba(120,170,255,0.07);
+  --sidebar-seg-active: rgba(61,139,255,0.18);
+
+  /* logs */
+  --log-bg: #0d1c36;
+  --log-text: #b6c8ea;
+  --log-info: #7fb0ff;
+
+  /* progress panel */
+  --progress-bg: linear-gradient(180deg, #122444 0%, #0e1d39 100%);
+  --progress-border: #213a63;
+  --progress-header-text: #e6eeff;
+  --progress-chevron: #9fb3d8;
+  --progress-empty-border: rgba(33, 58, 99, 0.8);
+  --progress-empty-text: #9fb3d8;
+  --progress-empty-bg: rgba(18, 36, 68, 0.5);
+  --progress-text-base: #e6eeff;
+  --progress-text-active: #e6eeff;
+  --progress-dot-pending-bg: #16294e;
+  --progress-dot-pending-border: #213a63;
+  --progress-dot-active-bg: #0b1830;
+  --progress-dot-active-border: #2a4a7c;
+  --progress-spinner-track: rgba(61, 139, 255, 0.22);
+  --progress-spinner-head: #3d8bff;
+}
+
+/* component-layer accent vars (embers / composer) */
+:root[data-skin="blue"] {
+  --pm-orange: #3d8bff;
+  --pm-orange-hot: #2f6fd0;
+  --pm-ember: #14315e;
+  --pm-gold: #6fb0ff;
+  --composer-bg: rgba(8, 16, 33, 0.76);
+  --composer-panel: rgba(18, 34, 64, 0.74);
+  --composer-input: rgba(22, 41, 78, 0.84);
+  --composer-border: rgba(120, 170, 255, 0.12);
+  --composer-text: #e6eeff;
+  --composer-muted: rgba(220, 231, 255, 0.55);
+}
+
+/* ── Structural backgrounds that hard-code dark greys ── */
+:root[data-skin="blue"] body {
+  background:
+    radial-gradient(circle at top left, rgba(61,139,255,0.10), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(110,176,255,0.06), transparent 30%),
+    var(--bg);
+}
+:root[data-skin="blue"] main { background: #07101f; }
+:root[data-skin="blue"] .main-shell-wrap { background: #0a1426; }
+
+/* ── Main chat background: darkened Olympian Blue art ── */
+:root[data-skin="blue"] #chat-view {
+  background:
+    linear-gradient(rgba(6, 13, 30, 0.55), rgba(6, 13, 30, 0.62)),
+    #07101f url('/assets/chat-main-background-blue.jpeg') center center / cover no-repeat;
+}
+:root[data-skin="blue"] .side-chat-main-pane,
+:root[data-skin="blue"] .side-chat-pane {
+  background:
+    linear-gradient(rgba(6, 13, 30, 0.55), rgba(6, 13, 30, 0.62)),
+    #07101f url('/assets/chat-main-background-blue.jpeg') center center / cover no-repeat;
+}
+
+/* Page views inherit the blue panel surface */
+:root[data-skin="blue"] .page-view { background: var(--panel); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   OLYMPIAN BLUE — orange → blue refinements
+   Recolors the hard-coded orange literals from base/components/pages for the
+   blue skin only. data-skin selectors load last, so they win on equal
+   specificity via source order. Intentionally left orange: the composer
+   attach/send buttons and the whole Settings modal (contrast is good there).
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Sidebar + topbar: flat navy matching .sidebar-footer, blue glow/border ── */
+:root[data-skin="blue"] .sidebar,
+:root[data-skin="blue"] .topbar {
+  --pm-glow: rgba(61,139,255,0.18);
+  background: var(--sidebar-bg);
+  border-color: rgba(120,170,255,0.12);
+}
+:root[data-skin="blue"] .sidebar { border-right-color: rgba(61,139,255,0.20); }
+
+/* Recolor the spinning conic shell decorations orange → blue */
+:root[data-skin="blue"] .sidebar::before,
+:root[data-skin="blue"] .topbar::before {
+  background:
+    conic-gradient(
+      from var(--pm-angle),
+      transparent 0deg,
+      color-mix(in srgb, #3d8bff, transparent 88%) 52deg,
+      color-mix(in srgb, #6fb0ff, transparent 92%) 95deg,
+      transparent 150deg,
+      color-mix(in srgb, #1e3a78, transparent 82%) 225deg,
+      transparent 310deg,
+      color-mix(in srgb, #2f6fd0, transparent 89%) 360deg
+    );
+}
+:root[data-skin="blue"] .sidebar::after,
+:root[data-skin="blue"] .topbar::after {
+  background:
+    conic-gradient(
+      from var(--pm-angle),
+      rgba(255,255,255,0.18),
+      color-mix(in srgb, #3d8bff, transparent 58%),
+      rgba(255,255,255,0.04),
+      color-mix(in srgb, #6fb0ff, transparent 70%),
+      rgba(255,255,255,0.16)
+    );
+}
+:root[data-skin="blue"] .sidebar:hover,
+:root[data-skin="blue"] .topbar:hover,
+:root[data-skin="blue"] .topbar:focus-within {
+  --pm-glow: rgba(61,139,255,0.26);
+  box-shadow:
+    0 0 24px var(--pm-glow),
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 0 0 1px rgba(255,255,255,0.10);
+}
+:root[data-skin="blue"] .sidebar-footer { border-top-color: rgba(61,139,255,0.18); }
+:root[data-skin="blue"] .more-popover-item:hover { border-color: rgba(61,139,255,0.30); }
+
+/* ── Chat scrollbar orange → blue ── */
+:root[data-skin="blue"] #chat-messages.chat-scroller-active {
+  scrollbar-color: rgba(61,139,255,0.50) transparent;
+}
+:root[data-skin="blue"] #chat-messages.chat-scroller-active::-webkit-scrollbar-thumb {
+  background-color: rgba(61,139,255,0.50);
+}
+
+/* ── Composer container hover/focus glow orange → blue (buttons stay orange) ── */
+:root[data-skin="blue"] .chat-input-area:hover,
+:root[data-skin="blue"] .chat-input-area:focus-within {
+  --pm-glow: rgba(61,139,255,0.34);
+  box-shadow:
+    0 22px 70px rgba(0,0,0,0.42),
+    0 0 30px rgba(61,139,255,0.24),
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 0 0 1px rgba(255,255,255,0.12);
+}
+
+/* ── Skills (right panel) orange → blue ── */
+:root[data-skin="blue"] .skill-card-icon {
+  background: rgba(61,139,255,0.12);
+  border-color: rgba(61,139,255,0.28);
+  color: #6fb0ff;
+}
+:root[data-skin="blue"] .skill-card.enabled .skill-card-icon {
+  background: rgba(61,139,255,0.18);
+  border-color: rgba(61,139,255,0.45);
+}
+:root[data-skin="blue"] .skill-pin-btn:hover { background: rgba(61,139,255,0.10); color: #6fb0ff; }
+:root[data-skin="blue"] .skill-pin-btn.active { color: #6fb0ff; }
+:root[data-skin="blue"] .skill-card.pinned {
+  border-color: rgba(61,139,255,0.45);
+  box-shadow: 0 0 0 1px rgba(61,139,255,0.15);
+}
+:root[data-skin="blue"] .skills-show-more-btn {
+  background: rgba(61,139,255,0.12);
+  border-color: rgba(61,139,255,0.30);
+}
+:root[data-skin="blue"] .skills-show-more-btn:hover {
+  background: rgba(61,139,255,0.20);
+  border-color: rgba(61,139,255,0.42);
+}
+:root[data-skin="blue"] .skill-hover-popover { border-color: rgba(61,139,255,0.28); }
+:root[data-skin="blue"] .skill-hover-popover button:hover {
+  border-color: rgba(61,139,255,0.55);
+  background: rgba(61,139,255,0.18);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   AETHER VIOLET  (base: dark)
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="purple"] {
+  --native-color-scheme: dark;
+
+  /* surfaces */
+  --bg: #0c0518;
+  --bg-soft: #150a28;
+  --panel: #1e1138;
+  --panel-2: #261545;
+  --line: rgba(170,120,255,0.12);
+  --line-strong: rgba(170,120,255,0.22);
+
+  /* text */
+  --text: #e8ddff;
+  --fg: #e8ddff;
+  --muted: #a892cf;
+
+  /* brand / accent → electric violet */
+  --brand: #8b5cf6;
+  --brand-2: #6d28d9;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --err: #f87171;
+
+  /* flame accent (reused everywhere for glow/borders) → violet */
+  --flame: #8b5cf6;
+  --flame-mid: #b794ff;
+  --flame-glow: rgba(150,90,255,0.26);
+  --flame-border: rgba(139,92,246,0.48);
+
+  /* sidebar tokens */
+  --sidebar-bg: rgba(13,6,28,0.82);
+  --sidebar-text: #e8ddff;
+  --sidebar-muted: #9a86c2;
+  --sidebar-icon-bg: rgba(170,120,255,0.08);
+  --sidebar-icon-border: rgba(170,120,255,0.14);
+  --sidebar-item-bg: rgba(170,120,255,0.05);
+  --sidebar-item-hover: rgba(139,92,246,0.16);
+  --sidebar-active-bg: rgba(139,92,246,0.22);
+  --sidebar-search-bg: rgba(170,120,255,0.07);
+  --sidebar-seg-bg: rgba(170,120,255,0.07);
+  --sidebar-seg-active: rgba(139,92,246,0.20);
+
+  /* logs */
+  --log-bg: #160b2c;
+  --log-text: #cbb8ee;
+  --log-info: #b794ff;
+
+  /* progress panel */
+  --progress-bg: linear-gradient(180deg, #1e1138 0%, #170c2e 100%);
+  --progress-border: #34215c;
+  --progress-header-text: #f0e9ff;
+  --progress-chevron: #b29fd6;
+  --progress-empty-border: rgba(52, 33, 92, 0.8);
+  --progress-empty-text: #b29fd6;
+  --progress-empty-bg: rgba(30, 17, 56, 0.5);
+  --progress-text-base: #f0e9ff;
+  --progress-text-active: #f0e9ff;
+  --progress-dot-pending-bg: #261545;
+  --progress-dot-pending-border: #34215c;
+  --progress-dot-active-bg: #140a28;
+  --progress-dot-active-border: #432a78;
+  --progress-spinner-track: rgba(139, 92, 246, 0.22);
+  --progress-spinner-head: #8b5cf6;
+}
+
+/* component-layer accent vars (embers / composer) */
+:root[data-skin="purple"] {
+  --pm-orange: #8b5cf6;
+  --pm-orange-hot: #6d28d9;
+  --pm-ember: #2a1452;
+  --pm-gold: #b794ff;
+  --composer-bg: rgba(13, 6, 28, 0.76);
+  --composer-panel: rgba(30, 17, 56, 0.74);
+  --composer-input: rgba(38, 21, 69, 0.84);
+  --composer-border: rgba(170, 120, 255, 0.12);
+  --composer-text: #f0e9ff;
+  --composer-muted: rgba(232, 221, 255, 0.55);
+}
+
+/* ── Structural backgrounds that hard-code dark greys ── */
+:root[data-skin="purple"] body {
+  background:
+    radial-gradient(circle at top left, rgba(139,92,246,0.12), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(183,148,255,0.07), transparent 30%),
+    var(--bg);
+}
+:root[data-skin="purple"] main { background: #0c0518; }
+:root[data-skin="purple"] .main-shell-wrap { background: #110826; }
+
+/* ── Main chat background: darkened Aether Violet art ── */
+:root[data-skin="purple"] #chat-view {
+  background:
+    linear-gradient(rgba(10, 4, 24, 0.55), rgba(10, 4, 24, 0.62)),
+    #0c0518 url('/assets/chat-main-background-purple.jpeg') center center / cover no-repeat;
+}
+:root[data-skin="purple"] .side-chat-main-pane,
+:root[data-skin="purple"] .side-chat-pane {
+  background:
+    linear-gradient(rgba(10, 4, 24, 0.55), rgba(10, 4, 24, 0.62)),
+    #0c0518 url('/assets/chat-main-background-purple.jpeg') center center / cover no-repeat;
+}
+
+/* Page views inherit the violet panel surface */
+:root[data-skin="purple"] .page-view { background: var(--panel); }
+
+/* ── Sidebar + topbar: flat deep-violet matching .sidebar-footer ── */
+:root[data-skin="purple"] .sidebar,
+:root[data-skin="purple"] .topbar {
+  --pm-glow: rgba(139,92,246,0.18);
+  background: var(--sidebar-bg);
+  border-color: rgba(170,120,255,0.12);
+}
+:root[data-skin="purple"] .sidebar { border-right-color: rgba(139,92,246,0.20); }
+
+/* Recolor the spinning conic shell decorations orange → violet */
+:root[data-skin="purple"] .sidebar::before,
+:root[data-skin="purple"] .topbar::before {
+  background:
+    conic-gradient(
+      from var(--pm-angle),
+      transparent 0deg,
+      color-mix(in srgb, #8b5cf6, transparent 88%) 52deg,
+      color-mix(in srgb, #b794ff, transparent 92%) 95deg,
+      transparent 150deg,
+      color-mix(in srgb, #3a1c6e, transparent 82%) 225deg,
+      transparent 310deg,
+      color-mix(in srgb, #6d28d9, transparent 89%) 360deg
+    );
+}
+:root[data-skin="purple"] .sidebar::after,
+:root[data-skin="purple"] .topbar::after {
+  background:
+    conic-gradient(
+      from var(--pm-angle),
+      rgba(255,255,255,0.18),
+      color-mix(in srgb, #8b5cf6, transparent 58%),
+      rgba(255,255,255,0.04),
+      color-mix(in srgb, #b794ff, transparent 70%),
+      rgba(255,255,255,0.16)
+    );
+}
+:root[data-skin="purple"] .sidebar:hover,
+:root[data-skin="purple"] .topbar:hover,
+:root[data-skin="purple"] .topbar:focus-within {
+  --pm-glow: rgba(139,92,246,0.26);
+  box-shadow:
+    0 0 24px var(--pm-glow),
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 0 0 1px rgba(255,255,255,0.10);
+}
+:root[data-skin="purple"] .sidebar-footer { border-top-color: rgba(139,92,246,0.18); }
+:root[data-skin="purple"] .more-popover-item:hover { border-color: rgba(139,92,246,0.30); }
+
+/* ── Chat scrollbar orange → violet ── */
+:root[data-skin="purple"] #chat-messages.chat-scroller-active {
+  scrollbar-color: rgba(139,92,246,0.50) transparent;
+}
+:root[data-skin="purple"] #chat-messages.chat-scroller-active::-webkit-scrollbar-thumb {
+  background-color: rgba(139,92,246,0.50);
+}
+
+/* ── Composer container hover/focus glow orange → violet (buttons stay orange) ── */
+:root[data-skin="purple"] .chat-input-area:hover,
+:root[data-skin="purple"] .chat-input-area:focus-within {
+  --pm-glow: rgba(139,92,246,0.34);
+  box-shadow:
+    0 22px 70px rgba(0,0,0,0.42),
+    0 0 30px rgba(139,92,246,0.24),
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 0 0 1px rgba(255,255,255,0.12);
+}
+
+/* ── Skills (right panel) orange → violet ── */
+:root[data-skin="purple"] .skill-card-icon {
+  background: rgba(139,92,246,0.12);
+  border-color: rgba(139,92,246,0.28);
+  color: #b794ff;
+}
+:root[data-skin="purple"] .skill-card.enabled .skill-card-icon {
+  background: rgba(139,92,246,0.18);
+  border-color: rgba(139,92,246,0.45);
+}
+:root[data-skin="purple"] .skill-pin-btn:hover { background: rgba(139,92,246,0.10); color: #b794ff; }
+:root[data-skin="purple"] .skill-pin-btn.active { color: #b794ff; }
+:root[data-skin="purple"] .skill-card.pinned {
+  border-color: rgba(139,92,246,0.45);
+  box-shadow: 0 0 0 1px rgba(139,92,246,0.15);
+}
+:root[data-skin="purple"] .skills-show-more-btn {
+  background: rgba(139,92,246,0.12);
+  border-color: rgba(139,92,246,0.30);
+}
+:root[data-skin="purple"] .skills-show-more-btn:hover {
+  background: rgba(139,92,246,0.20);
+  border-color: rgba(139,92,246,0.42);
+}
+:root[data-skin="purple"] .skill-hover-popover { border-color: rgba(139,92,246,0.28); }
+:root[data-skin="purple"] .skill-hover-popover button:hover {
+  border-color: rgba(139,92,246,0.55);
+  background: rgba(139,92,246,0.18);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Settings → Appearance theme picker (works on every theme via vars)
+   ───────────────────────────────────────────────────────────────────────── */
+#theme-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .12s ease;
+}
+.theme-swatch:hover {
+  border-color: var(--flame-border);
+  box-shadow: 0 4px 16px var(--flame-glow);
+}
+.theme-swatch.is-active {
+  border-color: var(--flame-border);
+  box-shadow: 0 0 0 1px var(--flame-border), 0 4px 18px var(--flame-glow);
+}
+
+.theme-swatch-chip {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
+}
+.theme-swatch-chip .tsc { position: absolute; }
+.theme-swatch-chip .tsc-bg { inset: 0; }
+.theme-swatch-chip .tsc-panel {
+  left: 5px; top: 5px; right: 5px; bottom: 5px;
+  border-radius: 5px;
+}
+.theme-swatch-chip .tsc-accent {
+  left: 8px; bottom: 7px; width: 14px; height: 4px; border-radius: 999px;
+}
+
+/* Per-theme chip preview colors */
+.theme-swatch[data-skin-preview="dark"]  .tsc-bg    { background: #1a1a1a; }
+.theme-swatch[data-skin-preview="dark"]  .tsc-panel { background: #2a2a2a; }
+.theme-swatch[data-skin-preview="dark"]  .tsc-accent{ background: #f97316; }
+.theme-swatch[data-skin-preview="light"] .tsc-bg    { background: #d8d6d2; }
+.theme-swatch[data-skin-preview="light"] .tsc-panel { background: #ffffff; }
+.theme-swatch[data-skin-preview="light"] .tsc-accent{ background: #f97316; }
+.theme-swatch[data-skin-preview="blue"]  .tsc-bg    { background: #07101f; }
+.theme-swatch[data-skin-preview="blue"]  .tsc-panel { background: #122444; }
+.theme-swatch[data-skin-preview="blue"]  .tsc-accent{ background: #3d8bff; }
+.theme-swatch[data-skin-preview="purple"] .tsc-bg    { background: #0c0518; }
+.theme-swatch[data-skin-preview="purple"] .tsc-panel { background: #1e1138; }
+.theme-swatch[data-skin-preview="purple"] .tsc-accent{ background: #8b5cf6; }
+
+.theme-swatch-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+}
+.theme-swatch-check {
+  color: var(--flame);
+  font-weight: 800;
+  font-size: 14px;
+}
