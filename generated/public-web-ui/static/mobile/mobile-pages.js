@@ -1064,7 +1064,6 @@ function _voiceAgentProcessEntriesFromResult(sessionId, result) {
 function _renderMobileProcess(entries, options = {}) {
   const list = Array.isArray(entries) ? entries : [];
   if (!list.length) return '';
-  const forceClosed = options.collapsed === true;
   const recent = list.slice(-5);
   const full = list.map((entry) => `
     <div class="pm-process-row ${escapeHtml(entry.type)}">
@@ -1072,8 +1071,9 @@ function _renderMobileProcess(entries, options = {}) {
       <p>${escapeHtml(entry.text)}</p>
     </div>
   `).join('');
+  // Keep collapsed by default on mobile; _renderThread restores panels the user opened.
   return `
-    <details class="pm-process-stream"${!forceClosed && list.length <= 2 ? ' open' : ''}>
+    <details class="pm-process-stream">
       <summary><span>Process</span><em>${list.length} event${list.length === 1 ? '' : 's'}</em></summary>
       <div class="pm-process-latest">${recent.map((entry) => `<b>${escapeHtml(entry.text)}</b>`).join('')}</div>
       <div class="pm-process-full">${full}</div>
@@ -2910,16 +2910,21 @@ function _buildMobileFileContextNote(uploadResults = []) {
 function _renderThread(threadEl) {
   _dedupeMobileAssistantTurns(__pmChat.thread);
   _reindexMobileThread(__pmChat.thread);
-  // Preserve which process-log <details> the user has opened, plus their inner
+  // Preserve which process-log <details> the user has opened or closed, plus inner
   // scroll, across this full innerHTML rebuild — otherwise streaming re-renders
-  // snap the process log closed and reset its scroll every tick.
+  // reset panel state every tick.
   const openProc = {};
+  const closedProc = new Set();
   try {
-    threadEl.querySelectorAll('details.pm-process-stream[open]').forEach((d) => {
+    threadEl.querySelectorAll('details.pm-process-stream').forEach((d) => {
       const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
       if (idx == null) return;
-      const full = d.querySelector('.pm-process-full');
-      openProc[idx] = { scrollTop: full ? full.scrollTop : 0 };
+      if (d.open) {
+        const full = d.querySelector('.pm-process-full');
+        openProc[idx] = { scrollTop: full ? full.scrollTop : 0 };
+      } else {
+        closedProc.add(idx);
+      }
     });
   } catch {}
   threadEl.innerHTML = __pmChat.thread
@@ -2927,12 +2932,18 @@ function _renderThread(threadEl) {
     .join('');
   try {
     Object.keys(openProc).forEach((idx) => {
+      if (closedProc.has(idx)) return;
       const msgEl = threadEl.querySelector(`[data-msg-index="${idx}"]`);
       const d = msgEl?.querySelector('details.pm-process-stream');
       if (!d) return;
       d.setAttribute('open', '');
       const full = d.querySelector('.pm-process-full');
       if (full) full.scrollTop = openProc[idx].scrollTop;
+    });
+    closedProc.forEach((idx) => {
+      const msgEl = threadEl.querySelector(`[data-msg-index="${idx}"]`);
+      const d = msgEl?.querySelector('details.pm-process-stream');
+      if (d) d.removeAttribute('open');
     });
   } catch {}
   threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
