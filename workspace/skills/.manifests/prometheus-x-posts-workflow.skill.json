@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "id": "prometheus-x-posts-workflow",
+  "name": "Prometheus X Posts Workflow",
+  "description": "Reusable scheduled workflow for autonomous X/Twitter posting. Reads the exact schedule-memory.md file with read_file (never memory_read), generates fresh non-duplicative tweets, attempts posting on the prometheus profile, saves records with write_note if blocked, closes browser after use, and keeps tweets consistent across runs.",
+  "version": "1.1.0",
+  "author": "Prometheus",
+  "triggers": [
+    "x post",
+    "tweet",
+    "autonomous x posting",
+    "scheduled posting",
+    "prometheus x posts"
+  ],
+  "category": "automation",
+  "tags": [
+    "x-twitter",
+    "social-media",
+    "scheduled-posting",
+    "autonomous",
+    "branding"
+  ],
+  "requirements": {
+    "toolBinding": {
+      "requiredTools": [
+        "read_file",
+        "write_note",
+        "browser_open",
+        "browser_click",
+        "browser_close"
+      ],
+      "defaultWorkflow": "browser"
+    }
+  },
+  "guardrails": [
+    "No em dashes (—) in generated tweets; use hyphens (-) or natural breaks instead",
+    "Tweets must sound natural and conversational, not corporate or formal",
+    "Avoid generic AI-voice phrasing; use authentic, human-like language",
+    "Each tweet must be distinct and non-repetitive (check schedule-memory.md)",
+    "Always close browser after posting with browser_close to prevent CDP conflicts"
+  ]
+}

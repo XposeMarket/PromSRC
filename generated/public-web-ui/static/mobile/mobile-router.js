@@ -94,6 +94,18 @@ export function mobileNavigate(route) {
 // `mobile.css` (scoped to body.pm-mobile-active) presents the modal full-screen.
 function openMobileSettings(tab) {
   if (typeof window.openSettings === 'function') {
+    // The desktop #settings-modal lives inside the .app container, which the
+    // mobile shell hides with `display:none`. A position:fixed element nested
+    // under a display:none ancestor never renders (it collapses to 0x0), so the
+    // modal opened but stayed invisible. Lift it to <body> — outside the hidden
+    // .app — before opening. It still matches `body.pm-mobile-active
+    // #settings-modal` since it remains a descendant of <body>.
+    try {
+      const modal = document.getElementById('settings-modal');
+      if (modal && modal.parentElement !== document.body) {
+        document.body.appendChild(modal);
+      }
+    } catch (err) { console.warn('[mobile settings] could not reparent modal', err); }
     try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
     return true;
   }

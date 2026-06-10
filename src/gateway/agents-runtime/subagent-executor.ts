@@ -14615,6 +14615,180 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
         }
 
+        // ── prom_repo_push / prom_repo_pull: git sync of the Prometheus repo ───
+        if (name === 'prom_repo_push' || name === 'prom_repo_pull') {
+          const { execSync } = require('child_process');
+          const fsmod = require('fs');
+          const osmod = require('os');
+          const repoRoot = path.resolve(__dirname, '..', '..', '..');
+          const run = (command: string, timeoutMs = 120_000) => {
+            const start = Date.now();
+            try {
+              const output = execSync(command, {
+                cwd: repoRoot,
+                encoding: 'utf-8',
+                timeout: timeoutMs,
+                stdio: 'pipe',
+                windowsHide: true,
+              });
+              return { success: true, command, output: String(output || '').trim(), durationMs: Date.now() - start };
+            } catch (err: any) {
+              const output = [err?.stdout, err?.stderr, err?.message].filter(Boolean).join('\n');
+              return { success: false, command, output: String(output || '').trim(), durationMs: Date.now() - start };
+            }
+          };
+
+          // Resolve the local PAT store (config dir, never the repo).
+          let configDir = path.join(osmod.homedir(), '.prometheus');
+          try { configDir = require('../../config/config').getConfig().getConfigDir() || configDir; } catch {}
+          const patFile = path.join(configDir, 'github-pat');
+          const readSavedPat = (): string => {
+            try { return fsmod.existsSync(patFile) ? String(fsmod.readFileSync(patFile, 'utf-8')).trim() : ''; } catch { return ''; }
+          };
+
+          // Optionally persist a PAT handed over by the user, then use it immediately.
+          let patSaveNote = '';
+          const incomingPat = String(args?.set_pat || args?.pat || '').trim();
+          if (incomingPat) {
+            try {
+              if (!fsmod.existsSync(configDir)) fsmod.mkdirSync(configDir, { recursive: true });
+              fsmod.writeFileSync(patFile, incomingPat, 'utf-8');
+              try { fsmod.chmodSync(patFile, 0o600); } catch {}
+              patSaveNote = `Saved GitHub PAT to ${patFile} (local only, not committed).`;
+            } catch (err: any) {
+              return { name, args, result: `Failed to save PAT to ${patFile}: ${err?.message || err}`, error: true };
+            }
+          }
+
+          // Resolve current branch
+          const branchRes = run('git rev-parse --abbrev-ref HEAD', 15_000);
+          if (!branchRes.success) {
+            return { name, args, result: `${name} failed to resolve the current branch:\n${branchRes.output || '(no output)'}`, error: true };
+          }
+          const branch = (branchRes.output.split(/\r?\n/).pop() || 'main').trim() || 'main';
+
+          // PAT resolution order: env → freshly-handed → saved file.
+          const pat = String(process.env.GITHUB_PAT || process.env.GITHUB_TOKEN || incomingPat || readSavedPat() || '').trim();
+          const remoteRes = run('git remote get-url origin', 15_000);
+          const remoteUrl = remoteRes.success ? (remoteRes.output.split(/\r?\n/)[0] || '').trim() : '';
+          let authRemote = '';
+          if (pat && /^https:\/\/([^@/]*@)?github\.com\//i.test(remoteUrl)) {
+            // PAT is only passed inline to pull/push — never persisted into the git remote via set-url.
+            authRemote = remoteUrl.replace(/^https:\/\/([^@/]*@)?github\.com\//i, `https://x-access-token:${pat}@github.com/`);
+          }
+          const remoteArg = authRemote ? `"${authRemote}"` : 'origin';
+          const sanitize = (s: string) => (pat ? String(s || '').split(pat).join('***') : String(s || ''));
+
+          // Detect auth failures so we can ask the user for a PAT instead of returning a raw error.
+          const isAuthFailure = (out: string): boolean =>
+            /(authentication failed|could not read username|could not read password|terminal prompts disabled|invalid username or password|permission denied|fatal: could not read|remote: (invalid|permission|repository not found)|403 forbidden|401 unauthorized|support for password authentication was removed)/i.test(String(out || ''));
+          const patHelp = (action: string): string => [
+            `⚠️ ACTION REQUIRED — git ${action} failed because this machine has no working GitHub credentials and no PAT is saved.`,
+            '',
+            'Do this:',
+            `1. Ask the user for a GitHub Personal Access Token (PAT) with "repo" scope (a classic token like ghp_… or a fine-grained token with read/write contents on XposeMarket/PromSRC).`,
+            `2. Once they hand it to you, call prom_repo_push again with set_pat:"<the token>" ${action === 'push' ? '(plus the commit message if you have one)' : '— this saves it'}. It is stored locally at ${patFile} (NOT committed to the repo) and reused automatically afterward.`,
+            `3. Then retry the ${action}. No gateway restart is needed — the PAT is read live from disk on each call.`,
+          ].join('\n');
+
+          if (name === 'prom_repo_pull') {
+            const pull = run(`git pull ${remoteArg} ${branch} --no-edit`, 180_000);
+            if (!pull.success && isAuthFailure(pull.output)) {
+              return { name, args, result: `${patSaveNote ? patSaveNote + '\n\n' : ''}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}`, error: true };
+            }
+            return {
+              name,
+              args,
+              result:
+                `${patSaveNote ? patSaveNote + '\n\n' : ''}${pull.success ? '✅' : '❌'} prom_repo_pull (${branch}) ${pull.success ? 'succeeded' : 'failed'} (${pull.durationMs}ms).\n\n` +
+                `${sanitize(pull.output) || '(no output)'}`,
+              error: !pull.success,
+            };
+          }
+
+          // prom_repo_push — stage everything first so the diff/auto-message reflects untracked files too.
+          const add = run('git add -A', 60_000);
+          if (!add.success) {
+            return { name, args, result: `prom_repo_push failed during git add -A:\n${sanitize(add.output) || '(no output)'}`, error: true };
+          }
+
+          // git diff --cached --quiet exits 0 (success) when there is nothing staged.
+          const stagedCheck = run('git diff --cached --quiet', 30_000);
+          const hasStaged = !stagedCheck.success;
+          const message = String(args?.message || args?.commit_message || '').trim();
+
+          // No explicit message but there ARE staged changes → return the diff so the model can author a real message.
+          if (hasStaged && !message) {
+            const stat = run('git diff --cached --stat', 30_000);
+            const nameStatus = run('git diff --cached --name-status', 30_000);
+            const fullDiff = run('git diff --cached --no-color', 60_000);
+            const cappedDiff = (() => {
+              const d = fullDiff.output || '';
+              return d.length > 9000 ? d.slice(0, 9000) + '\n… [diff truncated]' : d;
+            })();
+            return {
+              name,
+              args,
+              result: [
+                `${patSaveNote ? patSaveNote + '\n\n' : ''}📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", "Features added: …; Bug fixes: …"). Do not use a generic placeholder.`,
+                '',
+                '── Files changed (name-status) ──',
+                nameStatus.output || '(none)',
+                '',
+                '── Stat ──',
+                stat.output || '(none)',
+                '',
+                '── Diff ──',
+                cappedDiff || '(empty)',
+              ].join('\n'),
+              error: false,
+            };
+          }
+
+          let committed = false;
+          let commitOut = '';
+          if (hasStaged) {
+            const tmp = path.join(osmod.tmpdir(), `prom-commit-${Date.now()}.txt`);
+            fsmod.writeFileSync(tmp, message, 'utf-8');
+            const commit = run(`git commit -F "${tmp}"`, 60_000);
+            try { fsmod.unlinkSync(tmp); } catch {}
+            commitOut = sanitize(commit.output);
+            if (!commit.success) {
+              return { name, args, result: `prom_repo_push failed during git commit:\n${commitOut || '(no output)'}`, error: true };
+            }
+            committed = true;
+          }
+
+          const push = run(`git push ${remoteArg} ${branch}`, 180_000);
+          if (!push.success && isAuthFailure(push.output)) {
+            return {
+              name,
+              args,
+              result:
+                `${patSaveNote ? patSaveNote + '\n\n' : ''}` +
+                `${committed ? `(Local commit "${message.split(/\r?\n/)[0]}" was created and is waiting to be pushed.)\n\n` : ''}` +
+                `${patHelp('push')}\n\nGit output:\n${sanitize(push.output) || '(no output)'}`,
+              error: true,
+            };
+          }
+          const lines: string[] = [];
+          if (patSaveNote) { lines.push(patSaveNote); lines.push(''); }
+          lines.push(
+            committed
+              ? `Committed: ${message.split(/\r?\n/)[0]}`
+              : 'No local changes to commit — pushing any unpushed commits.',
+          );
+          if (commitOut) lines.push(commitOut);
+          lines.push('');
+          lines.push(`${push.success ? '✅' : '❌'} push to origin/${branch} ${push.success ? 'succeeded' : 'failed'} (${push.durationMs}ms).`);
+          lines.push(sanitize(push.output) || '(no output)');
+          if (!pat) {
+            lines.push('');
+            lines.push('Note: no PAT in use — relied on the OS git credential helper.');
+          }
+          return { name, args, result: lines.join('\n'), error: !push.success };
+        }
+
         // ── connector_list: always-available connector discovery ──────────────
         if (name === 'connector_list') {
           return { name, args, result: buildConnectorStatus(), error: false };

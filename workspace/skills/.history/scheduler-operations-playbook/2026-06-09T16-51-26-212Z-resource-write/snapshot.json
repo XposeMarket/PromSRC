@@ -1,0 +1,12 @@
+{
+  "skillId": "scheduler-operations-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-06-09T16:51:26.216Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\scheduler-operations-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "afaf1f09db8fbdb0"
+}

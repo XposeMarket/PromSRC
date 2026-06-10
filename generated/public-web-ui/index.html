@@ -3802,10 +3802,10 @@
                 </select>
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);margin-top:10px;cursor:pointer">
                   <input id="settings-anthropic-extended-thinking" type="checkbox" onchange="onAnthropicThinkingToggle(this.checked)" />
-                  <span>Enable Claude thinking</span>
+                  <span>Extended thinking</span>
                 </label>
                 <div id="anthropic-thinking-budget-row" style="display:none;margin-top:10px">
-                  <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Legacy Thinking Budget</label>
+                  <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Legacy Thinking Budget <span style="color:var(--muted);font-weight:400">(older Claude models — Opus 4.7+ uses adaptive thinking)</span></label>
                   <select id="settings-anthropic-thinking-budget" class="settings-input" style="font-size:13px">
                     <option value="2048">2,048 tokens</option>
                     <option value="5000">5,000 tokens</option>
@@ -3815,6 +3815,10 @@
                     <option value="32000">32,000 tokens</option>
                   </select>
                 </div>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);margin-top:10px;cursor:pointer">
+                  <input id="settings-anthropic-fast-mode" type="checkbox" />
+                  <span>Fast mode <span style="color:var(--muted);font-weight:400">(faster output, same model — Opus 4.6/4.7/4.8)</span></span>
+                </label>
 	              <div style="display:flex;gap:8px;margin-top:10px">
 	                <button class="btn btn-sm" onclick="testAnthropicConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
 	                <button class="btn btn-sm" onclick="disconnectAnthropic()" style="background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect</button>

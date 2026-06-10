@@ -1020,6 +1020,45 @@ export function getCisSystemTools(): any[] {
         },
       },
     },
+    // ── prom_repo_push: commit + push the Prometheus repo (dev sync) ───────────
+    {
+      type: 'function',
+      function: {
+        name: 'prom_repo_push',
+        description:
+          'Dev-only: stage ALL working-tree changes (git add -A), commit them, and push to origin on the current branch. ' +
+          'Use this to sync local edits up to GitHub so another machine (e.g. Mac ↔ desktop) can pull them. ' +
+          'COMMIT MESSAGE: if the user gave an explicit message, pass it verbatim. If they did NOT (e.g. "just push my changes"), call this tool WITHOUT a message first — it stages everything and returns the real git diff/stat. Read that diff, then call again with a concise, accurate message that summarizes the ACTUAL changes, e.g. "Fix: voice debug crash on reconnect", "Features added: mobile model badge; Bug fixes: mobile router back nav". Never invent a generic placeholder — base it on the diff. ' +
+          'AUTH: uses a saved GitHub PAT (GITHUB_PAT/GITHUB_TOKEN env var, or one previously saved via set_pat) when available, otherwise the machine\'s git credential helper. If auth fails and no PAT is available, the tool tells you to ask the user for a PAT and re-call with set_pat. ' +
+          'If there are no local changes, it still pushes any unpushed commits (no message needed). Public builds disable this tool.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            message: { type: 'string', description: 'Commit message. Omit to first receive the diff so you can author an accurate message. Multi-line allowed (first line is the summary).' },
+            set_pat: { type: 'string', description: 'Optional GitHub PAT (repo scope) to save locally for future pushes/pulls. Saved to the Prometheus config dir on this machine only — never committed to the repo. Provide this after the user hands you a PAT following an auth failure.' },
+          },
+        },
+      },
+    },
+    // ── prom_repo_pull: pull latest of the Prometheus repo (dev sync) ──────────
+    {
+      type: 'function',
+      function: {
+        name: 'prom_repo_pull',
+        description:
+          'Dev-only: pull the latest commits for the current branch from origin into the local Prometheus repo. ' +
+          'Use this to bring down edits made on another machine (e.g. Mac ↔ desktop). ' +
+          'Runs git pull --no-edit; if the working tree has conflicting uncommitted changes the pull may fail and the error is returned for you to resolve. ' +
+          'AUTH: uses a saved GitHub PAT (GITHUB_PAT/GITHUB_TOKEN env var, or one previously saved via prom_repo_push set_pat) when available, otherwise the machine\'s git credential helper. If auth fails and no PAT is available, the tool tells you to ask the user for a PAT (save it via prom_repo_push set_pat, then retry). ' +
+          'Note: this does NOT rebuild or restart — follow with prom_apply_dev_changes or gateway_restart if the pull changed src/ or web-ui/. Public builds disable this tool.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {},
+        },
+      },
+    },
     // ── request_tool_category: activate on-demand tool category ─────────────
     {
       type: 'function',

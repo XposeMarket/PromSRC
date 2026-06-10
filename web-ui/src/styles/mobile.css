@@ -264,6 +264,136 @@ body.pm-mobile-active { overflow: hidden; }
   .pm-header .pm-online { background: rgba(255,250,241,.9); }
   :root[data-theme="dark"] .pm-header .pm-online { background: rgba(29,32,36,.9); }
 }
+/* The status pill doubles as the interactive model badge (button). Reset the
+   native button chrome and suppress the iOS long-press callout/selection so a
+   press-and-hold opens the switch sheet instead of the system text menu. */
+.pm-header button.pm-model-badge {
+  position: relative;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  max-width: 46vw;
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.pm-model-badge .pm-model-badge-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 38vw;
+}
+.pm-model-badge:active { transform: scale(.97); }
+/* Native iOS switch overlay — a REAL native switch sitting under the finger so
+   the user's physical tap toggles it and iOS emits a system haptic. It must keep
+   its native appearance (do NOT set appearance:none — that downgrades it to a
+   plain checkbox and kills the haptic) and only be hidden via opacity. The
+   badge's own delegated pointer handlers still drive the tap/hold UX because the
+   events bubble up from this child. */
+.pm-model-badge .pm-haptic-switch-overlay {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transform: scale(2.4); /* enlarge the hit/native target across the whole pill */
+  cursor: pointer;
+}
+
+/* ── Model badge bottom sheet (reasoning + provider/model switch) ──────────── */
+.pm-msheet-scrim {
+  position: fixed; inset: 0;
+  background: rgba(20,14,8,.42);
+  opacity: 0; transition: opacity .2s ease;
+  z-index: 10000;
+}
+.pm-msheet-scrim.open { opacity: 1; }
+.pm-msheet {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  z-index: 10001;
+  max-height: 76vh;
+  display: flex; flex-direction: column;
+  padding: 8px 16px calc(env(safe-area-inset-bottom) + 18px);
+  border-radius: 22px 22px 0 0;
+  background: var(--pm-card, #fffaf1);
+  border: 1px solid rgba(255,255,255,.3);
+  border-bottom: 0;
+  box-shadow: 0 -10px 40px rgba(40,28,16,.28);
+  transform: translateY(100%);
+  transition: transform .26s cubic-bezier(.22,.61,.36,1);
+}
+.pm-msheet.open { transform: translateY(0); }
+:root[data-theme="dark"] .pm-msheet { background: #1d2024; border-color: rgba(255,255,255,.12); }
+.pm-msheet-handle {
+  width: 38px; height: 4px; border-radius: 999px;
+  background: var(--pm-muted, #b8ad9c); opacity: .5;
+  margin: 4px auto 10px;
+}
+.pm-msheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 8px;
+}
+.pm-msheet-title {
+  font-size: 17px; font-weight: 800; color: var(--pm-text);
+  display: flex; align-items: center; gap: 8px;
+}
+.pm-msheet-title .pm-msheet-sub { font-size: 13px; font-weight: 600; color: var(--pm-muted); }
+.pm-msheet-back {
+  border: 0; background: transparent; color: var(--pm-text);
+  font-size: 22px; line-height: 1; padding: 0 6px 0 0; cursor: pointer;
+}
+.pm-msheet-close {
+  border: 0; background: transparent; color: var(--pm-muted);
+  font-size: 26px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.pm-msheet-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.pm-msheet-rows { display: flex; flex-direction: column; gap: 6px; }
+.pm-msheet-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left;
+  padding: 13px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--pm-line, rgba(120,100,80,.16));
+  background: var(--pm-card-2, rgba(255,255,255,.5));
+  color: var(--pm-text);
+  font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.pm-msheet-row:active { background: var(--pm-orange-soft, rgba(234,106,31,.1)); }
+:root[data-theme="dark"] .pm-msheet-row { background: rgba(255,255,255,.04); }
+.pm-msheet-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-msheet-row-raw {
+  font-size: 11px; font-weight: 500; color: var(--pm-muted);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%;
+}
+.pm-msheet-check { color: var(--pm-green); font-weight: 800; }
+.pm-msheet-chev { color: var(--pm-muted); font-size: 19px; }
+.pm-msheet-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pm-green); }
+.pm-msheet-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-top: 10px; padding: 12px 14px;
+  border-radius: 14px; border: 1px solid var(--pm-line, rgba(120,100,80,.16));
+  font-size: 14px; font-weight: 600; color: var(--pm-text);
+}
+.pm-msheet-loading, .pm-msheet-empty {
+  padding: 22px 12px; text-align: center; color: var(--pm-muted);
+  font-size: 14px; font-weight: 500;
+}
+.pm-msheet-toggle-hint { font-size: 11px; font-weight: 500; color: var(--pm-muted); }
+
+/* Button haptic host — a native iOS switch overlay sits on top of the wrapped
+   button so the physical tap emits a system haptic; the wrapper shrink-wraps the
+   button so composer layout is unchanged. Keep the switch native (no
+   appearance:none) and hide it with opacity only. */
+.pm-haptic-host { position: relative; display: inline-flex; }
+.pm-haptic-host > .pm-haptic-switch-overlay {
+  position: absolute; inset: 0; margin: 0;
+  width: 100%; height: 100%;
+  opacity: 0; cursor: pointer; z-index: 3;
+  -webkit-tap-highlight-color: transparent;
+}
 .pm-header > .pm-icon-btn:first-child {
   position: relative;
   z-index: 2;

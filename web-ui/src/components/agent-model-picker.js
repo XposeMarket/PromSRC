@@ -164,6 +164,7 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
   }
   if (provider === 'anthropic') {
     const ext = providerConfig?.extended_thinking === true;
+    const fast = providerConfig?.fast_mode === true;
     const budget = parseInt(providerConfig?.thinking_budget || '10000', 10);
     const effort = String(providerConfig?.reasoning_effort || '').trim();
     return `
@@ -174,7 +175,7 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Claude thinking</label>
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Extended thinking</label>
         <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
           <input type="checkbox" id="${prefix}-extthink-${escHtml(agentId)}" ${ext?'checked':''} style="width:14px;height:14px" />
           Enabled
@@ -182,6 +183,13 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
         <select id="${prefix}-budget-${escHtml(agentId)}" style="flex:1;min-width:140px;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
           ${ANTHROPIC_BUDGETS.map((b) => `<option value="${b}" ${b===budget?'selected':''}>legacy ${b.toLocaleString()} tokens</option>`).join('')}
         </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Fast mode</label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="${prefix}-fastmode-${escHtml(agentId)}" ${fast?'checked':''} style="width:14px;height:14px" />
+          Faster output (Opus 4.6/4.7/4.8)
+        </label>
         <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}','anthropic')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
       </div>
       <div style="font-size:10px;color:var(--muted);margin-top:3px;margin-left:128px">Shared with all <strong>anthropic</strong> agents.</div>`;
@@ -364,9 +372,11 @@ window.agentModelPickerSaveReasoning = async function (prefix, agentId, provider
     const sel = document.getElementById(`${prefix}-effort-${agentId}`);
     const extEl = document.getElementById(`${prefix}-extthink-${agentId}`);
     const budgetEl = document.getElementById(`${prefix}-budget-${agentId}`);
+    const fastEl = document.getElementById(`${prefix}-fastmode-${agentId}`);
     providerPatch.reasoning_effort = (sel?.value || '').trim();
     providerPatch.extended_thinking = !!(extEl && extEl.checked);
     providerPatch.thinking_budget = parseInt(budgetEl?.value || '10000', 10);
+    providerPatch.fast_mode = !!(fastEl && fastEl.checked);
   }
   try {
     await _fetchLlm(true);

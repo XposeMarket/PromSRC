@@ -1,6 +1,7 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { timeAgo } from '../utils.js';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel } from './mobile-model-badge.js';
 
 // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
 export const ICONS = {
@@ -344,6 +345,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
 
   document.addEventListener('keydown', _escHandler, { passive: true });
   _renderInstallSlot();
+  initMobileModelBadge();
 
   // Page slot (header + body live in here, replaced per page)
   const page = el(`<div class="pm-page" id="pm-page" style="display:flex;flex-direction:column;flex:1;min-height:0;"></div>`);
@@ -756,7 +758,10 @@ export function renderMobileHeader({ title, online = true, leftIcon = 'menu', on
       <button class="pm-icon-btn" data-action="${leftIcon === 'back' ? 'back' : 'menu'}" aria-label="${leftIcon === 'back' ? 'Back' : 'Menu'}">${ICONS[leftIcon]}</button>
       <div class="pm-brand"><span class="pm-brand-flame">🔥</span><span>Prometheus</span></div>
       <div class="pm-header-actions">
-        ${online ? '<span class="pm-online" aria-live="polite">Online</span>' : ''}
+        ${online ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
+          <span class="pm-model-badge-label">${escapeHtml(mobileModelBadgeSeedLabel())}</span>
+          <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
+        </button>` : ''}
         ${rightActions}
         <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
       </div>

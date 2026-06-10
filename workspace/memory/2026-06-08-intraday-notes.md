@@ -392,3 +392,89 @@ Research + prep workflow completed: x_search surfaced fresh decentralized/Solana
 ### [DEBUG] 2026-06-08T15:29:47.620Z
 _Source: Telegram chat session; session: telegram_1799053599_1780932434224; origin: Telegram_
 Dev debug handoff sent to Claude Code desktop app. Task: Commit and push latest PromSRC to git (NO build/release). Message submitted via Ctrl+N → type → Enter. Claude is actively working, searching for PromSRC repo with 300 build cap limit. Screenshot proof sent to Telegram. Follow-up timer set for 2 minutes.
+
+### [GENERAL] 2026-06-08T16:06:58.138Z
+_Source: Main chat session; session: auto_job_1780928858997_bkhjl_
+## 2026-06-09 Tweet - Successfully Posted
+
+"Building with Prometheus is like finally having an operating system for your actual work. Browser automation, files, shell, APIs—everything connects to one place. No more context switching between 10 apps. This is what a modern desktop should look like."
+
+Reasoning: Prior tweets covered autonomous X posting mechanics and memory access patterns for scheduled jobs. This tweet pivots to user value proposition—the unified OS experience that Prometheus delivers. Fresh angle comparing Prometheus to desktop operating systems rather than meta-level workflow aspects. Posted successfully on prometheus profile at 2s timestamp.
+
+Status: ✅ POSTED SUCCESSFULLY",
+<parameter name="tag">x-post
+_Related task: prometheus-x-posts_
+
+### [GENERAL] 2026-06-08T16:07:21.041Z
+_Source: Main chat session; session: auto_job_1780928858997_bkhjl_
+Successful post this run: keyboard shortcut 'n' opened compose reliably, browser_type worked well for contenteditable, and Ctrl+Enter fired the post without browser click issues. Pattern: X.com modals benefit from keyboard shortcuts + raw typing over click automation; vision_click on Post button had latency but Ctrl+Enter was instant.",
+<parameter name="tag">last_run_insight
+
+### [GENERAL] 2026-06-08T16:41:03.424Z
+_Source: Subagent; session: subagent_chat_schedule_prometheus-x-research-replies_gf6xn_
+## 2026-06-08 X Research + Replies Run - Blockers
+
+**Blockers encountered:**
+1. x_search (xAI Grok): out of credits - spending limit hit, need subscription upgrade
+2. X API token (@raulinvests): invalid token refresh (400 error) - token needs refresh/reauth
+3. Browser login: reached password screen but no stored credentials available in scheduled context
+
+**Research angles prepared (not posted):**
+- Agentic reasoning chains: how agents learn to reason better through repeated tasks
+- Agent specialization and skill composition: focused agents vs generalist multi-tool agents
+- Human-AI collaboration reimagined: agents as true team members, not just tools
+
+**Prior angles (already covered in memory):**
+- Persistent memory and local execution (2026-06-07)
+- Multi-agent coordination (2026-06-07)
+- Infrastructure/reliability (2026-06-08)
+- Autonomous workflows (2026-06-07)
+
+**Next run action items:**
+1. Refresh X API token for @raulinvests before attempting posts
+2. Add xAI Grok credits or switch to alternative search (web_search + X API search endpoints)
+3. Store or retrieve raulinvests password in Prometheus vault for browser auth flow
+4. Alternative: use X API create_post directly once token is fixed (x_api_create_post)
+
+**Prepared posts (ready to go when auth is fixed):**
+1. Original: "Agent reasoning patterns are shifting fast in 2026. The ones that learn from task feedback, refine their approach incrementally, and build domain-specific reasoning improve dramatically over time. That's different from throwing more parameters at the problem. This is where local learning and persistent memory shine."
+
+2. Reply angle 1: "Specialization is winning. Agents that deeply understand one domain (finance, ops, code) outperform generalists juggling ten tools poorly. The constraint forces better design. The winners in 2026 will be focused agents, not capability kitchen sinks."
+
+3. Reply angle 2: "Human-AI teams are messier than pure automation, but way more powerful. The best workflows in 2026 have humans making judgment calls and agents handling execution, memory, and research. Real collaboration, not just 'AI assistant helps.'"
+
+### [LAST_RUN_INSIGHT] 2026-06-08T16:41:26.520Z
+_Source: Subagent; session: subagent_chat_schedule_prometheus-x-research-replies_gf6xn_
+Blockers prevented posting this run: x_search out of credits, X API token invalid, browser auth no credentials. Prepared three fresh distinct angles (reasoning chains, specialization, human-AI collaboration) for future runs when auth is fixed. Next run should verify X token refresh and xAI credits before attempting research flow.
+
+### [X_RESEARCH_BLOCKERS_AND_PREP] 2026-06-08T17:05:12.883Z
+_Source: Subagent; session: subagent_chat_schedule_prometheus-x-research-replies_gf6xn_
+## 2026-06-08 X Research + Replies Run - Blockers & Prepared Content
+
+**Blockers encountered:**
+1. xAI Grok x_search: out of credits (spending limit hit) - need subscription upgrade at grok.com
+2. X browser auth: login screen requires phone/Google/Apple/email credentials; no stored creds in scheduled context
+3. X API token: invalid token refresh (400 error) - token for @raulinvests needs to be re-established
+
+**Research completed (web_search):**
+- Agent memory frameworks 2026: Mem0 (48k GitHub stars, $24M funded), Zep, LangGraph memory modules, Cognee for knowledge graphs
+- Knowledge graph + agentic AI: hybrid architectures combining graph relationships + vector search for multi-hop reasoning
+- Key insights: temporal queries +29.6pts, multi-hop reasoning +23.1pts on memory benchmarks; agent memory is "the infrastructure layer" and competitive differentiator in 2026
+- Emerging tools: EverMemOS, Dep-Search framework with persistent memory, adaptive memory via multi-agent collaboration
+
+**Three prepared angles (distinct from prior local-memory posts):**
+1. **Knowledge Graphs + Agentic Reasoning:** "Agents that reason over knowledge graphs (entity relationships, dependencies, causality) outperform pure vector search on multi-hop questions. The graph is the reasoning skeleton; the LLM is the language engine."
+2. **Temporal Query Performance Gaps:** "Agent memory benchmarks show 29.6pt accuracy jumps on temporal queries between frameworks. Architecture choice matters more than most realize. What's your production memory bottleneck: recall, recency, or reasoning chains?"
+3. **Agent Memory as Competitive Moat:** "In 2026, agent memory is the last real battleground. Stateless chatbots -> stateful learning agents. The teams with durable, queryable memory across sessions will outcompete those rebuilding context every turn."
+
+**Next steps:**
+- Fix X API token (likely expired OAuth session)
+- Add xAI Grok credits if continuing x_search research path
+- Store safe browser credentials or use OAuth flow for @raulinvests login
+- Once auth works, post the three angles + prepare natural replies to live trending agent/memory posts
+
+All three angles are ready to post and logged here for continuity.
+
+### [LAST_RUN_INSIGHT] 2026-06-08T17:05:35.611Z
+_Source: Subagent; session: subagent_chat_schedule_prometheus-x-research-replies_gf6xn_
+Web search fallback worked well after x_search hit credit limit; discovered strong 2026 agent memory trends (Mem0 funding, knowledge graph + reasoning gaps, temporal accuracy wins). Three distinct content angles prepared but authentication blockers prevented posting this run. X API token and browser login both need credentials refresh before next attempt.

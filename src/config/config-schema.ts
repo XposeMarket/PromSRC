@@ -59,6 +59,9 @@ const AnthropicProviderSchema_LLM = z.object({
   reasoning_effort: ReasoningEffortSchema,
   extended_thinking: z.boolean().optional(),
   thinking_budget: z.number().int().min(1024).optional(),
+  // Claude Fast Mode — faster output on the same Opus model (no quality
+  // downgrade). Supported on Opus 4.6/4.7/4.8 via the Messages API `speed` field.
+  fast_mode: z.boolean().optional(),
 });
 
 const PerplexityProviderSchema = z.object({

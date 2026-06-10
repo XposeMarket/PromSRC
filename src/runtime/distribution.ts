@@ -46,6 +46,8 @@ const PUBLIC_BUILD_DISABLED_TOOL_NAMES = new Set([
   'await_dev_source_edit_approval',
   'apply_dev_source_patchset',
   'prom_apply_dev_changes',
+  'prom_repo_push',
+  'prom_repo_pull',
 ]);
 
 const PUBLIC_BUILD_DISABLED_TOOL_CATEGORIES = new Set([

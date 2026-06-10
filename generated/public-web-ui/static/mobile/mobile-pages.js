@@ -6,6 +6,7 @@ import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions,
 } from './mobile-shell.js?v=mobile-voice-live-update-fix';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
+import { attachMobileButtonHaptic } from './mobile-model-badge.js';
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow,
   loadMobileTeams, loadMobileTeamDetail,
@@ -57,6 +58,8 @@ function pmToast(msg, kind = 'info') {
   requestAnimationFrame(() => { t.style.opacity = '1'; t.style.transform = 'translateY(0)'; });
   setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateY(8px)'; setTimeout(() => t.remove(), 220); }, 2400);
 }
+// Expose so shared mobile modules (e.g. the header model badge) can toast too.
+try { window.pmToast = pmToast; } catch {}
 
 const FLAME = '<span class="pm-brand-flame">🔥</span>';
 const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
@@ -4038,17 +4041,19 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   }
 
   function updateOnlineStatus() {
-    const pill = page.querySelector('.pm-online');
+    // The pill is now the interactive model badge (.pm-model-badge): it shows the
+    // current model name, not the literal "Online"/"Offline" text. We only toggle
+    // the green/red dot via the .offline class so we don't clobber the label or
+    // the embedded native haptic switch.
+    const pill = page.querySelector('.pm-model-badge') || page.querySelector('.pm-online');
     if (!pill) return;
-    const wasOffline = pill.classList.contains('offline') || pill.textContent === 'Offline';
+    const wasOffline = pill.classList.contains('offline');
     loadGatewayStatus()
       .then(() => {
-        pill.textContent = 'Online';
         pill.classList.remove('offline');
         if (wasOffline) scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
       })
       .catch(() => {
-        pill.textContent = 'Offline';
         pill.classList.add('offline');
       });
   }
@@ -5958,6 +5963,14 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     updateComposerSubmitState();
     sendMessage(text);
   });
+
+  // Haptic feedback on the orange send / voice-mode / abort button and the mic
+  // button. The send button routes through the form's submit handler (which
+  // decides send vs voice-start vs abort), so we forward via requestSubmit().
+  try {
+    if (sendBtn) attachMobileButtonHaptic(sendBtn, () => form.requestSubmit());
+    if (micBtn) attachMobileButtonHaptic(micBtn, () => micBtn.click());
+  } catch (err) { console.warn('[mobile chat] haptic wiring failed:', err); }
 
   threadEl?.addEventListener('click', (event) => {
     const emailComposerBtn = event.target.closest?.('[data-email-composer-action]');

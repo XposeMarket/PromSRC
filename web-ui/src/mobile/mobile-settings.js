@@ -278,6 +278,7 @@ function buildProviderPayload(page, currentLlm) {
   else delete cfg.reasoning_effort;
   if (provider === 'anthropic') {
     cfg.extended_thinking = boolValue(page, 'pm-anthropic-thinking');
+    cfg.fast_mode = boolValue(page, 'pm-anthropic-fast');
     const budget = Number(val(page, 'pm-anthropic-budget'));
     if (budget) cfg.thinking_budget = budget;
   }
@@ -326,7 +327,8 @@ function renderProviderFields(provider, cfg = {}) {
     return `
       ${field('Model', select(modelId, ['claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-4-5-20251001'], cfg.model || 'claude-sonnet-4-6'))}
       ${field('Thinking Effort', select(effortId, anthropicEfforts, cfg.reasoning_effort || ''))}
-      ${toggleRow('pm-anthropic-thinking', 'Enable Claude thinking', cfg.extended_thinking === true)}
+      ${toggleRow('pm-anthropic-thinking', 'Extended thinking', cfg.extended_thinking === true)}
+      ${toggleRow('pm-anthropic-fast', 'Fast mode (Opus 4.6/4.7/4.8)', cfg.fast_mode === true)}
       ${field('Legacy Thinking Budget', select('pm-anthropic-budget', ['2048','5000','10000','16000','24000','32000'], String(cfg.thinking_budget || '10000')))}
     `;
   }

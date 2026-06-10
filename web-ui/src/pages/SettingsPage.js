@@ -1117,6 +1117,8 @@ async function loadModelSettings() {
         const sel = document.getElementById('settings-anthropic-thinking-budget');
         if (sel) sel.value = String(pc.anthropic.thinking_budget);
       }
+      const fastChk = document.getElementById('settings-anthropic-fast-mode');
+      if (fastChk) fastChk.checked = !!pc.anthropic.fast_mode;
       syncAnthropicReasoningControls();
     }
 
@@ -1488,10 +1490,12 @@ function buildProviderPayload(providerOverride) {
   const anthropicBudget = parseInt(document.getElementById('settings-anthropic-thinking-budget')?.value || '10000', 10);
   const anthropicEffortEl = document.getElementById('settings-anthropic-effort');
   const anthropicEffort = anthropicEffortEl?.disabled ? '' : (anthropicEffortEl?.value || '');
+  const anthropicFastMode = document.getElementById('settings-anthropic-fast-mode')?.checked || false;
   providers.anthropic = {
     model: document.getElementById('settings-anthropic-model')?.value || 'claude-sonnet-4-6',
     extended_thinking: anthropicExtThinking,
     thinking_budget: anthropicBudget,
+    fast_mode: anthropicFastMode,
   };
   if (anthropicEffort) providers.anthropic.reasoning_effort = anthropicEffort;
   const perplexityEffort = document.getElementById('settings-perplexity-effort')?.value || '';

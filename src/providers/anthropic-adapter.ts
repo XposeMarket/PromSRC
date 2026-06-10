@@ -76,6 +76,13 @@ export class AnthropicAdapter implements LLMProvider {
     return /^claude-opus-4-(7|8)(?:\b|[-_])/.test(model);
   }
 
+  // Claude Fast Mode (Messages API `speed: 'fast'`) — faster output on the same
+  // model, no intelligence downgrade. Supported on Opus 4.6/4.7/4.8 only; sending
+  // it to other models 400s, so gate strictly.
+  private isFastModeCapableModel(model: string): boolean {
+    return /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model);
+  }
+
   private supportsEffort(model: string): boolean {
     return /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(model)
       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model)
@@ -635,6 +642,12 @@ export class AnthropicAdapter implements LLMProvider {
 
     if (effort) {
       body.output_config = { ...(body.output_config || {}), effort };
+    }
+
+    // Claude Fast Mode: faster output on the same Opus model. Gated to capable
+    // models so it never 400s on Sonnet/Haiku or older Opus.
+    if (anthropicCfg.fast_mode === true && this.isFastModeCapableModel(model)) {
+      body.speed = 'fast';
     }
 
     // Thinking: enabled via config setting, suppressed for automation turns (think === false).

@@ -110,6 +110,18 @@
       "path": "notes/repeated-no-activity-scheduled-job-failures-2026-05-21.md",
       "type": "doc",
       "description": "Guardrail for scheduled jobs repeatedly failing with openai_codex no-activity timeouts."
+    },
+    {
+      "path": "examples/create-job-with-fallbacks.md",
+      "type": "example"
+    },
+    {
+      "path": "examples/confirm-gate-workarounds.md",
+      "type": "example"
+    },
+    {
+      "path": "examples/update-delete-patterns.md",
+      "type": "example"
     }
   ],
   "status": "ready",
