@@ -490,11 +490,29 @@ body.pm-mobile-active { overflow: hidden; }
   appearance: none;
   border: none;
   background: transparent;
+  position: relative;
   width: 44px; height: 44px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--pm-radius-sm);
   cursor: pointer;
   color: var(--pm-text);
+}
+/* Native iOS switch overlay so a physical tap on a header icon button (menu,
+   back, settings, …) or a footer tab emits a real system haptic. Same trick as
+   the send button / model badge: keep it a native switch (no appearance:none),
+   hidden by opacity only. Tap toggles it → iOS buzzes; the click bubbles up to
+   the button so existing handlers still run. */
+.pm-icon-btn > .pm-haptic-switch-overlay,
+.pm-tab > .pm-haptic-switch-overlay {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  z-index: 4;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .pm-icon-btn:active { background: rgba(0,0,0,.05); }
 .pm-icon-btn.listening {
@@ -542,6 +560,13 @@ body.pm-mobile-active { overflow: hidden; }
     0 2px 8px rgba(40,28,16,.09);
   z-index: 5;
   transform: translateZ(0);
+  /* Let the tabbar own horizontal drags (slider gesture) instead of the page. */
+  touch-action: none;
+}
+/* While the pill is being dragged, skip the springy transition so it tracks the
+   finger 1:1, and dim the tab labels slightly to signal the live drag. */
+.pm-tabbar.pm-tabbar-dragging .pm-tab-indicator {
+  transition: none;
 }
 :root[data-theme="dark"] .pm-tabbar {
   background:
