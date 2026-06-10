@@ -200,4 +200,8 @@ export function wireMobileContextWindow(page, { getSessionId } = {}) {
     if (_open) _close(); else _open_(getSessionId);
   });
   if (toggle) toggle.addEventListener('click', (e) => { e.stopPropagation(); _setExpanded(!_expanded); });
+
+  // Pre-load so the ring shows the real fill as soon as the chat opens,
+  // not just after the popover is first tapped.
+  _refresh(typeof getSessionId === 'function' ? getSessionId() : '');
 }
