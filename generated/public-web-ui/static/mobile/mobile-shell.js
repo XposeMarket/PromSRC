@@ -247,6 +247,109 @@ function _positionTabIndicator(tabbar, tabId, { animate = true } = {}) {
   }
 }
 
+// Make the bottom tabbar behave like a slider: the glass pill can be tapped
+// (jumps + slides to that tab) or pressed and dragged across the bar, snapping
+// to whichever tab you release over. Navigation fires once, on release.
+function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
+  let pointerId = null;
+  let startX = 0;
+  let dragging = false;
+  let pendingTab = null;       // currently highlighted tab during the gesture
+
+  const tabs = () => Array.from(tabbar.querySelectorAll('.pm-tab'));
+
+  // Nearest tab to a clientX, by horizontal centre distance.
+  const tabAtX = (clientX) => {
+    const rect = tabbar.getBoundingClientRect();
+    const x = clientX - rect.left;
+    let best = null;
+    let bestDist = Infinity;
+    for (const t of tabs()) {
+      const centre = t.offsetLeft + t.offsetWidth / 2;
+      const d = Math.abs(centre - x);
+      if (d < bestDist) { bestDist = d; best = t; }
+    }
+    return best;
+  };
+
+  // Visually mark a tab active (no navigation) and, when dragging, let the pill
+  // track the finger instead of snapping tab-to-tab.
+  const highlight = (tabEl, { follow = false, clientX = 0 } = {}) => {
+    if (!tabEl) return;
+    const id = tabEl.getAttribute('data-tab');
+    tabs().forEach((item) => {
+      const isActive = item === tabEl;
+      item.classList.toggle('active', isActive);
+      item.setAttribute('aria-selected', String(isActive));
+    });
+    const indicator = tabbar.querySelector('.pm-tab-indicator');
+    if (follow && indicator) {
+      const rect = tabbar.getBoundingClientRect();
+      const width = tabEl.offsetWidth;
+      const first = tabs()[0];
+      const last = tabs()[tabs().length - 1];
+      const minLeft = first ? first.offsetLeft : 0;
+      const maxLeft = last ? last.offsetLeft : 0;
+      let left = (clientX - rect.left) - width / 2;
+      left = Math.max(minLeft, Math.min(maxLeft, left));
+      indicator.style.setProperty('--pm-ind-x', `${left}px`);
+      indicator.style.setProperty('--pm-ind-w', `${width}px`);
+    } else {
+      _positionTabIndicator(tabbar, id, { animate: true });
+    }
+  };
+
+  const finish = (e) => {
+    if (pointerId === null || (e && e.pointerId !== undefined && e.pointerId !== pointerId)) return;
+    try { tabbar.releasePointerCapture(pointerId); } catch {}
+    tabbar.classList.remove('pm-tabbar-dragging');
+    const wasDragging = dragging;
+    pointerId = null;
+    dragging = false;
+    const target = wasDragging
+      ? pendingTab
+      : (e ? tabAtX(e.clientX) : pendingTab);
+    if (!target) return;
+    const id = target.getAttribute('data-tab');
+    const tabObj = mobileNavTabs.find((x) => x.id === id);
+    const current = getActiveTab ? getActiveTab() : '';
+    try { sessionStorage.setItem(PM_ACTIVE_TAB_KEY, id); } catch {}
+    highlight(target);               // snap the pill cleanly onto the target
+    if (id !== current && tabObj && typeof onNavigate === 'function') {
+      window.setTimeout(() => onNavigate(tabObj.route), 90);
+    }
+  };
+
+  tabbar.addEventListener('pointerdown', (e) => {
+    const t = e.target?.closest?.('.pm-tab');
+    if (!t || !tabbar.contains(t)) return;
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    dragging = false;
+    pendingTab = t;
+  });
+
+  tabbar.addEventListener('pointermove', (e) => {
+    if (pointerId === null || e.pointerId !== pointerId) return;
+    if (!dragging) {
+      if (Math.abs(e.clientX - startX) < 6) return;   // tap, not a drag (yet)
+      dragging = true;
+      tabbar.classList.add('pm-tabbar-dragging');
+      try { tabbar.setPointerCapture(pointerId); } catch {}
+    }
+    e.preventDefault();
+    const nearest = tabAtX(e.clientX);
+    if (nearest && nearest !== pendingTab) {
+      pendingTab = nearest;
+      try { if (navigator.vibrate) navigator.vibrate(6); } catch {}   // Android nicety
+    }
+    highlight(pendingTab, { follow: true, clientX: e.clientX });
+  });
+
+  tabbar.addEventListener('pointerup', finish);
+  tabbar.addEventListener('pointercancel', finish);
+}
+
 function _loadDrawerState() {
   try {
     const raw = JSON.parse(localStorage.getItem(PM_DRAWER_STATE_KEY) || '{}');
@@ -369,21 +472,15 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       <button class="pm-tab ${tab.id === activeTab ? 'active' : ''}" data-tab="${tab.id}" role="tab" aria-label="${escapeHtml(tab.label)}" aria-selected="${tab.id === activeTab ? 'true' : 'false'}">
         ${ICONS[tab.icon] || ''}
         <span>${escapeHtml(tab.label)}</span>
+        <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
       </button>
     `);
-    b.addEventListener('click', () => {
-      const currentTab = tabbar.querySelector('.pm-tab.active')?.getAttribute('data-tab') || activeTab || '';
-      try { if (currentTab) sessionStorage.setItem(PM_ACTIVE_TAB_KEY, currentTab); } catch {}
-      tabbar.querySelectorAll('.pm-tab').forEach((item) => {
-        const isActive = item.getAttribute('data-tab') === tab.id;
-        item.classList.toggle('active', isActive);
-        item.setAttribute('aria-selected', String(isActive));
-      });
-      _positionTabIndicator(tabbar, tab.id, { animate: true });
-      if (typeof onNavigate === 'function') window.setTimeout(() => onNavigate(tab.route), 90);
-    });
     tabbar.appendChild(b);
   });
+  // Tap OR drag the glass pill across the bar to switch pages. Tapping lands on
+  // the native switch overlay (iOS haptic) and navigates on release; dragging
+  // lets the pill track the finger and snaps to the tab you let go over.
+  _wireTabbarSlider(tabbar, { onNavigate, getActiveTab: () => activeTab });
   app.appendChild(tabbar);
   _rememberActiveTab(activeTab);
   // Snap the pill onto the active tab once laid out; animate from the previous
@@ -1282,6 +1379,19 @@ function initCanvasZoom(root, options = {}) {
 export function wireHeaderActions(pageEl, { onLeft, onSettings, onBack, onNewChat }) {
   pageEl.querySelectorAll('[data-action]').forEach(btn => {
     const a = btn.getAttribute('data-action');
+    // Drop a real native iOS switch under the finger so a physical tap on the
+    // header icon (menu / back / settings / new-chat) emits a system haptic —
+    // the same trick the send button uses. The tap toggles the hidden switch
+    // (iOS buzzes) and the click bubbles up to fire the handler below.
+    if (btn.classList.contains('pm-icon-btn') && !btn.querySelector('.pm-haptic-switch-overlay')) {
+      const sw = document.createElement('input');
+      sw.type = 'checkbox';
+      sw.setAttribute('switch', '');
+      sw.className = 'pm-haptic-switch-overlay';
+      sw.setAttribute('aria-hidden', 'true');
+      sw.tabIndex = -1;
+      btn.appendChild(sw);
+    }
     btn.addEventListener('click', () => {
       if (a === 'menu') openDrawer();
       else if (a === 'back' && onBack) onBack();
