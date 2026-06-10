@@ -845,8 +845,8 @@ export class SkillsManager {
       .slice(0, 5);
     const matchedBlock = matchedSkills.length
       ? (
-        `\n\n[MATCHING_SKILLS]\n` +
-        `The user's message matches skill trigger metadata. These skills are not active instructions yet; if one is relevant, call skill_read(id) before acting.\n` +
+        `\n\n[MATCHING_SKILLS] — MANDATORY READ\n` +
+        `Your message matched these skills by trigger word. You MUST skill_read EACH one before acting — even if you are not sure it applies. A partial match often still helps for one part of the work; read it and use whatever is relevant.\n` +
         matchedSkills.map((s) => {
           const triggerPreview = s.triggers.length ? ` [triggers: ${s.triggers.slice(0, 6).join(', ')}]` : '';
           return `- ${s.id}${triggerPreview} - ${s.description.slice(0, 140) || s.name}`;
@@ -855,21 +855,12 @@ export class SkillsManager {
       : '';
 
     return (
-      `[SKILLS] You have ${all.length} reusable skill playbook${all.length !== 1 ? 's' : ''}.\n` +
-      `For greetings, small talk, quick Q&A, or confirmations: respond directly - do NOT call skill_list.\n` +
-      `Before browser/desktop automation, file edits, or other execution-heavy work: call skill_list first.\n` +
-      `If a relevant skill exists, call skill_read(id) and follow it before acting.\n` +
-      `If a skill declares toolBinding metadata, treat requiredTools and defaultWorkflow as the expected operating contract; activate missing tool categories before using the workflow.\n` +
-      `If a skill declares assignment.preferredAgent or assignedAgents/assignedTeams, consider routing substantial work to that agent/team when the task matches.\n` +
-      `During and after real work, treat skills as living workflow playbooks: notice missing triggers, clearer steps, better tool order, reusable examples, templates, guardrails, and resources that would make the skill more useful next time.\n` +
-      `After a complex task (roughly 5+ tool calls), a tricky error fix, or a non-trivial workflow discovery, maintain the skill system while the evidence is fresh. If an existing skill was outdated, incomplete, wrong, or missing a useful example/template/reference, update it in the same turn with skill_resource_write/delete and skill_manifest_write rather than waiting to be asked.\n` +
-      `When a completed workflow seems reusable but no skill fit, create a durable playbook with skill_create_bundle when resources/examples/templates/schemas would help, or skill_create for a simple one-file skill; do not interrupt casual conversation with skill maintenance chatter.\n` +
-      `For bundled skill templates/examples/schemas/prompts/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed. Add focused resources under examples/, templates/, schemas/, prompts/, or references/ instead of bloating SKILL.md.\n` +
-      `Use skill_inspect(id) for normalized metadata/provenance, and skill_manifest_write(id,manifest) to enrich imported skills with overlays.\n` +
-      `Use skill_import_bundle(source) for directory/zip/GitHub skill bundles; skill_update_from_source(id) to refresh imported bundles; skill_export_bundle(id) to package one.\n` +
-      `Use skill_create_bundle for reusable workflows that need templates/schemas/examples/references; skill_resource_write/delete to maintain bundle resources; use skill_create only for simple one-file playbooks.\n` +
-      `skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create are core tools.\n` +
-      `Skills that are not maintained become liabilities; keep them current when real work exposes a gap.` +
+      `[SKILLS] You have ${all.length} reusable skill playbook${all.length !== 1 ? 's' : ''}. Skills are saved workflow instructions — the canonical how-to for a task. Reading the right skill makes you faster, cheaper in tokens, and correct, instead of re-deriving a workflow from scratch.\n` +
+      `THE GOAL: there should be a skill for essentially every real workflow you do. Treat skills as the durable memory of HOW to do things.\n` +
+      `For greetings, small talk, quick Q&A, or confirmations: respond directly — do NOT call skill_list.\n` +
+      `BEFORE any real workflow (browser/desktop automation, file edits, multi-step or repeatable work): call skill_list first, skill_read every relevant skill, and follow it.\n` +
+      `If a skill declares toolBinding metadata, treat requiredTools/defaultWorkflow as the operating contract (activate missing tool categories first); if it declares preferredAgent/assignedAgents/assignedTeams, consider routing substantial matching work there.\n` +
+      `AFTER finishing a workflow: if no skill covered it, create one; if a skill was incomplete or wrong, update it. Capture the actual steps AND the trigger words that should surface it next time (the same kind of request that prompted this work), so it fires automatically when this comes up again. This is part of finishing real work, not an optional extra. (Full skill-tool reference is in the SKILLS tool block.)` +
       matchedBlock
     );
   }

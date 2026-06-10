@@ -25,6 +25,7 @@ import {
   desktopBackgroundStatus,
 } from './desktop-background.js';
 import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
+import { parseCanonicalKey, canonicalKeyToSendKeys } from './desktop-keys.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -561,7 +562,7 @@ try {
 }
 `;
 
-interface DesktopContextGathered {
+export interface DesktopContextGathered {
   monitors: DesktopMonitorInfo[];
   virtualScreen: { left: number; top: number; width: number; height: number };
   windows: DesktopWindowInfo[];
@@ -620,7 +621,8 @@ function normalizeDesktopContext(raw: any): DesktopContextGathered {
 /**
  * One PowerShell round-trip: monitors, virtual screen, window list with monitor index, active window.
  */
-async function gatherDesktopContextInternal(): Promise<DesktopContextGathered> {
+/** Exported for the Win32 DesktopBackend (desktop-platform-win32.ts). */
+export async function gatherDesktopContextInternal(): Promise<DesktopContextGathered> {
   const script = `
 ${PS_DPI_AWARE_HEADER}
 Add-Type -AssemblyName System.Windows.Forms
@@ -885,8 +887,9 @@ export async function getDesktopActiveWindowInfo(): Promise<DesktopWindowInfo | 
   return activeWindowInternal();
 }
 
-/** Lightweight monitor list for coordinate conversion (desktop_click / scroll). */
-async function enumerateMonitorsInternal(): Promise<DesktopMonitorInfo[]> {
+/** Lightweight monitor list for coordinate conversion (desktop_click / scroll).
+ *  Exported for the Win32 DesktopBackend (desktop-platform-win32.ts). */
+export async function enumerateMonitorsInternal(): Promise<DesktopMonitorInfo[]> {
   const script = `
 ${PS_DPI_AWARE_HEADER}
 Add-Type -AssemblyName System.Windows.Forms
@@ -910,9 +913,9 @@ for ($i = 0; $i -lt $screens.Length; $i++) {
   return normalizeMonitors(parseJsonMaybe(raw));
 }
 
-type DesktopCaptureMode = { kind: 'all' } | { kind: 'primary' } | { kind: 'monitor'; index: number };
+export type DesktopCaptureMode = { kind: 'all' } | { kind: 'primary' } | { kind: 'monitor'; index: number };
 
-function parseScreenshotCaptureMode(opts?: DesktopScreenshotOptions): DesktopCaptureMode {
+export function parseScreenshotCaptureMode(opts?: DesktopScreenshotOptions): DesktopCaptureMode {
   const c = opts?.capture;
   if (typeof c === 'number' && Number.isFinite(c) && c >= 0) {
     return { kind: 'monitor', index: Math.floor(c) };
@@ -921,7 +924,7 @@ function parseScreenshotCaptureMode(opts?: DesktopScreenshotOptions): DesktopCap
   return { kind: 'all' };
 }
 
-async function captureScreenshotInternal(
+export async function captureScreenshotInternal(
   mode: DesktopCaptureMode = { kind: 'all' },
   cropRegion?: [number, number, number, number],
 ): Promise<{
@@ -1057,7 +1060,8 @@ function findWindowsByName(allWindows: DesktopWindowInfo[], query: string): Desk
   );
 }
 
-async function focusWindowHandle(handle: number): Promise<boolean> {
+/** Exported for the Win32 DesktopBackend (desktop-platform-win32.ts). */
+export async function focusWindowHandle(handle: number): Promise<boolean> {
   const h = Number(handle || 0);
   if (!Number.isFinite(h) || h === 0) return false;
   // Windows restricts SetForegroundWindow from background processes.
@@ -1613,7 +1617,7 @@ export function resolveDesktopVerificationMode(
   return isDesktopAutoVerificationPreferred(coordinateSpace) ? 'auto' : 'off';
 }
 
-async function desktopMovePointer(x: number, y: number, settleMs: number = 40): Promise<void> {
+export async function desktopMovePointer(x: number, y: number, settleMs: number = 40): Promise<void> {
   const xx = Math.floor(Number(x));
   const yy = Math.floor(Number(y));
   const waitMs = Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 40)));
@@ -1627,7 +1631,7 @@ Write-Output "OK"
   await runPowerShell(script, { timeoutMs: 4000 });
 }
 
-async function desktopPerformClickAtCurrent(
+export async function desktopPerformClickAtCurrent(
   button: 'left' | 'right',
   repeat: number,
   modifier?: 'shift' | 'ctrl' | 'alt',
@@ -1654,7 +1658,7 @@ Write-Output "OK"
   await runPowerShell(script, { timeoutMs: 4000 });
 }
 
-async function desktopPerformScrollAtCurrent(
+export async function desktopPerformScrollAtCurrent(
   delta: number,
   horizontal: boolean,
 ): Promise<void> {
@@ -1666,6 +1670,35 @@ ${PS_INPUTAPI_HEADER}
 Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 4000 });
+}
+
+/** Press-drag-release between two resolved virtual-coord points. Extracted from
+ *  desktopDrag so the Win32 DesktopBackend can wrap it. Coords are assumed
+ *  already resolved/validated; `steps` is clamped here. */
+export async function desktopPerformDragInternal(
+  fx: number,
+  fy: number,
+  tx: number,
+  ty: number,
+  steps: number,
+): Promise<void> {
+  const st = Math.max(2, Math.min(100, Math.floor(Number(steps) || 20)));
+  const script = `
+${PS_DPI_AWARE_HEADER}
+${PS_INPUTAPI_HEADER}
+[void][PrometheusInputApi]::SetCursorPos(${fx}, ${fy})
+Start-Sleep -Milliseconds 30
+[PrometheusInputApi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+for ($i = 1; $i -le ${st}; $i++) {
+  $x = [int](${fx} + ((${tx} - ${fx}) * $i / ${st}))
+  $y = [int](${fy} + ((${ty} - ${fy}) * $i / ${st}))
+  [void][PrometheusInputApi]::SetCursorPos($x, $y)
+  Start-Sleep -Milliseconds 8
+}
+[PrometheusInputApi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+Write-Output "OK"
+`;
+  await runPowerShell(script, { timeoutMs: 9000 });
 }
 
 async function loadSnapshotOcrText(snapshot: DesktopVerificationSnapshot | null | undefined): Promise<string> {
@@ -2145,26 +2178,38 @@ export async function desktopWindowControl(
     await new Promise((r) => setTimeout(r, 120));
   }
 
+  try {
+    await windowControlInternal(target.handle, action);
+    return `${action[0].toUpperCase()}${action.slice(1)} requested for "${target.title}" (${target.processName}, handle=${target.handle}).`;
+  } catch (e: any) {
+    return `ERROR: Failed to ${action} "${target.title}" (${target.processName}): ${e?.message || e}`;
+  }
+}
+
+/** Minimize/maximize/restore via ShowWindowAsync, or close via WM_CLOSE. The
+ *  public desktopWindowControl handles target resolution and focus-first;
+ *  this primitive just performs the action on a known handle. Exported for the
+ *  Win32 DesktopBackend. */
+export async function windowControlInternal(
+  handle: number,
+  action: 'minimize' | 'maximize' | 'restore' | 'close',
+): Promise<void> {
+  const h = Math.floor(Number(handle));
   const command = action === 'maximize' ? 3 : action === 'minimize' ? 6 : action === 'restore' ? 9 : 0;
   const script = action === 'close'
     ? `
 ${PS_WINAPI_HEADER}
-$hWnd = [IntPtr]::new([Int64]${Math.floor(Number(target.handle))})
+$hWnd = [IntPtr]::new([Int64]${h})
 [void][PrometheusWinApi]::PostMessage($hWnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
 Write-Output "OK"
 `
     : `
 ${PS_WINAPI_HEADER}
-$hWnd = [IntPtr]::new([Int64]${Math.floor(Number(target.handle))})
+$hWnd = [IntPtr]::new([Int64]${h})
 [void][PrometheusWinApi]::ShowWindowAsync($hWnd, ${command})
 Write-Output "OK"
 `;
-  try {
-    await runPowerShell(script, { timeoutMs: 5000 });
-    return `${action[0].toUpperCase()}${action.slice(1)} requested for "${target.title}" (${target.processName}, handle=${target.handle}).`;
-  } catch (e: any) {
-    return `ERROR: Failed to ${action} "${target.title}" (${target.processName}): ${e?.message || e}`;
-  }
+  await runPowerShell(script, { timeoutMs: 5000 });
 }
 
 export async function desktopClick(
@@ -2277,22 +2322,7 @@ export async function desktopDrag(
     verificationOpts?.coordinateSpace,
   );
   const performDrag = async (): Promise<void> => {
-    const script = `
-${PS_DPI_AWARE_HEADER}
-${PS_INPUTAPI_HEADER}
-[void][PrometheusInputApi]::SetCursorPos(${fx}, ${fy})
-Start-Sleep -Milliseconds 30
-[PrometheusInputApi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-for ($i = 1; $i -le ${st}; $i++) {
-  $x = [int](${fx} + ((${tx} - ${fx}) * $i / ${st}))
-  $y = [int](${fy} + ((${ty} - ${fy}) * $i / ${st}))
-  [void][PrometheusInputApi]::SetCursorPos($x, $y)
-  Start-Sleep -Milliseconds 8
-}
-[PrometheusInputApi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-Write-Output "OK"
-`;
-    await runPowerShell(script, { timeoutMs: 9000 });
+    await desktopPerformDragInternal(fx, fy, tx, ty, st);
   };
   let verificationSummary = '';
   if (verificationMode === 'off') {
@@ -2332,59 +2362,18 @@ export async function desktopWait(ms: number = 500): Promise<string> {
   return `Waited ${waitMs} ms.`;
 }
 
+/** Map a key spec ("ctrl+s", "enter") to SendKeys syntax. Delegates to the
+ *  shared canonical-key model (desktop-keys.ts) so Windows and macOS share one
+ *  parser and cannot drift apart. */
 function toSendKeysSpec(keyRaw: string): string {
-  const raw = String(keyRaw || '').trim();
-  if (!raw) return '{ENTER}';
-
-  const mapBase = (token: string): string => {
-    const t = token.toLowerCase();
-    if (t === 'enter' || t === 'return') return '{ENTER}';
-    if (t === 'escape' || t === 'esc') return '{ESC}';
-    if (t === 'tab') return '{TAB}';
-    if (t === 'space') return ' ';
-    if (t === 'backspace') return '{BACKSPACE}';
-    if (t === 'delete' || t === 'del') return '{DEL}';
-    if (t === 'up' || t === 'arrowup') return '{UP}';
-    if (t === 'down' || t === 'arrowdown') return '{DOWN}';
-    if (t === 'left' || t === 'arrowleft') return '{LEFT}';
-    if (t === 'right' || t === 'arrowright') return '{RIGHT}';
-    if (t === 'pagedown' || t === 'pgdn') return '{PGDN}';
-    if (t === 'pageup' || t === 'pgup') return '{PGUP}';
-    if (t === 'home') return '{HOME}';
-    if (t === 'end') return '{END}';
-    if (t === 'insert' || t === 'ins') return '{INS}';
-    const fn = t.match(/^f([1-9]|1[0-2])$/);
-    if (fn) return `{F${fn[1]}}`;
-    if (/^[a-z0-9]$/i.test(token)) return token;
-    return token;
-  };
-
-  const parts = raw.split('+').map(p => p.trim()).filter(Boolean);
-  if (parts.length <= 1) return mapBase(parts[0] || raw);
-
-  const base = mapBase(parts[parts.length - 1]);
-  let mods = '';
-  for (const m of parts.slice(0, -1)) {
-    const mm = m.toLowerCase();
-    if (mm === 'ctrl' || mm === 'control' || mm === 'cmd' || mm === 'command') mods += '^';
-    else if (mm === 'shift') mods += '+';
-    else if (mm === 'alt' || mm === 'option') mods += '%';
-  }
-  return `${mods}${base}`;
+  return canonicalKeyToSendKeys(parseCanonicalKey(keyRaw));
 }
 
-export async function desktopType(text: string): Promise<string> {
-  ensureWindows();
-  const payload = String(text || '');
-  if (!payload) return 'Typed 0 character(s).';
-
-  const MAX_TYPE_LENGTH = 50000;
-  if (payload.length > MAX_TYPE_LENGTH) {
-    return `ERROR: Text too long (${payload.length} chars). Maximum is ${MAX_TYPE_LENGTH} chars.`;
-  }
-
+/** Type text via clipboard paste (set clipboard -> Ctrl+V -> restore clipboard).
+ *  Extracted from desktopType so the Win32 DesktopBackend can wrap it. Caller
+ *  handles length limits, macro recording, and return formatting. */
+export async function typeTextInternal(payload: string): Promise<void> {
   const escaped = psSingleQuote(payload);
-
   // Read current clipboard content so we can restore it after pasting.
   // Keep payload on clipboard briefly after Ctrl+V to avoid restore/paste races.
   const script = `
@@ -2438,14 +2427,11 @@ try {
 Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 10000, sta: true });
-  _macroRecord({ type: 'type', text: payload });
-  markDesktopStateChanged();
-  return `Typed ${payload.length} character(s) via clipboard paste (clipboard restored).`;
 }
 
-export async function desktopPressKey(key: string): Promise<string> {
-  ensureWindows();
-  const spec = toSendKeysSpec(key);
+/** Send a pre-built SendKeys spec via SendWait. Extracted from desktopPressKey
+ *  for the Win32 DesktopBackend. */
+export async function pressSendKeysSpecInternal(spec: string): Promise<void> {
   const escaped = psSingleQuote(spec);
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -2453,20 +2439,57 @@ Add-Type -AssemblyName System.Windows.Forms
 Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 6000, sta: true });
+}
+
+export async function desktopType(text: string): Promise<string> {
+  ensureWindows();
+  const payload = String(text || '');
+  if (!payload) return 'Typed 0 character(s).';
+
+  const MAX_TYPE_LENGTH = 50000;
+  if (payload.length > MAX_TYPE_LENGTH) {
+    return `ERROR: Text too long (${payload.length} chars). Maximum is ${MAX_TYPE_LENGTH} chars.`;
+  }
+
+  await typeTextInternal(payload);
+  _macroRecord({ type: 'type', text: payload });
+  markDesktopStateChanged();
+  return `Typed ${payload.length} character(s) via clipboard paste (clipboard restored).`;
+}
+
+export async function desktopPressKey(key: string): Promise<string> {
+  ensureWindows();
+  await pressSendKeysSpecInternal(toSendKeysSpec(key));
   _macroRecord({ type: 'key', text: key });
   markDesktopStateChanged();
   return `Pressed key: ${key || 'Enter'}.`;
 }
 
-export async function desktopGetClipboard(): Promise<string> {
-  ensureWindows();
+/** Raw clipboard text read (empty string if no text). Exported for Win32Backend. */
+export async function getClipboardTextInternal(): Promise<string> {
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
 if ([System.Windows.Forms.Clipboard]::ContainsText()) {
   [System.Windows.Forms.Clipboard]::GetText()
 }
 `;
-  const out = await runPowerShell(script, { timeoutMs: 6000, sta: true });
+  return runPowerShell(script, { timeoutMs: 6000, sta: true });
+}
+
+/** Raw clipboard text write. Exported for Win32Backend. */
+export async function setClipboardTextInternal(text: string): Promise<void> {
+  const escaped = psSingleQuote(text);
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Clipboard]::SetText('${escaped}')
+Write-Output "OK"
+`;
+  await runPowerShell(script, { timeoutMs: 6000, sta: true });
+}
+
+export async function desktopGetClipboard(): Promise<string> {
+  ensureWindows();
+  const out = await getClipboardTextInternal();
   if (!out) return 'Clipboard is empty.';
   if (out.length > 5000) {
     return `Clipboard text (${out.length} chars):\n${out.slice(0, 5000)}\n...(truncated)`;
@@ -2519,13 +2542,7 @@ export async function desktopSetClipboard(input: DesktopSetClipboardArgs): Promi
   }
 
   if (effectiveMode === 'text') {
-    const escaped = psSingleQuote(textPayload);
-    const script = `
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Clipboard]::SetText('${escaped}')
-Write-Output "OK"
-`;
-    await runPowerShell(script, { timeoutMs: 6000, sta: true });
+    await setClipboardTextInternal(textPayload);
     return `Clipboard updated (${textPayload.length} chars).`;
   }
 
@@ -3066,6 +3083,32 @@ export function getDesktopAdvisorPacket(sessionId: string): DesktopAdvisorPacket
 
 // ─── Phase 4: App Launch / Process Control ────────────────────────────────────
 
+/** Spawn a process via Start-Process and return its PID (throws on failure).
+ *  Extracted from desktopLaunchApp so the Win32 DesktopBackend can wrap it; the
+ *  public function keeps installed-app resolution and window-appearance polling. */
+export async function launchProcessInternal(target: string, args: string): Promise<number> {
+  const appSafe = psSingleQuote(target);
+  const argsSafe = psSingleQuote(args);
+  // Console apps (cmd, powershell, etc.) need -WindowStyle Normal to get a visible
+  // window. For all other apps the parameter is harmless.
+  const script = `
+$procArgs = '${argsSafe}'
+$startParams = @{ FilePath = '${appSafe}'; PassThru = $true; WindowStyle = 'Normal' }
+if ($procArgs) { $startParams.ArgumentList = $procArgs }
+try {
+  $proc = Start-Process @startParams -ErrorAction Stop
+  Write-Output ("LAUNCHED:" + $proc.Id)
+} catch {
+  Write-Output ("ERROR:" + $_.Exception.Message)
+}
+`;
+  const launchOut = await runPowerShell(script, { timeoutMs: 10000 });
+  if (launchOut.startsWith('ERROR:')) {
+    throw new Error(launchOut.slice(6));
+  }
+  return Number(launchOut.replace('LAUNCHED:', '').trim()) || 0;
+}
+
 /**
  * Launch a desktop application by name or path and wait for a window to appear.
  * Returns a status string with the window handle once visible.
@@ -3126,29 +3169,15 @@ export async function desktopLaunchApp(
     }
   }
 
-  const appSafe = psSingleQuote(launchTarget);
-  const argsSafe = psSingleQuote(launchArgs);
   const pollMs = 400;
   const maxPolls = Math.max(1, Math.floor(clampInt(waitMs, 200, 60000, 6000) / pollMs));
 
-  // Console apps (cmd, powershell, etc.) need -WindowStyle Normal to get a visible window.
-  // For all other apps the parameter is harmless.
-  const script = `
-$procArgs = '${argsSafe}'
-$startParams = @{ FilePath = '${appSafe}'; PassThru = $true; WindowStyle = 'Normal' }
-if ($procArgs) { $startParams.ArgumentList = $procArgs }
-try {
-  $proc = Start-Process @startParams -ErrorAction Stop
-  Write-Output ("LAUNCHED:" + $proc.Id)
-} catch {
-  Write-Output ("ERROR:" + $_.Exception.Message)
-}
-`;
-  const launchOut = await runPowerShell(script, { timeoutMs: 10000 });
-  if (launchOut.startsWith('ERROR:')) {
-    return `ERROR: Failed to launch '${launchLabel}': ${launchOut.slice(6)}`;
+  let launchedPid = 0;
+  try {
+    launchedPid = await launchProcessInternal(launchTarget, launchArgs);
+  } catch (e: any) {
+    return `ERROR: Failed to launch '${launchLabel}': ${e?.message || e}`;
   }
-  const launchedPid = Number(launchOut.replace('LAUNCHED:', '').trim()) || 0;
 
   // Poll for window appearance
   // Console apps (cmd, powershell) are hosted by conhost.exe — their PID in the window list

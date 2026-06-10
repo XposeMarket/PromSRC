@@ -83,22 +83,29 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             skill.validation && !skill.validation.ok ? `Validation errors: ${skill.validation.errors.join('; ')}` : '',
           ].filter(Boolean).join('\n');
 
-          // For bundle skills, show a resource menu so the AI can fetch what it needs lazily.
+          // For bundle skills, inline the ENTIRE bundle this turn — SKILL.md plus
+          // every bundled resource — and mark each resource active for the session.
+          // Because they're activated, subsequent turns only show the [ACTIVE_SKILLS]
+          // pointer instead of re-injecting the full bundle (one-time full load).
           let resourceBlock = '';
           if (skill.kind === 'bundle' && Array.isArray(skill.resources) && skill.resources.length) {
-            const menuLines = skill.resources.map((r: any) =>
-              `- ${r.path}${r.description ? ` — ${r.description}` : ''}`
-            );
-            const firstResource = skill.resources[0];
-            const suggested = `skill_resource_read({ id: "${skillId}", path: "${firstResource.path}" })`;
-            resourceBlock = [
-              '',
-              '',
-              'Relevant resources:',
-              ...menuLines,
-              '',
-              `Suggested next call if you need a resource:\n${suggested}`,
-            ].join('\n');
+            const PER_RESOURCE_CAP = 8000;
+            const TOTAL_CAP = 48000;
+            const parts: string[] = ['', '', `Bundled resources (${skill.resources.length}) — full contents:`];
+            let used = 0;
+            const overflow: string[] = [];
+            for (const r of skill.resources as any[]) {
+              if (used >= TOTAL_CAP) { overflow.push(r.path); continue; }
+              const res = deps.skillsManager.readResource(skillId, r.path, PER_RESOURCE_CAP);
+              if (!res.ok) { overflow.push(r.path); continue; }
+              activateSkillResourceForSession(sessionId, skill.id, res.path);
+              used += (res.content || '').length;
+              parts.push('', `--- ${r.path}${r.description ? ` (${r.description})` : ''}${res.truncated ? ' [truncated]' : ''} ---`, res.content);
+            }
+            if (overflow.length) {
+              parts.push('', `Not inlined (over budget — read individually with skill_resource_read if needed): ${overflow.join(', ')}`);
+            }
+            resourceBlock = parts.join('\n');
           }
 
           return { name, args, result: `${header}\n\nInstructions:\n${content}${resourceBlock}`, error: false };

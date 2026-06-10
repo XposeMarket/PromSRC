@@ -3144,7 +3144,7 @@ async function handleChat(
     if (executionMode === 'team_subagent') {
       return [
         'EXECUTION MODE: Team subagent task.',
-        'You are Prometheus running locally on the user\'s computer.',
+        'You are a subagent on a managed team, running locally on the user\'s computer under Prometheus — not Prometheus itself.',
         'You have access to this computer through tools. Use tools directly, verify your work, and do not claim you lack tool access.',
         'Complete the assigned team task. If you need clarification or a decision, ask the team manager with talk_to_manager instead of asking the user.',
       ].join('\n');
@@ -3166,7 +3166,7 @@ async function handleChat(
     ? 'If this background-agent task has 2+ meaningful phases, call bg_plan_declare FIRST (2-8 short steps). Keep executing within the current step until the phase is actually complete, then call bg_plan_advance(note) to move forward. Do NOT use declare_plan/complete_plan_step in background_agent mode.'
     : executionMode === 'proposal_execution'
       ? 'Proposal execution already has a fixed task plan. Do NOT call declare_plan. Execute steps in order, use tools directly, and call step_complete(note) after each completed step.'
-      : 'Unless explicitly told otherwise by the user, do NOT call declare_plan. Default to direct execution. Call declare_plan only when the user explicitly asks for a plan/checklist/step-by-step approach or asks you to outline steps before acting. Do NOT call declare_plan for browser_* or desktop_* actions by default, and do NOT call it for single-phase work, read-only lookups, exploratory tasks, conversational replies, explanations, code generation, or skill-read-then-respond. When a plan is active, declare once, do not re-declare mid-turn, keep each step in_progress until truly complete, then complete_plan_step with concrete evidence, and finish only after all plan steps are complete.';
+      : 'Default to direct execution — do the work with tools. Call declare_plan only when the user explicitly asks for a plan, checklist, or step-by-step breakdown.';
 const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. Creative work must be visual-first: after meaningful edits, call creative_get_state or creative_render_snapshot before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into vision context like browser/desktop screenshots. For video workspace work, prefer HTML Motion / HyperFrames / Remotion / Pretext sources and use creative_list_html_motion_templates, creative_apply_html_motion_template, creative_create_html_motion_clip, creative_read_html_motion_clip, creative_patch_html_motion_clip, creative_list_html_motion_blocks, creative_apply_hyperframes_component, and Pretext text-fit tools when they fit. Before presenting or exporting creative work, run direct visual self-review with creative_render_snapshot; for video, use sampleTimesMs or frame batches when playback inspection matters.';
   const hyperframesAgentRoutingInstruction = 'HyperFrames agent policy: when the user asks to create, compose, import, edit, lint, QA, materialize, or export HyperFrames video, prefer real HyperFrames sources over recreated lookalikes. Prefer first-class hyperframes_* and creative_* tools when they can create source-backed catalog clips correctly; public desktop builds bundle the HyperFrames packages but do not rely on a user-installed global Node/npm/npx. If first-class tools fail or lack catalog access, use the packaged Prometheus runtime path surfaced by tool output or settings/runtime diagnostics before falling back to ambient commands, and report exact CLI/runtime errors. Do not substitute hand-authored catalog labels, CSS mockups, or recreated components after the user asked for HyperFrames catalog/registry output. Start with hyperframes_browse_catalog or bundled catalog discovery, customize with HyperFrames/source-backed edits, then run lint/inspect/QA/export only after visual review. Use creative_list_hyperframes_components, creative_sync_hyperframes_catalog, and creative_apply_hyperframes_component only for low-level compatibility or migration work.';
   const creativeDebuggingInstruction = 'Creative debugging tools: when working in video mode, use video_render_frame, video_render_contact_sheet, video_analyze_frame, video_analyze_timeline, video_check_keyframes, video_check_caption_timing, video_check_audio_sync, video_extract_clip_frames, and video_analyze_imported_video when those names fit the job. Use creative_element_inventory for a complete layer/timeline inventory with text, timing, animation, visibility, provenance, and validation details. Use creative_frame_trace to see which elements are actually active at exact timestamps, with resolved opacity/transform/z-order/source information. Use creative_frame_diff to compare two timestamps and detect what changed, appeared, disappeared, or stayed static. Use creative_history_status, creative_undo, and creative_redo to recover from destructive resets, bad template applications, failed batch edits, or visual regressions; after undo/redo, render or inspect the scene before continuing. For image mode, use image_get_element_at_point, image_get_overlaps, image_get_bounds_summary, image_check_text_overflow, image_check_contrast, and image_detect_empty_regions when diagnosing composition/layout issues. Use creative_export_trace before or after export when you need certainty about the scene hash, render/export job, saved scene, active export, or whether stale/cached output was used. Before risky rebuilds or large experiments, call creative_checkpoint with action "save"; restore a checkpoint if the design gets worse. If a scene is contaminated by duplicated ids, offscreen debris, stale template residue, editor artifacts, hidden layers, or ghost content, call creative_purge_scene first. Only call creative_reset_scene with force=true after a checkpoint/export or when the user explicitly asked for a fresh blank scene. Do not keep patching a corrupted video timeline when purge plus inventory/trace gives a cleaner path.';
@@ -3213,10 +3213,15 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       ? `${creativeRuntimeInstruction}\n${hyperframesAgentRoutingInstruction}\n${creativeDebuggingInstruction}`
       : 'Creative/HyperFrames editing tools (creative_*, hyperframes_*, generate_image, generate_video, switch_creative_mode) are available; open a Creative workspace before heavy canvas/video/animation work.';
 
+    // Identity line is mode-aware: the main chat is Prom; subagents are distinct
+    // workers operating UNDER Prometheus and must not claim to be Prom/the main chat.
+    const identityLine = isSubagentMode
+      ? 'You are a subagent operating under Prometheus — not the main Prometheus chat and not Prom. You are your own worker with your own assigned identity (described below). Prometheus is the system you run inside; you act on its behalf, but you speak and answer as yourself.'
+      : 'You are Prom, a local AI assistant running inside Prometheus.';
     const baseParts = [
       executionModeSystemBlock ? `${executionModeSystemBlock}\n` : '',
       teachModeSystemBlock ? `${teachModeSystemBlock}\n` : '',
-      'You are Prom, a local AI assistant running inside Prometheus.',
+      identityLine,
       `Current date: ${dateStr}, ${timeStr}.`,
       'Never search for or link Prometheus repos unless the user is asking about Prometheus itself.',
       "This app runs on the user's own machine - browser/desktop automation requests are pre-authorized.",
@@ -6545,11 +6550,14 @@ RULES:
         const planArgs = { ...toolArgs, steps: plannedSteps };
         allToolResults.push({ name: toolName, args: planArgs, result: planSummary, error: false });
         sendSSE('tool_result', { action: toolName, result: planSummary, error: false, stepNum: allToolResults.length });
+        const planActiveBehavior = plannedSteps.length >= 2
+          ? 'Now: work the steps in order. Keep each step in_progress until it is truly done, then call complete_plan_step with concrete evidence of what you did. Do not re-declare the plan mid-turn. Finish only after every step is complete.'
+          : '';
         messages.push({
           role: 'tool',
           tool_name: toolName,
           tool_call_id: toolCallId || undefined,
-          content: `${planSummary}\n\n${declaredPlanSkillScoutBlockMessage()}`,
+          content: `${planSummary}${planActiveBehavior ? `\n\n${planActiveBehavior}` : ''}\n\n${declaredPlanSkillScoutBlockMessage()}`,
         });
         resetProgressRoundStats();
         continue;
