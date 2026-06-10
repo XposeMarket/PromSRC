@@ -140,14 +140,22 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 type LiveResult = { windows: UsageWindow[]; plan_label: string | null; error: string | null };
 
 async function fetchAnthropicLive(configDir: string): Promise<LiveResult | null> {
-  const mod = require('../auth/anthropic-oauth');
-  const tokens = mod.loadTokens(configDir);
-  // Only the subscription setup-token (sk-ant-oat-*) authenticates the usage API.
-  if (!tokens || tokens.auth_type !== 'setup_token' || !tokens.access_token) return null;
+  // The usage endpoint requires the `user:profile` scope, which the main
+  // setup-token (inference-only) does NOT carry. We use a separate, opt-in
+  // browser-OAuth "usage tracking" token instead (see anthropic-usage-oauth.ts).
+  const usageOAuth = require('../auth/anthropic-usage-oauth');
+  const accessToken: string | null = await usageOAuth.getValidUsageToken(configDir);
+  // Not connected → no error, just fall back to internal tracking silently.
+  if (!accessToken) return null;
 
-  // Reuse the proven Claude Code header shape (full beta set + claude-cli UA +
-  // x-app) — the usage endpoint rejects a bare Bearer + single beta with 401.
-  const headers: Record<string, string> = { ...mod.buildAuthHeaders(configDir), Accept: 'application/json' };
+  // The usage endpoint requires Claude Code's User-Agent or it returns 429.
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+    'anthropic-beta': 'oauth-2025-04-20',
+    'anthropic-version': '2023-06-01',
+    'User-Agent': 'claude-code/2.1.75',
+    Accept: 'application/json',
+  };
   const res = await withTimeout(fetch('https://api.anthropic.com/api/oauth/usage', { headers }), 15000);
   if (!res.ok) return { windows: [], plan_label: null, error: `Anthropic usage ${res.status}` };
 
@@ -235,6 +243,65 @@ function internalTokens(providerId: string, events: ReturnType<typeof readModelU
   return { total, input, output, calls, monthTotal };
 }
 
+/**
+ * Read Grok CLI local session files (~/.grok/sessions) and sum their token
+ * usage. There is no live xAI/Grok usage endpoint, so — like TokenTracker —
+ * we passively read the files the Grok CLI already writes. Returns zeros if the
+ * CLI isn't installed or no sessions exist. We never write to these files.
+ */
+function readGrokCliTokens(): { total: number; calls: number; monthTotal: number } {
+  const out = { total: 0, calls: 0, monthTotal: 0 };
+  try {
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+    const base = path.join(os.homedir(), '.grok', 'sessions');
+    if (!fs.existsSync(base)) return out;
+
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthMs = monthStart.getTime();
+
+    const sessionDirs = fs.readdirSync(base, { withFileTypes: true })
+      .filter((d: any) => d.isDirectory())
+      .map((d: any) => path.join(base, d.name));
+
+    for (const dir of sessionDirs) {
+      // updates.jsonl: one JSON object per line, each may carry totalTokens.
+      const updatesPath = path.join(dir, 'updates.jsonl');
+      if (fs.existsSync(updatesPath)) {
+        const lines = String(fs.readFileSync(updatesPath, 'utf8')).split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const obj = JSON.parse(trimmed);
+            const tt = Number(obj.totalTokens ?? obj.total_tokens ?? 0);
+            if (tt > 0) {
+              out.total += tt;
+              out.calls += 1;
+              const t = Date.parse(obj.timestamp || obj.time || '');
+              if (Number.isFinite(t) && t >= monthMs) out.monthTotal += tt;
+              else if (!Number.isFinite(t)) out.monthTotal += tt; // undated → count as current
+            }
+          } catch { /* skip malformed line */ }
+        }
+      }
+      // signals.json: snapshot with a contextTokensUsed value (fallback).
+      const signalsPath = path.join(dir, 'signals.json');
+      if (out.total === 0 && fs.existsSync(signalsPath)) {
+        try {
+          const sig = JSON.parse(String(fs.readFileSync(signalsPath, 'utf8')));
+          const ctx = Number(sig.contextTokensUsed ?? sig.context_tokens_used ?? 0);
+          if (ctx > 0) { out.total += ctx; out.monthTotal += ctx; out.calls += 1; }
+        } catch { /* skip */ }
+      }
+    }
+  } catch { /* CLI not present or unreadable — return zeros */ }
+  return out;
+}
+
 function getBudgets(): Record<string, { monthly_token_limit?: number }> {
   try {
     const cfg = getConfig().getConfig() as any;
@@ -263,6 +330,15 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   const providers = await Promise.all(ids.map(async (id): Promise<ProviderUsage> => {
     const live = await getLive(id, configDir);
     const tokens = internalTokens(id, events);
+
+    // xAI/Grok has no live usage endpoint — augment internal accounting with
+    // token counts read from the local Grok CLI session files, if present.
+    if (id === 'xai') {
+      const cli = readGrokCliTokens();
+      tokens.total += cli.total;
+      tokens.calls += cli.calls;
+      tokens.monthTotal += cli.monthTotal;
+    }
 
     const limitTokens = Number(budgets[id]?.monthly_token_limit || 0);
     const budget: ProviderBudget | null = limitTokens > 0

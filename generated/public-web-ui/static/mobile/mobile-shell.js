@@ -1,7 +1,7 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { timeAgo } from '../utils.js';
-import { initMobileModelBadge, mobileModelBadgeSeedLabel } from './mobile-model-badge.js';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic } from './mobile-model-badge.js';
 
 // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
 export const ICONS = {

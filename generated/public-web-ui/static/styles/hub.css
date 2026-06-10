@@ -1378,7 +1378,8 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 12px 14px;
-  background: linear-gradient(180deg, #fff 0%, #f9fbff 100%);
+  /* Theme-aware surface so the card reads on every skin (dark/light/midnight/etc) */
+  background: var(--panel);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1405,9 +1406,10 @@
   padding: 1px 7px;
 }
 .usage-provider-badge.live {
-  color: #0d7a3f;
-  border-color: #9ad7b5;
-  background: #eafaf1;
+  /* translucent emerald reads on both light and dark surfaces */
+  color: #10b981;
+  border-color: rgba(16,185,129,0.45);
+  background: rgba(16,185,129,0.14);
 }
 .usage-provider-note,
 .usage-provider-foot {
@@ -1420,7 +1422,7 @@
 }
 .usage-provider-err {
   font-size: 11px;
-  color: #c0392b;
+  color: var(--err, #e74c3c);
 }
 
 .usage-gauge { display: flex; flex-direction: column; gap: 4px; }
@@ -1463,7 +1465,7 @@
   margin-bottom: 12px;
 }
 .settings-models-usage .hub-providers-grid { margin-top: 0; }
-.usage-provider-card.is-primary { border-color: #bdd3f6; }
+.usage-provider-card.is-primary { border-color: var(--brand, #1668e3); }
 .usage-provider-role {
   font-size: 10px;
   font-weight: 600;

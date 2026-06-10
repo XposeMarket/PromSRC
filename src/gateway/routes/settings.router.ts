@@ -275,6 +275,56 @@ router.post('/api/settings/usage-budgets', (req, res) => {
   }
 });
 
+// ─── Anthropic usage-tracking OAuth (separate, read-only credential) ──────────
+// This is NOT the chat credential. It carries the `user:profile` scope so the
+// /api/oauth/usage endpoint works, and is used ONLY to read usage limits.
+const anthropicUsageOAuth = () => require('../../auth/anthropic-usage-oauth');
+
+// GET status — whether usage tracking is connected.
+router.get('/api/settings/anthropic/usage-tracking', (_req, res) => {
+  try {
+    const configDir = getConfig().getConfigDir();
+    res.json({ success: true, connected: anthropicUsageOAuth().hasUsageTracking(configDir) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST start — returns the browser authorize URL to open.
+router.post('/api/settings/anthropic/usage-tracking/start', (_req, res) => {
+  try {
+    const configDir = getConfig().getConfigDir();
+    const { authorizeUrl } = anthropicUsageOAuth().beginUsageOAuth(configDir);
+    res.json({ success: true, authorizeUrl });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST complete — body: { code } (the `code#state` string pasted from the browser).
+router.post('/api/settings/anthropic/usage-tracking/complete', async (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim();
+    if (!code) return res.status(400).json({ success: false, error: 'code required' });
+    const configDir = getConfig().getConfigDir();
+    await anthropicUsageOAuth().completeUsageOAuth(configDir, code);
+    res.json({ success: true, connected: true });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// DELETE — disconnect usage tracking.
+router.delete('/api/settings/anthropic/usage-tracking', (_req, res) => {
+  try {
+    const configDir = getConfig().getConfigDir();
+    anthropicUsageOAuth().clearUsageTokens(configDir);
+    res.json({ success: true, connected: false });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
 // GET /api/credentials/audit - return last N lines of vault-audit.log (scrubbed)
 router.get('/api/credentials/audit', (_req, res) => {
   const fs = require('fs');

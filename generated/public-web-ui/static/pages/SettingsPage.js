@@ -1849,7 +1849,76 @@ async function refreshAnthropicStatus() {
       if (disc) disc.style.display = 'block';
       if (conn) conn.style.display = 'none';
     }
+    if (data?.connected) refreshAnthropicUsageTracking().catch(() => {});
   } catch {}
+}
+
+// ─── Anthropic usage tracking (separate read-only OAuth token) ───────────────
+async function refreshAnthropicUsageTracking() {
+  try {
+    const data = await api('/api/settings/anthropic/usage-tracking');
+    const chk = document.getElementById('settings-anthropic-usage-tracking');
+    const statusEl = document.getElementById('anthropic-usage-oauth-status');
+    if (chk) chk.checked = !!data?.connected;
+    if (statusEl) statusEl.textContent = data?.connected ? 'Live usage tracking is on.' : '';
+  } catch {}
+}
+
+async function onAnthropicUsageTrackingToggle(checked) {
+  const flow = document.getElementById('anthropic-usage-oauth-flow');
+  const statusEl = document.getElementById('anthropic-usage-oauth-status');
+  if (!checked) {
+    // Turning off → disconnect immediately.
+    if (flow) flow.style.display = 'none';
+    try {
+      await api('/api/settings/anthropic/usage-tracking', { method: 'DELETE' });
+      if (statusEl) statusEl.textContent = '';
+    } catch (e) { if (statusEl) statusEl.textContent = e.message; }
+    return;
+  }
+  // Turning on → start the OAuth flow and open the browser.
+  if (statusEl) statusEl.textContent = 'Opening browser…';
+  try {
+    const data = await api('/api/settings/anthropic/usage-tracking/start', { method: 'POST', body: '{}' });
+    if (data?.authorizeUrl) {
+      window.open(data.authorizeUrl, '_blank', 'noopener');
+      if (flow) flow.style.display = 'block';
+      if (statusEl) statusEl.textContent = 'Approve in the browser, then paste the code below.';
+    } else {
+      if (statusEl) statusEl.textContent = data?.error || 'Failed to start login';
+    }
+  } catch (e) { if (statusEl) statusEl.textContent = e.message; }
+}
+
+async function completeAnthropicUsageTracking() {
+  const codeEl = document.getElementById('settings-anthropic-usage-code');
+  const flow = document.getElementById('anthropic-usage-oauth-flow');
+  const statusEl = document.getElementById('anthropic-usage-oauth-status');
+  const code = (codeEl?.value || '').trim();
+  if (!code) { if (statusEl) statusEl.textContent = 'Paste the code first.'; return; }
+  if (statusEl) statusEl.textContent = 'Connecting…';
+  try {
+    const data = await api('/api/settings/anthropic/usage-tracking/complete', {
+      method: 'POST', body: JSON.stringify({ code }),
+    });
+    if (data?.success) {
+      if (codeEl) codeEl.value = '';
+      if (flow) flow.style.display = 'none';
+      if (statusEl) statusEl.textContent = 'Live usage tracking is on.';
+      if (typeof renderModelsUsage === 'function') renderModelsUsage();
+    } else {
+      if (statusEl) statusEl.textContent = data?.error || 'Failed to connect';
+    }
+  } catch (e) { if (statusEl) statusEl.textContent = e.message; }
+}
+
+function cancelAnthropicUsageTracking() {
+  const flow = document.getElementById('anthropic-usage-oauth-flow');
+  const chk = document.getElementById('settings-anthropic-usage-tracking');
+  const statusEl = document.getElementById('anthropic-usage-oauth-status');
+  if (flow) flow.style.display = 'none';
+  if (chk) chk.checked = false;
+  if (statusEl) statusEl.textContent = '';
 }
 
 async function connectAnthropic() {
@@ -3788,6 +3857,9 @@ window.deleteSelectedAgent = deleteSelectedAgent;
 window.deleteSiteShortcutUI = deleteSiteShortcutUI;
 window.connectAnthropic = connectAnthropic;
 window.disconnectAnthropic = disconnectAnthropic;
+window.onAnthropicUsageTrackingToggle = onAnthropicUsageTrackingToggle;
+window.completeAnthropicUsageTracking = completeAnthropicUsageTracking;
+window.cancelAnthropicUsageTracking = cancelAnthropicUsageTracking;
 window.onAnthropicThinkingToggle = onAnthropicThinkingToggle;
 window.onAnthropicModelChange = onAnthropicModelChange;
 window.syncAnthropicReasoningControls = syncAnthropicReasoningControls;

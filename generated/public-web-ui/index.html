@@ -2230,14 +2230,16 @@
             <span class="chat-context-window-dot"></span>
           </button>
           <div id="chat-context-window-popover" class="chat-context-window-popover" hidden>
-            <div class="chat-context-window-row chat-context-window-head">
-              <span>Context window</span>
-              <span id="chat-context-window-total">Loading...</span>
-            </div>
-            <div class="chat-context-window-track" aria-hidden="true">
-              <div id="chat-context-window-fill" class="chat-context-window-fill"></div>
-            </div>
-            <div class="chat-context-window-metrics">
+            <button type="button" id="chat-context-window-toggle" class="chat-context-window-toggle" onclick="toggleChatContextBreakdown(event)" aria-expanded="false" title="Show breakdown">
+              <div class="chat-context-window-row chat-context-window-head">
+                <span>Context window<svg class="ccw-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg></span>
+                <span id="chat-context-window-total">Loading...</span>
+              </div>
+              <div class="chat-context-window-track" aria-hidden="true">
+                <div id="chat-context-window-fill" class="chat-context-window-fill"></div>
+              </div>
+            </button>
+            <div class="chat-context-window-metrics" id="chat-context-window-breakdown" hidden>
               <div class="chat-context-window-row">
                 <span>Messages</span>
                 <span id="chat-context-window-messages">-</span>
@@ -2270,6 +2272,10 @@
                 <span>Tool schema estimate</span>
                 <span id="chat-context-window-tool-schema">-</span>
               </div>
+            </div>
+            <div class="chat-context-window-plan" id="chat-context-window-plan" hidden>
+              <div class="ccw-plan-head">Plan usage</div>
+              <div class="ccw-plan-body" id="chat-context-window-plan-body"></div>
             </div>
           </div>
           <!-- Model switcher popover -->
@@ -3822,6 +3828,24 @@
 	              <div style="display:flex;gap:8px;margin-top:10px">
 	                <button class="btn btn-sm" onclick="testAnthropicConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
 	                <button class="btn btn-sm" onclick="disconnectAnthropic()" style="background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect</button>
+	              </div>
+
+	              <!-- Usage tracking (separate, read-only OAuth token) -->
+	              <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+	                <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
+	                  <input id="settings-anthropic-usage-tracking" type="checkbox" onchange="onAnthropicUsageTrackingToggle(this.checked)" />
+	                  <span>Enable live usage tracking <span style="color:var(--muted);font-weight:400">(separate login — read-only, never used for chat)</span></span>
+	                </label>
+	                <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">Your chat setup-token can't read usage limits (inference-only scope). This opens a separate browser login to grant read-only access to your 5-hour & weekly limits.</div>
+	                <div id="anthropic-usage-oauth-flow" style="display:none;margin-top:10px">
+	                  <div style="font-size:11px;color:var(--muted);margin-bottom:6px">1. A browser window opened to approve access. 2. Copy the code Claude shows and paste it below:</div>
+	                  <input id="settings-anthropic-usage-code" type="text" placeholder="paste code#state here" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;margin-bottom:8px" />
+	                  <div style="display:flex;gap:8px">
+	                    <button class="btn btn-sm" onclick="completeAnthropicUsageTracking()" style="background:var(--brand);border:1px solid var(--brand);color:#fff">Connect usage tracking</button>
+	                    <button class="btn btn-sm" onclick="cancelAnthropicUsageTracking()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Cancel</button>
+	                  </div>
+	                </div>
+	                <div id="anthropic-usage-oauth-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
 	              </div>
 	            </div>
           </div>

@@ -7,6 +7,7 @@ import {
 } from './mobile-shell.js?v=mobile-voice-live-update-fix';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import { attachMobileButtonHaptic } from './mobile-model-badge.js';
+import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow,
   loadMobileTeams, loadMobileTeamDetail,
@@ -3556,6 +3557,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   });
   page.innerHTML = `
     ${header}
+    ${renderMobileContextChip()}
     <div class="pm-body pm-chat-body" id="pm-chat-body">
       <div class="pm-chat-thread" id="pm-chat-thread"></div>
     </div>
@@ -3632,6 +3634,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   wireHeaderActions(page, {
     onNewChat: () => _startMobileNewChat(navigate),
   });
+  wireMobileContextWindow(page, { getSessionId: () => __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
 
   const body     = page.querySelector('#pm-chat-body');
   const threadEl = page.querySelector('#pm-chat-thread');
