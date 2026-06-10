@@ -129,6 +129,34 @@ function hashText(value: string): number {
   return Math.abs(h >>> 0);
 }
 
+// Larger quirk pools per archetype. Two same-role agents share an archetype but
+// get a different per-agent subset (seeded by id), so they don't read as clones.
+const QUIRK_POOLS: Record<string, string[]> = {
+  steady: ['Names assumptions early', 'Keeps summaries crisp', 'Anchors on the goal before moving', 'Flags risk quietly, without alarm', 'Closes loops before opening new ones', 'Restates the ask in one line to confirm', 'Prefers the boring reliable path'],
+  spark: ['Finds momentum quickly', 'Uses short lively phrasing', 'Reframes blockers as next moves', 'Notes small wins in passing', 'Leads with the most interesting angle', 'Keeps energy up without hype', 'Asks the fun version of the question'],
+  austere: ['Cuts weak claims fast', 'Separates evidence from opinion', 'Refuses to pad an answer', 'States confidence levels plainly', 'Trims every sentence to its load', 'Marks what is unverified', 'Distrusts round numbers'],
+  mentor: ['Explains tradeoffs plainly', 'Turns confusion into next steps', 'Checks understanding before moving on', 'Offers the why behind the how', 'Names the one thing that matters most', 'Leaves the user more capable', 'Picks the teachable example'],
+  operator: ['Tracks state and next action', 'Prefers concrete outputs', 'Reports status in one tight line', 'Removes blockers before they spread', 'Defaults to doing over discussing', 'Keeps a running sense of done/not-done', 'Confirms the exit condition first'],
+  critic: ['Pressure-tests easy answers', 'Calls out missing verification', 'Asks what would disprove this', 'Separates strong from weak evidence', 'Names the failure mode first', 'Refuses to rubber-stamp', 'Hunts the unstated assumption'],
+  creative: ['Offers tasteful variants', 'Connects ideas without overdecorating', 'Starts from the feeling, then ships', 'Borrows from adjacent domains', 'Keeps one bold option on the table', 'Knows when to stop polishing', 'Names what the work is really for'],
+};
+
+function deriveQuirks(archetype: string, seed: string, fallback?: string[]): string[] {
+  const pool = QUIRK_POOLS[archetype];
+  if (!pool || !pool.length) return fallback || [];
+  const h = hashText(seed || archetype);
+  const count = 2 + (h % 2); // 2 or 3 distinct habits per agent
+  const step = 1 + (h % 3);
+  const picks: string[] = [];
+  let idx = h % pool.length;
+  while (picks.length < count && picks.length < pool.length) {
+    const q = pool[idx % pool.length];
+    if (!picks.includes(q)) picks.push(q);
+    idx += step;
+  }
+  return picks;
+}
+
 function cleanText(value: unknown, max = 240): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
@@ -196,10 +224,16 @@ export function buildAgentIdentity(input: BuildAgentIdentityInput): AgentIdentit
   const presetKey = inferPreset(input);
   const base = PRESETS[presetKey] || PRESETS.steady;
   const personality = mergePersonality(base, input.identity?.personality);
+  // De-clone: unless the caller hand-set quirks, vary them per-agent by id so two
+  // same-role agents feel like different people rather than preset twins.
+  if (!input.identity?.personality?.quirks?.length) {
+    personality.quirks = deriveQuirks(personality.archetype, input.id || chosen.name, personality.quirks);
+  }
   const role = cleanText(input.teamRole || input.roleType || 'subagent', 100);
   const voiceGuidelines = cleanText(input.identity?.voiceGuidelines, 1000) || [
-    `You are ${chosen.name}. You are a capable Prometheus subagent with a distinct but subtle working style.`,
-    `Let your personality affect phrasing, collaboration, and judgment style, not factual accuracy or task discipline.`,
+    `You are ${chosen.name} — a real, distinct working presence under Prometheus, not a generic assistant and not just a role label.`,
+    `Inhabit this personality: let it shape your word choice, how you open and close, what you notice first, and how you collaborate — consistently, so you are recognizably yourself across runs.`,
+    `It must never override factual accuracy, tool use, verification, or task discipline; it shows in HOW you work, not whether you do the work well.`,
     `For this assignment, your functional role is: ${role}.`,
   ].join(' ');
 
@@ -237,6 +271,10 @@ export function renderIdentityPrompt(identity?: AgentIdentity): string {
     );
     if (p.quirks?.length) lines.push('Subtle habits:', ...p.quirks.map((q) => `- ${q}`));
     if (p.avoid?.length) lines.push('Avoid:', ...p.avoid.map((a) => `- ${a}`));
+    lines.push(
+      '',
+      'Embody this — it is who you are for this work, not a costume. Let it show in your voice, pacing, and judgment, subtly and consistently, without announcing it and without letting it slow or distort the actual work.',
+    );
   }
   if (identity.voiceGuidelines) {
     lines.push('', '## Voice Guidance', identity.voiceGuidelines);

@@ -129,9 +129,10 @@ export interface DesktopBackend {
 
   // ── Accessibility (OPTIONAL — may throw DesktopUnsupportedError) ──────────────
   /** Returns a text dump of the accessibility/UIA tree, depth- and node-bounded.
-   *  Used by SOM overlays, window-text extraction, and tree-based click-verify.
-   *  Backends without a11y support throw DesktopUnsupportedError; callers degrade. */
-  getAccessibilityTree(opts: { windowHandle?: number; depth: number; maxNodes: number }): Promise<string>;
+   *  Targets a window by name/title (empty = active window). Used by SOM overlays,
+   *  window-text extraction, and tree-based click-verify. Backends without a11y
+   *  support throw DesktopUnsupportedError; callers degrade. */
+  getAccessibilityTree(opts: { windowName?: string; depth: number; maxNodes: number }): Promise<string>;
 
   // ── Health ───────────────────────────────────────────────────────────────────
   /** Platform permission/health probe for desktop_doctor. Each entry is one
