@@ -590,10 +590,13 @@ async function fetchJsonWithTimeout(url, timeoutMs = 2500) {
 const chatContextWindowState = {
   loading: false,
   open: false,
+  expanded: false,
   lastSessionId: '',
   lastFetchAt: 0,
   refreshTimer: 0,
   data: null,
+  planFetchAt: 0,
+  planData: null,
 };
 
 function getChatContextWindowSessionId() {
@@ -721,7 +724,12 @@ function toggleChatContextWindowPopover(event) {
   chatContextWindowState.open = popover.hidden;
   popover.hidden = !chatContextWindowState.open;
   btn.setAttribute('aria-expanded', chatContextWindowState.open ? 'true' : 'false');
-  if (chatContextWindowState.open) refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+  if (chatContextWindowState.open) {
+    // Always open collapsed — the detailed breakdown expands only on bar click.
+    setChatContextBreakdown(false);
+    refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+    refreshChatContextPlanUsage().catch(() => {});
+  }
 }
 
 function closeChatContextWindowPopover() {
@@ -730,6 +738,101 @@ function closeChatContextWindowPopover() {
   if (popover) popover.hidden = true;
   if (btn) btn.setAttribute('aria-expanded', 'false');
   chatContextWindowState.open = false;
+}
+
+// Collapsible detailed breakdown inside the popover (hidden until the user
+// clicks the context-window bar — mirrors the Claude UI plan-usage popover).
+function setChatContextBreakdown(expanded) {
+  chatContextWindowState.expanded = !!expanded;
+  const breakdown = document.getElementById('chat-context-window-breakdown');
+  const toggle = document.getElementById('chat-context-window-toggle');
+  if (breakdown) breakdown.hidden = !expanded;
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    toggle.title = expanded ? 'Hide breakdown' : 'Show breakdown';
+  }
+}
+
+function toggleChatContextBreakdown(event) {
+  if (event) event.stopPropagation();
+  setChatContextBreakdown(!chatContextWindowState.expanded);
+}
+
+// ─── Plan usage (live provider limits) inside the context popover ─────────────
+function ccwUsageGaugeClass(pct) {
+  const p = Number(pct) || 0;
+  if (p >= 90) return 'crit';
+  if (p >= 75) return 'warn';
+  return 'ok';
+}
+
+function ccwFmtReset(iso) {
+  if (!iso) return '';
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return '';
+  const diff = ts - Date.now();
+  if (diff <= 0) return 'resets now';
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `resets in ${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `resets in ${hrs}h`;
+  const days = Math.round(hrs / 24);
+  return `resets in ${days}d`;
+}
+
+function renderChatContextPlanUsage() {
+  const wrap = document.getElementById('chat-context-window-plan');
+  const body = document.getElementById('chat-context-window-plan-body');
+  if (!wrap || !body) return;
+  const result = chatContextWindowState.planData;
+  const providerId = String(window._activeProvider || '').toLowerCase();
+  const providers = (result && Array.isArray(result.providers)) ? result.providers : [];
+  // Show the plan usage for the provider backing the current chat model.
+  const prov = providers.find((p) => String(p.provider).toLowerCase() === providerId);
+
+  if (!prov) { wrap.hidden = true; body.innerHTML = ''; return; }
+
+  const windows = Array.isArray(prov.windows) ? prov.windows : [];
+  let html = '';
+  if (windows.length) {
+    html += windows.map((w) => {
+      const pct = Math.max(0, Math.min(100, Number(w.used_percent) || 0));
+      const left = (100 - pct).toFixed(0);
+      const reset = ccwFmtReset(w.resets_at);
+      return `
+        <div class="ccw-plan-gauge">
+          <div class="ccw-plan-gauge-head">
+            <span class="ccw-plan-gauge-label">${escHtml(w.label || '')}${reset ? ` · ${escHtml(reset)}` : ''}</span>
+            <span class="ccw-plan-gauge-pct">${left}% left</span>
+          </div>
+          <div class="ccw-plan-gauge-track"><div class="ccw-plan-gauge-fill ${ccwUsageGaugeClass(pct)}" style="width:${pct}%"></div></div>
+        </div>`;
+    }).join('');
+  } else {
+    // No live limit windows (e.g. xAI/Grok) — show tracked token totals instead.
+    const tokens = prov.tokens || {};
+    const total = Number(tokens.total || 0);
+    const calls = Number(tokens.calls || 0);
+    html += `<div class="ccw-plan-tokens">${formatContextTokenCount(total)} tokens · ${calls} calls tracked</div>`;
+  }
+  body.innerHTML = html;
+  wrap.hidden = false;
+}
+
+async function refreshChatContextPlanUsage(force = false) {
+  const now = Date.now();
+  if (!force && chatContextWindowState.planData && now - chatContextWindowState.planFetchAt < 60000) {
+    renderChatContextPlanUsage();
+    return;
+  }
+  try {
+    const data = await fetchJsonWithTimeout('/api/usage/limits', 6000);
+    if (data && data.success !== false) {
+      chatContextWindowState.planData = data;
+      chatContextWindowState.planFetchAt = Date.now();
+    }
+  } catch { /* leave previous planData */ }
+  renderChatContextPlanUsage();
 }
 
 function toggleVoiceSettingsPopover(event) {
@@ -36019,6 +36122,7 @@ window.refreshChatContextWindow = refreshChatContextWindow;
 window.scheduleChatContextWindowRefresh = scheduleChatContextWindowRefresh;
 window.toggleChatContextWindowPopover = toggleChatContextWindowPopover;
 window.closeChatContextWindowPopover = closeChatContextWindowPopover;
+window.toggleChatContextBreakdown = toggleChatContextBreakdown;
 window.loadTerminalSessions = loadTerminalSessions;
 window.syncActiveChat = syncActiveChat;
 window.persistActiveChat = persistActiveChat;

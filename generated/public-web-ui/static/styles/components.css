@@ -2406,6 +2406,76 @@ body.side-chat-split-active #chat-view > .chat-input-area {
   flex-direction: column;
   gap: 6px;
 }
+/* A class `display` overrides the bare [hidden] attribute, so guard it explicitly
+   — keeps the detailed breakdown collapsed until the bar is clicked. */
+.chat-context-window-metrics[hidden],
+.chat-context-window-plan[hidden] { display: none; }
+
+/* Clickable context-window bar that expands the detailed breakdown */
+.chat-context-window-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-context-window-toggle .chat-context-window-head span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ccw-chevron {
+  transition: transform 160ms ease;
+  opacity: 0.6;
+}
+.chat-context-window-toggle[aria-expanded="true"] .ccw-chevron {
+  transform: rotate(90deg);
+}
+.chat-context-window-toggle:hover .ccw-chevron { opacity: 1; }
+
+/* Plan usage (live provider limits) */
+.chat-context-window-plan {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ccw-plan-head {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.ccw-plan-body { display: flex; flex-direction: column; gap: 9px; }
+.ccw-plan-gauge { display: flex; flex-direction: column; gap: 4px; }
+.ccw-plan-gauge-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.ccw-plan-gauge-label { color: var(--muted); }
+.ccw-plan-gauge-pct { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+.ccw-plan-gauge-track {
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.22);
+  overflow: hidden;
+}
+.ccw-plan-gauge-fill { height: 100%; border-radius: 999px; transition: width 200ms ease; }
+.ccw-plan-gauge-fill.ok { background: linear-gradient(90deg, #38a3ff, #7dd3fc); }
+.ccw-plan-gauge-fill.warn { background: linear-gradient(90deg, #f0b54f, #e08a2f); }
+.ccw-plan-gauge-fill.crit { background: linear-gradient(90deg, #f0744f, #e0402f); }
+.ccw-plan-tokens { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 #model-switcher-popover {
   left: auto !important;
