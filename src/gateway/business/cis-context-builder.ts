@@ -103,7 +103,13 @@ export function buildCisContextBlock(workspacePath: string, messageText: string,
     const parts = [
       '[CIS_CONTEXT]',
       'Business context is generic per-user/company state, not product-default content. Use it only as scoped operating memory.',
-      business ? `business_profile:\n${business}` : 'business_profile: BUSINESS.md not found or empty.',
+      // When business context mode is on (forced), the dedicated [BUSINESS] block
+      // already carries BUSINESS.md verbatim — reference it instead of embedding a
+      // second full copy. On the keyword-triggered path (mode off) CIS is the only
+      // carrier, so embed the snapshot.
+      forced
+        ? 'business_profile: see the [BUSINESS] block (business context mode is on).'
+        : business ? `business_profile:\n${business}` : 'business_profile: BUSINESS.md not found or empty.',
       entityBlocks.length ? `relevant_entities:\n${entityBlocks.join('\n')}` : 'relevant_entities: none matched this turn.',
       'business_memory_routing: company-level facts -> BUSINESS.md; people/clients/projects/vendors/social accounts -> workspace/entities; repeatable workflows -> skills; short-lived events -> notes unless durable.',
     ];

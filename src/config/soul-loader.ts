@@ -16,6 +16,10 @@ const SOUL_PATHS = [
   path.join(CONFIG_DIR, 'soul.md'),
   path.join(process.cwd(), 'src', 'config', 'soul.md'),
 ];
+const SUBAGENT_SOUL_PATHS = [
+  path.join(CONFIG_DIR, 'subagent-soul.md'),
+  path.join(process.cwd(), 'src', 'config', 'subagent-soul.md'),
+];
 const SKILLS_DIR = resolveSkillsRoot();
 
 function intEnv(name: string, fallback: number): number {
@@ -69,6 +73,13 @@ function readFirstExisting(paths: string[]): string {
 
 export function loadSoul(): string {
   return readFirstExisting(SOUL_PATHS);
+}
+
+// Subagent identity contract — parallel to loadSoul() but written for delegated
+// subagent runs (team + standalone). Falls back to the main soul if a subagent
+// soul file is not present, so behavior degrades gracefully.
+export function loadSubagentSoul(): string {
+  return readFirstExisting(SUBAGENT_SOUL_PATHS) || readFirstExisting(SOUL_PATHS);
 }
 
 export interface SkillInfo {

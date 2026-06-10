@@ -67,6 +67,7 @@ import {
 	} from '../comms/telegram-tool-log';
 import { buildObsoleteBrandBlockMessage, containsObsoleteProductBrand } from '../scheduled-output-guard';
 import { appendSubagentChatMessage } from '../agents-runtime/subagent-chat-store';
+import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import {
   finishLiveRuntime,
   registerLiveRuntime,
@@ -629,6 +630,25 @@ export class BackgroundTaskRunner {
     const profileNote = task.subagentProfile
       ? `\nSub-agent role: ${task.subagentProfile}. Stay focused on your assigned task only. Do NOT call subagent_spawn.`
       : '';
+    // #4: surface the subagent's own role file in the system slot (not just the
+    // user turn) so role adherence holds. Only renders when a role file exists.
+    const standaloneRoleBlock = (() => {
+      try {
+        const ws = (task as any).agentWorkspace as string | undefined;
+        if (!ws) return '';
+        const rolePath = path.join(ws, 'system_prompt.md');
+        if (!fs.existsSync(rolePath)) return '';
+        const content = fs.readFileSync(rolePath, 'utf-8').trim();
+        return content
+          ? `\n[YOUR ROLE]\nKeep this role and scope for the whole task.\n\n${content}`
+          : '';
+      } catch { return ''; }
+    })();
+    // #5: standing assignments — empty unless this is a named subagent.
+    const standaloneAssignments = (() => {
+      const a = buildSubagentAssignmentBlock(task.subagentProfile);
+      return a ? `\n${a}` : '';
+    })();
     const pauseSnapshot = task.pauseSnapshot;
     const blockedStepDescription = pauseSnapshot?.currentStepDescription || task.plan?.[task.currentStepIndex]?.description || '';
     const blockedStateNote = pauseSnapshot
@@ -686,7 +706,7 @@ export class BackgroundTaskRunner {
       `  do not call step_complete afterward. Then write your summary response as plain text.`,
       `  That text becomes the final message delivered to chat.`,
       `- If blocked, say what is blocking you and stop.`,
-      `You are running autonomously.${teamSubagentNote}${profileNote}${blockedStateNote}${latestPauseAnalysis}${latestResumeBrief}${resumeNote}${xLoginGuidance}`,
+      `You are running autonomously.${teamSubagentNote}${profileNote}${standaloneRoleBlock}${standaloneAssignments}${blockedStateNote}${latestPauseAnalysis}${latestResumeBrief}${resumeNote}${xLoginGuidance}`,
       `[/BACKGROUND TASK CONTEXT]`,
     ].filter(Boolean).join('\n');
   }

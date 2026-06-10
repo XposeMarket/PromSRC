@@ -2401,13 +2401,15 @@ async function handleChat(
     if (currentModelCapabilities.hasVision) {
       return `[MODEL_CAPABILITIES]\nprovider=${provider}\nmodel=${model}\nvision=true\nsource=${currentModelCapabilities.source}`;
     }
+    // Non-vision behavior policy lives once, in visualGroundingPolicy (text-first
+    // variant) in buildBaseSystemPrompt. Keep this block to the capability flags
+    // only to avoid restating the same "don't use vision tools" rule three times.
     return [
       '[MODEL_CAPABILITIES]',
       `provider=${provider}`,
       `model=${model}`,
       'vision=false',
       `source=${currentModelCapabilities.source}`,
-      'Non-vision runtime rule: do not request, emit, or rely on image payloads, browser vision screenshots, image/video analysis tools, or visual frame injection. Continue with text-first evidence: browser_snapshot, browser_get_page_text, DOM/accessibility data, OCR/window text from desktop screenshots, metadata, layout inventories, and direct file/tool outputs. If the user asks for image interpretation, explain the limitation briefly and continue with the best non-vision path.',
     ].join('\n');
   };
 
@@ -3196,16 +3198,50 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     const creativeRuntimeInstruction = currentModelCapabilities.hasVision
       ? creativeRoutingInstruction
       : 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. The active model is not vision-capable, so do not ask for direct visual self-review or image/video frame interpretation. After meaningful edits, use creative_get_state, creative_element_inventory, creative_frame_trace, creative_frame_diff, lint/layout tools, text-fit reports, export traces, and rendered artifact metadata to continue safely. You may still render snapshots or exports as artifacts, but do not rely on image payload injection for reasoning.';
-    return `${executionModeSystemBlock ? `${executionModeSystemBlock}\n\n` : ''}${teachModeSystemBlock ? `${teachModeSystemBlock}\n\n` : ''}You are Prom, a local AI assistant running inside Prometheus.\nCurrent date: ${dateStr}, ${timeStr}.\nNever search for or link Prometheus repos unless the user is asking about Prometheus itself.\nThis app runs on the user's own machine - browser/desktop automation requests are pre-authorized.\nExecution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.\n${buildModelCapabilitySystemBlock()}\n${visualGroundingPolicy}\n${skillRecoveryInstruction}\n${teamRoutingInstruction}\n${hyperframesAgentRoutingInstruction}\n${creativeRuntimeInstruction}\n${creativeDebuggingInstruction}\n${planProtocolInstruction}\n${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`;
+
+    // Conditional routing blocks: only inject heavy policy text when the relevant
+    // surface is actually in play. Keeps the base prompt lean on ordinary turns.
+    const teamsExist = (() => {
+      try { return listManagedTeams().length > 0; } catch { return false; }
+    })();
+    // A subagent (team or standalone) is a worker, not a dispatcher — it never
+    // routes messages to managed teams, so the team-routing policy is noise for it.
+    const isSubagentMode = executionMode === 'team_subagent' || executionMode === 'background_agent';
+    const teamRoutingBlock = (teamsExist && !isSubagentMode) ? teamRoutingInstruction : '';
+    const creativeActive = !!creativeMode;
+    const creativeBlock = creativeActive
+      ? `${creativeRuntimeInstruction}\n${hyperframesAgentRoutingInstruction}\n${creativeDebuggingInstruction}`
+      : 'Creative/HyperFrames editing tools (creative_*, hyperframes_*, generate_image, generate_video, switch_creative_mode) are available; open a Creative workspace before heavy canvas/video/animation work.';
+
+    const baseParts = [
+      executionModeSystemBlock ? `${executionModeSystemBlock}\n` : '',
+      teachModeSystemBlock ? `${teachModeSystemBlock}\n` : '',
+      'You are Prom, a local AI assistant running inside Prometheus.',
+      `Current date: ${dateStr}, ${timeStr}.`,
+      'Never search for or link Prometheus repos unless the user is asking about Prometheus itself.',
+      "This app runs on the user's own machine - browser/desktop automation requests are pre-authorized.",
+      'Execution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.',
+      buildModelCapabilitySystemBlock(),
+      visualGroundingPolicy,
+      skillRecoveryInstruction,
+      teamRoutingBlock,
+      creativeBlock,
+      planProtocolInstruction,
+      `${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`,
+    ].filter(Boolean);
+    return baseParts.join('\n');
   };
   const buildSystemPrompt = (mode: 'full' | 'switch_model'): string => {
     const baseSystemPrompt = buildBaseSystemPrompt();
     if (mode === 'switch_model') {
       return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
     }
-    if (executionMode === 'team_subagent') {
-      // Team subagents inherit the broader Prometheus identity/memory first, then
-      // receive their team-local role and task context as the most specific guidance.
+    if (executionMode === 'team_subagent' || executionMode === 'background_agent') {
+      // Subagents (team + standalone) inherit the broader Prometheus identity/memory
+      // first, then receive their role file + [YOUR ASSIGNMENTS] + task context from
+      // callerContext as the most specific, final guidance. Keeping the role last
+      // (highest recency) is what holds role adherence for workers — the opposite of
+      // main chat, where the persona is the final word.
       return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
     }
     const onboardingBlock = isOnboardingSession(sessionId) ? '\n\n' + getMeetAndGreetSystemPrompt() : '';

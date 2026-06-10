@@ -1,7 +1,7 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { timeAgo } from '../utils.js';
-import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic } from './mobile-model-badge.js';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
 
 // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
 export const ICONS = {
@@ -253,10 +253,13 @@ function _positionTabIndicator(tabbar, tabId, { animate = true } = {}) {
 function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   let pointerId = null;
   let startX = 0;
+  let lastX = 0;
+  let velocity = 0;            // px between the last two pointermove samples
   let dragging = false;
   let pendingTab = null;       // currently highlighted tab during the gesture
 
   const tabs = () => Array.from(tabbar.querySelectorAll('.pm-tab'));
+  const indicator = () => tabbar.querySelector('.pm-tab-indicator');
 
   // Nearest tab to a clientX, by horizontal centre distance.
   const tabAtX = (clientX) => {
@@ -272,31 +275,42 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     return best;
   };
 
-  // Visually mark a tab active (no navigation) and, when dragging, let the pill
-  // track the finger instead of snapping tab-to-tab.
-  const highlight = (tabEl, { follow = false, clientX = 0 } = {}) => {
-    if (!tabEl) return;
-    const id = tabEl.getAttribute('data-tab');
+  const setActive = (tabEl) => {
     tabs().forEach((item) => {
-      const isActive = item === tabEl;
-      item.classList.toggle('active', isActive);
-      item.setAttribute('aria-selected', String(isActive));
+      const on = item === tabEl;
+      item.classList.toggle('active', on);
+      item.setAttribute('aria-selected', String(on));
     });
-    const indicator = tabbar.querySelector('.pm-tab-indicator');
-    if (follow && indicator) {
-      const rect = tabbar.getBoundingClientRect();
-      const width = tabEl.offsetWidth;
-      const first = tabs()[0];
-      const last = tabs()[tabs().length - 1];
-      const minLeft = first ? first.offsetLeft : 0;
-      const maxLeft = last ? last.offsetLeft : 0;
-      let left = (clientX - rect.left) - width / 2;
-      left = Math.max(minLeft, Math.min(maxLeft, left));
-      indicator.style.setProperty('--pm-ind-x', `${left}px`);
-      indicator.style.setProperty('--pm-ind-w', `${width}px`);
-    } else {
-      _positionTabIndicator(tabbar, id, { animate: true });
-    }
+  };
+
+  // 1:1 follow with a velocity-driven elastic stretch: the pill leans and
+  // stretches in the direction of travel like a blob of liquid being pulled.
+  const followDrag = (clientX) => {
+    const ind = indicator();
+    const tabEl = pendingTab || tabs()[0];
+    if (!ind || !tabEl) return;
+    const rect = tabbar.getBoundingClientRect();
+    const width = tabEl.offsetWidth;
+    const first = tabs()[0];
+    const last = tabs()[tabs().length - 1];
+    const minLeft = first ? first.offsetLeft : 0;
+    const maxLeft = last ? last.offsetLeft : 0;
+    let left = (clientX - rect.left) - width / 2;
+    left = Math.max(minLeft, Math.min(maxLeft, left));
+    ind.style.setProperty('--pm-ind-x', `${left}px`);
+    ind.style.setProperty('--pm-ind-w', `${width}px`);
+    const stretch = 1 + Math.min(Math.abs(velocity) * 0.018, 0.32);
+    const lean = Math.max(-16, Math.min(16, velocity * 0.7));
+    ind.style.transform = `translateX(${lean}px) scaleX(${stretch})`;
+  };
+
+  // Spring the pill onto a tab and let the elastic stretch relax to rest.
+  const settle = (tabEl) => {
+    const ind = indicator();
+    if (!ind || !tabEl) return;
+    ind.style.setProperty('--pm-ind-x', `${tabEl.offsetLeft}px`);
+    ind.style.setProperty('--pm-ind-w', `${tabEl.offsetWidth}px`);
+    ind.style.transform = '';     // relax to identity via the CSS spring transition
   };
 
   const finish = (e) => {
@@ -306,16 +320,19 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     const wasDragging = dragging;
     pointerId = null;
     dragging = false;
-    const target = wasDragging
-      ? pendingTab
-      : (e ? tabAtX(e.clientX) : pendingTab);
+    velocity = 0;
+    const target = wasDragging ? pendingTab : (e ? tabAtX(e.clientX) : pendingTab);
     if (!target) return;
     const id = target.getAttribute('data-tab');
     const tabObj = mobileNavTabs.find((x) => x.id === id);
-    const current = getActiveTab ? getActiveTab() : '';
-    try { sessionStorage.setItem(PM_ACTIVE_TAB_KEY, id); } catch {}
-    highlight(target);               // snap the pill cleanly onto the target
-    if (id !== current && tabObj && typeof onNavigate === 'function') {
+    const currentId = tabbar.querySelector('.pm-tab.active')?.getAttribute('data-tab')
+      || (getActiveTab ? getActiveTab() : '') || '';
+    // Remember the tab we're leaving so the post-navigation re-render glides the
+    // pill *from* it rather than snapping.
+    try { if (currentId) sessionStorage.setItem(PM_ACTIVE_TAB_KEY, currentId); } catch {}
+    setActive(target);
+    settle(target);
+    if (id !== currentId && tabObj && typeof onNavigate === 'function') {
       window.setTimeout(() => onNavigate(tabObj.route), 90);
     }
   };
@@ -324,13 +341,16 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     const t = e.target?.closest?.('.pm-tab');
     if (!t || !tabbar.contains(t)) return;
     pointerId = e.pointerId;
-    startX = e.clientX;
+    startX = lastX = e.clientX;
+    velocity = 0;
     dragging = false;
     pendingTab = t;
   });
 
   tabbar.addEventListener('pointermove', (e) => {
     if (pointerId === null || e.pointerId !== pointerId) return;
+    velocity = e.clientX - lastX;
+    lastX = e.clientX;
     if (!dragging) {
       if (Math.abs(e.clientX - startX) < 6) return;   // tap, not a drag (yet)
       dragging = true;
@@ -341,13 +361,40 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     const nearest = tabAtX(e.clientX);
     if (nearest && nearest !== pendingTab) {
       pendingTab = nearest;
-      try { if (navigator.vibrate) navigator.vibrate(6); } catch {}   // Android nicety
+      setActive(nearest);
+      // Buzz on every tab the pill slides over (not just the page we started on).
+      // pmHaptic toggles the native iOS switch so iOS emits a real haptic, and
+      // also fires navigator.vibrate on Android.
+      pmHaptic(8);
     }
-    highlight(pendingTab, { follow: true, clientX: e.clientX });
+    followDrag(e.clientX);
   });
 
   tabbar.addEventListener('pointerup', finish);
   tabbar.addEventListener('pointercancel', finish);
+}
+
+// Inject the SVG filter the glass layers reference (#pm-liquid-glint). It lives
+// in the document once; building it via a detached <div> lets the HTML parser
+// namespace the SVG/filter children correctly (setting innerHTML on an <svg>
+// element directly does not). Element filters like this DO render in WebKit,
+// unlike SVG filters routed through backdrop-filter.
+function _ensureLiquidGlassFilters() {
+  if (document.getElementById('pm-liquid-glass-defs')) return;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <svg id="pm-liquid-glass-defs" aria-hidden="true" width="0" height="0"
+         style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;">
+      <defs>
+        <filter id="pm-liquid-glint" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves="2" seed="5" result="n" />
+          <feGaussianBlur in="n" stdDeviation="0.4" result="nb" />
+          <feDisplacementMap in="SourceGraphic" in2="nb" scale="16" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+      </defs>
+    </svg>`;
+  const svg = wrap.firstElementChild;
+  if (svg) document.body.appendChild(svg);
 }
 
 function _loadDrawerState() {
@@ -368,6 +415,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   const root = document.getElementById('mobile-root');
   root.innerHTML = '';
   root.hidden = false;
+
+  _ensureLiquidGlassFilters();
 
   const app = el(`<div class="pm-app" id="pm-app"></div>`);
   root.appendChild(app);

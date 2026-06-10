@@ -11,7 +11,7 @@ import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCateg
 import { searchMemoryIndex } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
-import { loadSoul } from '../config/soul-loader';
+import { loadSoul, loadSubagentSoul } from '../config/soul-loader';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
 
 // ─── Prompt-cache assembly ─────────────────────────────────────────────────────
@@ -1017,7 +1017,7 @@ export async function buildPersonalityContext(
     );
   }
 
-  const allowLongTermSearch = executionMode === 'interactive' || executionMode === 'background_agent';
+  const allowLongTermSearch = executionMode === 'interactive' || executionMode === 'background_agent' || executionMode === 'team_subagent';
   const memorySearchRouting = allowLongTermSearch
     ? routeMemorySearchMode(messageText)
     : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
@@ -1118,36 +1118,67 @@ export async function buildPersonalityContext(
       [cisContext, retrievedMemoryCtx, skillCtx, activeSkillCtx],
     );
   }
-  // ── Path T: team subagents — lean prompt, team memory only ─────────────────
-  if (executionMode === 'team_subagent') {
-    const activatedCatsTeam = getActivatedToolCategories(sessionId);
+  // ── Path SUB: subagents (team + standalone) — full main-chat stack, ────────
+  // but with the subagent identity contract in place of the Prometheus config
+  // soul, and without the managed-team routing policy (a subagent IS a worker,
+  // it does not dispatch to teams). Team role / assignment awareness is layered
+  // on top via callerContext, which has the task/subagent records.
+  if (executionMode === 'team_subagent' || executionMode === 'background_agent') {
+    const subagentSoul = loadSubagentSoul();
+    const activatedCatsSub = getActivatedToolCategories(sessionId);
     const mainWorkspacePath = getConfig().getWorkspacePath();
     const fallbackMemoryRoots = mainWorkspacePath && path.resolve(mainWorkspacePath) !== path.resolve(workspacePath)
       ? [mainWorkspacePath]
       : [];
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md', 3000, fallbackMemoryRoots);
-    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', 4000, fallbackMemoryRoots);
+    // Full main-chat-equivalent memory stack (no per-field caps beyond MEMORY's 8k).
+    const user = loadFullMemoryProfile(workspacePath, 'USER.md', undefined, fallbackMemoryRoots);
+    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', undefined, fallbackMemoryRoots);
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    // Keep MEMORY.md lighter than the normal autonomous path so team dispatches stay focused.
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 5000, fallbackMemoryRoots);
+    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000, fallbackMemoryRoots);
+    // Intraday: pull from the main workspace where the user's daily notes live,
+    // so a subagent working today shares the same working context as main chat.
+    const intradayRoot = mainWorkspacePath || workspacePath;
+    const todaySub = new Date().toISOString().split('T')[0];
+    const intradayPathSub = path.join(intradayRoot, 'memory', `${todaySub}-intraday-notes.md`);
+    const intradayNotesSub = fs.existsSync(intradayPathSub) ? processIntradayNotes(fs.readFileSync(intradayPathSub, 'utf-8')) : '';
+    let projectContextBlockSub = '';
+    try {
+      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
+      if (findProjectBySessionId(sessionId)) {
+        projectContextBlockSub = buildProjectContextBlock(sessionId) || '';
+      }
+    } catch {}
     if (extraCats) {
       for (const ec of extraCats) {
-        if (ec === 'browser_vision' || ec === 'browser') activatedCatsTeam.add('browser');
-        else activatedCatsTeam.add(ec);
+        if (ec === 'browser_vision' || ec === 'browser') activatedCatsSub.add('browser');
+        else activatedCatsSub.add(ec);
       }
     }
     const skillCtx = skillsManager.buildTurnContext(messageText);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    const referenceHintSub = isPublicDistributionBuild()
+      ? ''
+      : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use read_file('self/index.md'). Follow its links to focused self/* subsystem files as needed.`;
+    setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
       [
+        subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
-        memory ? `[MEMORY]\n${memory}` : '',
         business ? `[BUSINESS]\n${business}` : '',
-        buildToolsContext(activatedCatsTeam),
+        memory ? `[MEMORY]\n${memory}` : '',
+        projectContextBlockSub ? `[PROJECT_CONTEXT]\n${projectContextBlockSub}` : '',
+        buildToolsContext(activatedCatsSub),
       ],
-      [cisContext, skillCtx, activeSkillCtx],
+      [
+        cisContext,
+        retrievedMemoryCtx,
+        intradayNotesSub ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotesSub}` : '',
+        referenceHintSub,
+        skillCtx,
+        activeSkillCtx,
+      ],
     );
   }
 

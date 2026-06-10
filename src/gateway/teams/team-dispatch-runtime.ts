@@ -16,6 +16,7 @@ import { loadTask, saveTask } from '../tasks/task-store';
 import { bindTaskRunToSession, clearTaskRunBinding, completeNextOpenTaskStep } from '../tasks/task-run-mirror';
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { registerBrowserSessionMetadata } from '../browser-tools';
+import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import { setActivatedToolCategories } from '../session';
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
@@ -167,6 +168,7 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
         ].join('\n')
       : '',
     agentRoleBlock ? `\n${agentRoleBlock}` : '',
+    (() => { const a = buildSubagentAssignmentBlock(agentId); return a ? `\n${a}` : ''; })(),
     roomSummary ? `\n${roomSummary}` : '',
     roomDeltaBlock ? `\n${roomDeltaBlock}` : '',
     pendingMessages.length > 0
@@ -446,6 +448,7 @@ export async function runTeamAgentViaChat(
         ].join('\n')
       : '',
     agentRoleBlock ? `\n${agentRoleBlock}` : '',
+    (() => { const a = buildSubagentAssignmentBlock(agentId); return a ? `\n${a}` : ''; })(),
     roomSummary ? `\n${roomSummary}` : '',
     roomDeltaBlock ? `\n${roomDeltaBlock}` : '',
     pendingMessages.length > 0
