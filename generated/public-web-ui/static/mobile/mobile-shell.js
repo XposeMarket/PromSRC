@@ -1,7 +1,7 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { timeAgo } from '../utils.js';
-import { initMobileModelBadge, mobileModelBadgeSeedLabel } from './mobile-model-badge.js';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic } from './mobile-model-badge.js';
 
 // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
 export const ICONS = {
@@ -326,7 +326,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       if (typeof onNavigate === 'function') onNavigate(route);
     });
   });
-  _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {
+  const _drawerNewChatBtn = _drawerEl.querySelector('[data-mobile-new-chat]');
+  // Haptic feedback on the drawer's New Chat button
+  if (_drawerNewChatBtn) {
+    try { attachMobileButtonHaptic(_drawerNewChatBtn, () => _drawerNewChatBtn.click()); } catch {}
+  }
+  _drawerNewChatBtn?.addEventListener('click', () => {
     closeDrawer();
     Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
       .then(() => {
@@ -335,6 +340,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       })
       .catch(() => {});
   });
+
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
@@ -1296,5 +1302,24 @@ export function wireHeaderActions(pageEl, { onLeft, onSettings, onBack, onNewCha
       }
       else if (a === 'new-chat' && onNewChat) onNewChat();
     });
+    // Haptic feedback for all header icon buttons — use direct action callbacks
+    // instead of btn.click() so the hamburger reliably opens the drawer on iOS
+    // (synthetic click events from the haptic overlay don't always re-trigger the
+    // delegated shell listener).
+    try {
+      let activateFn;
+      if (a === 'menu') activateFn = () => openDrawer();
+      else if (a === 'back') activateFn = () => { if (onBack) onBack(); };
+      else if (a === 'settings') activateFn = () => {
+        if (onSettings) onSettings();
+        else if (typeof window.pmOpenSettings === 'function') window.pmOpenSettings();
+        else if (typeof window.openSettings === 'function') window.openSettings();
+        else window.location.hash = '#mobile/settings';
+      };
+      else if (a === 'new-chat') activateFn = () => { if (onNewChat) onNewChat(); };
+      if (activateFn) attachMobileButtonHaptic(btn, activateFn);
+    } catch {}
+  
   });
 }
+

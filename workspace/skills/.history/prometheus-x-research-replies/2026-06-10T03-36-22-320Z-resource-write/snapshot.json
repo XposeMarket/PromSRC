@@ -1,0 +1,13 @@
+{
+  "skillId": "prometheus-x-research-replies",
+  "reason": "resource-write",
+  "createdAt": "2026-06-10T03:36:22.326Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-x-research-replies",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/blockers-and-workarounds.md"
+  ],
+  "hash": "679432050cfe24bc"
+}

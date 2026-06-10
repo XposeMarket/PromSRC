@@ -24,6 +24,10 @@
     {
       "path": "references/blockers-and-workarounds.md",
       "type": "doc"
+    },
+    {
+      "path": "references/workflows/prometheus-x-research-replies-2026-06-09.md",
+      "type": "doc"
     }
   ]
 }

@@ -540,7 +540,7 @@ export function getAgentTeamScheduleTools(): any[] {
             action: { type: 'string', description: 'One of: list, create, update, pause, resume, delete, run_now' },
             job_id: { type: 'string', description: 'Required for update/pause/resume/delete/run_now' },
             name: { type: 'string', description: 'Job name (create/update)' },
-            instruction_prompt: { type: 'string', description: 'REQUIRED for create/update. This is the ONLY instruction the agent receives when the job fires — it must be fully self-contained. Include: who the agent is, the exact step-by-step actions to take (with tool names where relevant), any constraints, and what success looks like. Do NOT write a label or summary — write executable instructions as if briefing a fresh agent with zero context.' },
+            instruction_prompt: { type: 'string', description: 'REQUIRED for create. Optional for update — only include if you want to replace the existing prompt. This is the ONLY instruction the agent receives when the job fires — it must be fully self-contained. Include: who the agent is, the exact step-by-step actions to take (with tool names where relevant), any constraints, and what success looks like. Do NOT write a label or summary — write executable instructions as if briefing a fresh agent with zero context.' },
             schedule: {
               type: 'object',
               description: 'Recurring/one-shot schedule. You may provide raw cron/run_at, or friendly fields equivalent to the web UI: {kind:"recurring", repeat:"daily|weekday|weekend", time:"09:00"}, {days_of_week:["monday","wednesday"], time:"14:30"}, {every_hours:6}, {every_days:2, time:"09:00"}, or {text:"weekdays at 9am"}.',
@@ -565,7 +565,7 @@ export function getAgentTeamScheduleTools(): any[] {
               },
             },
             model_override: { type: 'string', description: 'Optional model override for this scheduled job' },
-	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use as the schedule owner. Omit to have Prometheus itself own and execute the scheduled job.' },
+	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use as the schedule owner. Omit to have Prometheus itself own and execute the scheduled job. IMPORTANT — during update: omit this field entirely to preserve existing ownership (do NOT re-pass it just because the job previously had one). Only include subagent_id if you explicitly want to change who owns the job. Pass an empty string "" to return ownership to Prometheus itself.' },
             team_id: { type: 'string', description: 'Optional: managed team ID. When set, the scheduled run wakes that team manager first; the manager derives the run from team goal/memory and dispatches agents accordingly.' },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },

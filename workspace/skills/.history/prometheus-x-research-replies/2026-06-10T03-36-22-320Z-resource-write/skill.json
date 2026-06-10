@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-x-research-replies",
+  "name": "Prometheus X Research & Replies Operator",
+  "description": "Operating playbook for the prometheus-x-research-replies scheduled job: always read memory first, try x_search for fresh AI/tech angles, fallback to browser automation with x-browser-automation-playbook skill if x_search fails, prepare 2 natural replies + 1 original post with no em dashes and human tone, post via browser from @raulinvests, send Telegram screenshot proof, log to memory, and always close browser with browser_close at the end. Prevents duplicates and CDP issues.",
+  "version": "1.2.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "x research",
+    "research replies",
+    "ai agent memory",
+    "autonomous research posting",
+    "scheduled research"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/workflows/prometheus-x-research-replies-2026-06-08.md",
+      "type": "doc",
+      "description": "Add workflow recipe to prometheus-x-research-replies"
+    },
+    {
+      "path": "references/blockers-and-workarounds.md",
+      "type": "doc"
+    },
+    {
+      "path": "references/workflows/prometheus-x-research-replies-2026-06-09.md",
+      "type": "doc"
+    }
+  ]
+}
