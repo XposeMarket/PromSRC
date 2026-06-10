@@ -4,7 +4,7 @@ import {
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions,
-} from './mobile-shell.js?v=mobile-voice-live-update-fix';
+} from './mobile-shell.js?v=liquid-glass-v7';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import { attachMobileButtonHaptic } from './mobile-model-badge.js';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';

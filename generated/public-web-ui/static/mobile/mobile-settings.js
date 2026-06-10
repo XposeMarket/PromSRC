@@ -1,4 +1,4 @@
-import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=mobile-voice-live-update-fix';
+import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=liquid-glass-v7';
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
 
 const SECTIONS = [

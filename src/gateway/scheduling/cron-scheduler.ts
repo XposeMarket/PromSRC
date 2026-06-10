@@ -41,6 +41,7 @@ import {
 } from '../teams/managed-teams';
 import { handleManagerConversationDetailed, triggerManagerReview } from '../teams/team-manager-runner';
 import { broadcastTeamEvent } from '../comms/broadcaster';
+import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 import {
   buildMissingSourceBlockMessage,
@@ -202,6 +203,7 @@ function loadAgentIdentityPrompt(agentWorkspace: string): string {
 
 function buildScheduleOwnerCallerContext(agentId: string, agent: any, mainWorkspace: string, artifactWorkspace: string, job: CronJob, taskId: string, runId: string): string {
   const identityPrompt = loadAgentIdentityPrompt(artifactWorkspace);
+  const assignmentsBlock = buildSubagentAssignmentBlock(agentId);
   return [
     '[SUBAGENT CHAT CONTEXT]',
     `You are running as the scheduled-job owner agent "${agent?.name || agentId}" (id: ${agentId}).`,
@@ -216,8 +218,9 @@ function buildScheduleOwnerCallerContext(agentId: string, agent: any, mainWorksp
     identityPrompt
       ? ['', 'Your configured identity prompt follows. Keep this role and scope during the scheduled run.', '', identityPrompt].join('\n')
       : 'No subagent identity file was found. Use the schedule prompt and current run context as your guide.',
+    assignmentsBlock ? `\n${assignmentsBlock}` : '',
     '[/SUBAGENT CHAT CONTEXT]',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function seedSubagentChatSessionFromStore(agentId: string, sessionId: string, workspacePath: string): void {

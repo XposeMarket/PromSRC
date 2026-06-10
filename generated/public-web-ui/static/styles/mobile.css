@@ -192,12 +192,13 @@ body.pm-mobile-active { overflow: hidden; }
   color: var(--pm-text);
   border-radius: 50%;
   background:
-    linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.02) 52%, rgba(234,106,31,.03));
-  backdrop-filter: blur(18px) saturate(2.1) brightness(1.02);
-  -webkit-backdrop-filter: blur(18px) saturate(2.1) brightness(1.02);
-  border: 1px solid rgba(255,255,255,.30);
+    linear-gradient(135deg, rgba(255,255,255,.05), rgba(255,255,255,0) 52%, rgba(234,106,31,.015));
+  backdrop-filter: blur(6px) saturate(1.7) brightness(1.04);
+  -webkit-backdrop-filter: blur(6px) saturate(1.7) brightness(1.04);
+  border: 1px solid rgba(255,255,255,.38);
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.42),
+    inset 0 1.5px 1px rgba(255,255,255,.6),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.32),
     0 6px 16px rgba(40,28,16,.16),
     0 1px 4px rgba(40,28,16,.08);
   transition: transform .16s ease, background .2s ease;
@@ -549,47 +550,56 @@ body.pm-mobile-active { overflow: hidden; }
   grid-template-columns: repeat(4, 1fr);
   overflow: hidden;
   border-radius: 999px;
+  /* Genuinely see-through: light blur so shapes behind stay readable, with a
+     saturation/brightness lift to keep the glass crisp (the iOS look). */
   background:
-    linear-gradient(135deg, rgba(255,255,255,.05), rgba(255,255,255,.005) 50%, rgba(234,106,31,.025));
-  backdrop-filter: blur(19px) saturate(2.3) brightness(1.02);
-  -webkit-backdrop-filter: blur(19px) saturate(2.3) brightness(1.02);
-  border: 1px solid rgba(255,255,255,.22);
+    linear-gradient(135deg, rgba(255,255,255,.04), rgba(255,255,255,0) 46%, rgba(234,106,31,.015));
+  backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
+  -webkit-backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
+  border: 1px solid rgba(255,255,255,.30);
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.30),
-    0 14px 40px rgba(40,28,16,.18),
-    0 2px 8px rgba(40,28,16,.09);
+    inset 0 1.5px 1px rgba(255,255,255,.55),     /* crisp top rim light */
+    inset 0 -10px 26px rgba(255,255,255,.06),    /* inner floor glow */
+    0 18px 48px rgba(40,28,16,.20),
+    0 4px 12px rgba(40,28,16,.10);
   z-index: 5;
   transform: translateZ(0);
   /* Let the tabbar own horizontal drags (slider gesture) instead of the page. */
   touch-action: none;
 }
-/* While the pill is being dragged, skip the springy transition so it tracks the
-   finger 1:1, and dim the tab labels slightly to signal the live drag. */
+/* During a drag the pill tracks the finger 1:1 (position set inline, no
+   transition); only the elastic stretch keeps a short transition so velocity
+   changes stay smooth instead of snapping. */
 .pm-tabbar.pm-tabbar-dragging .pm-tab-indicator {
-  transition: none;
+  transition: transform .09s linear;
 }
 :root[data-theme="dark"] .pm-tabbar {
   background:
-    linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.02) 48%, rgba(234,106,31,.06));
-  border-color: rgba(255,255,255,.16);
+    linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.01) 48%, rgba(234,106,31,.05));
+  border-color: rgba(255,255,255,.14);
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.22),
-    inset 0 -16px 30px rgba(255,255,255,.03),
-    0 16px 44px rgba(0,0,0,.46),
-    0 2px 10px rgba(0,0,0,.28);
+    inset 0 1.5px 1px rgba(255,255,255,.28),
+    inset 0 -16px 30px rgba(255,255,255,.04),
+    0 18px 48px rgba(0,0,0,.5),
+    0 3px 12px rgba(0,0,0,.3);
 }
+/* A faint top sheen that ripples like liquid. This is an *element* filter on a
+   painted layer (not a backdrop filter), so WebKit actually renders the
+   displacement — the trick we proved the backdrop path can't do. Kept low and
+   edge-bound so it never reads as a blob in the middle. */
 .pm-tabbar::before {
   content: '';
   position: absolute;
-  inset: -40%;
+  inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(circle at 14% 8%, rgba(255,255,255,.22), transparent 28%),
-    radial-gradient(circle at 88% 16%, rgba(255,255,255,.08), transparent 30%);
-  opacity: .34;
-  filter: blur(10px);
+  border-radius: inherit;
+  background: linear-gradient(to bottom, rgba(255,255,255,.14), transparent 22%);
+  opacity: .42;
+  filter: url(#pm-liquid-glint);
   mix-blend-mode: screen;
 }
+/* Specular reflection bound to the INNER top + bottom edges only (how the iOS
+   glass catches light), with a transparent middle so the background shows. */
 .pm-tabbar::after {
   content: '';
   position: absolute;
@@ -597,9 +607,15 @@ body.pm-mobile-active { overflow: hidden; }
   pointer-events: none;
   border-radius: inherit;
   background:
-    linear-gradient(180deg, rgba(255,255,255,.18), transparent 42%),
-    radial-gradient(120% 80% at 50% 120%, rgba(0,0,0,.10), transparent 56%);
-  opacity: .5;
+    linear-gradient(to bottom,
+      rgba(255,255,255,.22) 0%,
+      rgba(255,255,255,.03) 18%,
+      transparent 34%,
+      transparent 70%,
+      rgba(255,255,255,.06) 90%,
+      rgba(255,255,255,.15) 100%),
+    radial-gradient(130% 78% at 50% 122%, rgba(0,0,0,.10), transparent 56%);
+  opacity: .72;
 }
 .pm-tabbar-sheen,
 .pm-tab-indicator {
@@ -607,46 +623,79 @@ body.pm-mobile-active { overflow: hidden; }
   pointer-events: none;
   border-radius: 999px;
 }
+/* Refractive rim — a masked conic gradient fakes the chromatic edge of real
+   glass (the rainbow fringe in Apple's Liquid Glass), screen-blended and faint
+   so it reads as light bending, not RGB. */
 .pm-tabbar-sheen {
-  inset: 5px;
-  z-index: 1;
-  border: 1px solid rgba(255,255,255,.14);
-  box-shadow:
-    inset 0 12px 24px rgba(255,255,255,.07),
-    inset 0 -16px 28px rgba(0,0,0,.05);
+  inset: 0;
+  z-index: 3;
+  padding: 1.4px;
+  background: conic-gradient(from 130deg,
+    rgba(120,210,255,0)   0deg,
+    rgba(120,210,255,.5)  55deg,
+    rgba(255,255,255,.9)  125deg,
+    rgba(160,255,210,.45) 205deg,
+    rgba(255,140,210,.5)  290deg,
+    rgba(120,210,255,0)   360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: .42;
+  mix-blend-mode: screen;
 }
+:root[data-theme="dark"] .pm-tabbar-sheen { opacity: .32; }
 .pm-tab-indicator {
-  top: 6px;
-  bottom: 6px;
+  top: 5px;
+  bottom: 5px;
   left: var(--pm-ind-x, 6px);
   width: var(--pm-ind-w, calc(25% - 3px));
   z-index: 1;
+  transform-origin: center center;
+  /* Highlight on the inner top + bottom edges, transparent through the middle so
+     the bar's glass reads behind the pill — not a blob in one corner. */
   background:
-    radial-gradient(circle at 28% 16%, rgba(255,255,255,.38), transparent 46%),
-    linear-gradient(135deg, rgba(255,255,255,.20), rgba(255,255,255,.06) 52%, rgba(255,255,255,.13));
-  border: 1px solid rgba(255,255,255,.42);
+    linear-gradient(to bottom,
+      rgba(255,255,255,.36) 0%,
+      rgba(255,255,255,.07) 20%,
+      transparent 46%,
+      transparent 56%,
+      rgba(255,255,255,.05) 82%,
+      rgba(255,255,255,.22) 100%);
+  border: 1px solid rgba(255,255,255,.46);
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.55),
-    0 8px 22px rgba(40,28,16,.16),
-    0 1px 4px rgba(40,28,16,.10);
-  transition: left .44s cubic-bezier(.22, 1.06, .26, 1), width .44s cubic-bezier(.22, 1.06, .26, 1);
+    inset 0 1.5px 1.5px rgba(255,255,255,.58),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.28),
+    0 8px 22px rgba(40,28,16,.18),
+    0 1px 4px rgba(40,28,16,.12);
+  /* Spring with a touch of overshoot for the clean glide + elastic settle. */
+  transition:
+    left .52s cubic-bezier(.34, 1.45, .5, 1),
+    width .52s cubic-bezier(.34, 1.45, .5, 1),
+    transform .55s cubic-bezier(.34, 1.7, .5, 1);
 }
 .pm-tab-indicator.is-moving {
   animation: pmTabIndicatorGlide .46s cubic-bezier(.22, 1.06, .26, 1) both;
 }
 @keyframes pmTabIndicatorGlide {
   0%   { transform: scaleY(1); }
-  40%  { transform: scaleY(1.05); filter: brightness(1.06); }
+  40%  { transform: scaleY(1.06); filter: brightness(1.07); }
   100% { transform: scaleY(1); }
 }
 :root[data-theme="dark"] .pm-tab-indicator {
   background:
-    radial-gradient(circle at 28% 16%, rgba(255,255,255,.30), transparent 44%),
-    linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.05) 52%, rgba(255,255,255,.12));
+    linear-gradient(to bottom,
+      rgba(255,255,255,.26) 0%,
+      rgba(255,255,255,.04) 20%,
+      transparent 46%,
+      transparent 56%,
+      rgba(255,255,255,.04) 82%,
+      rgba(255,255,255,.16) 100%);
   border-color: rgba(255,255,255,.26);
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.34),
-    0 8px 22px rgba(0,0,0,.40);
+    inset 0 1.5px 1.5px rgba(255,255,255,.38),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.2),
+    0 8px 22px rgba(0,0,0,.42);
 }
 .pm-tab {
   appearance: none; background: transparent; border: none;
@@ -3476,15 +3525,22 @@ body.pm-mobile-active { overflow: hidden; }
   position: absolute;
   left: 10px; right: 10px;
   bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 22px);
+  /* Same liquid-glass material as the tab bar: light blur, see-through, with
+     specular on the inner top + bottom edges (not a flat sheen). */
   background:
-    linear-gradient(135deg, rgba(255,255,255,.16), rgba(255,255,255,.05) 55%, rgba(234,106,31,.04));
-  backdrop-filter: blur(22px) saturate(2.0) brightness(1.02);
-  -webkit-backdrop-filter: blur(22px) saturate(2.0) brightness(1.02);
+    linear-gradient(to bottom,
+      rgba(255,255,255,.22) 0%, rgba(255,255,255,.03) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.06) 90%, rgba(255,255,255,.16) 100%),
+    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, rgba(234,106,31,.03));
+  backdrop-filter: blur(6px) saturate(1.7) brightness(1.04);
+  -webkit-backdrop-filter: blur(6px) saturate(1.7) brightness(1.04);
   border: 1px solid rgba(255,255,255,.34);
   border-radius: 22px;
   padding: 5px 9px;
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.50),
+    inset 0 1.5px 1px rgba(255,255,255,.4),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.22),
     0 10px 30px rgba(40,28,16,.18),
     0 2px 8px rgba(40,28,16,.10);
   z-index: 4;
@@ -3492,10 +3548,15 @@ body.pm-mobile-active { overflow: hidden; }
 }
 :root[data-theme="dark"] .pm-composer {
   background:
-    linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.025) 55%, rgba(234,106,31,.05));
-  border-color: rgba(255,255,255,.16);
+    linear-gradient(to bottom,
+      rgba(255,255,255,.16) 0%, rgba(255,255,255,.02) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.04) 90%, rgba(255,255,255,.12) 100%),
+    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, rgba(234,106,31,.05));
+  border-color: rgba(255,255,255,.14);
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.22),
+    inset 0 1.5px 1px rgba(255,255,255,.24),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.14),
     0 12px 32px rgba(0,0,0,.42),
     0 2px 8px rgba(0,0,0,.26);
 }
@@ -4476,10 +4537,13 @@ body.pm-mobile-active { overflow: hidden; }
     /* Warm glow anchored to the very bottom so the glow runs all the way down
        behind the floating tab capsule to the screen edge (not stopping above
        the tabs). */
-    radial-gradient(135% 58% at 50% 102%, rgba(255,105,31,.16), rgba(255,75,140,.06) 46%, transparent 72%),
-    linear-gradient(180deg, rgba(14,15,22,.10), rgba(14,15,22,.20) 46%, rgba(14,15,22,.30) 100%);
-  backdrop-filter: blur(20px) saturate(1.5);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    radial-gradient(135% 58% at 50% 102%, rgba(255,105,31,.18), rgba(255,75,140,.07) 46%, transparent 72%),
+    /* Near-clear: the same see-through liquid glass as the tab bar so chat stays
+       visible behind the panel as it scrolls. Only a whisper of darkening at the
+       very bottom for control legibility. */
+    linear-gradient(180deg, rgba(14,15,22,0), rgba(14,15,22,.02) 55%, rgba(14,15,22,.07) 100%);
+  backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
+  -webkit-backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
   /* Soft fade-in at the very top so there is no hard glass edge — it emerges as
      the chat fades out above it. Ramped a little lower so the transition sits
      further down. */
@@ -4520,10 +4584,10 @@ body.pm-mobile-active { overflow: hidden; }
   height: 42px;
   pointer-events: none;
   background:
-    radial-gradient(ellipse at 48% 92%, rgba(255,255,255,.18), rgba(255,255,255,.06) 34%, transparent 76%),
-    linear-gradient(180deg, transparent 0%, rgba(255,255,255,.025) 34%, rgba(255,255,255,.075) 72%, transparent 100%);
-  backdrop-filter: blur(22px) saturate(2.0) brightness(1.02);
-  -webkit-backdrop-filter: blur(22px) saturate(2.0) brightness(1.02);
+    radial-gradient(ellipse at 48% 92%, rgba(255,255,255,.14), rgba(255,255,255,.05) 34%, transparent 76%),
+    linear-gradient(180deg, transparent 0%, rgba(255,255,255,.02) 34%, rgba(255,255,255,.06) 72%, transparent 100%);
+  backdrop-filter: blur(7px) saturate(1.7) brightness(1.02);
+  -webkit-backdrop-filter: blur(7px) saturate(1.7) brightness(1.02);
   mask-image: linear-gradient(180deg, transparent 0%, rgba(0,0,0,.45) 24%, #000 62%, transparent 100%);
   -webkit-mask-image: linear-gradient(180deg, transparent 0%, rgba(0,0,0,.45) 24%, #000 62%, transparent 100%);
 }
@@ -4684,7 +4748,7 @@ body.pm-mobile-active { overflow: hidden; }
   bottom: calc(-1 * (var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 70px));
   pointer-events: none;
   background:
-    linear-gradient(180deg, rgba(10,11,18,0), rgba(10,11,18,.10) 42%, rgba(10,11,18,.18) 100%);
+    linear-gradient(180deg, rgba(10,11,18,0), rgba(10,11,18,.05) 42%, rgba(10,11,18,.10) 100%);
   filter: blur(22px);
   mask-image: linear-gradient(180deg, transparent 0%, #000 34%, #000 100%);
   -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 34%, #000 100%);
