@@ -3573,7 +3573,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       </button>
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn" id="pm-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
-        <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+        <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
       </div>
@@ -6046,12 +6046,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     const suggestions = _pmSlashCommandSuggestions(input.value);
     const popoverOpen = !page.querySelector('#pm-chat-slash-popover')?.hidden && suggestions.length > 0;
     if (!popoverOpen) {
-      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        if (typeof form.requestSubmit === 'function') form.requestSubmit();
-        else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-        return;
-      }
+      // Plain Enter inserts a newline (default behavior) so multi-paragraph
+      // messages can be typed; sending is done via the Send button.
       if (e.key === 'Escape' && pmActiveSlashCommand) {
         e.preventDefault();
         _pmClearActiveSlashCommand(page, input);

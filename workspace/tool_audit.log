@@ -42724,3 +42724,207 @@ asked claude fable 5 to recreate one of the most creative threejs experiments fr
 [2026-06-11T00:08:46.738Z] OK prom_repo_sync({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
 [2026-06-11T00:11:08.812Z] OK prom_repo_push({"message":"Polish: mobile liquid-glass halo + refraction; gateway/agent runtime tweaks; new landing page + daily notes"}) => Committed: Polish: mobile liquid-glass halo + refraction; gateway/agent runtime tweaks; new landing page + daily notes
 [main 7908b6a] Polish: mobile liquid-glass halo + refraction; gateway/agent runti
+[2026-06-11T00:33:02.116Z] OK prom_repo_sync({"message":"Sync edits between machines as requested by Raul."}) => Committed locally: Sync edits between machines as requested by Raul.
+
+Merged in from origin/main (no overwrite):
+src/config/soul-loader.ts
+src/config/voice-soul.md
+src/gateway/agents-runtime/subagent-
+[2026-06-11T00:33:32.695Z] OK gateway_restart({"reason":"User requested gateway restart","title":"Gateway restart","summary":"Restarting the Prometheus gateway as requested","test_instructions":"Verify gateway is back online on port 18789 after r) => ✅ Quick gateway restart initiated. No npm build was run.
+[2026-06-11T00:41:31.837Z] FAIL list_directory({"path":"web-ui/src/mobile","max_depth":3}) => ERROR: "web-ui/src/mobile" not found
+[2026-06-11T00:41:35.396Z] OK list_directory({"path":".","max_depth":2}) => Directory . (max_depth=2, entries=500/500+):
+[DIR]  .prometheus/
+[DIR]  .prometheus/agent-chats/
+[FILE] .prometheus/agent-chats/.gitkeep
+[FILE] .prometheus/agent-chats/mobile_voice_context_investigato
+[2026-06-11T00:41:39.995Z] FAIL search_files({"pattern":"mobile.*chat|chat.*input|textarea|sendButton|enterButton","path":"web-ui","file_glob":"*.ts,*.tsx,*.js,*.jsx,*.html","max_results":20}) => ERROR: "web-ui" not found
+[2026-06-11T00:41:43.989Z] OK search_files({"pattern":"sendButton|chat-input|textarea|mobile.*input|enter.*button|newline|break.*line","path":".","file_glob":"*.ts,*.tsx,*.js,*.jsx,*.html,*.vue","max_results":15}) => {
+  "directory": ".",
+  "pattern": "sendButton|chat-input|textarea|mobile.*input|enter.*button|newline|break.*line",
+  "match_count": 15,
+  "matches": [
+    {
+      "file": "creative-projects/mobile_m
+[2026-06-11T00:42:11.564Z] OK list_directory({"path":".","max_depth":3,"max_entries":100}) => Directory . (max_depth=3, entries=100/100+):
+[DIR]  .prometheus/
+[DIR]  .prometheus/agent-chats/
+[FILE] .prometheus/agent-chats/.gitkeep
+[FILE] .prometheus/agent-chats/mobile_voice_context_investigato
+[2026-06-11T00:42:11.947Z] OK search_files({"pattern":"chat.*input|sendButton|textarea|mobile.*chat|enterButton|newline|break.*line|chat-input","path":".","file_glob":"*.ts,*.tsx,*.js,*.jsx,*.html,*.vue","max_results":30}) => {
+  "directory": ".",
+  "pattern": "chat.*input|sendButton|textarea|mobile.*chat|enterButton|newline|break.*line|chat-input",
+  "match_count": 30,
+  "matches": [
+    {
+      "file": "creative-projects
+[2026-06-11T00:42:11.953Z] FAIL search_files({"pattern":"send|button|input|textarea","path":"web-ui","file_glob":"*.ts,*.tsx,*.js,*.jsx","max_results":10}) => ERROR: "web-ui" not found
+[2026-06-11T00:42:16.649Z] FAIL list_directory({"path":"web-ui"}) => ERROR: "web-ui" not found
+[2026-06-11T00:42:16.663Z] OK list_directory({"path":".","max_depth":1}) => Directory . (max_depth=1, entries=500/500+):
+[DIR]  .prometheus/
+[DIR]  .prometheus/agent-chats/
+[DIR]  .prometheus/analysis/
+[DIR]  .prometheus/composites/
+[DIR]  .prometheus/creative/
+[DIR]  .promet
+[2026-06-11T00:42:27.314Z] OK search_files({"pattern":"chat-input|send-button|mobile.*composer|textarea.*chat|chat.*textarea","path":".","file_glob":"*.ts,*.tsx,*.js,*.jsx,*.html","max_results":20}) => {
+  "directory": ".",
+  "pattern": "chat-input|send-button|mobile.*composer|textarea.*chat|chat.*textarea",
+  "match_count": 20,
+  "matches": [
+    {
+      "file": "oss agents/openclaw/ui/src/ui/e2e/c
+[2026-06-11T00:42:27.327Z] OK grep_files({"pattern":"web-ui/src/mobile|mobile.*chat|chat.*mobile","path":".","glob":"*.md","max_results":10}) => {
+  "directory": ".",
+  "pattern": "web-ui/src/mobile|mobile.*chat|chat.*mobile",
+  "match_count": 10,
+  "matches": [
+    {
+      "file": "audit/chats/compactions/bfd9e6e2-5214-4f22-90d0-c05f239dbd46.
+[2026-06-11T00:43:43.770Z] OK list_directory({"path":".","max_depth":4,"max_entries":200}) => Directory . (max_depth=4, entries=200/200+):
+[DIR]  .prometheus/
+[DIR]  .prometheus/agent-chats/
+[FILE] .prometheus/agent-chats/.gitkeep
+[FILE] .prometheus/agent-chats/mobile_voice_context_investigato
+[2026-06-11T00:43:44.066Z] OK search_files({"pattern":"mobile.*chat|chat.*input|textarea|sendButton|enterButton|newline|break.*line|chat-input","path":".","file_glob":"*.ts,*.tsx,*.js,*.jsx,*.html,*.vue","max_results":30}) => {
+  "directory": ".",
+  "pattern": "mobile.*chat|chat.*input|textarea|sendButton|enterButton|newline|break.*line|chat-input",
+  "match_count": 30,
+  "matches": [
+    {
+      "file": "creative-projects
+[2026-06-11T00:43:44.082Z] OK search_files({"pattern":"web-ui/src/mobile|mobile-api|mobile-pages|mobile-shell","path":".","file_glob":"*.md,*.json","max_results":20}) => {
+  "directory": ".",
+  "pattern": "web-ui/src/mobile|mobile-api|mobile-pages|mobile-shell",
+  "match_count": 20,
+  "matches": [
+    {
+      "file": "audit/chats/compactions/bfd9e6e2-5214-4f22-90d0-c0
+[2026-06-11T00:43:51.947Z] FAIL search_files({"pattern":"composer|chat-input|send-button|mobile.*composer|textarea.*chat|chat.*textarea|sendButton|blue.*button","path":"web-ui","file_glob":"*.js,*.ts,*.tsx,*.jsx","max_results":20}) => ERROR: "web-ui" not found
+[2026-06-11T00:43:51.954Z] FAIL list_directory({"path":"web-ui/src/mobile","max_depth":2,"max_entries":50}) => ERROR: "web-ui/src/mobile" not found
+[2026-06-11T00:43:55.786Z] OK search_files({"pattern":"mobile-pages\\.js|mobile-shell\\.js|mobile-api\\.js","path":".","file_glob":"*.js,*.md","max_results":10}) => {
+  "directory": ".",
+  "pattern": "mobile-pages\\.js|mobile-shell\\.js|mobile-api\\.js",
+  "match_count": 10,
+  "matches": [
+    {
+      "file": "audit/chats/compactions/bfd9e6e2-5214-4f22-90d0-c05f2
+[2026-06-11T00:43:55.798Z] OK list_directory({"path":"generated","max_depth":3,"max_entries":30}) => Directory generated (max_depth=3, entries=30/30+):
+[DIR]  generated/ascii-video-test/
+[FILE] generated/ascii-video-test/.gitkeep
+[DIR]  generated/audio/
+[DIR]  generated/audio/prometheus-fitness-promo
+[2026-06-11T00:43:59.052Z] FAIL grep_files({"pattern":"send|button|input|textarea|composer|newline|break","path":"web-ui/src/mobile","glob":"*.js","max_results":20}) => ERROR: "web-ui/src/mobile" not found
+[2026-06-11T00:43:59.061Z] FAIL list_directory({"path":"web-ui","max_depth":3,"max_entries":100}) => ERROR: "web-ui" not found
+[2026-06-11T00:45:01.735Z] OK list_directory({"path":"workspace/self","max_depth":3}) => Directory self (max_depth=3, entries=49):
+[DIR]  self/creative/
+[FILE] self/creative/00-overview.md
+[FILE] self/creative/01-runtime-scene-graph.md
+[FILE] self/creative/02-assets-uploads.md
+[FILE] self
+[2026-06-11T00:45:04.485Z] OK read_file({"filename":"workspace/self/16-mobile-app.md","start_line":1,"num_lines":100}) => self/16-mobile-app.md (390 lines) [window 1-100]:
+1: # 16) Prometheus Mobile App Maintenance Reference
+2: 
+3: Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gate
+[2026-06-11T00:45:08.468Z] FAIL grep_files({"pattern":"enterkeyhint|enterKeyHint|submitOnEnter|mobile.*input|chat-input|textarea|input.*chat","path":"web-ui/src/mobile","max_results":30}) => ERROR: "web-ui/src/mobile" not found
+[2026-06-11T00:45:08.476Z] FAIL grep_files({"pattern":"mobile.*chat|chat.*mobile","path":"web-ui/src","max_results":20}) => ERROR: "web-ui/src" not found
+[2026-06-11T00:45:10.345Z] OK list_directory({"path":".","max_depth":2}) => Directory . (max_depth=2, entries=500/500+):
+[DIR]  .prometheus/
+[DIR]  .prometheus/agent-chats/
+[FILE] .prometheus/agent-chats/.gitkeep
+[FILE] .prometheus/agent-chats/mobile_voice_context_investigato
+[2026-06-11T00:45:14.590Z] FAIL list_directory({"path":"web-ui","max_depth":2}) => ERROR: "web-ui" not found
+[2026-06-11T00:45:20.082Z] OK grep_files({"pattern":"enterkeyhint|enterKeyHint|chat-input|mobile-chat-input|textarea.*chat|input.*type=.*text.*chat","max_results":20}) => {
+  "directory": ".",
+  "pattern": "enterkeyhint|enterKeyHint|chat-input|mobile-chat-input|textarea.*chat|input.*type=.*text.*chat",
+  "match_count": 20,
+  "matches": [
+    {
+      "file": "audit/chat
+[2026-06-11T00:46:58.119Z] FAIL list_directory({"path":"web-ui","max_depth":2}) => ERROR: "web-ui" not found
+[2026-06-11T00:47:00.064Z] OK list_files({}) => {
+  "path": ".",
+  "files": [
+    "AGENTS.md",
+    "BOOT.md",
+    "BUSINESS.md",
+    "Context.md",
+    "HEARTBEAT.md",
+    "landing-page.html",
+    "MEMORY.md",
+    "Prometheus-Tool-Architecture-Refac
+[2026-06-11T00:47:03.648Z] OK request_tool_category({"category":"prometheus_source_read"}) => Tool category "prometheus_source_read" activated for session mobile_mq8s230k_ov6kxg.
+[2026-06-11T00:47:07.072Z] OK grep_source({"pattern":"enterKeyHint","root":"web-ui"}) => {
+  "searched": "web-ui/",
+  "pattern": "enterKeyHint",
+  "match_count": 0,
+  "matches": []
+}
+[2026-06-11T00:47:07.141Z] OK list_webui_source({"path":"src/pages"}) => web-ui/src/pages/:
+[FILE] AuditPage.js
+[FILE] ChatPage.js
+[FILE] ConnectionsPage.js
+[FILE] HubPage.js
+[FILE] MemoryPage.js
+[FILE] ProjectsPage.js
+[FILE] ProposalsPage.js
+[FILE] SchedulePage.js
+[FILE] 
+[2026-06-11T00:47:11.781Z] OK grep_source({"pattern":"textarea|<textarea|onKeyDown","root":"web-ui","glob":"*.js","max_results":40}) => {
+  "searched": "web-ui/",
+  "pattern": "textarea|<textarea|onKeyDown",
+  "match_count": 40,
+  "matches": [
+    {
+      "file": "web-ui/src/components/creative/editor/interactions/text-edit.js",
+     
+[2026-06-11T00:47:11.853Z] OK list_prom({}) => ./:
+[DIR]  .prometheus/
+[DIR]  dist/
+[DIR]  electron/
+[FILE] package-lock.json
+[FILE] package.json
+[DIR]  scripts/
+[DIR]  src/
+[FILE] tsconfig.json
+[DIR]  web-ui/
+[2026-06-11T00:47:17.955Z] OK read_webui_source({"file":"src/mobile/mobile-pages.js","start_line":3560,"num_lines":40}) => web-ui/src/mobile/mobile-pages.js (18777 lines):
+3560:     ${renderMobileContextChip()}
+3561:     <div class="pm-body pm-chat-body" id="pm-chat-body">
+3562:       <div class="pm-chat-thread" id="pm-
+[2026-06-11T00:47:18.032Z] FAIL grep_source({"pattern":"pm-composer-input|composerKeydown|Enter","root":"web-ui","path":"mobile","glob":"*.js","max_results":60}) => ERROR: web-ui/mobile not found. Likely intended paths:
+1) web-ui/src/mobile/
+
+Next: retry with one candidate, or use list_webui_source to browse nearby files.
+[2026-06-11T00:47:21.648Z] OK grep_source({"pattern":"key === 'Enter'|key==='Enter'|keydown|Enter","root":"web-ui","path":"src/mobile","glob":"*.js","max_results":40}) => {
+  "searched": "web-ui/src/mobile",
+  "pattern": "key === 'Enter'|key==='Enter'|keydown|Enter",
+  "match_count": 14,
+  "matches": [
+    {
+      "file": "web-ui/src/mobile/mobile-pages.js",
+      "lin
+[2026-06-11T00:47:25.233Z] OK read_webui_source({"file":"src/mobile/mobile-pages.js","start_line":6040,"num_lines":60}) => web-ui/src/mobile/mobile-pages.js (18777 lines):
+6040:     resizeComposerInput();
+6041:     _pmHandleSlashInput(page, input);
+6042:     _pmRenderSkillTriggerPill(page, input);
+6043:     updateCompo
+[2026-06-11T00:47:48.588Z] OK request_dev_source_edit({"files":["web-ui/src/mobile/mobile-pages.js"],"reason":"Make the iOS Safari keyboard on the mobile chat composer show a line-break (return) key instead of the blue Send key, and let Enter insert newl) => Approved dev source edit scope for this session: web-ui/src/mobile/mobile-pages.js.
+Approved plan hash: f79a572a21097919; dev_edit_id: dev_edit_mq8s3alr_4c801b76.
+Use source-specific tools only. When 
+[2026-06-11T00:47:57.604Z] FAIL apply_dev_source_patchset({"edits":[{"file":"web-ui/src/mobile/mobile-pages.js","op":"find_replace","find":"<textarea class=\"pm-composer-input\" id=\"pm-composer-input\" rows=\"1\" placeholder=\"Type a message…\" aria-label=\) => Unknown tool: apply_dev_source_patchset
+[2026-06-11T00:48:05.769Z] FAIL find_replace_webui_source({"file":"src/mobile/mobile-pages.js","find":"autocapitalize=\"sentences\" enterkeyhint=\"send\"></textarea>\n        <button type=\"button\" class=\"pm-icon-btn\" id=\"pm-chat-mic-btn\"","replace":"au) => ERROR: Text not found in web-ui/src/mobile/mobile-pages.js. Likely intended locations:
+1) same text with normalized whitespace, lines 3576-3577:
+3574:       <div class="pm-composer-row">
+3575:       
+[2026-06-11T00:48:06.826Z] FAIL find_replace_webui_source({"file":"src/mobile/mobile-pages.js","find":"    if (!popoverOpen) {\n      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {\n        e.preventDefault();\n        if (t) => ERROR: Text not found in web-ui/src/mobile/mobile-pages.js. Likely intended locations:
+1) same text with normalized whitespace, lines 6048-6055:
+6046:     const suggestions = _pmSlashCommandSuggestion
+[2026-06-11T00:48:12.176Z] OK replace_lines_webui_source({"file":"src/mobile/mobile-pages.js","start_line":3576,"end_line":3576,"new_content":"        <textarea class=\"pm-composer-input\" id=\"pm-composer-input\" rows=\"1\" placeholder=\"Type a message…\" ) => OK web-ui/src/mobile/mobile-pages.js: replaced lines 3576-3576 (now 18777 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=mobile; write_note tag=dev_edit_complete. dev_ed
+[2026-06-11T00:48:19.697Z] OK replace_lines_webui_source({"file":"src/mobile/mobile-pages.js","start_line":6049,"end_line":6054,"new_content":"      // Plain Enter inserts a newline (default behavior) so multi-paragraph\n      // messages can be typed; send) => OK web-ui/src/mobile/mobile-pages.js: replaced lines 6049-6054 (now 18773 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=mobile; write_note tag=dev_edit_complete. dev_ed
+[2026-06-11T00:48:24.956Z] OK read_webui_source({"file":"src/mobile/mobile-pages.js","start_line":6045,"num_lines":12}) => web-ui/src/mobile/mobile-pages.js (18773 lines):
+6045:   input?.addEventListener('keydown', (e) => {
+6046:     const suggestions = _pmSlashCommandSuggestions(input.value);
+6047:     const popoverOpe
+[2026-06-11T00:48:36.544Z] OK prom_apply_dev_changes({"changed_surfaces":["mobile"],"mode":"apply_live","reason":"Make the iOS Safari keyboard on the mobile chat composer show a line-break (return) key instead of the blue Send key, and let Enter insert ) => prom_apply_dev_changes succeeded. npm run sync:web-ui ok (5027ms); desktop web UI reload requested. Next, call write_note with tag "dev_edit_complete" to complete dev edit dev_edit_mq8s3alr_4c801b76.
+[2026-06-11T00:48:50.360Z] OK write_note({"content":"Mobile chat composer (#pm-composer-input) in web-ui/src/mobile/mobile-pages.js: changed enterkeyhint \"send\"->\"enter\" (line 3576) and removed the plain-Enter requestSubmit branch in the) => Note saved [dev_edit_complete] (426 chars) -> intraday-notes
+[2026-06-11T00:49:34.929Z] OK prom_repo_push({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
