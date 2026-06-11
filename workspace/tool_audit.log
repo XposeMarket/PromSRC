@@ -42771,3 +42771,12 @@ From https://github.com/XposeMarket/promsrc
  * branch            main       -> FETCH_HEAD
 hint: You have divergent branches and need to specify how to reconcile them.
 hint: Yo
+[2026-06-11T01:39:09.361Z] FAIL prom_repo_sync({"message":"Sync after divergent branches on main (pull + restart request)"}) => ❌ prom_repo_sync: pull/merge failed.
+Your local commit "Sync after divergent branches on main (pull + restart request)" is safe locally; nothing was pushed.
+
+From https://github.com/XposeMarket/promsr
+[2026-06-11T01:40:40.995Z] FAIL prom_repo_pull({}) => ❌ prom_repo_pull failed:
+From https://github.com/XposeMarket/promsrc
+ * branch            main       -> FETCH_HEAD
+hint: You have divergent branches and need to specify how to reconcile them.
+hint: Yo
