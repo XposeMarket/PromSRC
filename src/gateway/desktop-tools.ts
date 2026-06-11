@@ -1013,12 +1013,19 @@ if ($cropX2 -gt $cropX1 -and $cropY2 -gt $cropY1) {
 }
 # --- End crop ---
 $tmp = Join-Path $env:TEMP ("prometheus-desktop-" + [guid]::NewGuid().ToString() + ".png")
+# Report the REAL saved bitmap pixel dimensions, not the logical $bounds size.
+# On DPI-scaled / partial-DPI-aware processes, the bitmap (physical pixels captured
+# via CopyFromScreen) can diverge from $bounds (logical/virtual-screen coords). Using
+# $bmp.Width/$bmp.Height keeps the downstream coordinateScale (shot.width / imageWidth)
+# exact so capture-space clicks resolve to the correct virtual desktop coordinates.
+$realWidth = [int]$bmp.Width
+$realHeight = [int]$bmp.Height
 $bmp.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 [PSCustomObject]@{
   path = [string]$tmp
-  width = [int]$bounds.Width
-  height = [int]$bounds.Height
+  width = $realWidth
+  height = $realHeight
   left = [int]$bounds.Left
   top = [int]$bounds.Top
 } | ConvertTo-Json -Compress

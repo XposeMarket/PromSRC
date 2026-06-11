@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v35-2026-06-09-fast-mode-and-button-haptics';
+const VERSION = 'pm-v38-2026-06-10-liquid-glass-outer-halo';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 

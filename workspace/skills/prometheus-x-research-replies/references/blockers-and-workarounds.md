@@ -1,6 +1,6 @@
 # Known Blockers & Workarounds — X Research & Replies Workflow
 
-**Last Updated:** 2026-06-08
+**Last Updated:** 2026-06-09
 
 ## External Blockers (Not Skill Issues)
 
@@ -11,47 +11,45 @@ These blockers are infrastructure or credential limitations, not skill gaps. All
 **Root Cause:** Free xAI Grok credits exhausted; resets monthly or require paid subscription.
 **Workaround:**
 - Upgrade to paid Grok subscription at grok.com
-- Switch to `web_search` + keyword filtering for research fallback
-- Delegate x_search to a separate scheduled job with independent credits
-**Status:** Active blocker as of 2026-06-08. Fallback to web_search confirmed working.
+- Switch to `web_search` + keyword filtering for research fallback (confirmed working 2026-06-09)
+- **Best path:** Use browser-first research (open x.com/home, scroll timeline) — zero API dependency
+**Status:** Active blocker as of 2026-06-09. Browser-first research is the primary confirmed fallback.
 
 ### 2. X Browser Auth Missing (@raulinvests Profile)
 **Symptom:** `browser_open` to x.com/home lands on login page; no raulinvests avatar or credentials available.
 **Root Cause:** No stored browser session/credentials for raulinvests in scheduled job context; scheduled agents run with a fresh/clean browser profile.
 **Workaround:**
+- If @raulinvests is already logged in on the desktop browser (interactive runs), browser-first posting works without credentials
 - Store raulinvests password in Prometheus vault/auth system for automated login
-- Use X OAuth flow instead of browser password login
-- Manually log in once and persist the session cookie to the scheduled context
-- Use X API create_post directly (see blocker 3)
-**Status:** Active blocker as of 2026-06-08. Affects all browser-based posting attempts.
+- Manually log in once to persist the session cookie
+**Status:** Partially resolved — interactive desktop runs succeed when logged in. Scheduled cron context still needs persistent credentials.
 
 ### 3. X API Token Invalid / Expired (@raulinvests)
-**Symptom:** X API calls return 401 Unauthorized or "invalid token refresh" (400 error).
-**Root Cause:** OAuth token for @raulinvests account is expired or revoked; typical for accounts unused > 1 week.
+**Symptom:** X API calls return 401 Unauthorized or "invalid token refresh" (400 error, `x_api_me` fails).
+**Root Cause:** OAuth token for @raulinvests account is expired or revoked.
 **Workaround:**
 - Refresh/re-authorize @raulinvests account on X OAuth app settings
 - Regenerate personal API key/bearer token at developer.twitter.com
-- Verify token is stored in Prometheus vault under the correct path (check SOUL.md/BUSINESS.md for expected location)
-- Test with a test X API call before attempting research workflow
-**Status:** Active blocker as of 2026-06-08. X API posting unavailable until token is refreshed.
+- **Preferred short-term path:** Avoid API calls entirely; use browser-first research + posting
+**Status:** Active blocker as of 2026-06-09. Browser path does not need the API token.
 
-## Prepared Content (Ready When Auth Fixed)
+## Successful Workflow Pattern (2026-06-09)
 
-Three research angles prepared on 2026-06-08 but not posted due to blockers above. Ready to post immediately once auth is restored:
+Browser-first research + posting confirmed fully working in the late evening run:
+1. `browser_open("https://x.com/home")` → already logged in as @raulinvests
+2. `browser_snapshot / scroll / get_page_text` → captured trending topics from live timeline
+3. Keyboard shortcuts `n` / `r` + `Control+Enter` for composing and submitting
+4. `browser_close()` immediately after all posting
 
-1. **Agent Reasoning Patterns:** "Agent reasoning patterns are shifting fast in 2026. The ones that learn from task feedback, refine their approach incrementally, and build domain-specific reasoning improve dramatically over time. That's different from throwing more parameters at the problem. This is where local learning and persistent memory shine."
-
-2. **Agent Specialization:** "Specialization wins in 2026. Generalist LLM chatbots lost. Agents with domain reasoning, local learning, and task-specific memory are outperforming. That's a shift."
-
-3. **Human-AI Collaboration:** "In 2026, agent memory is the last real battleground. Stateless chatbots → stateful learning agents. The teams with durable, queryable memory across sessions will outcompete those rebuilding context every turn."
+See full recipe: `references/workflows/prometheus-x-research-replies-2026-06-09.md`
 
 ## Recommended Next Steps
 
-1. Verify and refresh X API token before next workflow run
-2. Add xAI Grok credits or migrate to web_search fallback
-3. Store safe browser credentials for @raulinvests or switch to X API posting
-4. Test credentials before the next scheduled run (consider a manual test run after fixes)
+1. Keep browser-first research as primary path (stable, zero API dependency)
+2. Verify/refresh X API token when convenient — not blocking the browser-first path
+3. Consider a scheduled credential-keepalive job for the X browser session in the cron context
+4. Add xAI Grok credits when available — x_search gives better signal than web_search for reply targeting
 
 ---
 
-*This reference is maintained by Dream/Skill Curator and updated whenever blockers change or new failure patterns emerge.*
+*changeType: update_blocker_status — evidence: Brain/skill-episodes/2026-06-09/episodes.jsonl, appliedBy: brain_dream, reason: Document 2026-06-09 successful browser-first pattern and update blocker statuses*

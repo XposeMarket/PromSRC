@@ -14616,7 +14616,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         // ── prom_repo_push / prom_repo_pull: git sync of the Prometheus repo ───
-        if (name === 'prom_repo_push' || name === 'prom_repo_pull') {
+        if (name === 'prom_repo_push' || name === 'prom_repo_pull' || name === 'prom_repo_sync') {
           const { execSync } = require('child_process');
           const fsmod = require('fs');
           const osmod = require('os');
@@ -14691,18 +14691,48 @@ export async function executeTool(name: string, args: any, workspacePath: string
             `3. Then retry the ${action}. No gateway restart is needed — the PAT is read live from disk on each call.`,
           ].join('\n');
 
+          const prefix = patSaveNote ? patSaveNote + '\n\n' : '';
+
           if (name === 'prom_repo_pull') {
             const pull = run(`git pull ${remoteArg} ${branch} --no-edit`, 180_000);
             if (!pull.success && isAuthFailure(pull.output)) {
-              return { name, args, result: `${patSaveNote ? patSaveNote + '\n\n' : ''}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}`, error: true };
+              return { name, args, result: `${prefix}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}`, error: true };
+            }
+            if (!pull.success) {
+              const conflicts = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
+              if (conflicts) {
+                run('git merge --abort', 30_000);
+                return {
+                  name,
+                  args,
+                  result:
+                    `${prefix}❌ prom_repo_pull hit merge conflicts in:\n${conflicts}\n\n` +
+                    'Merge was aborted — your working tree is unchanged. These files were changed on BOTH machines in overlapping lines. ' +
+                    'Resolve by editing them on one machine only, or commit your local work and use prom_repo_sync to merge deliberately.\n\n' +
+                    `${sanitize(pull.output) || '(no output)'}`,
+                  error: true,
+                };
+              }
+              if (/local changes|overwritten|commit your changes|stash/i.test(pull.output)) {
+                return {
+                  name,
+                  args,
+                  result:
+                    `${prefix}❌ prom_repo_pull blocked: you have uncommitted local changes that overlap incoming changes. ` +
+                    'Use prom_repo_sync — it commits your changes and merges in one safe step.\n\n' +
+                    `${sanitize(pull.output) || '(no output)'}`,
+                  error: true,
+                };
+              }
+              return { name, args, result: `${prefix}❌ prom_repo_pull failed:\n${sanitize(pull.output) || '(no output)'}`, error: true };
             }
             return {
               name,
               args,
               result:
-                `${patSaveNote ? patSaveNote + '\n\n' : ''}${pull.success ? '✅' : '❌'} prom_repo_pull (${branch}) ${pull.success ? 'succeeded' : 'failed'} (${pull.durationMs}ms).\n\n` +
+                `${prefix}✅ prom_repo_pull (${branch}) succeeded (${pull.durationMs}ms).\n\n` +
                 `${sanitize(pull.output) || '(no output)'}`,
-              error: !pull.success,
+              error: false,
             };
           }
 
@@ -14759,7 +14789,78 @@ export async function executeTool(name: string, args: any, workspacePath: string
             committed = true;
           }
 
+          // ── prom_repo_sync: commit (done above) → pull/merge → push ──────────
+          if (name === 'prom_repo_sync') {
+            const beforeMerge = (run('git rev-parse HEAD', 15_000).output || '').trim();
+            const pull = run(`git pull ${remoteArg} ${branch} --no-edit`, 180_000);
+            const commitSafeNote = committed
+              ? `Your local commit "${message.split(/\r?\n/)[0]}" is safe locally; nothing was pushed.\n\n`
+              : '';
+            if (!pull.success) {
+              if (isAuthFailure(pull.output)) {
+                return { name, args, result: `${prefix}${commitSafeNote}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}`, error: true };
+              }
+              const conflicts = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
+              if (conflicts) {
+                run('git merge --abort', 30_000);
+                return {
+                  name,
+                  args,
+                  result:
+                    `${prefix}❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:\n${conflicts}\n\n` +
+                    `Merge aborted. ${commitSafeNote}` +
+                    'Resolve manually: open those files, keep the intended combined content, then run prom_repo_sync again. ' +
+                    '(Editing a given file on only one machine at a time avoids this entirely.)\n\n' +
+                    `${sanitize(pull.output) || '(no output)'}`,
+                  error: true,
+                };
+              }
+              return { name, args, result: `${prefix}❌ prom_repo_sync: pull/merge failed.\n${commitSafeNote}${sanitize(pull.output) || '(no output)'}`, error: true };
+            }
+
+            // Push the merged result; retry once if origin advanced between our pull and push.
+            let push = run(`git push ${remoteArg} ${branch}`, 180_000);
+            if (!push.success && !isAuthFailure(push.output) && /non-fast-forward|fetch first|\[rejected\]|tip of your current branch is behind|updates were rejected/i.test(push.output)) {
+              const pull2 = run(`git pull ${remoteArg} ${branch} --no-edit`, 180_000);
+              if (pull2.success) {
+                push = run(`git push ${remoteArg} ${branch}`, 180_000);
+              } else {
+                const conflicts2 = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
+                if (conflicts2) run('git merge --abort', 30_000);
+              }
+            }
+            if (!push.success && isAuthFailure(push.output)) {
+              return { name, args, result: `${prefix}(Merge succeeded locally; your work is committed and safe.)\n\n${patHelp('push')}\n\nGit output:\n${sanitize(push.output) || '(no output)'}`, error: true };
+            }
+
+            const mergedIn = beforeMerge ? (run(`git diff --name-only ${beforeMerge} HEAD`, 30_000).output || '').trim() : '';
+            const lines: string[] = [];
+            if (patSaveNote) { lines.push(patSaveNote); lines.push(''); }
+            lines.push(committed ? `Committed locally: ${message.split(/\r?\n/)[0]}` : 'No local changes to commit.');
+            lines.push('');
+            lines.push(mergedIn ? `Merged in from origin/${branch} (no overwrite):\n${mergedIn}` : `Nothing new on origin/${branch} to merge.`);
+            lines.push('');
+            lines.push(`${push.success ? '✅' : '❌'} push to origin/${branch} ${push.success ? 'succeeded' : 'failed'} (${push.durationMs}ms).`);
+            lines.push(sanitize(push.output) || '(no output)');
+            if (push.success) {
+              lines.push('');
+              lines.push(`Done — local and origin/${branch} now hold the combined history. Run prom_repo_sync (or prom_repo_pull) on the OTHER machine to bring these changes down there too.`);
+            }
+            return { name, args, result: lines.join('\n'), error: !push.success };
+          }
+
           const push = run(`git push ${remoteArg} ${branch}`, 180_000);
+          if (!push.success && !isAuthFailure(push.output) && /non-fast-forward|fetch first|\[rejected\]|tip of your current branch is behind|updates were rejected/i.test(push.output)) {
+            return {
+              name,
+              args,
+              result:
+                `${prefix}❌ prom_repo_push rejected: origin/${branch} has commits you don't have locally (likely pushed from the other machine). ` +
+                'Git blocked the push so nothing gets overwritten. Use prom_repo_sync instead — it merges those in and pushes the combined result safely.\n\n' +
+                `${sanitize(push.output) || '(no output)'}`,
+              error: true,
+            };
+          }
           if (!push.success && isAuthFailure(push.output)) {
             return {
               name,

@@ -387,9 +387,9 @@ function _ensureLiquidGlassFilters() {
          style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;">
       <defs>
         <filter id="pm-liquid-glint" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves="2" seed="5" result="n" />
-          <feGaussianBlur in="n" stdDeviation="0.4" result="nb" />
-          <feDisplacementMap in="SourceGraphic" in2="nb" scale="16" xChannelSelector="R" yChannelSelector="G" />
+          <feTurbulence type="fractalNoise" baseFrequency="0.006 0.009" numOctaves="2" seed="5" result="n" />
+          <feGaussianBlur in="n" stdDeviation="0.6" result="nb" />
+          <feDisplacementMap in="SourceGraphic" in2="nb" scale="10" xChannelSelector="R" yChannelSelector="G" />
         </filter>
       </defs>
     </svg>`;
@@ -478,7 +478,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       if (typeof onNavigate === 'function') onNavigate(route);
     });
   });
-  _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {
+  const _drawerNewChatBtn = _drawerEl.querySelector('[data-mobile-new-chat]');
+  // Haptic feedback on the drawer's New Chat button
+  if (_drawerNewChatBtn) {
+    try { attachMobileButtonHaptic(_drawerNewChatBtn, () => _drawerNewChatBtn.click()); } catch {}
+  }
+  _drawerNewChatBtn?.addEventListener('click', () => {
     closeDrawer();
     Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
       .then(() => {
@@ -487,6 +492,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       })
       .catch(() => {});
   });
+
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
@@ -530,6 +536,11 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   // the native switch overlay (iOS haptic) and navigates on release; dragging
   // lets the pill track the finger and snaps to the tab you let go over.
   _wireTabbarSlider(tabbar, { onNavigate, getActiveTab: () => activeTab });
+  // Outer refraction halo — a sibling (NOT a child, so it escapes the tabbar's
+  // overflow:hidden clip) that extends a few px beyond the bar. Its backdrop
+  // filter distorts the real background passing behind the panel's outer edge.
+  // Appended before the bar so the bar paints on top of it.
+  app.appendChild(el('<div class="pm-glass-halo pm-tabbar-halo" aria-hidden="true"></div>'));
   app.appendChild(tabbar);
   _rememberActiveTab(activeTab);
   // Snap the pill onto the active tab once laid out; animate from the previous
@@ -1455,5 +1466,24 @@ export function wireHeaderActions(pageEl, { onLeft, onSettings, onBack, onNewCha
       }
       else if (a === 'new-chat' && onNewChat) onNewChat();
     });
+    // Haptic feedback for all header icon buttons — use direct action callbacks
+    // instead of btn.click() so the hamburger reliably opens the drawer on iOS
+    // (synthetic click events from the haptic overlay don't always re-trigger the
+    // delegated shell listener).
+    try {
+      let activateFn;
+      if (a === 'menu') activateFn = () => openDrawer();
+      else if (a === 'back') activateFn = () => { if (onBack) onBack(); };
+      else if (a === 'settings') activateFn = () => {
+        if (onSettings) onSettings();
+        else if (typeof window.pmOpenSettings === 'function') window.pmOpenSettings();
+        else if (typeof window.openSettings === 'function') window.openSettings();
+        else window.location.hash = '#mobile/settings';
+      };
+      else if (a === 'new-chat') activateFn = () => { if (onNewChat) onNewChat(); };
+      if (activateFn) attachMobileButtonHaptic(btn, activateFn);
+    } catch {}
+  
   });
 }
+

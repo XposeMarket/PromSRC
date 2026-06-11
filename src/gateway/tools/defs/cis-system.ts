@@ -1059,6 +1059,29 @@ export function getCisSystemTools(): any[] {
         },
       },
     },
+    // ── prom_repo_sync: safe two-way sync (commit → merge → push) ─────────────
+    {
+      type: 'function',
+      function: {
+        name: 'prom_repo_sync',
+        description:
+          'Dev-only: the SAFE way to sync edits between machines (e.g. Mac ↔ desktop) without overwriting anything. ' +
+          'It (1) stages + commits ALL local changes, (2) git pull --no-edit to MERGE in whatever the other machine pushed, then (3) pushes the combined result. ' +
+          'Because step 2 merges, edits to DIFFERENT files (e.g. mobile pages here + prompt-context on the other machine) combine automatically — nothing is lost. ' +
+          'If the SAME lines of the SAME file were changed on both machines, git reports a real conflict: the merge is aborted (your local commit stays safe, nothing is pushed) and the conflicting files are returned for you to resolve. ' +
+          'COMMIT MESSAGE: same as prom_repo_push — pass the user\'s message verbatim, or omit it to first get the diff back and author an accurate one. ' +
+          'After a successful sync, run prom_repo_sync (or prom_repo_pull) on the OTHER machine to bring the combined changes down there too. ' +
+          'AUTH: same PAT handling as prom_repo_push (set_pat to save a token). Does NOT rebuild/restart — follow with prom_apply_dev_changes if src/ or web-ui/ changed. Public builds disable this tool.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            message: { type: 'string', description: 'Commit message for THIS machine\'s local changes. Omit to first receive the diff so you can author an accurate message.' },
+            set_pat: { type: 'string', description: 'Optional GitHub PAT to save locally for future syncs (config dir only, never committed).' },
+          },
+        },
+      },
+    },
     // ── request_tool_category: activate on-demand tool category ─────────────
     {
       type: 'function',
