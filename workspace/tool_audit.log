@@ -42722,3 +42722,41 @@ asked claude fable 5 to recreate one of the most creative threejs experiments fr
 [2026-06-10T23:05:35.475Z] OK write_note({"content":"Executed full X research & replies workflow via browser: 2 quote-reposts from home feed (Video Use project + Polymarket AI displacement) + 1 from Fable 5/Hermes search (threejs moss experi) => Note saved [last_run_insight] (301 chars) -> intraday-notes
 [2026-06-10T23:05:44.703Z] OK write_note({"content":"What worked: j/k + t shortcuts + immediate focused-item confirmation prevented scroll loops and delivered clean quote-reposts. Persistent @raulinvests session held perfectly. What was tric) => Note saved [last_run_insight] (376 chars) -> intraday-notes
 [2026-06-11T00:08:46.738Z] OK prom_repo_sync({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
+[2026-06-11T00:39:20.462Z] OK skill_list({}) => 122 skills available. Call skill_read(id) to load one.
+
+ai-surface-smoke-research - Run Raul's browser/desktop test workflow: focus Codex and Claude, open Chrome/browser, search Reddit and/or X for AI
+[2026-06-11T00:41:50.893Z] OK list_files({"path":"."}) => {
+  "path": ".",
+  "files": [
+    ".DS_Store",
+    "AGENTS.md",
+    "BOOT.md",
+    "BUSINESS.md",
+    "Context.md",
+    "HEARTBEAT.md",
+    "MEMORY.md",
+    "PROMETHEUS_FULL_THREAD_AUDIT.md",
+    "Pro
+[2026-06-11T01:07:16.117Z] OK list_directory({"path":"audit","max_depth":2}) => Directory audit (max_depth=2, entries=439):
+[DIR]  audit/_index/
+[DIR]  audit/_index/memory/
+[DIR]  audit/_index/memory/operational/
+[FILE] audit/_index/memory/.gitkeep
+[FILE] audit/_index/memory/grap
+[2026-06-11T01:07:19.847Z] FAIL file_stats({"filename":"Brain/active-work.jsonl"}) => ERROR: File "Brain/active-work.jsonl" not found
+[2026-06-11T01:07:19.863Z] OK list_directory({"path":"Brain"}) => Directory Brain (max_depth=2, entries=500/500+):
+[DIR]  Brain/business-candidates/
+[DIR]  Brain/business-candidates/2026-05-15/
+[FILE] Brain/business-candidates/2026-05-15/.gitkeep
+[DIR]  Brain/busine
+[2026-06-11T01:07:24.753Z] OK read_file({"filename":"audit/memory/files/2026-06-10-intraday-notes.md","start_line":1,"num_lines":100}) => audit/memory/files/2026-06-10-intraday-notes.md (128 lines) [window 1-100]:
+1: 
+2: ### [DISCOVERY] 2026-06-10T01:02:00.146Z
+3: _Source: Mobile chat session; session: mobile_mq7d3bdf_yj8r5c; origin: Mo
+[2026-06-11T01:07:27.850Z] OK mkdir({"path":"Brain/thoughts/2026-06-10"}) => OK directory created: Brain/thoughts/2026-06-10
+[2026-06-11T01:07:36.960Z] OK write_file({"filename":"Brain/thoughts/2026-06-10/14-53-thought.md","content":"---\n# Thought 3 - 2026-06-10 | Window: 2026-06-10 18:53 UTC-2026-06-11 01:07 UTC\n_Generated: 2026-06-10 21:07 local_\n\n## Summary) => OK wrote Brain/thoughts/2026-06-10/14-53-thought.md (88 lines).
+[2026-06-11T01:07:58.339Z] FAIL prom_repo_pull({}) => ❌ prom_repo_pull blocked: you have uncommitted local changes that overlap incoming changes. Use prom_repo_sync — it commits your changes and merges in one safe step.
+
+Updating 8fbfeb7..cd21398
+
+From h
