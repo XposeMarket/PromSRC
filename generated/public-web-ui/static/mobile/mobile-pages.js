@@ -9,7 +9,7 @@ import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import { attachMobileButtonHaptic } from './mobile-model-badge.js';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import {
-  loadMobileSchedules, toggleSchedule, runScheduleNow,
+  loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule,
   loadMobileTeams, loadMobileTeamDetail,
   startTeamRun, pauseTeam, resumeTeam, triggerTeamReview, deleteTeam,
   saveTeamContextReference, invalidateTeamsCache,
@@ -1100,6 +1100,26 @@ function _appendMobileLiveTrace(message, type, text, { append = false } = {}) {
   }
 }
 
+function _appendMobileVisionTrace(message, evt) {
+  if (!message || !evt) return;
+  const preview = evt.preview && typeof evt.preview === 'object' ? evt.preview : {};
+  const dataUrl = String(preview.dataUrl || evt.dataUrl || '').trim();
+  if (!/^data:image\//i.test(dataUrl)) return;
+  if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  const source = String(evt.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+  const tool = String(evt.tool || evt.action || evt.name || '').trim();
+  const text = `Vision injected: ${tool ? _mobileToolLabel({ ...evt, action: tool }) : `${source} observation`}`;
+  const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
+  if (last && last.type === 'vision' && String(last.text || '') === text && String(last?.preview?.dataUrl || '') === dataUrl) return;
+  message.liveTraceEntries.push({
+    type: 'vision',
+    text,
+    time: _nowTime(),
+    preview,
+    previewTitle: `${source} screenshot`,
+  });
+}
+
 function _isMobileStartupStatusText(value) {
   return /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i
     .test(String(value || '').trim());
@@ -1164,18 +1184,32 @@ function _moveMobilePreToolAnswerIntoPreamble(message) {
   message.finalResponseStarted = false;
 }
 
+function _renderMobileLiveTracePreview(entry) {
+  const preview = entry?.preview && typeof entry.preview === 'object' ? entry.preview : null;
+  const dataUrl = String(preview?.dataUrl || entry?.dataUrl || '').trim();
+  if (!/^data:image\//i.test(dataUrl)) return '';
+  const title = String(entry?.previewTitle || entry?.text || 'Vision screenshot preview').trim();
+  const width = Number(preview?.width || entry?.width || 0);
+  const height = Number(preview?.height || entry?.height || 0);
+  const dims = width > 0 && height > 0 ? ` (${Math.round(width)}x${Math.round(height)})` : '';
+  return `<button type="button" class="pm-live-vision-preview" title="${escapeHtml(title + dims)}">
+    <img src="${escapeHtml(dataUrl)}" alt="${escapeHtml(title)}" loading="lazy">
+  </button>`;
+}
+
 function _renderMobileLiveTrace(entries) {
-  const list = (Array.isArray(entries) ? entries : []).filter((entry) => String(entry?.text || '').trim());
+  const list = (Array.isArray(entries) ? entries : []).filter((entry) => String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim());
   if (!list.length) return '';
   return `<div class="pm-live-trace">${list.map((entry) => {
     const type = String(entry.type || 'info').toLowerCase();
     const text = String(entry.text || '').trim();
+    const previewHtml = _renderMobileLiveTracePreview(entry);
     if (type === 'preamble' || type === 'think' || type === 'assistant') {
-      return `<div class="pm-live-prose ${escapeHtml(type)}"><div class="pm-live-md">${_renderMobileMarkdown(text)}</div></div>`;
+      return `<div class="pm-live-prose ${escapeHtml(type)}"><div class="pm-live-md">${_renderMobileMarkdown(text)}</div>${previewHtml}</div>`;
     }
-    const label = type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
-    const body = `<div class="pm-live-text">${escapeHtml(text)}</div>`;
-    return `<div class="pm-live-segment ${escapeHtml(type)}"><span>${escapeHtml(label)}</span>${body}</div>`;
+    const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+    const body = text ? `<div class="pm-live-text">${escapeHtml(text)}</div>` : '';
+    return `<div class="pm-live-segment ${escapeHtml(type)}"><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
   }).join('')}</div>`;
 }
 
@@ -4204,8 +4238,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
           localThread,
         );
         _activeMobileThread();
-        _renderThread(threadEl);
-        _scrollChat(body);
+        _flushThreadRender(threadEl, body, requestedSession);
         if (!silent) pmToast('Recovered latest mobile chat result.', 'success');
       }
       _clearMobileActiveRun(requestedSession);
@@ -4542,6 +4575,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`, evt);
         _appendMobileLiveTrace(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`);
+        renderMobileSideSheet();
+        return 'streaming';
+      case 'vision_injected':
+        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        aiTurn.toolActivityStarted = true;
+        _appendMobileVisionTrace(aiTurn, evt);
         renderMobileSideSheet();
         return 'streaming';
       case 'final':
@@ -5099,6 +5138,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         renderThreadSoon();
         return 'streaming';
       }
+      case 'vision_injected':
+        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        aiTurn.toolActivityStarted = true;
+        _appendMobileVisionTrace(aiTurn, evt);
+        renderThreadSoon();
+        return 'streaming';
       case 'tool_progress': {
         _moveMobilePreToolAnswerIntoPreamble(aiTurn);
         aiTurn.toolActivityStarted = true;
@@ -5724,11 +5769,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   }
   window.__pmMobileSendMessage = sendMessage;
 
-  const runRecoveryOnReturn = () => scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
+  let lastForegroundRecoveryAt = 0;
+  const runRecoveryOnReturn = () => {
+    const now = Date.now();
+    if (now - lastForegroundRecoveryAt < 5000) return;
+    lastForegroundRecoveryAt = now;
+    scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
+  };
   const runRecoveryOnVisibility = () => {
     if (!document.hidden) runRecoveryOnReturn();
   };
-  const runRecoveryOnWsOpen = () => scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
+  const runRecoveryOnWsOpen = () => runRecoveryOnReturn();
   const onMainChatStreamEvent = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return;
     if (__pmChat.activeSessionId !== requestedSession) return;
@@ -11048,6 +11099,8 @@ export async function renderVoicePage(page, ctx) {
   let voiceWaveSource = null;
   let voiceWaveStream = null;
   let voiceWaveBins = null;
+  let voiceStrandsGl = null;
+  let voiceStrandsAudioLevel = 0;
 
   function _updateVoiceVisualState() {
     const active = !!(__pmVoice.listening || __pmVoice.speaking || __pmVoice.realtimeSpeechActiveResponse);
@@ -11064,9 +11117,9 @@ export async function renderVoicePage(page, ctx) {
     if (waveCanvas.width !== width || waveCanvas.height !== height) {
       waveCanvas.width = width;
       waveCanvas.height = height;
+      voiceStrandsGl?.gl?.viewport?.(0, 0, width, height);
     }
-    voiceWaveCtx = voiceWaveCtx || waveCanvas.getContext('2d');
-    voiceWaveCtx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (voiceWaveCtx) voiceWaveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   function _connectVoiceWaveAnalyser() {
@@ -11095,11 +11148,206 @@ export async function renderVoicePage(page, ctx) {
     }
   }
 
+  function _initVoiceStrandsGl() {
+    if (voiceStrandsGl || !waveCanvas) return voiceStrandsGl;
+    const gl = waveCanvas.getContext('webgl2', {
+      alpha: true,
+      premultipliedAlpha: true,
+      antialias: true,
+    });
+    if (!gl) return null;
+
+    const vert = `#version 300 es
+in vec2 position;
+void main() {
+  gl_Position = vec4(position, 0.0, 1.0);
+}
+`;
+    const frag = `#version 300 es
+precision highp float;
+
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec3 uColors[8];
+uniform int uColorCount;
+uniform int uStrandCount;
+uniform float uSpeed;
+uniform float uAmplitude;
+uniform float uWaviness;
+uniform float uThickness;
+uniform float uGlow;
+uniform float uTaper;
+uniform float uSpread;
+uniform float uHueShift;
+uniform float uIntensity;
+uniform float uOpacity;
+uniform float uScale;
+uniform float uSaturation;
+
+out vec4 fragColor;
+
+const float PI = 3.14159265;
+
+vec3 spectrum(float t) {
+  return 0.5 + 0.5 * cos(2.0 * PI * (t + vec3(0.00, 0.33, 0.67)));
+}
+
+vec3 samplePalette(float t) {
+  t = fract(t);
+  float scaled = t * float(uColorCount);
+  int idx = int(floor(scaled));
+  float blend = fract(scaled);
+  int nextIdx = idx + 1;
+  if (nextIdx >= uColorCount) nextIdx = 0;
+  return mix(uColors[idx], uColors[nextIdx], blend);
+}
+
+vec3 strandColor(float t) {
+  if (uColorCount > 0) return samplePalette(t);
+  return spectrum(t);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
+  uv /= max(uScale, 0.0001);
+
+  float e = 0.06 + uIntensity * 0.94;
+  float env = pow(max(cos(uv.x * PI * 1.3), 0.0), uTaper);
+
+  vec3 col = vec3(0.0);
+
+  for (int i = 0; i < 12; i++) {
+    if (i >= uStrandCount) break;
+
+    float fi = float(i);
+    float ph = fi * 1.7 * uSpread;
+    float freq = (2.0 + fi * 0.35) * uWaviness;
+    float spd = 1.4 + fi * 1.2;
+
+    float tt = uTime * uSpeed;
+    float w = sin(uv.x * freq + tt * spd + ph) * 0.60
+            + sin(uv.x * freq * 1.1 - tt * spd * 0.7 + ph * 1.7) * 0.40;
+
+    float amp = (0.1 + 0.02 * e) * env * uAmplitude;
+    float y = w * amp;
+
+    float d = abs(uv.y - y);
+    float thick = (0.001 + 0.05 * e) * (0.35 + env) * uThickness;
+    float g = thick / (d + thick * 0.45);
+    g = g * g;
+
+    float h = fi / float(uStrandCount) + uv.x * 0.30 + uTime * 0.04 + uHueShift;
+    col += strandColor(h) * g * env;
+  }
+
+  col *= 0.45 + 0.7 * e;
+  col = 1.0 - exp(-col * uGlow);
+
+  float gray = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = max(mix(vec3(gray), col, uSaturation), 0.0);
+
+  float lum = max(max(col.r, col.g), col.b);
+  float alpha = clamp(lum, 0.0, 1.0) * uOpacity;
+
+  fragColor = vec4(col * uOpacity, alpha);
+}
+`;
+    const compile = (type, source) => {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.warn('[voice strands] shader compile failed:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+    const vs = compile(gl.VERTEX_SHADER, vert);
+    const fs = compile(gl.FRAGMENT_SHADER, frag);
+    if (!vs || !fs) return null;
+    const program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.warn('[voice strands] program link failed:', gl.getProgramInfoLog(program));
+      gl.deleteProgram(program);
+      return null;
+    }
+
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'position');
+    const uniforms = {};
+    [
+      'uTime', 'uResolution', 'uColors', 'uColorCount', 'uStrandCount', 'uSpeed',
+      'uAmplitude', 'uWaviness', 'uThickness', 'uGlow', 'uTaper', 'uSpread',
+      'uHueShift', 'uIntensity', 'uOpacity', 'uScale', 'uSaturation',
+    ].forEach((name) => { uniforms[name] = gl.getUniformLocation(program, name); });
+
+    gl.clearColor(0, 0, 0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    voiceStrandsGl = { gl, program, buffer, position, uniforms };
+    return voiceStrandsGl;
+  }
+
+  function _voiceStrandsPalette() {
+    const hex = ['#F97316', '#7C3AED', '#06B6D4', '#F472B6', '#EAB308'];
+    const values = [];
+    for (let i = 0; i < 8; i += 1) {
+      const raw = hex[i] || hex[hex.length - 1];
+      const value = raw.replace('#', '');
+      values.push(
+        parseInt(value.slice(0, 2), 16) / 255,
+        parseInt(value.slice(2, 4), 16) / 255,
+        parseInt(value.slice(4, 6), 16) / 255,
+      );
+    }
+    return new Float32Array(values);
+  }
+
+  function _renderVoiceStrands(now, energy, listening, speaking) {
+    const state = _initVoiceStrandsGl();
+    if (!state) return false;
+    const { gl, program, buffer, position, uniforms } = state;
+    const width = waveCanvas.width || 1;
+    const height = waveCanvas.height || 1;
+    const pulse = Math.min(1, Math.max(0, energy));
+    gl.viewport(0, 0, width, height);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform1f(uniforms.uTime, now);
+    gl.uniform2f(uniforms.uResolution, width, height);
+    gl.uniform3fv(uniforms.uColors, _voiceStrandsPalette());
+    gl.uniform1i(uniforms.uColorCount, 5);
+    gl.uniform1i(uniforms.uStrandCount, 5);
+    gl.uniform1f(uniforms.uSpeed, 0.36 + pulse * 0.08);
+    gl.uniform1f(uniforms.uAmplitude, 1.18 + pulse * 0.3);
+    gl.uniform1f(uniforms.uWaviness, 1.3 + pulse * 0.05);
+    gl.uniform1f(uniforms.uThickness, 0.9 + pulse * 0.04);
+    gl.uniform1f(uniforms.uGlow, 1.72 + pulse * 0.46);
+    gl.uniform1f(uniforms.uTaper, 4.3);
+    gl.uniform1f(uniforms.uSpread, 1);
+    gl.uniform1f(uniforms.uHueShift, 0);
+    gl.uniform1f(uniforms.uIntensity, 0.38 + pulse * 0.28);
+    gl.uniform1f(uniforms.uOpacity, 1);
+    gl.uniform1f(uniforms.uScale, 2.3);
+    gl.uniform1f(uniforms.uSaturation, 1.5);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return true;
+  }
+
   function _drawVoiceWave() {
     if (!waveCanvas) return;
     _resizeVoiceWaveCanvas();
-    const ctx2d = voiceWaveCtx;
-    if (!ctx2d) return;
     const w = waveCanvas.clientWidth || 1;
     const h = waveCanvas.clientHeight || 1;
     const centerY = h / 2;
@@ -11112,46 +11360,78 @@ export async function renderVoicePage(page, ctx) {
       const useful = voiceWaveBins.slice(2, 44);
       liveLevel = useful.reduce((sum, value) => sum + value, 0) / Math.max(1, useful.length) / 255;
     }
-    const energy = listening ? Math.max(liveLevel, 0.08) : speaking ? 0.42 : 0.04;
-    mic?.style.setProperty('--pm-voice-level', String(Math.min(1, energy * 2.1)));
+    const targetEnergy = listening
+      ? Math.max(0.07, Math.min(0.46, liveLevel * 0.82))
+      : speaking ? 0.2 : 0.05;
+    const smoothing = targetEnergy > voiceStrandsAudioLevel ? 0.08 : 0.028;
+    voiceStrandsAudioLevel += (targetEnergy - voiceStrandsAudioLevel) * smoothing;
+    const energy = Math.max(0.05, Math.min(0.46, voiceStrandsAudioLevel));
+    mic?.style.setProperty('--pm-voice-level', String(Math.min(1, energy * 1.2)));
+    if (_renderVoiceStrands(now, energy, listening, speaking)) {
+      _updateVoiceVisualState();
+      voiceWaveRaf = requestAnimationFrame(_drawVoiceWave);
+      return;
+    }
+    voiceWaveCtx = voiceWaveCtx || waveCanvas.getContext('2d');
+    voiceWaveCtx?.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+    const ctx2d = voiceWaveCtx;
+    if (!ctx2d) return;
     ctx2d.clearRect(0, 0, w, h);
-    const gradient = ctx2d.createLinearGradient(0, 0, w, 0);
-    gradient.addColorStop(0, 'rgba(68,118,255,0.16)');
-    gradient.addColorStop(0.32, 'rgba(117,77,255,0.76)');
-    gradient.addColorStop(0.5, 'rgba(255,225,212,0.96)');
-    gradient.addColorStop(0.72, 'rgba(255,92,72,0.92)');
-    gradient.addColorStop(1, 'rgba(255,122,47,0.78)');
-    ctx2d.fillStyle = gradient;
-    ctx2d.shadowBlur = listening || speaking ? 18 : 8;
-    ctx2d.shadowColor = listening ? 'rgba(255,105,69,0.72)' : speaking ? 'rgba(255,122,47,0.64)' : 'rgba(255,90,80,0.34)';
-    const bars = 48;
-    const gap = w / bars;
-    const barW = Math.max(2, gap * 0.24);
-    for (let i = 0; i < bars; i += 1) {
-      const dist = Math.abs(i - bars / 2) / (bars / 2);
-      const centerBoost = Math.pow(1 - dist, 2.35);
-      const sourceBin = voiceWaveBins ? voiceWaveBins[Math.min(voiceWaveBins.length - 1, Math.floor((i / bars) * voiceWaveBins.length))] / 255 : 0;
-      const pulse = (Math.sin(now * (speaking ? 7.2 : 10.5) + i * 0.62) + 1) / 2;
-      const jitter = (Math.sin(now * 17 + i * 1.7) + 1) / 2;
-      const reactive = listening ? sourceBin : speaking ? pulse * 0.82 : pulse * 0.2;
-      const barH = Math.max(2.5, (5 + centerBoost * 34 + reactive * 54 + jitter * energy * 16) * (0.22 + (1 - dist) * 0.78));
-      const x = i * gap + gap * 0.32;
-      const y = centerY - barH / 2;
-      const r = Math.min(barW / 2, barH / 2);
+    const intensity = listening ? 0.4 + energy * 0.55 : speaking ? 0.6 : 0.34;
+    const glow = 1.75 + energy * 1.1;
+    const amp = h * (0.34 + energy * 0.34);
+    const strands = [
+      { rgb: [255, 176, 61],  base: -0.66, peak: 0.44, width: 0.19, wave: 0.08, drift: 0.18, alpha: 0.84 },
+      { rgb: [38, 224, 255],  base: -0.42, peak: 0.50, width: 0.22, wave: 0.06, drift: 1.44, alpha: 0.88 },
+      { rgb: [142, 116, 255], base: -0.14, peak: 0.61, width: 0.24, wave: 0.10, drift: 2.2,  alpha: 0.74 },
+      { rgb: [198, 255, 188], base:  0.18, peak: 0.56, width: 0.26, wave: 0.05, drift: 2.86, alpha: 0.72 },
+      { rgb: [255, 86, 205],  base:  0.82, peak: 0.55, width: 0.18, wave: 0.09, drift: 3.68, alpha: 0.86 },
+    ];
+    const gaussian = (p, peak, width) => Math.exp(-Math.pow((p - peak) / width, 2));
+    const taper = (p) => Math.pow(Math.sin(Math.PI * p), 4.3);
+    const strandY = (strand, p) => {
+      const binIndex = voiceWaveBins ? Math.min(voiceWaveBins.length - 1, Math.floor(p * voiceWaveBins.length)) : 0;
+      const bin = voiceWaveBins ? voiceWaveBins[binIndex] / 255 : 0;
+      const audioLift = (listening ? bin : speaking ? 0.34 : 0.08) * energy * 0.22;
+      const body = gaussian(p, strand.peak, strand.width) * taper(p);
+      const shimmer = Math.sin((p * Math.PI * 3.15) + now * (0.72 + energy) + strand.drift) * strand.wave * taper(p);
+      return centerY + amp * (strand.base * body + shimmer + Math.sign(strand.base || 1) * audioLift * body);
+    };
+    const drawStrand = (pass, strand) => {
+      const points = 120;
+      const [r, g, b] = strand.rgb;
       ctx2d.beginPath();
-      ctx2d.roundRect?.(x, y, barW, barH, r);
-      if (!ctx2d.roundRect) {
-        ctx2d.rect(x, y, barW, barH);
+      for (let i = 0; i <= points; i += 1) {
+        const p = i / points;
+        const x = p * w;
+        const y = strandY(strand, p);
+        if (i === 0) ctx2d.moveTo(x, y);
+        else ctx2d.lineTo(x, y);
       }
-      ctx2d.fill();
-    }
+      const alpha = pass === 'glow'
+        ? (0.12 + intensity * 0.18) * strand.alpha
+        : (0.46 + intensity * 0.28) * strand.alpha;
+      ctx2d.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+      ctx2d.lineWidth = pass === 'glow'
+        ? 10 + glow * 6 + energy * 8
+        : 1.45 + energy * 1.4;
+      ctx2d.lineCap = 'round';
+      ctx2d.lineJoin = 'round';
+      ctx2d.shadowBlur = pass === 'glow' ? 20 + glow * 11 : 8 + glow * 3;
+      ctx2d.shadowColor = `rgba(${r},${g},${b},${0.34 + intensity * 0.24})`;
+      ctx2d.stroke();
+    };
+    ctx2d.globalCompositeOperation = 'lighter';
+    strands.forEach((strand) => drawStrand('glow', strand));
+    strands.forEach((strand) => drawStrand('line', strand));
+    const core = ctx2d.createRadialGradient(w * 0.5, centerY, 0, w * 0.5, centerY, w * 0.3);
+    core.addColorStop(0, `rgba(255,255,255,${0.13 + energy * 0.1})`);
+    core.addColorStop(0.2, `rgba(153,235,255,${0.08 + energy * 0.09})`);
+    core.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx2d.fillStyle = core;
+    ctx2d.fillRect(0, 0, w, h);
+    ctx2d.globalCompositeOperation = 'source-over';
     ctx2d.shadowBlur = 0;
-    ctx2d.globalAlpha = listening || speaking ? 0.38 : 0.2;
-    for (let x = 0; x < w; x += 15) {
-      ctx2d.beginPath();
-      ctx2d.arc(x, centerY, listening || speaking ? 1.25 : 0.9, 0, Math.PI * 2);
-      ctx2d.fill();
-    }
     ctx2d.globalAlpha = 1;
     _updateVoiceVisualState();
     voiceWaveRaf = requestAnimationFrame(_drawVoiceWave);
@@ -13988,7 +14268,7 @@ function scheduleCardHtml(s) {
     ? `<span style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--pm-text-soft);">Assigned to: <span class="pm-assign-chip">🤖 ${escapeHtml(s.assignedTo)}</span></span>`
     : `<span><span style="display:block;font-weight:600;color:var(--pm-text-soft)">${escapeHtml(s.footLeft || '')}</span><span style="display:block;font-size:12px;color:var(--pm-muted)">${escapeHtml(s.footRight || '')}</span></span>`;
   return `
-    <article class="pm-schedule-card color-${s.color}" data-id="${s.id}">
+    <article class="pm-schedule-card color-${s.color}" data-id="${s.id}" role="button" tabindex="0">
       <div class="pm-schedule-head">
         <span class="pm-emoji">${s.emoji}</span>
         <h3>${escapeHtml(s.name)}</h3>
@@ -14006,6 +14286,150 @@ function scheduleCardHtml(s) {
       </div>
     </article>
   `;
+}
+
+function _mobileScheduleEditorHtml(s) {
+  const raw = s.raw || {};
+  const skillIds = Array.isArray(s.skillIds) ? s.skillIds.join(', ') : '';
+  const contextRefs = _formatMobileScheduleContextRefs(s.contextRefs || raw.context_refs || raw.contextReferences);
+  const ownerValue = String(s.assignedTo || raw.subagent_id || raw.subagentId || raw.team_id || '').trim();
+  const channel = String(s.deliveryChannel || raw.delivery_channel || 'web').trim() || 'web';
+  const timezone = String(s.timezone || raw.timezone || 'UTC').trim() || 'UTC';
+  const tzOptions = ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London'];
+  const channelOptions = [
+    ['web', 'Web (notification)'],
+    ['telegram', 'Telegram'],
+    ['discord', 'Discord'],
+    ['whatsapp', 'WhatsApp'],
+    ['email', 'Email'],
+  ];
+  const optionHtml = (value, label, selected) => `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  return `
+    <section class="pm-schedule-editor" data-schedule-editor="${escapeHtml(s.id)}">
+      <label>Name<input type="text" data-field="name" value="${escapeHtml(s.name || '')}"></label>
+      <label>Cron Expression<input type="text" data-field="pattern" value="${escapeHtml(s.cron || '')}" placeholder="0 9 * * *"></label>
+      <label>Timezone<select data-field="timezone">
+        ${tzOptions.map(tz => optionHtml(tz, tz, tz === timezone)).join('')}
+        ${tzOptions.includes(timezone) ? '' : optionHtml(timezone, timezone, true)}
+      </select></label>
+      <label>Prompt / Action<textarea data-field="prompt" rows="7">${escapeHtml(s.prompt || s.description || '')}</textarea></label>
+      <label>Run As Agent<input type="text" data-field="subagent" value="${escapeHtml(ownerValue)}" placeholder="Main agent"></label>
+      <label>Attached Skills<input type="text" data-field="skills" value="${escapeHtml(skillIds)}" placeholder="skill-a, skill-b"></label>
+      <label>Context References<textarea data-field="contextRefs" rows="5" placeholder="Title: reference content">${escapeHtml(contextRefs)}</textarea></label>
+      <label>Delivery Channel<select data-field="channel">
+        ${channelOptions.map(([value, label]) => optionHtml(value, label, value === channel)).join('')}
+        ${channelOptions.some(([value]) => value === channel) ? '' : optionHtml(channel, channel, true)}
+      </select></label>
+      <div class="pm-schedule-editor-actions">
+        <button type="button" class="pm-run-btn" data-schedule-close>Cancel</button>
+        <button type="button" class="pm-run-btn primary" data-schedule-save>Save Changes</button>
+      </div>
+    </section>
+  `;
+}
+
+function _splitMobileScheduleList(value) {
+  return String(value || '')
+    .split(/[\n,]+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+function _formatMobileScheduleContextRefs(refs) {
+  return (Array.isArray(refs) ? refs : [])
+    .map((ref) => {
+      const title = String(ref?.title || '').trim();
+      const content = String(ref?.content || '').trim();
+      return title && content ? `${title}: ${content}` : '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function _parseMobileScheduleContextRefs(value, item) {
+  const existing = new Map((Array.isArray(item?.contextRefs) ? item.contextRefs : [])
+    .map((ref) => [String(ref?.title || '').trim().toLowerCase(), ref]));
+  return String(value || '')
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => {
+      const match = block.match(/^([^:\n]{1,160}):\s*([\s\S]+)$/);
+      const title = (match ? match[1] : block.split(/\n/)[0]).trim();
+      const content = (match ? match[2] : block.split(/\n/).slice(1).join('\n')).trim();
+      if (!title || !content) return null;
+      const prior = existing.get(title.toLowerCase()) || {};
+      return {
+        id: prior.id || `ref_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        title,
+        content,
+        createdAt: prior.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function _collectMobileSchedulePayload(editor, item) {
+  const field = name => String(editor.querySelector(`[data-field="${name}"]`)?.value || '').trim();
+  const raw = item.raw || {};
+  const name = field('name');
+  const pattern = field('pattern');
+  const prompt = field('prompt');
+  const subagentId = field('subagent');
+  const skillIds = _splitMobileScheduleList(field('skills'));
+  const contextRefs = _parseMobileScheduleContextRefs(field('contextRefs'), item);
+  if (!name) throw new Error('Name required');
+  if (!pattern) throw new Error('Cron expression required');
+  if (!prompt) throw new Error('Prompt/action required');
+  return {
+    name,
+    pattern,
+    prompt,
+    timezone: field('timezone') || 'UTC',
+    delivery_channel: field('channel') || 'web',
+    confirm: true,
+    ...(String(raw.team_id || '').trim() && !subagentId ? { team_id: String(raw.team_id).trim() } : {}),
+    ...(!String(raw.team_id || '').trim() || subagentId ? { subagent_id: subagentId } : {}),
+    skillIds,
+    context_refs: contextRefs,
+  };
+}
+
+function _toggleMobileScheduleEditor({ body, card, item, page }) {
+  if (!body || !card || !item) return;
+  const open = card.nextElementSibling?.matches?.('.pm-schedule-editor');
+  body.querySelectorAll('.pm-schedule-editor').forEach(el => el.remove());
+  body.querySelectorAll('.pm-schedule-card.open').forEach(el => el.classList.remove('open'));
+  if (open) return;
+  if (item.kind !== 'cron') {
+    pmToast('Built-in schedules can be toggled or run from this card.', 'info');
+    return;
+  }
+  card.classList.add('open');
+  card.insertAdjacentHTML('afterend', _mobileScheduleEditorHtml(item));
+  const editor = card.nextElementSibling;
+  editor.querySelector('[data-schedule-close]')?.addEventListener('click', () => {
+    editor.remove();
+    card.classList.remove('open');
+  });
+  editor.querySelector('[data-schedule-save]')?.addEventListener('click', async (event) => {
+    const btn = event.currentTarget;
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+      const payload = _collectMobileSchedulePayload(editor, item);
+      const result = await updateMobileSchedule(item, payload);
+      if (!result || result.success === false) throw new Error(result?.error || 'Save failed');
+      pmToast('Schedule saved', 'success');
+      await renderSchedulePage(page);
+    } catch (err) {
+      pmToast(err.message || 'Save failed', 'error');
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  });
 }
 
 function scheduleSkeletonHtml() {
@@ -14066,7 +14490,8 @@ export async function renderSchedulePage(page) {
 
     const toggle = card.querySelector('[data-toggle]');
     if (toggle) {
-      toggle.addEventListener('click', async () => {
+      toggle.addEventListener('click', async (event) => {
+        event.stopPropagation();
         const next = !toggle.classList.contains('on');
         toggle.classList.toggle('on', next);
         toggle.disabled = true;
@@ -14086,7 +14511,8 @@ export async function renderSchedulePage(page) {
 
     const runBtn = card.querySelector('[data-run]');
     if (runBtn) {
-      runBtn.addEventListener('click', async () => {
+      runBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
         const prev = runBtn.textContent;
         runBtn.textContent = 'Running…';
         runBtn.disabled = true;
@@ -14102,6 +14528,14 @@ export async function renderSchedulePage(page) {
         }
       });
     }
+
+    card.addEventListener('click', () => _toggleMobileScheduleEditor({ body, card, item, page }));
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        _toggleMobileScheduleEditor({ body, card, item, page });
+      }
+    });
   });
 }
 
@@ -14839,6 +15273,10 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
       message._progress = ok ? '' : `${action} failed`;
       _pushMobileStreamProcessEntry(message, ok ? 'result' : 'error', `${action}${text ? ` -> ${text}` : ' complete'}`, evt.actor ? { actor: evt.actor } : null);
+      return true;
+    }
+    case 'vision_injected': {
+      _appendMobileVisionTrace(message, evt);
       return true;
     }
     case 'tool_progress': {
@@ -15738,6 +16176,21 @@ function _pmProposalSteps(proposal) {
   }).join('')}</div></section>`;
 }
 
+function _pmProposalDetails(proposal) {
+  const details = String(proposal?.details || '').trim();
+  if (!details) return '';
+  return `<section class="pm-card pm-more-section pm-proposal-details">
+    <div class="pm-card-head">Details</div>
+    <div class="markdown-body">${_renderMobileMarkdown(details)}</div>
+  </section>`;
+}
+
+function _pmIsDevSourceApproval(approval = {}) {
+  const kind = String(approval?.approvalKind || '').trim();
+  const tool = String(approval?.toolName || '').trim();
+  return kind === 'dev_source_edit' || tool === 'request_dev_source_edit';
+}
+
 function _pmCuratorStatus(suggestion) {
   const s = String(suggestion?.status || 'pending').toLowerCase();
   if (s === 'applied') return '<span class="pm-proposal-status complete">APPLIED</span>';
@@ -16073,6 +16526,27 @@ function _pmRenderProcessRunCard(run = {}, { log = null, tab = 'combined' } = {}
   </section>`;
 }
 
+function _pmProcessLogSnapshot(root) {
+  const log = root?.querySelector?.('.pm-process-log');
+  if (!log) return null;
+  return {
+    scrollTop: log.scrollTop || 0,
+    distanceFromBottom: Math.max(0, log.scrollHeight - log.scrollTop - log.clientHeight),
+    nearBottom: (log.scrollHeight - log.scrollTop - log.clientHeight) < 48,
+  };
+}
+
+function _pmRestoreProcessLogSnapshot(root, snapshot) {
+  const log = root?.querySelector?.('.pm-process-log');
+  if (!log || !snapshot) return;
+  const apply = () => {
+    if (snapshot.nearBottom) log.scrollTop = log.scrollHeight;
+    else log.scrollTop = Math.max(0, log.scrollHeight - log.clientHeight - Number(snapshot.distanceFromBottom || 0));
+  };
+  apply();
+  requestAnimationFrame(apply);
+}
+
 function _pmRenderCommandRunLink(approval = {}) {
   if (!_pmIsCommandApproval(approval) || !approval.id) return '';
   return `<div class="pm-process-approval-link">
@@ -16084,9 +16558,10 @@ function _pmRenderCommandRunLink(approval = {}) {
 async function _pmLoadApprovalProcessRun(approvalId, host) {
   if (!approvalId || !host) return;
   const toggle = host.parentElement?.querySelector?.('[data-pm-process-action="load-approval"]');
+  const scrollSnapshot = _pmProcessLogSnapshot(host);
   host.dataset.terminalOpen = '1';
   if (toggle) toggle.textContent = 'Close terminal';
-  host.innerHTML = '<div class="pm-process-loading">Loading command run...</div>';
+  if (!host.querySelector('.pm-process-card')) host.innerHTML = '<div class="pm-process-loading">Loading command run...</div>';
   try {
     let run = null;
     for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -16102,6 +16577,8 @@ async function _pmLoadApprovalProcessRun(approvalId, host) {
     }
     const log = await loadMobileProcessRunLog(run.runId, 200000).catch(() => null);
     host.innerHTML = _pmRenderProcessRunCard(run, { log });
+    _wireMobileProcessRunActions(host);
+    _pmRestoreProcessLogSnapshot(host, scrollSnapshot);
   } catch (err) {
     host.innerHTML = `<div class="pm-process-loading error">${escapeHtml(err.message || 'Could not load command run')}</div>`;
   }
@@ -16112,6 +16589,7 @@ async function _pmRefreshMobileProcessCard(card, tab = '') {
   if (!runId) return;
   const activeTab = tab || card.getAttribute('data-pm-process-tab') || 'combined';
   const host = card.parentElement;
+  const scrollSnapshot = _pmProcessLogSnapshot(card);
   try {
     const [runs, log] = await Promise.all([
       loadMobileProcessRuns(100),
@@ -16121,6 +16599,7 @@ async function _pmRefreshMobileProcessCard(card, tab = '') {
     if (host) {
       host.innerHTML = _pmRenderProcessRunCard(run, { log, tab: activeTab });
       _wireMobileProcessRunActions(host);
+      _pmRestoreProcessLogSnapshot(host, scrollSnapshot);
     }
   } catch (err) {
     pmToast(err.message || 'Could not refresh command run', 'error');
@@ -16239,6 +16718,46 @@ function _pmMoreSkeleton() {
   return `<div class="pm-more-skeleton"><span></span><span></span><span></span></div>`;
 }
 
+function _pmModelTotal(stats = {}) {
+  return Number(stats.totalTokens ?? stats.total ?? 0) || 0;
+}
+
+function _pmModelCalls(stats = {}) {
+  return Number(stats.modelCalls ?? stats.messages ?? 0) || 0;
+}
+
+function _pmStatCard(label, value, sub = '') {
+  return `<span><b>${escapeHtml(String(value))}</b><em>${escapeHtml(label)}</em>${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>`;
+}
+
+function _pmScheduleInitialLoad(page, load, { retryOnWsOpen = true } = {}) {
+  if (!page || typeof load !== 'function') return;
+  let loaded = false;
+  let running = false;
+  let disposed = false;
+  const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
+  const run = async () => {
+    if (disposed || running || loaded) return;
+    running = true;
+    try {
+      loaded = await load() !== false;
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setTimeout(() => requestAnimationFrame(run), 0);
+  const onWsOpen = () => {
+    if (!loaded) setTimeout(run, 120);
+  };
+  if (retryOnWsOpen) wsEventBus?.on?.('ws:open', onWsOpen);
+  page._pmCleanup = () => {
+    disposed = true;
+    clearTimeout(timer);
+    if (retryOnWsOpen) wsEventBus?.off?.('ws:open', onWsOpen);
+    previousCleanup?.();
+  };
+}
+
 function _renderMoreLanding(page, { navigate }) {
   const extras = `<span class="pm-spacer"></span><button class="pm-icon-btn" id="pm-more-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
@@ -16262,8 +16781,8 @@ function _renderMoreLanding(page, { navigate }) {
           <span class="pm-chev">${ICONS.chev}</span>
         </div>
         <div class="pm-more-stats">
-          <span><b>${escapeHtml(_pmCompactNumber(data?.hub?.models?.totalTokens || data?.hub?.models?.total || 0))}</b><em>tokens</em></span>
-          <span><b>${escapeHtml(_pmCompactNumber(data?.hub?.tools?.toolCalls || data?.hub?.tools?.total || 0))}</b><em>tool calls</em></span>
+          ${_pmStatCard('tokens', _pmCompactNumber(_pmModelTotal(data?.hub?.models)))}
+          ${_pmStatCard('tool calls', _pmCompactNumber(data?.hub?.tools?.toolCalls || data?.hub?.tools?.total || 0))}
         </div>
         <div class="pm-more-preview-box">
           <span class="pm-mini-label">Latest goal</span>
@@ -16344,12 +16863,14 @@ function _renderMoreLanding(page, { navigate }) {
   const load = async () => {
     try {
       paint(await loadMobileMoreSummary());
+      return true;
     } catch (err) {
       pmToast(`Could not refresh More: ${err.message || ''}`, 'error');
+      return false;
     }
   };
   page.querySelector('#pm-more-refresh')?.addEventListener('click', load);
-  load();
+  _pmScheduleInitialLoad(page, load);
 }
 
 async function _renderMoreHub(page, { navigate }) {
@@ -16367,12 +16888,27 @@ async function _renderMoreHub(page, { navigate }) {
       const latestGoal = data.goals[0];
       const curator = data.curator || { suggestions: [], pending: 0, quarantined: 0 };
       const curatorSuggestions = Array.isArray(curator.suggestions) ? curator.suggestions : [];
+      const curatorActivity = Array.isArray(curator.activity) ? curator.activity : [];
       const curatorLow = curatorSuggestions.filter((s) => String(s.risk || '').toLowerCase() === 'low').length;
+      const modelStats = data.models || {};
+      const toolStats = data.tools || {};
+      const totalTokens = _pmModelTotal(modelStats);
+      const toolCalls = Number(toolStats.toolCalls || toolStats.total || 0) || 0;
       body.innerHTML = `
         <section class="pm-more-detail-hero">
-          <div><span class="pm-mini-label">Total tokens</span><strong>${escapeHtml(_pmCompactNumber(data.models.totalTokens || data.models.total || 0))}</strong></div>
-          <div><span class="pm-mini-label">Favorite model</span><strong>${escapeHtml(data.models.favorite || data.models.favoriteByTokens || 'none')}</strong></div>
+          <div><span class="pm-mini-label">Total tokens</span><strong>${escapeHtml(_pmCompactNumber(totalTokens))}</strong></div>
+          <div><span class="pm-mini-label">Favorite model</span><strong>${escapeHtml(modelStats.favorite || modelStats.favoriteByTokens || toolStats.favorite || 'none')}</strong></div>
           ${_pmSparkBars(data.modelDaily, 'count', 16)}
+        </section>
+        <section class="pm-more-grid pm-hub-overview-grid">
+          ${_pmStatCard('Sessions', _pmCompactNumber(toolStats.chatSessions || modelStats.chatSessions || 0))}
+          ${_pmStatCard('Messages', _pmCompactNumber(toolStats.messages || modelStats.chatMessages || 0))}
+          ${_pmStatCard('Model calls', _pmCompactNumber(_pmModelCalls(modelStats)))}
+          ${_pmStatCard('Tool calls', _pmCompactNumber(toolCalls))}
+          ${_pmStatCard('Active days', _pmCompactNumber(toolStats.activeDays || modelStats.activeDays || 0))}
+          ${_pmStatCard('Current streak', `${Number(toolStats.currentStreak || modelStats.currentStreak || 0)}d`)}
+          ${_pmStatCard('Longest streak', `${Number(toolStats.longestStreak || modelStats.longestStreak || 0)}d`)}
+          ${_pmStatCard('Peak hour', toolStats.peakHour || modelStats.peakHour || '-')}
         </section>
         <section class="pm-card pm-more-section">
           <div class="pm-card-head">Latest Goal</div>
@@ -16381,21 +16917,21 @@ async function _renderMoreHub(page, { navigate }) {
           <div class="pm-more-meta-row"><span>${escapeHtml(String(latestGoal?.status || ''))}</span><span>${escapeHtml(_pmDateTime(latestGoal?.updatedAt || latestGoal?.completedAt || latestGoal?.createdAt))}</span></div>
         </section>
         <section class="pm-more-grid">
-          <span><b>${escapeHtml(_pmCompactNumber(data.tools.toolCalls || data.tools.total || 0))}</b><em>Tool calls</em></span>
-          <span><b>${escapeHtml(_pmCompactNumber(data.tools.activeDays || 0))}</b><em>Active days</em></span>
-          <span><b>${escapeHtml(data.tools.peakHour || '-')}</b><em>Peak hour</em></span>
-          <span><b>${escapeHtml(_pmCompactNumber(data.goals.length))}</b><em>Goals</em></span>
-        </section>
-        <section class="pm-more-grid">
-          <span><b>${escapeHtml(_pmCompactNumber(curator.pending || 0))}</b><em>Curator pending</em></span>
-          <span><b>${escapeHtml(_pmCompactNumber(curator.quarantined || 0))}</b><em>Quarantined</em></span>
-          <span><b>${escapeHtml(_pmCompactNumber(curatorLow))}</b><em>Low risk</em></span>
-          <span><b>${escapeHtml(_pmCompactNumber(curatorSuggestions.length))}</b><em>Total suggestions</em></span>
+          ${_pmStatCard('Goals', _pmCompactNumber(data.goals.length))}
+          ${_pmStatCard('Curator pending', _pmCompactNumber(curator.pending || 0))}
+          ${_pmStatCard('Quarantined', _pmCompactNumber(curator.quarantined || 0))}
+          ${_pmStatCard('Low risk', _pmCompactNumber(curatorLow))}
         </section>
         <section class="pm-card pm-more-section">
           <div class="pm-card-head">Top Models</div>
           <div class="pm-more-list">
             ${(data.topModels || []).slice(0, 5).map((m) => `<span><b>${escapeHtml(m.name)}</b><em>${escapeHtml(_pmCompactNumber(m.tokens || 0))} tokens - ${escapeHtml(_pmCompactNumber(m.calls || 0))} calls</em></span>`).join('') || '<p>No model usage yet.</p>'}
+          </div>
+        </section>
+        <section class="pm-card pm-more-section">
+          <div class="pm-card-head">Top Tools</div>
+          <div class="pm-more-list">
+            ${(data.topTools || []).slice(0, 6).map((t) => `<span><b>${escapeHtml(t.name || 'tool')}</b><em>${escapeHtml(_pmCompactNumber(t.count || 0))} calls</em></span>`).join('') || '<p>No tool usage yet.</p>'}
           </div>
         </section>
         <section class="pm-card pm-more-section">
@@ -16406,8 +16942,11 @@ async function _renderMoreHub(page, { navigate }) {
         </section>
         <section class="pm-card pm-more-section pm-curator-section">
           <div class="pm-card-head">Skill Curator Review</div>
-          <p>Brain suggestions waiting to be folded into Prometheus skills.</p>
+          <p>${escapeHtml(curatorActivity.length ? 'Review queue plus recent Thought and Dream skill activity.' : 'Brain suggestions waiting to be folded into Prometheus skills.')}</p>
           <div class="pm-curator-list">${_pmCuratorCards(curatorSuggestions)}</div>
+          ${curatorActivity.length ? `<div class="pm-more-list pm-hub-activity-list">
+            ${curatorActivity.slice(0, 8).map((item) => `<span><b>${escapeHtml(item.title || 'Skill activity')}</b><em>${escapeHtml([item.status, item.source, item.risk ? `${item.risk} risk` : ''].filter(Boolean).join(' - '))}</em><small>${escapeHtml(String(item.summary || item.requestExcerpt || '').slice(0, 140))}</small></span>`).join('')}
+          </div>` : ''}
         </section>
       `;
       body.querySelectorAll('[data-curator-toggle]').forEach((btn) => {
@@ -16439,12 +16978,14 @@ async function _renderMoreHub(page, { navigate }) {
         event.stopPropagation();
         actCurator(btn.getAttribute('data-deny-curator'), 'deny', btn);
       }));
+      return true;
     } catch (err) {
       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.target}</div><h2>Could not load Hub</h2><p>${escapeHtml(err.message || '')}</p></div>`;
+      return false;
     }
   };
   page.querySelector('#pm-hub-refresh')?.addEventListener('click', load);
-  await load();
+  _pmScheduleInitialLoad(page, load);
 }
 
 async function _renderMoreAudit(page, { navigate }) {
@@ -16508,12 +17049,14 @@ async function _renderMoreAudit(page, { navigate }) {
       body.innerHTML = _pmMoreSkeleton();
       runs = await loadMobileAuditRuns(200);
       paint();
+      return true;
     } catch (err) {
       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clipboard}</div><h2>Could not load Audit</h2><p>${escapeHtml(err.message || '')}</p></div>`;
+      return false;
     }
   };
   page.querySelector('#pm-audit-refresh')?.addEventListener('click', load);
-  await load();
+  _pmScheduleInitialLoad(page, load);
 }
 
 async function _renderMoreMemory(page, { navigate }) {
@@ -16727,6 +17270,7 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
         loadMobileProposals(status),
         status === 'pending' || status === 'all' ? loadMobileApprovals('pending') : Promise.resolve([]),
       ]);
+      approvals = approvals.filter((approval) => !_pmIsDevSourceApproval(approval));
       paint();
     } catch (err) {
       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.doc}</div><h2>Could not load proposals</h2><p>${escapeHtml(err.message || '')}</p></div>`;
@@ -16811,7 +17355,7 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
 async function _renderProposalReview(page, { proposalId, navigate }) {
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Proposal Review', leftIcon: 'back', onBack: () => navigate('#mobile/proposals'), online: false, hideTitle: true, hideBrand: true })}
-    <div class="pm-body pm-proposals-page" id="pm-proposal-review-body">${_pmMoreSkeleton()}</div>
+    <div class="pm-body pm-proposals-page pm-proposal-review-body" id="pm-proposal-review-body">${_pmMoreSkeleton()}</div>
   `;
   wireHeaderActions(page, { onBack: () => navigate('#mobile/proposals') });
   const body = page.querySelector('#pm-proposal-review-body');
@@ -16833,7 +17377,7 @@ async function _renderProposalReview(page, { proposalId, navigate }) {
         ${proposal.estimatedImpact ? `<p class="pm-proposal-impact">Impact: ${escapeHtml(proposal.estimatedImpact)}</p>` : ''}
       </section>
       ${_pmProposalSteps(proposal)}
-      ${proposal.details ? `<section class="pm-card pm-more-section"><div class="pm-card-head">Details</div><p style="white-space:pre-wrap;">${escapeHtml(proposal.details)}</p></section>` : ''}
+      ${_pmProposalDetails(proposal)}
       <div class="pm-proposal-review-actions">
         ${isPending ? `<button class="pm-btn success" id="pm-proposal-approve">Approve</button><button class="pm-btn danger" id="pm-proposal-deny">Deny</button>` : `<button class="pm-btn ghost" id="pm-proposal-back">Back to proposals</button>`}
       </div>
@@ -17039,7 +17583,7 @@ function _pmRenderTaskProgress(items) {
 function _pmRenderTaskJournal(journal) {
   const entries = Array.isArray(journal) ? journal.slice().reverse() : [];
   if (!entries.length) return `<div class="pm-card-body">No process log entries yet.</div>`;
-  return `<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;border:1px solid var(--pm-border);border-radius:8px;max-height:360px;overflow:auto;background:#fff;">${entries.map(entry => {
+  return `<div class="pm-task-journal" data-pm-task-journal style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;border:1px solid var(--pm-border);border-radius:8px;max-height:360px;overflow:auto;background:#fff;">${entries.map(entry => {
     const time = entry?.t ? _formatChatTime(entry.t) : '';
     const type = String(entry?.type || 'event');
     const content = String(entry?.content || entry?.detail || '').trim();
@@ -17114,6 +17658,17 @@ export async function renderTasksPage(page, { navigate }) {
   let refreshTimer = null;
 
   function paint() {
+    const bodyEl = page.querySelector('#pm-tasks-body');
+    const bodySnapshot = bodyEl ? {
+      top: bodyEl.scrollTop || 0,
+      distanceFromBottom: Math.max(0, bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight),
+    } : null;
+    const journalEl = listEl.querySelector('[data-pm-task-journal]');
+    const journalSnapshot = journalEl ? {
+      scrollTop: journalEl.scrollTop || 0,
+      distanceFromBottom: Math.max(0, journalEl.scrollHeight - journalEl.scrollTop - journalEl.clientHeight),
+      nearBottom: (journalEl.scrollHeight - journalEl.scrollTop - journalEl.clientHeight) < 48,
+    } : null;
     const counts = PM_TASK_FILTERS.reduce((acc, f) => { acc[f.key] = 0; return acc; }, {});
     for (const t of allTasks) counts[_pmTaskFilter(t.status)] = (counts[_pmTaskFilter(t.status)] || 0) + 1;
     for (const f of PM_TASK_FILTERS) {
@@ -17176,6 +17731,19 @@ export async function renderTasksPage(page, { navigate }) {
       `;
     }).join('');
     wireTaskCards();
+    const nextJournal = listEl.querySelector('[data-pm-task-journal]');
+    if (nextJournal && journalSnapshot) {
+      const applyJournalScroll = () => {
+        if (journalSnapshot.nearBottom) nextJournal.scrollTop = nextJournal.scrollHeight;
+        else nextJournal.scrollTop = Math.max(0, nextJournal.scrollHeight - nextJournal.clientHeight - Number(journalSnapshot.distanceFromBottom || 0));
+      };
+      applyJournalScroll();
+      requestAnimationFrame(applyJournalScroll);
+    }
+    if (bodyEl && bodySnapshot) {
+      const nextTop = Math.min(bodySnapshot.top, Math.max(0, bodyEl.scrollHeight - bodyEl.clientHeight));
+      bodyEl.scrollTop = nextTop;
+    }
   }
 
   function wireTaskCards() {
@@ -17252,14 +17820,14 @@ export async function renderTasksPage(page, { navigate }) {
     });
   });
 
-  async function load() {
+  async function load({ resetExpandedDetail = false } = {}) {
     try {
       allTasks = await loadBgTasks();
       const activeCount = allTasks.filter(t => !['complete','failed'].includes(_pmTaskFilter(t.status))).length;
       countEl.textContent = `${activeCount} active`;
       paint();
       if (expandedId) {
-        delete details[expandedId];
+        if (resetExpandedDetail) delete details[expandedId];
         await loadDetail(expandedId);
       }
     } catch (err) {
@@ -17267,7 +17835,7 @@ export async function renderTasksPage(page, { navigate }) {
     }
   }
 
-  page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { listEl.innerHTML = _tasksSkeleton(); load(); });
+  page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { listEl.innerHTML = _tasksSkeleton(); load({ resetExpandedDetail: true }); });
   await load();
   refreshTimer = setInterval(() => load().catch(() => {}), 5000);
   page._pmCleanup = () => { if (refreshTimer) clearInterval(refreshTimer); };

@@ -6,7 +6,7 @@
  *
  * Functions extracted verbatim from index.html:
  *   refreshSchedules, renderScheduleList, _resolveSchedulePattern,
- *   onScheduleOccurrenceChange, addScheduleRefLink, _renderScheduleRefChips,
+ *   onScheduleOccurrenceChange, addScheduleSkill, removeScheduleSkill,
  *   _loadScheduleModalData, _resetScheduleModalFields, openScheduleCreateModal,
  *   editSchedule, closeScheduleModal, parseSchedulePattern, saveSchedule,
  *   deleteSchedule, toggleJobEnabled, toggleBrainJob, runScheduleNow, runBrainNow
@@ -25,6 +25,23 @@ let schedules  = [];
 let brainStatus = null;
 let teamsById = {};
 let editingScheduleId = null;
+let scheduleSkillsCache = [];
+let _scheduleSkillIds = [];
+let _scheduleContextRefs = [];
+let _scheduleCtxRefEditId = null;
+
+const SCHEDULE_OWNER_MAIN = '__main__';
+
+function _scheduleOwnerValue(job) {
+  const teamId = String(job?.team_id || job?.teamId || '').trim();
+  if (teamId) return '';
+  const assignmentTarget = String(job?.assignment_target || job?.assignmentTarget || '').trim();
+  const subagentId = String(job?.subagent_id || job?.subagentId || '').trim();
+  if (assignmentTarget === 'main' || job?.deliver_to_main_channel === true || job?.deliverToMainChannel === true || !subagentId) {
+    return SCHEDULE_OWNER_MAIN;
+  }
+  return subagentId;
+}
 
 // --- TOGGLE SWITCH RENDERER -------------------------------------------------
 
@@ -169,7 +186,8 @@ function _renderCronCard(job) {
   const statusBg    = running ? 'rgba(167,139,250,.15)' : isDisabled ? '#e5e7eb' : isPaused ? '#fff4d6' : '#c8f0c4';
   const statusTxt   = running ? '#6d28d9' : isDisabled ? '#374151' : isPaused ? '#7d5700' : '#0d5c2f';
 
-  const subagentId = job.subagent_id || '';
+  const ownerValue = _scheduleOwnerValue(job);
+  const subagentId = ownerValue === SCHEDULE_OWNER_MAIN ? '' : ownerValue;
   const nextRun    = job.next_run || job.nextRun  ? new Date(job.next_run || job.nextRun).toLocaleString()  : 'Never';
   const lastRun    = job.last_run || job.lastRun  ? new Date(job.last_run || job.lastRun).toLocaleString() : 'Never';
 
@@ -192,7 +210,11 @@ function _renderCronCard(job) {
         </div>
         <div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:2px">
           <strong>Assigned to:</strong>
-          ${subagentId
+          ${ownerValue === SCHEDULE_OWNER_MAIN
+            ? `<span style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);
+                       background:var(--panel-2);color:var(--text);border-radius:999px;padding:2px 9px;
+                       font-size:10px;font-weight:700;white-space:nowrap">Main agent</span>`
+            : subagentId
             ? `<button onclick="event.stopPropagation(); (window.openScheduleOwnerAgent ? openScheduleOwnerAgent('${subagentId}') : openAgentSettings('${subagentId}'))"
                  title="Open in Subagents"
                  style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--brand,#6c8ebf);
@@ -200,7 +222,7 @@ function _renderCronCard(job) {
                         color:var(--brand,#6c8ebf);border-radius:999px;padding:2px 9px;font-size:10px;
                         font-weight:700;cursor:pointer;font-family:monospace;white-space:nowrap">
                  🤖 ${escHtml(subagentId)}</button>`
-            : `<span style="font-size:10px;color:var(--muted);font-style:italic">Owner agent will be assigned on next save/run</span>`
+            : `<span style="font-size:10px;color:var(--muted);font-style:italic">No owner selected</span>`
           }
         </div>
       </div>
@@ -373,10 +395,6 @@ async function runBrainNow(type) {
   }
 }
 
-// --- REFERENCE LINKS --------------------------------------------------------
-
-let _scheduleRefLinks = [];
-
 function _resolveSchedulePattern() {
   const occ = document.getElementById('schedule-occurrence').value;
   if (occ === 'manual') return null;
@@ -409,35 +427,153 @@ function onScheduleOccurrenceChange() {
   document.getElementById('schedule-custom-cron-row').style.display = isCustom ? '' : 'none';
 }
 
-function addScheduleRefLink() {
-  const input = document.getElementById('schedule-ref-input');
-  const url = (input.value || '').trim();
-  if (!url) return;
-  if (!_scheduleRefLinks.includes(url)) {
-    _scheduleRefLinks.push(url);
-    _renderScheduleRefChips();
-  }
-  input.value = '';
+// --- CONTEXT + SKILLS -------------------------------------------------------
+
+function _normalizeScheduleContextRef(raw) {
+  const title = String(raw?.title || '').trim();
+  const content = String(raw?.content || '').trim();
+  if (!title || !content) return null;
+  const now = Date.now();
+  return {
+    id: String(raw?.id || `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`).trim(),
+    title,
+    content,
+    createdAt: Number(raw?.createdAt || raw?.created_at || now) || now,
+    updatedAt: Number(raw?.updatedAt || raw?.updated_at || now) || now,
+  };
 }
 
-function _renderScheduleRefChips() {
-  const container = document.getElementById('schedule-ref-chips');
-  container.innerHTML = '';
-  _scheduleRefLinks.forEach((url, i) => {
-    const chip = document.createElement('div');
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:11px;max-width:240px;overflow:hidden';
-    const label = document.createElement('span');
-    label.textContent = url.length > 35 ? url.slice(0,32)+'...' : url;
-    label.title = url;
-    label.style.overflow = 'hidden';
-    const btn = document.createElement('button');
-    btn.textContent = '×';
-    btn.style.cssText = 'border:0;background:none;cursor:pointer;color:var(--muted);font-size:11px;padding:0;line-height:1';
-    btn.onclick = () => { _scheduleRefLinks.splice(i,1); _renderScheduleRefChips(); };
-    chip.appendChild(label);
-    chip.appendChild(btn);
-    container.appendChild(chip);
-  });
+function _setScheduleAttachmentsFromJob(job) {
+  _scheduleSkillIds = Array.isArray(job?.skillIds)
+    ? Array.from(new Set(job.skillIds.map(id => String(id || '').trim()).filter(Boolean)))
+    : [];
+  const refs = Array.isArray(job?.context_refs)
+    ? job.context_refs
+    : (Array.isArray(job?.contextReferences) ? job.contextReferences : []);
+  _scheduleContextRefs = refs.map(_normalizeScheduleContextRef).filter(Boolean);
+  _scheduleCtxRefEditId = null;
+}
+
+function _renderScheduleSkills() {
+  const chips = document.getElementById('schedule-skill-chips');
+  const select = document.getElementById('schedule-skill-select');
+  if (!chips || !select) return;
+  const byId = new Map(scheduleSkillsCache.map(skill => [String(skill.id || '').trim(), skill]));
+  chips.innerHTML = _scheduleSkillIds.length
+    ? _scheduleSkillIds.map((id) => {
+        const skill = byId.get(id) || {};
+        const label = skill.name && skill.name !== id ? `${skill.name} (${id})` : id;
+        return `<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel-2);border-radius:999px;padding:4px 9px;font-size:11px;font-weight:700;max-width:100%">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(label)}</span>
+          <button type="button" onclick="removeScheduleSkill('${escHtml(id)}')" style="border:0;background:none;color:var(--muted);cursor:pointer;font-weight:900;padding:0;line-height:1">&times;</button>
+        </span>`;
+      }).join('')
+    : '<span style="font-size:11px;color:var(--muted)">No skills attached.</span>';
+  const available = scheduleSkillsCache.filter(skill => skill?.id && !_scheduleSkillIds.includes(String(skill.id)));
+  select.innerHTML = '<option value="">Attach skill...</option>' + available.map(skill => {
+    const id = String(skill.id || '');
+    const label = skill.name && skill.name !== id ? `${skill.name} (${id})` : id;
+    return `<option value="${escHtml(id)}">${escHtml(label)}</option>`;
+  }).join('');
+}
+
+function addScheduleSkill() {
+  const select = document.getElementById('schedule-skill-select');
+  const skillId = String(select?.value || '').trim();
+  if (!skillId || _scheduleSkillIds.includes(skillId)) return;
+  _scheduleSkillIds.push(skillId);
+  if (select) select.value = '';
+  _renderScheduleSkills();
+}
+
+function removeScheduleSkill(skillId) {
+  const id = String(skillId || '').trim();
+  _scheduleSkillIds = _scheduleSkillIds.filter(existing => existing !== id);
+  _renderScheduleSkills();
+}
+
+async function reloadScheduleSkills() {
+  try {
+    const data = await api('/api/skills?refresh=1');
+    scheduleSkillsCache = Array.isArray(data?.skills) ? data.skills : [];
+    _renderScheduleSkills();
+  } catch (err) {
+    showToast('Skills unavailable', err.message || 'Could not load skills', 'warning');
+  }
+}
+
+function _renderScheduleContextRefs() {
+  const list = document.getElementById('schedule-context-ref-list');
+  if (!list) return;
+  if (!_scheduleContextRefs.length) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--muted);border:1px dashed var(--line);border-radius:8px;padding:9px 10px">No context references attached.</div>';
+    return;
+  }
+  list.innerHTML = _scheduleContextRefs.map((ref) => `
+    <button type="button" onclick="openScheduleCtxRefModal('${escHtml(ref.id)}')" style="text-align:left;border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:9px 10px;cursor:pointer;color:var(--text)">
+      <div style="font-size:12px;font-weight:800;margin-bottom:3px">${escHtml(ref.title)}</div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.45;white-space:pre-wrap">${escHtml(ref.content.slice(0, 220))}${ref.content.length > 220 ? '...' : ''}</div>
+    </button>
+  `).join('');
+}
+
+function saveScheduleCtxRef() {
+  const titleInput = document.getElementById('schedule-ctx-title');
+  const contentInput = document.getElementById('schedule-ctx-content');
+  const title = String(titleInput?.value || '').trim();
+  const content = String(contentInput?.value || '').trim();
+  if (!title || !content) {
+    showToast('Reference required', 'Add a title and content for the context card.', 'warning');
+    return;
+  }
+  const ref = _normalizeScheduleContextRef({ title, content });
+  if (!ref) return;
+  _scheduleContextRefs.push(ref);
+  if (titleInput) titleInput.value = '';
+  if (contentInput) contentInput.value = '';
+  _renderScheduleContextRefs();
+}
+
+function openScheduleCtxRefModal(refId) {
+  const ref = _scheduleContextRefs.find(item => item.id === refId);
+  if (!ref) return;
+  _scheduleCtxRefEditId = ref.id;
+  document.getElementById('schedule-ctx-modal-title').value = ref.title;
+  document.getElementById('schedule-ctx-modal-content').value = ref.content;
+  document.getElementById('schedule-ctx-modal').style.display = 'flex';
+}
+
+function closeScheduleCtxRefModal() {
+  _scheduleCtxRefEditId = null;
+  const modal = document.getElementById('schedule-ctx-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function updateScheduleCtxRef() {
+  if (!_scheduleCtxRefEditId) return;
+  const idx = _scheduleContextRefs.findIndex(ref => ref.id === _scheduleCtxRefEditId);
+  if (idx < 0) return;
+  const title = String(document.getElementById('schedule-ctx-modal-title')?.value || '').trim();
+  const content = String(document.getElementById('schedule-ctx-modal-content')?.value || '').trim();
+  if (!title || !content) {
+    showToast('Reference required', 'Context references need a title and content.', 'warning');
+    return;
+  }
+  _scheduleContextRefs[idx] = {
+    ..._scheduleContextRefs[idx],
+    title,
+    content,
+    updatedAt: Date.now(),
+  };
+  closeScheduleCtxRefModal();
+  _renderScheduleContextRefs();
+}
+
+function deleteScheduleCtxRef() {
+  if (!_scheduleCtxRefEditId) return;
+  _scheduleContextRefs = _scheduleContextRefs.filter(ref => ref.id !== _scheduleCtxRefEditId);
+  closeScheduleCtxRefModal();
+  _renderScheduleContextRefs();
 }
 
 // --- MODAL: LOAD DATA -------------------------------------------------------
@@ -446,7 +582,7 @@ async function _loadScheduleModalData() {
   try {
     const agentsResult = await api('/api/agents');
     const sel = document.getElementById('schedule-subagent');
-    sel.innerHTML = '<option value="">Create dedicated schedule agent</option>';
+    sel.innerHTML = '<option value="__main__">Main agent (Prometheus)</option>';
     window._agentsCache = window._agentsCache || {};
     if (agentsResult.agents && Array.isArray(agentsResult.agents)) {
       for (const a of agentsResult.agents) {
@@ -459,7 +595,7 @@ async function _loadScheduleModalData() {
     }
     if (editingScheduleId) {
       const job = schedules.find(j => j.id === editingScheduleId);
-      const sid = job?.subagent_id || job?.subagentId || '';
+      const sid = _scheduleOwnerValue(job);
       if (sid) {
         sel.value = sid;
         if (typeof window._updateHeartbeatMdPreview === 'function') window._updateHeartbeatMdPreview(sid);
@@ -468,28 +604,13 @@ async function _loadScheduleModalData() {
   } catch {}
 
   try {
-    const mcpResult = await api('/api/mcp/status');
-    const box = document.getElementById('schedule-mcp-checkboxes');
-    const servers = (mcpResult.servers || []).filter(s => s.status === 'connected');
-    if (servers.length === 0) {
-      box.innerHTML = '<span style="font-size:12px;color:var(--muted)">No connected MCP servers</span>';
-    } else {
-      box.innerHTML = '';
-      for (const s of servers) {
-        const label = document.createElement('label');
-        label.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.value = s.id;
-        cb.id = `mcp-cb-${s.id}`;
-        label.appendChild(cb);
-        label.appendChild(document.createTextNode(s.name || s.id));
-        box.appendChild(label);
-      }
-    }
+    const skillsResult = await api('/api/skills').catch(() => ({ skills: [] }));
+    scheduleSkillsCache = Array.isArray(skillsResult?.skills) ? skillsResult.skills : [];
   } catch {
-    document.getElementById('schedule-mcp-checkboxes').innerHTML = '<span style="font-size:12px;color:var(--muted)">MCP unavailable</span>';
+    scheduleSkillsCache = [];
   }
+  _renderScheduleSkills();
+  _renderScheduleContextRefs();
 }
 
 function _resetScheduleModalFields() {
@@ -500,15 +621,17 @@ function _resetScheduleModalFields() {
   document.getElementById('schedule-prompt').value = '';
   document.getElementById('schedule-timezone').value = 'UTC';
   document.getElementById('schedule-channel').value = 'web';
-  document.getElementById('schedule-subagent').value = '';
+  document.getElementById('schedule-subagent').value = SCHEDULE_OWNER_MAIN;
   const hbPreview = document.getElementById('schedule-heartbeat-preview');
   if (hbPreview) hbPreview.style.display = 'none';
   document.getElementById('schedule-pattern-preview').style.display = 'none';
   document.getElementById('schedule-time-row').style.display = 'none';
   document.getElementById('schedule-custom-cron-row').style.display = 'none';
-  document.querySelectorAll('#schedule-mcp-checkboxes input[type=checkbox]').forEach(cb => cb.checked = false);
-  _scheduleRefLinks = [];
-  _renderScheduleRefChips();
+  _scheduleSkillIds = [];
+  _scheduleContextRefs = [];
+  _scheduleCtxRefEditId = null;
+  _renderScheduleSkills();
+  _renderScheduleContextRefs();
 }
 
 // --- MODAL: CREATE / EDIT ---------------------------------------------------
@@ -518,6 +641,7 @@ function openScheduleCreateModal() {
   document.getElementById('schedule-modal-title').textContent = 'Create Schedule';
   document.getElementById('schedule-save-btn').textContent = 'Create Schedule';
   _resetScheduleModalFields();
+  _setScheduleAttachmentsFromJob(null);
   document.getElementById('schedule-modal').style.display = 'flex';
   _loadScheduleModalData();
 }
@@ -530,6 +654,7 @@ function editSchedule(jobId) {
   document.getElementById('schedule-modal-title').textContent = 'Edit Schedule';
   document.getElementById('schedule-save-btn').textContent = 'Save Changes';
   _resetScheduleModalFields();
+  _setScheduleAttachmentsFromJob(job);
   document.getElementById('schedule-name').value = job.name || '';
 
   const cron = job.cron || job.run_at || '';
@@ -608,14 +733,11 @@ async function saveSchedule() {
   const prompt    = document.getElementById('schedule-prompt').value.trim();
   const timezone  = document.getElementById('schedule-timezone').value;
   const channel   = document.getElementById('schedule-channel').value;
-  const subagentId = document.getElementById('schedule-subagent').value.trim();
+  const ownerValue = document.getElementById('schedule-subagent').value.trim() || SCHEDULE_OWNER_MAIN;
+  const subagentId = ownerValue === SCHEDULE_OWNER_MAIN ? '' : ownerValue;
   const pattern   = _resolveSchedulePattern();
   const currentJob = editingScheduleId ? schedules.find(j => j.id === editingScheduleId) : null;
   const currentTeamId = String(currentJob?.team_id || '').trim();
-
-  const mcpServers = Array.from(
-    document.querySelectorAll('#schedule-mcp-checkboxes input[type=checkbox]:checked')
-  ).map(cb => cb.value);
 
   if (!name)    { showToast('Name required',    'Schedule name is required',    'warning'); return; }
   if (!pattern && document.getElementById('schedule-occurrence').value !== 'manual') {
@@ -635,9 +757,9 @@ async function saveSchedule() {
       delivery_channel: channel,
       confirm: true,
       ...(currentTeamId && !subagentId ? { team_id: currentTeamId } : {}),
-      ...(subagentId    ? { subagent_id:      subagentId }    : {}),
-      ...(mcpServers.length > 0 ? { mcp_servers: mcpServers } : {}),
-      ...(_scheduleRefLinks.length > 0 ? { reference_links: _scheduleRefLinks } : {}),
+      ...(!currentTeamId || subagentId ? { subagent_id: subagentId } : {}),
+      skillIds: _scheduleSkillIds,
+      context_refs: _scheduleContextRefs,
     };
     const result = await api(apiPath, { method, body: JSON.stringify(body) });
     if (result.success) {
@@ -705,7 +827,14 @@ window.toggleBrainJob          = toggleBrainJob;
 window.runBrainNow             = runBrainNow;
 window.runScheduleNow          = runScheduleNow;
 window.onScheduleOccurrenceChange = onScheduleOccurrenceChange;
-window.addScheduleRefLink      = addScheduleRefLink;
+window.addScheduleSkill        = addScheduleSkill;
+window.removeScheduleSkill     = removeScheduleSkill;
+window.reloadScheduleSkills    = reloadScheduleSkills;
+window.saveScheduleCtxRef      = saveScheduleCtxRef;
+window.openScheduleCtxRefModal = openScheduleCtxRefModal;
+window.closeScheduleCtxRefModal = closeScheduleCtxRefModal;
+window.updateScheduleCtxRef    = updateScheduleCtxRef;
+window.deleteScheduleCtxRef    = deleteScheduleCtxRef;
 window._openScheduledTeam      = _openScheduledTeam;
 
 // ─── WS Event Handlers ─────────────────────────────────────────

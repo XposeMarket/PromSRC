@@ -118,6 +118,34 @@ const buildTeamDispatchTaskLazy: typeof import('../teams/team-dispatch-runtime')
   const { buildTeamDispatchTask } = getTeamDispatchRuntime();
   return buildTeamDispatchTask(...args);
 };
+
+function normalizeScheduleToolSkillIds(value: any): string[] {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id: any) => String(id || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeScheduleToolContextRefs(value: any, existing: any[] = []): any[] {
+  if (!Array.isArray(value)) return [];
+  const existingById = new Map((Array.isArray(existing) ? existing : []).map((ref: any) => [String(ref?.id || ''), ref]));
+  const now = Date.now();
+  return value.map((raw: any) => {
+    const title = String(raw?.title || '').trim().slice(0, 160);
+    const content = String(raw?.content || '').trim().slice(0, 12000);
+    if (!title || !content) return null;
+    const id = String(raw?.id || `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`).trim();
+    const prior = existingById.get(id) || {};
+    return {
+      id,
+      title,
+      content,
+      createdAt: Number(raw?.createdAt || raw?.created_at || prior?.createdAt || now) || now,
+      updatedAt: Number(raw?.updatedAt || raw?.updated_at || now) || now,
+    };
+  }).filter(Boolean);
+}
 import {
   browserOpen,
   browserSetProfileTarget,
@@ -10672,6 +10700,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             team_id: requestedTeamId,
             assignmentTarget,
             deliverToMainChannel: assignmentTarget === 'main',
+            skillIds: normalizeScheduleToolSkillIds(args.skillIds),
+            context_refs: normalizeScheduleToolContextRefs(args.context_refs || args.contextReferences),
           } as any);
           if (requestedSubagentId) {
             ensureScheduleRuntimeForAgent(requestedSubagentId, {
@@ -10756,6 +10786,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
           if (args.model_override !== undefined || args.model !== undefined) {
             const mv = String(args.model_override || args.model || '').trim();
             patch.model = mv || undefined;
+          }
+          if (args.skillIds !== undefined) {
+            patch.skillIds = normalizeScheduleToolSkillIds(args.skillIds);
+          }
+          if (args.context_refs !== undefined || args.contextReferences !== undefined) {
+            const existingJob = deps.cronScheduler.getJobStatus(jobId)?.job;
+            patch.context_refs = normalizeScheduleToolContextRefs(
+              args.context_refs || args.contextReferences,
+              existingJob?.context_refs || existingJob?.contextReferences || []
+            );
           }
           if (args.delivery !== undefined || args.channel !== undefined) {
             const delivery = (args.delivery && typeof args.delivery === 'object') ? args.delivery : {};
@@ -12692,7 +12732,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const ids = allAgents.map((a: any) => a.id).join(', ') || 'none';
             return { name, args, result: `Agent "${agentId}" not found. Available IDs: ${ids}`, error: true };
           }
-          return { name, args, result: JSON.stringify(agent, null, 2), error: false };
+          let contextRefs: any[] = [];
+          try {
+            const workspacePath = getConfig().getConfig().workspace?.path || process.cwd();
+            contextRefs = new SubagentManager(workspacePath).listContextReferences(agentId);
+          } catch {}
+          return { name, args, result: JSON.stringify({ ...agent, context_refs: contextRefs }, null, 2), error: false };
         } catch (err: any) {
 	          return { name, args, result: `agent_info error: ${err.message}`, error: true };
 	        }
@@ -12727,8 +12772,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	                max_steps: updated.max_steps,
 	                timeout_ms: updated.timeout_ms,
 	                identity: updated.identity || null,
-		                allowed_tools: updated.allowed_tools || [],
+	                allowed_tools: updated.allowed_tools || [],
 	                forbidden_tools: updated.forbidden_tools || [],
+	                skillIds: updated.skillIds || [],
+	                context_refs: subagentMgr.listContextReferences(agentId),
 	                modified_at: updated.modified_at,
 	              },
 	            }, null, 2),

@@ -957,6 +957,71 @@ function getTeamChatSignature(messages) {
   return `${list.length}:${last?.id || ''}:${last?.timestamp || 0}`;
 }
 
+function hasTeamChatProcessMetadata(message) {
+  const metadata = message?.metadata || {};
+  return (Array.isArray(metadata.processEntries) && metadata.processEntries.length > 0)
+    || String(metadata.thinking || '').trim();
+}
+
+function isLocalTeamChatMessage(message) {
+  const id = String(message?.id || '');
+  const metadata = message?.metadata || {};
+  return !!(metadata.localStreamingFallback || id.startsWith('team_stream_') || id.startsWith('team_chat_stream_'));
+}
+
+function sameTeamChatTurn(a, b) {
+  if (!a || !b) return false;
+  if (a.id && b.id && a.id === b.id) return true;
+  const aContent = String(a.content || '').trim();
+  const bContent = String(b.content || '').trim();
+  if (!aContent || aContent !== bContent) return false;
+  if (String(a.from || '') !== String(b.from || '')) return false;
+  if (String(a.fromAgentId || '') !== String(b.fromAgentId || '')) return false;
+  const delta = Math.abs(Number(a.timestamp || 0) - Number(b.timestamp || 0));
+  return !Number.isFinite(delta) || delta < 5 * 60 * 1000;
+}
+
+function mergeTeamChatProcessMetadata(preferred, fallback) {
+  if (!preferred) return fallback;
+  if (!fallback) return preferred;
+  if (hasTeamChatProcessMetadata(preferred) || !hasTeamChatProcessMetadata(fallback)) return preferred;
+  return {
+    ...preferred,
+    metadata: {
+      ...(preferred.metadata || {}),
+      processEntries: Array.isArray(fallback.metadata?.processEntries) ? [...fallback.metadata.processEntries] : [],
+      thinking: String(fallback.metadata?.thinking || '').trim() || undefined,
+    },
+  };
+}
+
+function dedupeTeamChatMessages(messages) {
+  const out = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const existingIndex = out.findIndex((entry) => sameTeamChatTurn(entry, message));
+    if (existingIndex < 0) {
+      out.push(message);
+      continue;
+    }
+    const existing = out[existingIndex];
+    const preferIncoming = isLocalTeamChatMessage(existing) && !isLocalTeamChatMessage(message);
+    const preferred = preferIncoming ? message : existing;
+    const fallback = preferIncoming ? existing : message;
+    out[existingIndex] = mergeTeamChatProcessMetadata(preferred, fallback);
+  }
+  return out;
+}
+
+function preserveTeamChatProcessMetadata(freshMessages, localMessages = teamChatMessages) {
+  const localWithProcess = (Array.isArray(localMessages) ? localMessages : []).filter(hasTeamChatProcessMetadata);
+  const mapped = (Array.isArray(freshMessages) ? freshMessages : []).map((fresh) => {
+    if (hasTeamChatProcessMetadata(fresh)) return fresh;
+    const local = localWithProcess.find((m) => sameTeamChatTurn(m, fresh));
+    return local ? mergeTeamChatProcessMetadata(fresh, local) : fresh;
+  });
+  return dedupeTeamChatMessages(mapped);
+}
+
 function isTeamChatBusy(teamId) {
   return !!(teamChatStreamingState && teamChatStreamingState.teamId === teamId && teamChatStreamingState.completed !== true);
 }
@@ -1912,7 +1977,7 @@ function attachTeamStreamingMetadata(messages, streamingState) {
       },
     });
   }
-  return list;
+  return dedupeTeamChatMessages(list);
 }
 
 function refreshVisibleTeamChat(teamId, forceBottom = false) {
@@ -2938,7 +3003,10 @@ async function loadTeamBoardData(teamId) {
       }
     }
     teamActiveRunsByTeam[teamId] = nextLive;
-    teamChatMessages = mergeDispatchMetadataIntoMessages(teamId, chatData.messages || []);
+    teamChatMessages = preserveTeamChatProcessMetadata(
+      mergeDispatchMetadataIntoMessages(teamId, chatData.messages || []),
+      teamChatMessages,
+    );
     teamWorkspaceFiles = workspaceData.files || [];
     teamWorkspaceTree = workspaceData.tree || [];
     teamWorkspaceData = workspaceData || null;
@@ -4481,6 +4549,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
     finalReply: '',
     fallbackTimer: null,
     source: 'localSse',
+    startedAt: Date.now(),
   };
   teamChatStreamingState = streamState;
   const controller = new AbortController();
@@ -4662,7 +4731,8 @@ async function sendTeamChat(teamId, queuedMessage = null) {
                     thinking: String(streamState.thinking || '').trim(),
                   },
                 });
-                activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
+                teamChatMessages = dedupeTeamChatMessages(teamChatMessages);
+                  activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
               }
               if (teamChatStreamingState === streamState) teamChatStreamingState = null;
               renderActiveTeamChat(teamId, { forceBottom: true });
@@ -5590,8 +5660,10 @@ function handleTeamWsEvent(msg) {
   }
   if (msg.type === 'team_chat_stream_event') {
     if (teamChatStreamingState?.teamId === msg.teamId
-      && teamChatStreamingState.source === 'localSse'
-      && teamChatStreamingState.completed !== true) {
+      && teamChatStreamingState.source === 'localSse') {
+      return;
+    }
+    if (!teamChatStreamingState && ['final', 'done'].includes(String(msg.event || ''))) {
       return;
     }
     if (msg.teamId) {
@@ -5629,7 +5701,10 @@ function handleTeamWsEvent(msg) {
         && String(chatMessage.content || '').trim() === String(entry.content || '').trim()
       ));
       teamChatMessages.push(chatMessage);
-      teamChatMessages = mergeDispatchMetadataIntoMessages(msg.teamId, teamChatMessages);
+      teamChatMessages = preserveTeamChatProcessMetadata(
+        mergeDispatchMetadataIntoMessages(msg.teamId, teamChatMessages),
+        teamChatMessages,
+      );
       activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
       renderActiveTeamChat(msg.teamId, { forceBottom: false });
     }

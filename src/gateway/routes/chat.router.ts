@@ -1149,32 +1149,11 @@ import { activeTasks, getMaxToolRounds } from '../chat/chat-state';
 const MAX_TOOL_ROUNDS = getMaxToolRounds();
 
 function resolveEffectiveMaxToolRounds(
-  baseMax: number,
-  opts: { creativeMode?: string | null; executionMode: ExecutionMode; message: string },
+  _baseMax: number,
+  _opts: { creativeMode?: string | null; executionMode: ExecutionMode; message: string },
 ): number {
-  const configured = Number.isFinite(baseMax) && baseMax > 0 ? Math.floor(baseMax) : 80;
-  const msg = String(opts.message || '');
-  const toolHeavyInteractive =
-    opts.executionMode === 'interactive'
-    && (
-      !!opts.creativeMode
-      || /\b(browser|desktop|creative mode|video|clip|export|render|canvas|automation)\b/i.test(msg)
-    );
-
-  if (opts.creativeMode === 'video') return Math.max(configured, 160);
-  if (opts.creativeMode) return Math.max(configured, 120);
-  if (toolHeavyInteractive) return Math.max(configured, 120);
-  if (
-    opts.executionMode === 'background_task'
-    || opts.executionMode === 'background_agent'
-    || opts.executionMode === 'proposal_execution'
-    || opts.executionMode === 'cron'
-    || opts.executionMode === 'team_manager'
-    || opts.executionMode === 'team_subagent'
-  ) {
-    return Math.max(configured, 100);
-  }
-  return configured;
+  // No cap — the tool loop runs until the model stops calling tools (or on abort).
+  return Infinity;
 }
 
 function isResumableExecutionMode(executionMode: ExecutionMode): boolean {
@@ -1882,9 +1861,7 @@ async function handleChat(
     && String(rawHistory[rawHistory.length - 1]?.content || '').replace(/\s+/g, ' ').trim() === normalizedIncomingMessage
       ? rawHistory.slice(0, -1)
       : rawHistory;
-  if (executionMode !== 'cron') {
-    autoActivateToolCategories(sessionId, message, history.length);
-  }
+  autoActivateToolCategories(sessionId, message, history.length);
   // Build compact tool observations from recent assistant turns so the model
   // knows what it recently did even across the short history window.
   const activeContextProfile = resolveActiveModelContextProfile();
@@ -11528,10 +11505,30 @@ function attachRuntimeProcessEntriesToLatestAssistant(sessionId: string, entries
       const msg: any = history[i];
       if (msg?.role !== 'assistant' && msg?.role !== 'ai') continue;
       const existing = Array.isArray(msg.processEntries) ? msg.processEntries : [];
-      if (existing.length >= processEntries.length) return;
+      const merged = [...existing];
+      const seen = new Set(merged.map((entry: any) => JSON.stringify({
+        ts: entry?.ts,
+        type: entry?.type,
+        actor: entry?.actor,
+        content: entry?.content,
+        toolName: entry?.toolName,
+      })));
+      for (const entry of processEntries) {
+        const key = JSON.stringify({
+          ts: entry?.ts,
+          type: entry?.type,
+          actor: entry?.actor,
+          content: entry?.content,
+          toolName: entry?.toolName,
+        });
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(entry);
+      }
+      if (merged.length === existing.length) return;
       history[i] = {
         ...msg,
-        processEntries,
+        processEntries: merged.slice(-300),
       };
       replaceHistory(sid, history);
       return;
@@ -11550,6 +11547,26 @@ function historyMessageMergeKey(msg: any): string {
   return `${role}|${content}`;
 }
 
+function isInterruptedAssistantMessage(msg: any): boolean {
+  const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : '';
+  if (!role) return false;
+  const content = String(msg?.content || '').trim();
+  if (!content) return false;
+  return /^\[(?:Stopped by user|Generation stopped|Interrupted by user)\]/i.test(content)
+    || /^Restart Context Packet\b/i.test(content)
+    || /\b(?:stopped|interrupted|aborted) by user\b/i.test(content);
+}
+
+function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
+  if (!prior || typeof prior !== 'object' || !raw || typeof raw !== 'object') return raw;
+  const next: any = { ...raw };
+  if (!Array.isArray(next.processEntries) && Array.isArray((prior as any).processEntries)) next.processEntries = (prior as any).processEntries;
+  if (!next.toolLog && (prior as any).toolLog) next.toolLog = (prior as any).toolLog;
+  if (!next.thinking && (prior as any).thinking) next.thinking = (prior as any).thinking;
+  if (!next.fileChanges && (prior as any).fileChanges) next.fileChanges = (prior as any).fileChanges;
+  return next;
+}
+
 function mergeHistoryWithExistingMessageMetadata(sessionId: string, incomingHistory: any[]): any[] {
   const incoming = Array.isArray(incomingHistory) ? incomingHistory : [];
   if (!incoming.length) return incoming;
@@ -11560,15 +11577,23 @@ function mergeHistoryWithExistingMessageMetadata(sessionId: string, incomingHist
       const key = historyMessageMergeKey(msg);
       if (key && !byKey.has(key)) byKey.set(key, msg);
     }
+    const interruptedExisting = existing
+      .filter(isInterruptedAssistantMessage)
+      .filter((msg: any) => Array.isArray(msg?.processEntries) || msg?.toolLog || msg?.fileChanges)
+      .sort((a: any, b: any) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
     return incoming.map((raw) => {
       if (!raw || typeof raw !== 'object') return raw;
       const prior = byKey.get(historyMessageMergeKey(raw));
-      if (!prior || typeof prior !== 'object') return raw;
-      const next: any = { ...raw };
-      if (!Array.isArray(next.processEntries) && Array.isArray((prior as any).processEntries)) next.processEntries = (prior as any).processEntries;
-      if (!next.toolLog && (prior as any).toolLog) next.toolLog = (prior as any).toolLog;
-      if (!next.thinking && (prior as any).thinking) next.thinking = (prior as any).thinking;
-      return next;
+      if (prior && typeof prior === 'object') return mergeHistoryMetadataFromPrior(raw, prior);
+      if (isInterruptedAssistantMessage(raw)) {
+        const rawTs = Number(raw?.timestamp || 0);
+        const nearestInterrupted = interruptedExisting.find((msg: any) => {
+          const msgTs = Number(msg?.timestamp || 0);
+          return !rawTs || !msgTs || Math.abs(msgTs - rawTs) < 10 * 60_000;
+        });
+        if (nearestInterrupted) return mergeHistoryMetadataFromPrior(raw, nearestInterrupted);
+      }
+      return raw;
     });
   } catch {
     return incoming;

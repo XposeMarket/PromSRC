@@ -65,6 +65,50 @@ interface MCPSession {
   initialized: boolean;
 }
 
+async function readJsonRpcResponse(resp: Response, timeoutMs: number): Promise<any> {
+  const contentType = resp.headers.get('content-type') || '';
+  if (!contentType.includes('text/event-stream')) {
+    return resp.json();
+  }
+
+  const reader = resp.body?.getReader();
+  if (!reader) return {};
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const started = Date.now();
+  const timer = setTimeout(() => {
+    try { reader.cancel(); } catch {}
+  }, Math.max(1000, timeoutMs));
+
+  try {
+    while (Date.now() - started < timeoutMs) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const eventEnd = buffer.indexOf('\n\n');
+      const eventText = eventEnd >= 0 ? buffer.slice(0, eventEnd) : buffer;
+      const dataLines = eventText
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice('data:'.length).trim())
+        .filter(Boolean);
+
+      if (dataLines.length > 0) {
+        const data = dataLines.join('\n');
+        if (data === '[DONE]') return {};
+        return JSON.parse(data);
+      }
+    }
+    throw new Error(`SSE response timeout after ${timeoutMs}ms`);
+  } finally {
+    clearTimeout(timer);
+    try { reader.cancel(); } catch {}
+  }
+}
+
 export interface MCPServerStatus {
   id: string;
   name: string;
@@ -73,6 +117,10 @@ export interface MCPServerStatus {
   tools: number;
   toolNames?: string[];
   error?: string;
+  /** Last connect hit 401/403 — server requires OAuth authorization. */
+  needsOAuth?: boolean;
+  /** OAuth tokens are stored for this server. */
+  oauthConnected?: boolean;
 }
 
 // ─── Manager ──────────────────────────────────────────────────────────────────
@@ -82,6 +130,14 @@ export class MCPManager {
   private configDir: string;
   private sessions = new Map<string, MCPSession>();
   private configs: MCPServerConfig[] = [];
+  // Last WWW-Authenticate hint per server from a 401/403, used to bootstrap the
+  // OAuth discovery flow.
+  private oauthHints = new Map<string, { wwwAuthenticate: string }>();
+
+  /** WWW-Authenticate hint captured from the last 401/403 for this server. */
+  getOAuthHint(id: string): { wwwAuthenticate: string } | undefined {
+    return this.oauthHints.get(id);
+  }
 
   constructor(configDir: string) {
     this.configDir = configDir;
@@ -473,6 +529,16 @@ export class MCPManager {
         'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
         ...resolvedHeaders.env,
       };
+      // OAuth: if this server was authorized via the browser flow, attach a fresh
+      // bearer token (unless the user pinned an explicit Authorization header).
+      const hasExplicitAuth = Object.keys(baseHeaders).some((k) => k.toLowerCase() === 'authorization');
+      if (!hasExplicitAuth) {
+        try {
+          const { getValidMcpAccessToken } = await import('./mcp-oauth.js');
+          const token = await getValidMcpAccessToken(cfg.id);
+          if (token) baseHeaders['Authorization'] = `Bearer ${token}`;
+        } catch { /* oauth optional */ }
+      }
       // Debug logging
       const headerKeys = Object.keys(baseHeaders).filter(k => k !== 'Content-Type' && k !== 'Accept' && k !== 'MCP-Protocol-Version');
       console.log(`[MCP:${cfg.id}] Connecting to ${cfg.url} with ${headerKeys.length} custom headers:`, headerKeys);
@@ -501,6 +567,13 @@ export class MCPManager {
         } catch {}
         const details = bodyText ? ` — ${bodyText.slice(0, 100)}` : '';
         session.error = `HTTP ${initResp.status} ${initResp.statusText}${details}`;
+        // 401/403 → this server needs OAuth authorization. Record the
+        // WWW-Authenticate hint so the OAuth flow can discover the auth server.
+        if (initResp.status === 401 || initResp.status === 403) {
+          (session as any)._needsOAuth = true;
+          (session as any)._wwwAuthenticate = initResp.headers.get('www-authenticate') || '';
+          this.oauthHints.set(cfg.id, { wwwAuthenticate: (session as any)._wwwAuthenticate });
+        }
         console.warn(`[MCP:${cfg.id}] Connection failed: ${session.error}`);
         return { success: false, error: session.error };
       }
@@ -536,16 +609,7 @@ export class MCPManager {
         return { success: true, tools: [] };
       }
 
-      const ct = toolsResp.headers.get('content-type') || '';
-      let toolsData: any;
-      if (ct.includes('text/event-stream')) {
-        // Server chose SSE stream — read first data event
-        const sseText = await toolsResp.text();
-        const match = sseText.match(/^data:\s*(.+)$/m);
-        toolsData = match ? JSON.parse(match[1]) : {};
-      } else {
-        toolsData = await toolsResp.json();
-      }
+      const toolsData = await readJsonRpcResponse(toolsResp, 12000);
 
       const tools: MCPTool[] = (toolsData?.result?.tools || []).map((t: any) => ({
         name: t.name,
@@ -602,15 +666,7 @@ export class MCPManager {
         body: JSON.stringify({ jsonrpc: '2.0', id: session.requestId++, method: 'tools/call', params: { name: toolName, arguments: args } }),
         signal: AbortSignal.timeout(30000),
       });
-      const ct = resp.headers.get('content-type') || '';
-      let data: any;
-      if (ct.includes('text/event-stream')) {
-        const sseText = await resp.text();
-        const match = sseText.match(/^data:\s*(.+)$/m);
-        data = match ? JSON.parse(match[1]) : {};
-      } else {
-        data = await resp.json();
-      }
+      const data = await readJsonRpcResponse(resp, 30000);
       return {
         content: data?.result?.content || [{ type: 'text', text: JSON.stringify(data?.result) }],
         isError: data?.result?.isError === true,
@@ -627,6 +683,8 @@ export class MCPManager {
   // ── Status ─────────────────────────────────────────────────────────────────
 
   getStatus(): MCPServerStatus[] {
+    let hasMcpOAuthTokens: ((id: string) => boolean) | null = null;
+    try { hasMcpOAuthTokens = require('./mcp-oauth.js').hasMcpOAuthTokens; } catch {}
     return this.configs.map(cfg => {
       const session = this.sessions.get(cfg.id);
       return {
@@ -637,6 +695,8 @@ export class MCPManager {
         tools: session?.tools.length || 0,
         toolNames: session?.tools.map(t => t.name) || [],
         error: session?.error,
+        needsOAuth: Boolean((session as any)?._needsOAuth) || this.oauthHints.has(cfg.id),
+        oauthConnected: hasMcpOAuthTokens ? hasMcpOAuthTokens(cfg.id) : undefined,
       };
     });
   }

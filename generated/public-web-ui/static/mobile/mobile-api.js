@@ -303,6 +303,7 @@ function _normalizeCronJob(job) {
   const enabled = job.enabled !== false;
   const running = job.status === 'running';
   const subagentId = String(job.subagent_id || job.subagentId || '').trim() || null;
+  const cron = String(job.cron || job.run_at || job.pattern || '').trim();
   return {
     id: job.id,
     kind: 'cron',
@@ -316,6 +317,15 @@ function _normalizeCronJob(job) {
     next: fmtDate(job.next_run || job.nextRun) || '—',
     last: fmtDate(job.last_run || job.lastRun) || 'Never',
     assignedTo: subagentId,
+    cron,
+    timezone: job.timezone || 'UTC',
+    prompt: String(job.prompt || ''),
+    deliveryChannel: job.delivery_channel || job.deliveryChannel || 'web',
+    skillIds: Array.isArray(job.skillIds) ? job.skillIds.map(id => String(id || '').trim()).filter(Boolean) : [],
+    contextRefs: Array.isArray(job.context_refs)
+      ? job.context_refs
+      : (Array.isArray(job.contextReferences) ? job.contextReferences : []),
+    raw: job,
     footLeft: '',
     footRight: '',
   };
@@ -359,6 +369,14 @@ export async function runScheduleNow(item) {
     });
   }
   return api(`/api/schedules/${encodeURIComponent(item.id)}/run`, { method: 'POST' });
+}
+
+export async function updateMobileSchedule(item, fields) {
+  if (!item || item.kind !== 'cron') throw new Error('This schedule cannot be edited here');
+  return api(`/api/schedules/${encodeURIComponent(item.id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(fields || {}),
+  });
 }
 
 /* ---------------- teams ---------------- */
@@ -871,11 +889,11 @@ function _recentMemoryItems(graph, limit = 3) {
 
 export async function loadMobileMoreSummary() {
   const [models, tools, goals, audit, memory] = await Promise.all([
-    _withTimeout(api('/api/hub/models/overview?range=all', { timeoutMs: 10000 }), null, 10500),
-    _withTimeout(api('/api/hub/tools/overview?range=30d', { timeoutMs: 10000 }), null, 10500),
-    _withTimeout(api('/api/hub/goals', { timeoutMs: 8000 }), null, 8500),
-    _withTimeout(api('/api/audit-log?limit=120&offset=0&nonMainOnly=1', { timeoutMs: 10000 }), null, 10500),
-    _withTimeout(api('/api/memory/graph', { timeoutMs: 3500 }).catch(() => null), null, 4000),
+    _withTimeout(api('/api/hub/models/overview?range=all', { timeoutMs: 4500 }), null, 4800),
+    _withTimeout(api('/api/hub/tools/overview?range=30d', { timeoutMs: 4500 }), null, 4800),
+    _withTimeout(api('/api/hub/goals', { timeoutMs: 3500 }), null, 3800),
+    _withTimeout(api('/api/audit-log?limit=80&offset=0&nonMainOnly=1', { timeoutMs: 4500 }), null, 4800),
+    _withTimeout(api('/api/memory/graph', { timeoutMs: 3000 }).catch(() => null), null, 3300),
   ]);
   const goalList = Array.isArray(goals?.goals) ? goals.goals.slice() : [];
   goalList.sort((a, b) => Date.parse(b?.updatedAt || b?.completedAt || b?.createdAt || 0) - Date.parse(a?.updatedAt || a?.completedAt || a?.createdAt || 0));
@@ -897,11 +915,11 @@ export async function loadMobileMoreSummary() {
 
 export async function loadMobileHubOverview() {
   const [models, tools, goals, skills, curator] = await Promise.all([
-    api('/api/hub/models/overview?range=all', { timeoutMs: 30000 }).catch(() => null),
-    api('/api/hub/tools/overview?range=30d', { timeoutMs: 30000 }).catch(() => null),
-    api('/api/hub/goals').catch(() => null),
-    api('/api/hub/skills/usage?range=month').catch(() => null),
-    api('/api/hub/skills/review', { timeoutMs: 30000 }).catch(() => null),
+    _withTimeout(api('/api/hub/models/overview?range=all', { timeoutMs: 7000 }), null, 7300),
+    _withTimeout(api('/api/hub/tools/overview?range=30d', { timeoutMs: 7000 }), null, 7300),
+    _withTimeout(api('/api/hub/goals', { timeoutMs: 4500 }), null, 4800),
+    _withTimeout(api('/api/hub/skills/usage?range=month', { timeoutMs: 7000 }), null, 7300),
+    _withTimeout(api('/api/hub/skills/review', { timeoutMs: 7000 }), null, 7300),
   ]);
   const goalList = Array.isArray(goals?.goals) ? goals.goals.slice() : [];
   goalList.sort((a, b) => Date.parse(b?.updatedAt || b?.completedAt || b?.createdAt || 0) - Date.parse(a?.updatedAt || a?.completedAt || a?.createdAt || 0));
@@ -917,8 +935,11 @@ export async function loadMobileHubOverview() {
     skills: Array.isArray(skills?.skills) ? skills.skills : [],
     curator: {
       suggestions: Array.isArray(curator?.suggestions) ? curator.suggestions : [],
+      activity: Array.isArray(curator?.activity) ? curator.activity : [],
       pending: Number(curator?.pending || 0),
       quarantined: Number(curator?.quarantined || 0),
+      appliedActivity: Number(curator?.appliedActivity || 0),
+      observedActivity: Number(curator?.observedActivity || 0),
     },
   };
 }
@@ -940,7 +961,8 @@ export async function denyMobileSkillCuratorSuggestion(id) {
 }
 
 export async function loadMobileAuditRuns(limit = 100) {
-  const audit = await api(`/api/audit-log?limit=${encodeURIComponent(limit)}&offset=0&nonMainOnly=1`);
+  const safeLimit = Math.max(20, Math.min(300, Math.floor(Number(limit) || 100)));
+  const audit = await api(`/api/audit-log?limit=${encodeURIComponent(safeLimit)}&offset=0&nonMainOnly=1`, { timeoutMs: 7000 });
   return _groupAuditRuns(audit?.entries || []);
 }
 

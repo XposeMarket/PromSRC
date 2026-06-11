@@ -15,6 +15,7 @@ import { getTeamMemberAgentIds } from '../teams/managed-teams';
 import { checkForTeamSuggestion } from '../teams/team-detector';
 import { getTeamWorkspacePath } from '../teams/team-workspace';
 import type { RuntimeVisionAttachment } from '../chat/attachment-context';
+import type { SkillsManager } from '../skills-runtime/skills-manager';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
@@ -28,6 +29,7 @@ let _cronScheduler: any;
 let _telegramChannel: any;
 let _telegramPersonaBots: any;
 let _telegramTeamRoomBridge: any;
+let _skillsManager: InstanceType<typeof SkillsManager> | undefined;
 
 
 let _dispatchToAgent: (agentId: string, message: string, context: string | undefined, source: string) => Promise<any>;
@@ -50,6 +52,7 @@ export function initChannelsRouter(deps: {
   telegramChannel: any;
   telegramPersonaBots?: any;
   telegramTeamRoomBridge?: any;
+  skillsManager?: InstanceType<typeof SkillsManager>;
   dispatchToAgent: (agentId: string, message: string, context: string | undefined, source: string) => Promise<any>;
   runInteractiveTurn: (
     message: string,
@@ -69,6 +72,7 @@ export function initChannelsRouter(deps: {
   _telegramChannel = deps.telegramChannel;
   _telegramPersonaBots = deps.telegramPersonaBots;
   _telegramTeamRoomBridge = deps.telegramTeamRoomBridge;
+  _skillsManager = deps.skillsManager;
   _dispatchToAgent = deps.dispatchToAgent;
   _runInteractiveTurn = deps.runInteractiveTurn;
 }
@@ -635,6 +639,9 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   if (raw?.teamAssignment !== undefined) normalized.teamAssignment = String(raw.teamAssignment || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
   if (raw?.model !== undefined) normalized.model = String(raw.model || '').trim();
+  if (Array.isArray(raw?.skillIds)) {
+    normalized.skillIds = Array.from(new Set(raw.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean)));
+  }
   if (typeof raw?.default === 'boolean') normalized.default = raw.default;
   if (raw?.maxSteps !== undefined) {
     const n = Number(raw.maxSteps);
@@ -1717,6 +1724,27 @@ function saveAgentContextRefs(workspace: string, refs: any[]): void {
   fs.writeFileSync(path.join(workspace, 'context-refs.json'), JSON.stringify({ refs }, null, 2), 'utf-8');
 }
 
+function buildAttachedSkillsContext(agent: any): string {
+  const skillIds: string[] = Array.isArray(agent?.skillIds)
+    ? Array.from(new Set(agent.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean))) as string[]
+    : [];
+  if (!skillIds.length) return '';
+  _skillsManager?.scanSkillsIfStale?.();
+  const skills = skillIds.map((id) => _skillsManager?.get?.(id)).filter(Boolean) as any[];
+  const knownIds = new Set(skills.map((skill) => skill.id));
+  const missing = skillIds.filter((id) => !knownIds.has(id));
+  const lines = [
+    '[ATTACHED SKILLS]',
+    'This subagent has skill playbooks attached by the user. Before acting, call skill_read for each relevant attached skill ID and follow the loaded instructions.',
+    ...skills.map((skill) => {
+      const triggerPreview = Array.isArray(skill.triggers) && skill.triggers.length ? ` [triggers: ${skill.triggers.slice(0, 6).join(', ')}]` : '';
+      return `- ${skill.id}${triggerPreview} - ${String(skill.description || skill.name || '').slice(0, 180)}`;
+    }),
+    ...missing.map((id) => `- ${id} - attached but not found in the current skill registry`),
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
 router.get('/api/agents/:id/context-refs', (req, res) => {
   const agent = getAgentById(_sanitizeAgentId(req.params.id));
   if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
@@ -1812,7 +1840,7 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
     res.status(400).json({ success: false, error: 'task is required' });
     return;
   }
-  // Inject context refs into the context block
+  // Inject context refs and attached skills into the context block
   const workspace = resolveAgentWorkspaceSafe(agent);
   const refs = loadAgentContextRefs(workspace);
   let contextRefsBlock = '';
@@ -1820,9 +1848,10 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
     const lines = refs.map(r => `- **${r.title}**: ${r.content}`).join('\n');
     contextRefsBlock = `[CONTEXT REFERENCES]\n${lines}\n`;
   }
+  const attachedSkillsBlock = buildAttachedSkillsContext(agent);
   const rawContext = req.body?.context !== undefined ? String(req.body.context) : undefined;
-  const context = contextRefsBlock
-    ? [contextRefsBlock, rawContext].filter(Boolean).join('\n\n')
+  const context = contextRefsBlock || attachedSkillsBlock
+    ? [contextRefsBlock, attachedSkillsBlock, rawContext].filter(Boolean).join('\n\n')
     : rawContext;
   const maxStepsRaw = req.body?.maxSteps;
   const maxSteps = Number.isFinite(Number(maxStepsRaw)) && Number(maxStepsRaw) > 0

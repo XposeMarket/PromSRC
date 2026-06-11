@@ -17,6 +17,9 @@
 
 import { state, THEME_KEY } from './state.js';
 import { runIfNeeded as runOnboardingIfNeeded } from './onboarding/onboarding-controller.js';
+import { initGlobalShortcuts } from './shortcuts.js';
+
+initGlobalShortcuts();
 
 // Theme registry is defined in index.html (window.PROM_THEMES) so it loads
 // before any script. Fall back to dark/light if it is somehow unavailable.

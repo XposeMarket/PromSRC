@@ -320,7 +320,12 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             const ids = allAgents.map((a: any) => a.id).join(', ') || 'none';
             return { name, args, result: `Agent "${agentId}" not found. Available IDs: ${ids}`, error: true };
           }
-          return { name, args, result: JSON.stringify(agent, null, 2), error: false };
+          let contextRefs: any[] = [];
+          try {
+            const workspacePath = getConfig().getConfig().workspace?.path || process.cwd();
+            contextRefs = new SubagentManager(workspacePath).listContextReferences(agentId);
+          } catch {}
+          return { name, args, result: JSON.stringify({ ...agent, context_refs: contextRefs }, null, 2), error: false };
         } catch (err: any) {
           return { name, args, result: `agent_info error: ${err.message}`, error: true };
         }
@@ -357,6 +362,8 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
                 identity: updated.identity || null,
                 allowed_tools: updated.allowed_tools || [],
                 forbidden_tools: updated.forbidden_tools || [],
+                skillIds: updated.skillIds || [],
+                context_refs: subagentMgr.listContextReferences(agentId),
                 modified_at: updated.modified_at,
               },
             }, null, 2),

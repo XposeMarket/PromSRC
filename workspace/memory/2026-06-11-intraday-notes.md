@@ -27,3 +27,32 @@ Fixed mobile drawer "new chat doesn't appear until app restart" in web-ui/src/mo
 _Source: Mobile chat session; session: mobile_mq8dsz24_x6fac0; origin: Desktop app_
 Reminder logged at 10:30 PM (June 10, 2026): Raul is still daytrading after 5 PM, reported still up $189 after getting greedy again. Gentle reminder issued.
 _Related task: daytrade_afterhours_
+
+### [LAST_RUN_INSIGHT] 2026-06-11T14:30:45.696Z
+_Source: Mobile chat session; session: mobile_mq9fqk3l_czsequ_
+Browser automation with j/k + t worked cleanly on home feed and search. Persistent @raulinvests session held. Pattern: acting on focused items immediately after j/k prevents scroll loops and modal issues.
+
+### [LAST_RUN_INSIGHT] 2026-06-11T14:34:54.243Z
+_Source: Mobile chat session; session: mobile_mq9fqk3l_czsequ_
+Browser session closed mid-run after failed selector attempts. Keyboard shortcut pattern from prior context remains the reliable path but needs fresh session start. schedule-memory.md path not found at expected location.
+
+### [X-POST] 2026-06-11T14:35:00.831Z
+_Source: Mobile chat session; session: mobile_mq9fqk3l_czsequ_
+Post failed - browser session closed mid-run, CDP error on reopen. schedule-memory.md path not found. No post made.
+_Related task: prometheus-x-posts_
+
+### [LAST_RUN_INSIGHT] 2026-06-11T14:35:04.669Z
+_Source: Mobile chat session; session: mobile_mq9fqk3l_czsequ_
+Browser automation failed due to repeated CDP session closure after first open. schedule-memory.md not found at specified path. No post executed. Keyboard shortcut pattern noted for future reliability.
+
+### [LAST_RUN_INSIGHT] 2026-06-11T14:39:58.522Z
+_Source: Main chat session; session: auto_job_1781023720991_vo76d; origin: Desktop app_
+Keyboard shortcut flow (n + type + Control+Enter) worked cleanly again. Post appeared instantly in feed. schedule-memory.md path not found (used correct read_file). No em dashes. Browser closed immediately.
+
+### [GENERAL] 2026-06-11T17:14:28.667Z
+_Source: Main chat session; session: 99911502-2b14-43d3-8efa-b79dca4f945f; origin: Desktop app_
+Created standalone subagent `x_account_operator_raulinvests_v1` named Mara to operate Raul's X/Twitter account @Raulinvests. Scope: draft posts, post only when explicitly authorized, monitor mentions/bookmarks/searches, selective engagement, and audience growth around Prometheus/building, trading discipline, AI agents, Xpose/local business marketing, and founder/build-in-public. Hard constraints include no em dashes in tweets, preserve Raul's human/non-corporate voice, use web_fetch first for X URLs, verify auth for exact X surfaces, and close browser after X work.
+
+### [DISCOVERY] 2026-06-11T20:09:45.028Z
+_Source: Main chat session; session: 7da43dd0-a536-4689-9cda-9a62a718eaf0; origin: Desktop app_
+AI smoke test 2026-06-11: desktop focus worked for Codex (handle 722350) and Claude (handle 66910), with fresh screenshots. Browser automation opened Reddit and X for query `Claude OpenClaw Hermes AI`; Reddit collected 6,359 chars across 5 passes, X collected 23 structured tweets / 12,957 chars. Main signals: Reddit discussion centers Hermes vs OpenClaw, Claude Code + Hermes, token costs, migration/necessity of harnesses; X live search centers AI Agent OS/command-center positioning, Claude+Hermes+OpenClaw dashboards, token-cost concerns, agent-native app platforms, shared memory/context pain.

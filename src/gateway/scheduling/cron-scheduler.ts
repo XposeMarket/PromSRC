@@ -17,7 +17,7 @@ import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSess
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
-import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, addLearnedContext, setNote } from './schedule-memory';
+import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, addLearnedContext, setNote, type ScheduleAgentMemory } from './schedule-memory';
 import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
@@ -57,6 +57,14 @@ export interface CronJob {
   id: string;
   name: string;
   prompt: string;
+  skillIds?: string[];
+  context_refs?: Array<{
+    id: string;
+    title: string;
+    content: string;
+    createdAt?: number;
+    updatedAt?: number;
+  }>;
   type: 'one-shot' | 'recurring' | 'heartbeat';
   schedule: string | null;   // Cron expression (5 or 6 fields), e.g. "*/30 * * * *"
   tz?: string;               // Optional IANA timezone (e.g. "America/New_York")
@@ -130,19 +138,90 @@ export interface RunJobNowOptions {
   respectActiveHours?: boolean;
 }
 
-// Short "last run" orientation injected into a scheduled run's prompt: when it
-// last ran and a trimmed summary of that result, so the run has continuity.
-function buildLastRunContext(job: CronJob): string {
+// Short "last run" orientation injected at the very top of a scheduled run's
+// prompt: when it last ran and a trimmed summary of that result, so the run has
+// continuity before it reads any broader workspace context.
+function getScheduleNote(mem: ScheduleAgentMemory | null, key: string): string {
+  return String(mem?.notes?.[key] || '').replace(/\s+/g, ' ').trim();
+}
+
+function buildLastRunContext(job: CronJob, mem: ScheduleAgentMemory | null): string {
   if (!job.lastRun) return '';
   let when = job.lastRun;
   try {
     when = new Date(job.lastRun).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   } catch { /* keep ISO */ }
   const lastResult = String(job.lastResult || '').replace(/\s+/g, ' ').trim();
+  const lastRunInsight = getScheduleNote(mem, 'last_run_insight');
+  const lastCompletionNote = getScheduleNote(mem, 'last_completion_note');
   return [
-    `[LAST RUN] This scheduled job last ran ${when}.`,
-    lastResult ? `Previous result (summary): ${lastResult.slice(0, 400)}` : '',
+    `[JOB-SPECIFIC LAST RUN CONTEXT - READ FIRST]`,
+    `This scheduled job last ran ${when}.`,
+    lastRunInsight ? `Last run insight (operational evidence: what worked, failed, selectors, blockers, recovery): ${lastRunInsight.slice(0, 700)}` : '',
+    lastCompletionNote ? `Last completion note (actual task outcome from final write_note): ${lastCompletionNote.slice(0, 900)}` : '',
+    !lastCompletionNote && lastResult ? `Previous result (fallback summary): ${lastResult.slice(0, 400)}` : '',
+    `Use this before broad intraday notes or workspace memory. It is only about "${job.name}".`,
+    `[/JOB-SPECIFIC LAST RUN CONTEXT]`,
   ].filter(Boolean).join('\n');
+}
+
+function buildScheduledRunCompletionScope(job: CronJob): string {
+  return [
+    '[COMPLETION NOTE SCOPE]',
+    `When this scheduled job finishes, any write_note/final summary must describe only this run of "${job.name}".`,
+    'Do not write a Prometheus system status report, operator snapshot, global workspace summary, or generic continuity report unless the job prompt explicitly asks for that exact artifact.',
+    'Include concrete actions, outputs, blockers, source searches/files used, posts/replies made, and verification for this run only.',
+    'If nothing was completed, write the blocker and the next concrete recovery step for this job only.',
+    '[/COMPLETION NOTE SCOPE]',
+  ].join('\n');
+}
+
+function normalizeScheduleSkillIds(value: any): string[] {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id: any) => String(id || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeScheduleContextRefs(value: any): NonNullable<CronJob['context_refs']> {
+  if (!Array.isArray(value)) return [];
+  const now = Date.now();
+  return value.map((ref: any) => {
+    const title = String(ref?.title || '').trim().slice(0, 160);
+    const content = String(ref?.content || '').trim().slice(0, 12000);
+    if (!title || !content) return null;
+    return {
+      id: String(ref?.id || `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`).trim(),
+      title,
+      content,
+      createdAt: Number(ref?.createdAt || ref?.created_at || now) || now,
+      updatedAt: Number(ref?.updatedAt || ref?.updated_at || now) || now,
+    };
+  }).filter(Boolean) as NonNullable<CronJob['context_refs']>;
+}
+
+function buildScheduleAttachmentsContext(job: CronJob): string {
+  const blocks: string[] = [];
+  const refs = normalizeScheduleContextRefs((job as any).context_refs || (job as any).contextReferences);
+  if (refs.length) {
+    blocks.push([
+      '[CONTEXT REFERENCES]',
+      ...refs.map((ref) => `- **${ref.title}**: ${ref.content}`),
+      '[/CONTEXT REFERENCES]',
+    ].join('\n'));
+  }
+
+  const skillIds = normalizeScheduleSkillIds((job as any).skillIds);
+  if (skillIds.length) {
+    blocks.push([
+      '[ATTACHED SKILLS]',
+      'This scheduled job has skill playbooks attached by the user. Before acting, call skill_read for each relevant attached skill ID and follow the loaded instructions.',
+      ...skillIds.map((id) => `- ${id} - attached schedule skill; call skill_read("${id}") before relevant work.`),
+      '[/ATTACHED SKILLS]',
+    ].join('\n'));
+  }
+  return blocks.join('\n\n');
 }
 
 // Continuity: capture messages exchanged in this job's stable thread (auto_<id>)
@@ -731,6 +810,8 @@ export class CronScheduler {
               deliverToMainChannel: legacyMainJob ? true : j?.deliverToMainChannel,
               payloadKind: j?.payloadKind === 'systemEvent' ? 'systemEvent' : 'agentTurn',
               lastOutputSessionId: j?.lastOutputSessionId ?? j?.sessionId ?? null,
+              skillIds: normalizeScheduleSkillIds(j?.skillIds),
+              context_refs: normalizeScheduleContextRefs(j?.context_refs || j?.contextReferences),
             };
           })
         : [];
@@ -821,6 +902,8 @@ export class CronScheduler {
       id,
       name: partial.name,
       prompt: partial.prompt,
+      skillIds: normalizeScheduleSkillIds((partial as any).skillIds),
+      context_refs: normalizeScheduleContextRefs((partial as any).context_refs || (partial as any).contextReferences),
       type: normalizedType,
       schedule: partial.schedule || '*/30 * * * *',
       tz: partial.tz,
@@ -870,6 +953,9 @@ export class CronScheduler {
       normalizedPartial.type = partial.type === 'one-shot' ? 'one-shot' : 'recurring';
     }
     this.store.jobs[idx] = { ...this.store.jobs[idx], ...normalizedPartial };
+    for (const [key, value] of Object.entries(normalizedPartial)) {
+      if (value === undefined) delete (this.store.jobs[idx] as any)[key];
+    }
     // Recalculate nextRun if schedule changed
     if (partial.schedule !== undefined || partial.runAt !== undefined || partial.tz !== undefined) {
       const job = this.store.jobs[idx];
@@ -1150,10 +1236,15 @@ export class CronScheduler {
         // the previous run (user feedback continuity).
         const scheduleMem = loadScheduleMemory(job.id);
         const memText = formatScheduleMemoryForPrompt(scheduleMem);
-        const lastRunCtx = buildLastRunContext(job);
+        const lastRunCtx = buildLastRunContext(job, scheduleMem);
         const interRunCtx = buildInterRunContext(job);
-        const promptParts = [job.prompt];
-        if (lastRunCtx) promptParts.push('', lastRunCtx);
+        const completionScope = buildScheduledRunCompletionScope(job);
+        const attachmentsContext = buildScheduleAttachmentsContext(job);
+        const promptParts = [];
+        if (lastRunCtx) promptParts.push(lastRunCtx, '');
+        promptParts.push(completionScope);
+        if (attachmentsContext) promptParts.push('', attachmentsContext);
+        promptParts.push('', job.prompt);
         if (interRunCtx) promptParts.push('', interRunCtx);
         if (memText) promptParts.push('', memText);
         let effectivePrompt = promptParts.join('\n');
@@ -1386,7 +1477,7 @@ export class CronScheduler {
               if (event === 'tool_call' && data?.action === 'write_note') {
                 const noteArgs = data.args || {};
                 const noteScope = String(noteArgs.scope || '').toLowerCase();
-                const noteKey = String(noteArgs.key || noteArgs.tag || 'insight').trim();
+                const noteKey = String(noteArgs.key || noteArgs.tag || 'insight').trim().toLowerCase();
                 const noteValue = String(noteArgs.value || noteArgs.content || '').trim();
                 if (noteValue) {
                   writeToEvidenceBus(cronTask.id, {
@@ -1395,8 +1486,14 @@ export class CronScheduler {
                     key: noteKey,
                     value: noteValue,
                   });
-                  if (noteScope === 'schedule' || noteKey === 'last_run_insight') {
+                  if (noteKey === 'last_run_insight') {
                     addLearnedContext(job.id, noteValue);
+                    setNote(job.id, 'last_run_insight', noteValue);
+                  } else if (noteScope === 'schedule') {
+                    addLearnedContext(job.id, noteValue);
+                    setNote(job.id, 'last_run_insight', noteValue);
+                  } else if (noteKey === 'task_complete' || noteKey === 'run_summary' || noteKey === 'completion' || noteKey === 'complete') {
+                    setNote(job.id, 'last_completion_note', noteValue);
                   } else if (noteScope === 'note') {
                     setNote(job.id, noteKey, noteValue);
                   }
@@ -1561,7 +1658,7 @@ export class CronScheduler {
             if (data.action === 'write_note') {
               const noteArgs = data.args || {};
               const noteScope = String(noteArgs.scope || '').toLowerCase();
-              const noteKey = String(noteArgs.key || noteArgs.tag || 'insight').trim();
+              const noteKey = String(noteArgs.key || noteArgs.tag || 'insight').trim().toLowerCase();
               const noteValue = String(noteArgs.value || noteArgs.content || '').trim();
               if (noteValue) {
                 // Always write to evidence bus so it shows in the task panel
@@ -1571,10 +1668,17 @@ export class CronScheduler {
                   key: noteKey,
                   value: noteValue,
                 });
-                if (noteScope === 'schedule' || noteKey === 'last_run_insight') {
+                if (noteKey === 'last_run_insight') {
                   // Persist to schedule memory so it shows up in future run prompts
                   addLearnedContext(job.id, noteValue);
+                  setNote(job.id, 'last_run_insight', noteValue);
                   console.log(`[CronScheduler] Saved schedule insight for "${job.name}": ${noteValue.slice(0, 80)}`);
+                } else if (noteScope === 'schedule') {
+                  addLearnedContext(job.id, noteValue);
+                  setNote(job.id, 'last_run_insight', noteValue);
+                  console.log(`[CronScheduler] Saved schedule insight for "${job.name}": ${noteValue.slice(0, 80)}`);
+                } else if (noteKey === 'task_complete' || noteKey === 'run_summary' || noteKey === 'completion' || noteKey === 'complete') {
+                  setNote(job.id, 'last_completion_note', noteValue);
                 } else if (noteScope === 'note') {
                   setNote(job.id, noteKey, noteValue);
                 }

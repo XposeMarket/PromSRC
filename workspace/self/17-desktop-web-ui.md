@@ -14,6 +14,9 @@ Canonical desktop source:
 - `web-ui/src/api.js` - shared `api(path, opts)` wrapper, API base fallback handling, paired-device token attachment when present, and browser global `window.api`.
 - `web-ui/src/ws.js` - shared WebSocket connection, event bus, mobile token query support, reload/update handling, and `window.connectWS`.
 - `web-ui/src/utils.js` - desktop/shared helpers for escaping HTML, time/memory/percent formatting, toasts, confirms, logs, visual iframe/srcdoc rendering, Mermaid rendering, Markdown rendering, and legacy `window.*` helper exports.
+- `web-ui/src/shortcuts.js` - global keyboard shortcut registry (`registerShortcut`, `initGlobalShortcuts`), attached once from `app.js`. Owns `Ctrl+N` (new chat), `Ctrl+K` (command palette), and `Ctrl+/` (shortcuts help).
+- `web-ui/src/command-palette.js` - `Ctrl+K` command palette overlay (jump to pages, recent chats, and a few quick actions). Builds its DOM on first open and is loaded via dynamic `import()` from `shortcuts.js`.
+- `web-ui/src/shortcuts-help.js` - `Ctrl+/` "Keyboard Shortcuts" reference overlay, also loaded via dynamic `import()`.
 
 Desktop page modules:
 
@@ -177,6 +180,7 @@ Core/shared globals:
 - `escHtml`, `escapeHtml`, `timeAgo`, `fmtPercent`, `fmtMemoryGb`, `meterWidth`, `setText`, `setMeter`
 - `showToast`, `bgtToast`, `showConfirm`, `log`, `renderMd`, `buildVisualSrcdoc`, `buildVisualIframe`
 - `setMode`, `toggleTheme`, `applyTheme`, `getInitialTheme`, `toggleSidebar`, `toggleRightPanel`, `toggleMorePopover`, `closeMorePopover`, `setSidebarSegTab`, `_syncPageViewPositions`
+- `openCommandPalette`/`closeCommandPalette` (`command-palette.js`), `openShortcutsHelp`/`closeShortcutsHelp` (`shortcuts-help.js`) - see "Global Keyboard Shortcuts" below.
 
 Chat/session/canvas globals from `ChatPage.js` include the highest-risk compatibility surface:
 
@@ -209,6 +213,26 @@ Component exports:
 - `agent-model-picker.js`: `renderAgentModelPicker`, `agentModelPickerHydrate`, `registerAgentModelPickerOnSaved` plus `window.agentModelPicker*` handlers.
 - `model-provider-credentials.js`: credential cache/filter helpers.
 - Creative editor modules export `createCreativeEditor`, `syncCreativeEditor`, `createStore`, `createHistory`, `createViewport`, `createRenderer`, panel factories, timeline factories, interaction helpers, effect registry helpers, and export encoder/dialog helpers.
+
+## Global Keyboard Shortcuts
+
+`web-ui/src/shortcuts.js` is initialized once from `app.js` (`initGlobalShortcuts()`) and attaches a single `document` `keydown` listener. Bindings are registered via `registerShortcut(combo, handler, { allowInInputs, preventDefault })`; `allowInInputs: true` lets a shortcut fire even while a text input/textarea/contenteditable has focus (used for all three bindings below since these should work while typing in the chat composer).
+
+Current bindings:
+
+- `Ctrl+N` - new chat, calls `window.newChatSession()`.
+- `Ctrl+K` - opens the command palette (`command-palette.js`, dynamically imported on first use). With an empty query, lists Quick Actions (New Chat, Toggle Sidebar, Toggle Theme, Keyboard Shortcuts), Pages (`setMode(...)` targets: chat, bgtasks, schedule, teams, subagents, proposals, audit, memory, hub), Recent Chats (up to 8, from `window.chatSessions`), and Skills. Typing a query also searches a deep index of every Settings tab (see below). `↑`/`↓` move selection, `Enter` runs the active item, `Esc` or click-outside closes.
+- `Ctrl+/` - toggles the "Keyboard Shortcuts" help overlay (`shortcuts-help.js`, dynamically imported), a static reference list grouped into "General" and "Command Palette".
+
+Both overlays build their DOM lazily on first open (appended to `document.body`, class `cmdk-overlay`/`cmdk-card`) and share styles added to the end of `web-ui/src/styles/components.css` (`.cmdk-*`, `.shortcuts-help-*`). Because these are app-only (Electron) shortcuts, `Ctrl+N`/`Ctrl+K` intentionally override browser defaults - this is fine since `Menu.setApplicationMenu(null)` in `electron/main.js` means nothing intercepts them first, but they will not work as intended in a plain browser tab (e.g. the dev `web-ui-static` preview), where the browser claims `Ctrl+N`/`Ctrl+K` first.
+
+Filtering uses token-based AND matching (`scoreItem`): every space-separated word in the query must appear somewhere in the item's `label` + `sub` text, so a multi-word query like "heartbeat interval" matches an item whose label is "Interval (minutes)" and whose sub-line is "Settings → Heartbeat".
+
+**Skills group**: `getSkillItems()` maps the Hub's skill list to palette items (icon 🧩, `run` calls `window.openHubSkillModal(id)`). The list is fetched lazily via `refreshSkillsCache()` (`GET /api/hub/skills/usage?range=all`, 60s TTL) - the palette renders immediately on open and re-renders once the skills response lands, so the group can pop in a moment after `Ctrl+K`.
+
+**Settings deep search**: `buildSettingsIndex()` scans every `#settings-panel-<tab>` in the (always-present, hidden) `#settings-modal` for `<label>` and `.right-section-title` elements, and builds a flat, memoized index of `{ tab, label, target }` entries (`target` is the label's `<input>/<select>/<textarea>/<button>`, or its next sibling, or the label itself). Entries whose target sits inside a conditionally-hidden sub-section (e.g. a per-channel-type form like `#channel-form-whatsapp` that's only shown after picking that channel type, detected via an inline `style.display === 'none'` between the target and its panel) are skipped, since jumping to them would land on an invisible element. `getSettingsItems()` turns each entry into a palette item (icon ⚙️, `sub: "Settings → <Tab Label>"` via `SETTINGS_TAB_LABELS`); these only ever appear as search results (filtered out of the empty-query default view since they're too granular to browse). Selecting one calls `openSettingsAndHighlight(tab, target)`, which opens Settings on that tab (`window.openSettings`/`window.setSettingsTab`), then after 150ms scrolls `target` into view and adds the `.cmdk-highlight` class (a 1.6s flash animation, defined alongside the other `.cmdk-*` rules in `components.css`) for 1.6s - falling back to the closest visible ancestor if `target` itself has no `offsetParent`.
+
+To add a new global shortcut: call `registerShortcut(...)` in `initGlobalShortcuts()`. To add a new command palette entry: add an item (with `id`, `group`, `icon`, `label`, `sub`, optional `kbd`, and `run()`) to `ACTION_ITEMS` or `PAGE_ITEMS` in `command-palette.js`. To document a new shortcut, add a row to the matching group in `GROUPS` in `shortcuts-help.js`.
 
 ## Maintenance Rules
 

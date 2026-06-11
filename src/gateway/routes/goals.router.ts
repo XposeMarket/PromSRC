@@ -120,7 +120,7 @@ router.get('/api/mcp/servers', (_req, res) => {
     const status = mgr.getStatus();
     const merged = configs.map(cfg => {
       const s = status.find(x => x.id === cfg.id);
-      return { ...cfg, status: s?.status || 'disconnected', toolCount: s?.tools || 0, toolNames: s?.toolNames || [], error: s?.error };
+      return { ...cfg, status: s?.status || 'disconnected', toolCount: s?.tools || 0, toolNames: s?.toolNames || [], error: s?.error, needsOAuth: s?.needsOAuth || false, oauthConnected: s?.oauthConnected || false };
     });
     res.json({ success: true, servers: merged });
   } catch (err: any) {
@@ -175,6 +175,46 @@ router.get('/api/mcp/tools', (_req, res) => {
   try {
     const mgr = getMCPManager();
     res.json({ success: true, tools: mgr.getAllTools() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Begin the browser OAuth 2.1 flow for a remote MCP server (Robinhood-style).
+// Discovers the auth server, opens the system browser, returns the authorize URL.
+router.post('/api/mcp/servers/:id/oauth/start', async (req, res) => {
+  try {
+    const mgr = getMCPManager();
+    const cfg = mgr.getConfigs().find((c) => c.id === req.params.id);
+    if (!cfg) { res.status(404).json({ success: false, error: 'Server not found' }); return; }
+    if (!cfg.url) { res.status(400).json({ success: false, error: 'OAuth only applies to remote (sse/http) servers' }); return; }
+    const { startMcpOAuthFlow } = await import('../mcp-oauth.js');
+    const hint = mgr.getOAuthHint(cfg.id)?.wwwAuthenticate;
+    const scope = typeof req.body?.scope === 'string' ? req.body.scope : undefined;
+    const result = await startMcpOAuthFlow(cfg.id, cfg.url, hint, scope);
+    res.json({ success: result.status !== 'error', ...result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Poll OAuth flow status. On 'connected', the caller should connect the server.
+router.get('/api/mcp/servers/:id/oauth/status', async (req, res) => {
+  try {
+    const { getMcpOAuthFlowStatus } = await import('../mcp-oauth.js');
+    const status = getMcpOAuthFlowStatus(req.params.id);
+    res.json({ success: true, status: status?.status || 'none', error: status?.error, authorizeUrl: status?.authorizeUrl });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Clear stored OAuth tokens/client (sign out / re-authorize).
+router.post('/api/mcp/servers/:id/oauth/clear', async (req, res) => {
+  try {
+    const { clearMcpOAuth } = await import('../mcp-oauth.js');
+    clearMcpOAuth(req.params.id);
+    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -68,6 +68,34 @@ function clampLimit(raw: any, fallback = 10, max = 200): number {
   return Math.min(max, Math.max(1, Math.floor(n)));
 }
 
+function normalizeScheduleSkillIds(value: any): string[] {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id: any) => String(id || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeScheduleContextRefs(value: any, existing: any[] = []): any[] {
+  if (!Array.isArray(value)) return [];
+  const existingById = new Map((Array.isArray(existing) ? existing : []).map((ref: any) => [String(ref?.id || ''), ref]));
+  const now = Date.now();
+  return value.map((raw: any) => {
+    const title = String(raw?.title || '').trim().slice(0, 160);
+    const content = String(raw?.content || '').trim().slice(0, 12000);
+    if (!title || !content) return null;
+    const id = String(raw?.id || `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`).trim();
+    const prior = existingById.get(id) || {};
+    return {
+      id,
+      title,
+      content,
+      createdAt: Number(raw?.createdAt || raw?.created_at || prior?.createdAt || now) || now,
+      updatedAt: Number(raw?.updatedAt || raw?.updated_at || now) || now,
+    };
+  }).filter(Boolean);
+}
+
 function findJob(scheduler: SchedulerLike, rawId: any): CronJob | null {
   const id = String(rawId || '').trim();
   if (!id) return null;
@@ -432,6 +460,15 @@ function buildSchedulePatch(args: any): { patch: Record<string, any>; errors: st
   }
   if (args?.model_override !== undefined || args?.model !== undefined) {
     patch.model = String(args.model_override ?? args.model ?? '').trim() || undefined;
+  }
+  if (args?.skillIds !== undefined) {
+    patch.skillIds = normalizeScheduleSkillIds(args.skillIds);
+  }
+  if (args?.context_refs !== undefined || args?.contextReferences !== undefined) {
+    patch.context_refs = normalizeScheduleContextRefs(
+      args.context_refs ?? args.contextReferences,
+      args?.existing_context_refs || args?.existingContextRefs || []
+    );
   }
   if (args?.team_id !== undefined || args?.teamId !== undefined) {
     const teamId = String(args.team_id ?? args.teamId ?? '').trim();

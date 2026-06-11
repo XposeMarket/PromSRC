@@ -10051,24 +10051,40 @@ function renderUserMessageContent(msg) {
   return `${imgHtml}${fileHtml}${text ? `<div class="msg-content">${escHtml(text)}</div>` : ''}`;
 }
 
+function renderLiveTracePreview(entry) {
+  const preview = entry?.preview && typeof entry.preview === 'object' ? entry.preview : null;
+  const dataUrl = String(preview?.dataUrl || entry?.dataUrl || '').trim();
+  if (!/^data:image\//i.test(dataUrl)) return '';
+  const title = String(entry?.previewTitle || entry?.text || 'Vision screenshot preview').trim();
+  const width = Number(preview?.width || entry?.width || 0);
+  const height = Number(preview?.height || entry?.height || 0);
+  const dims = width > 0 && height > 0 ? ` (${Math.round(width)}x${Math.round(height)})` : '';
+  return `<button type="button" class="live-turn-vision-preview" title="${escHtml(title + dims)}" onclick="openImgPreview(this.querySelector('img')?.src || '', ${encodeInlineJsString(title)})">
+    <img src="${escHtml(dataUrl)}" alt="${escHtml(title)}" loading="lazy">
+  </button>`;
+}
+
 function renderLiveTurnTrace(entries) {
   const list = (Array.isArray(entries) ? entries : [])
-    .filter((entry) => entry && String(entry.text || '').trim());
+    .filter((entry) => entry && (String(entry.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim()));
   if (!list.length) return '';
   return `<div class="live-turn-trace">
     ${list.map((entry) => {
       const type = String(entry.type || 'info').toLowerCase();
       const text = String(entry.text || '').trim();
+      const previewHtml = renderLiveTracePreview(entry);
       if (type === 'preamble' || type === 'think' || type === 'assistant') {
         return `<div class="live-turn-prose live-turn-${escHtml(type)}">
           <div class="live-turn-md">${renderMd(text)}</div>
+          ${previewHtml}
         </div>`;
       }
-      const label = type === 'assistant' ? 'Prometheus' : type === 'preamble' ? 'Preamble' : type === 'think' ? 'Reasoning' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
-      const body = `<div class="live-turn-text">${escHtml(text)}</div>`;
+      const label = type === 'assistant' ? 'Prometheus' : type === 'preamble' ? 'Preamble' : type === 'think' ? 'Reasoning' : type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+      const body = text ? `<div class="live-turn-text">${escHtml(text)}</div>` : '';
       return `<div class="live-turn-segment live-turn-${escHtml(type)}">
         <span>${escHtml(label)}</span>
         ${body}
+        ${previewHtml}
       </div>`;
     }).join('')}
   </div>`;
@@ -13050,6 +13066,34 @@ async function sendChat(queuedMessage = null, options = {}) {
               pushProgressLine(progressText);
               appendLiveTrace('tool', progressText);
               addProcessEntry('info', progressText, event.actor ? { actor: event.actor } : undefined);
+            }
+            break;
+          }
+
+          case 'vision_injected': {
+            const preview = event.preview && typeof event.preview === 'object' ? event.preview : {};
+            const dataUrl = String(preview.dataUrl || event.dataUrl || '').trim();
+            if (dataUrl) {
+              movePreToolAnswerTextIntoPreamble();
+              sawToolActivityThisTurn = true;
+              const source = String(event.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+              const tool = String(event.tool || event.action || '').trim();
+              const toolLabel = tool ? formatToolCallForLog(tool, {}, streamState).replace(/\.\.\.$/, '') : `${source} observation`;
+              const text = `Vision injected: ${toolLabel}`;
+              const last = Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1] : null;
+              const samePreview = last
+                && last.type === 'vision'
+                && String(last.text || '') === text
+                && String(last?.preview?.dataUrl || '') === dataUrl;
+              if (!samePreview) {
+                appendLiveTrace('vision', text);
+                const added = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
+                if (added) {
+                  added.preview = preview;
+                  added.previewTitle = `${source} screenshot`;
+                }
+              }
+              renderIfViewingThisSession();
             }
             break;
           }
@@ -36604,12 +36648,36 @@ wsEventBus.on('delivery_notification', (msg) => {
 wsEventBus.on('vision_injected', (msg) => {
   if (!msg) return;
   const tool = String(msg.tool || '').trim();
-  if (!/^voice_(?:browser|desktop)_screenshot$/i.test(tool)) return;
   const sid = String(msg.sessionId || window.activeChatSessionId || '').trim();
   const preview = msg.preview && typeof msg.preview === 'object' ? msg.preview : {};
   const dataUrl = String(preview.dataUrl || msg.dataUrl || '').trim();
   if (!dataUrl) return;
   const source = String(msg.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+  if (!/^voice_(?:browser|desktop)_screenshot$/i.test(tool)) {
+    const streamState = getSessionStreamState(sid);
+    const toolLabel = tool ? formatToolCallForLog(tool, {}, streamState).replace(/\.\.\.$/, '') : `${source} observation`;
+    const text = `Vision injected: ${toolLabel}`;
+    const last = Array.isArray(streamState.liveTraceEntries)
+      ? streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1]
+      : null;
+    const samePreview = last
+      && last.type === 'vision'
+      && String(last.text || '') === text
+      && String(last?.preview?.dataUrl || '') === dataUrl;
+    if (!samePreview) {
+      appendLiveTraceToStreamState(streamState, 'vision', text);
+      const added = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
+      if (added) {
+        added.preview = preview;
+        added.previewTitle = `${source} screenshot`;
+      }
+    }
+    if (sid === window.activeChatSessionId) {
+      applyStreamStateToWindow(sid);
+      renderChatMessages();
+    }
+    return;
+  }
   const dimensions = preview.width && preview.height ? ` ${preview.width}x${preview.height}` : '';
   const content = `![${source} screenshot${dimensions}](${dataUrl})`;
   let sess = (window.chatSessions || []).find((s) => s.id === sid);

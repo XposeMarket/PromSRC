@@ -546,8 +546,9 @@ export class BackgroundTaskRunner {
         op: 'add',
         after_index: task.plan.length - 1,
         description:
-          'Log completion: call write_note with a full summary of what was done in this task — ' +
-          'what changed, what was created or modified, key results, and any important findings. ' +
+          'Log completion: call write_note with a summary scoped only to this task/run - ' +
+          'what changed, what was created or modified, key results, concrete outputs, blockers, and important findings from this task only. ' +
+          'Do not write a general operator snapshot, global system status report, workspace-wide continuity report, or broad memory recap unless the task explicitly asked for that artifact. ' +
           'Tag it "task_complete"; that note completes the task, so do not call step_complete afterward. ' +
           'Then write your final response to the user summarizing the outcome.',
         notes: 'write_note_completion',
@@ -2065,8 +2066,9 @@ export class BackgroundTaskRunner {
                     ]
                   : [
                       `This is the final step. Do the following IN ORDER:`,
-                      `1. Call write_note with tag "task_complete" and a full summary of everything done:`,
-                      `   what files changed, what was created/modified, key results, findings.`,
+                      `1. Call write_note with tag "task_complete" and a summary scoped only to this task/run:`,
+                      `   what files changed, what was created/modified, concrete outputs, key results, blockers, findings.`,
+                      `   Do not write a general operator snapshot, global system status report, workspace-wide continuity report, or broad memory recap unless this task explicitly asked for that artifact.`,
                       `   Calling write_note with tag "task_complete" will automatically complete the task.`,
                       `   Do NOT call step_complete after write_note.`,
                       `2. After write_note returns, write your final plain-text response to the user.`,
