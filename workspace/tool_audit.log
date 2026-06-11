@@ -42928,3 +42928,212 @@ Use source-specific tools only. When
 [2026-06-11T00:48:36.544Z] OK prom_apply_dev_changes({"changed_surfaces":["mobile"],"mode":"apply_live","reason":"Make the iOS Safari keyboard on the mobile chat composer show a line-break (return) key instead of the blue Send key, and let Enter insert ) => prom_apply_dev_changes succeeded. npm run sync:web-ui ok (5027ms); desktop web UI reload requested. Next, call write_note with tag "dev_edit_complete" to complete dev edit dev_edit_mq8s3alr_4c801b76.
 [2026-06-11T00:48:50.360Z] OK write_note({"content":"Mobile chat composer (#pm-composer-input) in web-ui/src/mobile/mobile-pages.js: changed enterkeyhint \"send\"->\"enter\" (line 3576) and removed the plain-Enter requestSubmit branch in the) => Note saved [dev_edit_complete] (426 chars) -> intraday-notes
 [2026-06-11T00:49:34.929Z] OK prom_repo_push({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
+[2026-06-11T00:49:43.320Z] OK prom_repo_push({"message":"Fix: mobile chat composer — enterkeyhint \"send\"→\"enter\" + removed plain-Enter submit so iOS Safari shows return key and Enter inserts paragraphs (send via button)"}) => Committed: Fix: mobile chat composer — enterkeyhint "send"→"enter" + removed plain-Enter submit so iOS Safari shows return key and Enter inserts paragraphs (send via button)
+[main 42ede54] Fix: mobile
+[2026-06-11T00:52:40.513Z] OK request_tool_category({"category":"prometheus_source_read"}) => Tool category "prometheus_source_read" activated for session mobile_mq8s9dff_m4e5le.
+[2026-06-11T00:52:40.589Z] FAIL search_files({"pattern":"liquid.?glass","directory":"web-ui/src","case_insensitive":true,"max_results":60}) => ERROR: "web-ui/src" not found
+[2026-06-11T00:52:44.720Z] OK grep_webui_source({"pattern":"liquid.?glass","case_insensitive":true,"max_results":80}) => {
+  "searched": "web-ui/",
+  "pattern": "liquid.?glass",
+  "match_count": 18,
+  "matches": [
+    {
+      "file": "web-ui/index.html",
+      "line_number": 71,
+      "line": "<link rel=\"stylesheet\" h
+[2026-06-11T00:52:49.619Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":3544,"num_lines":120}) => web-ui/src/styles/mobile.css (7067 lines):
+3544: /* composer — liquid-glass surface (same system as the footer/header controls).
+3545:    The send/abort/voice button keeps its own orange treatment. T
+[2026-06-11T00:52:49.690Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4560,"num_lines":220}) => web-ui/src/styles/mobile.css (7067 lines):
+4560:    are padded up so they still sit clear of the floating tab bar. */
+4561: .pm-composer.is-voice-active {
+4562:   left: 0;
+4563:   right: 0;
+4564: 
+[2026-06-11T00:52:56.946Z] OK grep_webui_source({"pattern":"\\.pm-tabbar(\\s|\\{|::|,|:)","max_results":40}) => {
+  "searched": "web-ui/",
+  "pattern": "\\.pm-tabbar(\\s|\\{|::|,|:)",
+  "match_count": 6,
+  "matches": [
+    {
+      "file": "web-ui/src/styles/mobile.css",
+      "line_number": 542,
+      "line": "
+[2026-06-11T00:53:00.652Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":542,"num_lines":130}) => web-ui/src/styles/mobile.css (7067 lines):
+542: .pm-tabbar {
+543:   position: absolute;
+544:   left: max(12px, env(safe-area-inset-left));
+545:   right: max(12px, env(safe-area-inset-right));
+546:
+[2026-06-11T00:53:09.105Z] OK grep_webui_source({"pattern":"pm-chat-voice-shell|pm-chat-voice-inline|pm-chat-voice-mount","glob":"*.js","max_results":30}) => {
+  "searched": "web-ui/",
+  "pattern": "pm-chat-voice-shell|pm-chat-voice-inline|pm-chat-voice-mount",
+  "match_count": 4,
+  "matches": [
+    {
+      "file": "web-ui/src/mobile/mobile-pages.js",
+    
+[2026-06-11T00:53:36.718Z] OK request_dev_source_edit({"files":["web-ui/src/styles/mobile.css"],"reason":"Make mobile voice mode panel use the same liquid-glass material as the composer/tab bar: remove the dark blur band above the panel and the fake dark) => Approved dev source edit scope for this session: web-ui/src/styles/mobile.css.
+Approved plan hash: 589e99064e30639b; dev_edit_id: dev_edit_mq8saoru_9057e984.
+Use source-specific tools only. When edits
+[2026-06-11T00:53:49.330Z] FAIL find_replace_webui_source({"file":"src/styles/mobile.css","find":".pm-chat-voice-shell::before {\n  content: '';\n  position: absolute;\n  z-index: 0;\n  left: 0;\n  right: 0;\n  top: -42px;\n  height: 42px;\n  pointer-events:) => ERROR: Text not found in web-ui/src/styles/mobile.css. Likely intended locations:
+1) same text with normalized whitespace, lines 4628-4644:
+4626:   box-shadow: none;
+4627: }
+4628: .pm-chat-voice-she
+[2026-06-11T00:53:56.541Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":4792,"end_line":4806,"new_content":".pm-chat-voice-inline .pm-voice-controls::before {\n  content: '';\n  position: absolute;\n  z-index: -1;\n  left: -10%) => OK web-ui/src/styles/mobile.css: replaced lines 4792-4806 (now 7064 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T00:54:10.951Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":4628,"end_line":4644,"new_content":"/* The dark blurred transition band above the panel has been removed — the voice\n   panel now relies solely on the sin) => OK web-ui/src/styles/mobile.css: replaced lines 4628-4644 (now 7054 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T00:54:15.284Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4577,"num_lines":27}) => web-ui/src/styles/mobile.css (7054 lines):
+4577: /* Single continuous liquid-glass sheet covering the whole voice panel — from
+4578:    its top (where it crossfades with the chat above) all the way t
+[2026-06-11T00:54:22.575Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":4587,"end_line":4597,"new_content":"  background:\n    /* Warm glow anchored to the very bottom so the glow runs all the way down\n       behind the floati) => OK web-ui/src/styles/mobile.css: replaced lines 4587-4597 (now 7059 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T00:54:26.634Z] OK grep_webui_source({"pattern":"liquid-glass-v7","max_results":30}) => {
+  "searched": "web-ui/",
+  "pattern": "liquid-glass-v7",
+  "match_count": 6,
+  "matches": [
+    {
+      "file": "web-ui/index.html",
+      "line_number": 71,
+      "line": "<link rel=\"stylesheet\" 
+[2026-06-11T00:54:39.234Z] OK prom_apply_dev_changes({"changed_surfaces":["web-ui"],"mode":"verify_only","reason":"Verify mobile.css voice-panel liquid glass edits before applying live.","dev_edit_id":"dev_edit_mq8saoru_9057e984","affected_files":["web-) => prom_apply_dev_changes verify_only succeeded.
+Profile: webui_sync_check (approved from 1 changed file)
+Checks:
+- ok (0ms)
+- npm run sync:web-ui: ok (5003ms)
+Gateway was not restarted, and no desktop r
+[2026-06-11T00:54:49.974Z] OK prom_apply_dev_changes({"changed_surfaces":["web-ui"],"mode":"apply_live","reason":"Make mobile voice mode panel use the same liquid-glass material as the composer/tab bar: remove the dark blur band above the panel and the ) => prom_apply_dev_changes succeeded. npm run sync:web-ui ok (5001ms); desktop web UI reload requested. Next, call write_note with tag "dev_edit_complete" to complete dev edit dev_edit_mq8saoru_9057e984.
+[2026-06-11T00:54:55.579Z] OK write_note({"content":"Mobile voice mode panel now matches composer/tab-bar liquid glass. Edits to web-ui/src/styles/mobile.css: (1) removed dark blur band above panel (.pm-chat-voice-shell::before -> content:no) => Note saved [dev_edit_complete] (548 chars) -> intraday-notes
+[2026-06-11T00:59:50.198Z] OK grep_webui_source({"pattern":"is-voice-active|pm-chat-voice-shell|pm-voice-controls|pm-voice","path":"src/styles/mobile.css"}) => {
+  "searched": "web-ui/src/styles/mobile.css",
+  "pattern": "is-voice-active|pm-chat-voice-shell|pm-voice-controls|pm-voice",
+  "match_count": 0,
+  "matches": []
+}
+[2026-06-11T00:59:54.245Z] OK grep_source({"pattern":"is-voice-active|pm-chat-voice-shell|pm-voice-controls","root":"web-ui","glob":"*.css"}) => {
+  "searched": "web-ui/",
+  "pattern": "is-voice-active|pm-chat-voice-shell|pm-voice-controls",
+  "match_count": 17,
+  "matches": [
+    {
+      "file": "web-ui/src/styles/mobile.css",
+      "line_num
+[2026-06-11T00:59:59.108Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4555,"num_lines":130}) => web-ui/src/styles/mobile.css (7059 lines):
+4555: .pm-mobile-side-composer .pm-composer-row { transform: translateY(0); }
+4556: .pm-mobile-side-composer .pm-composer-input { min-height: 34px; }
+4557:
+[2026-06-11T01:00:04.260Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4770,"num_lines":40}) => web-ui/src/styles/mobile.css (7059 lines):
+4770: }
+4771: .pm-chat-voice-inline #pm-voice-settings-panel,
+4772: .pm-chat-voice-inline #pm-voice-dictation-fallback {
+4773:   position: relative;
+4774
+[2026-06-11T01:00:04.325Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":5060,"num_lines":160}) => web-ui/src/styles/mobile.css (7059 lines):
+5060: @keyframes pm-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+5061: @keyframes pm-voice-ambient-float {
+5062:   from 
+[2026-06-11T01:00:09.369Z] OK grep_source({"pattern":"^\\.pm-composer \\{|--pm-tabbar-h|pm-composer-shell","root":"web-ui","glob":"*.css","max_results":20}) => {
+  "searched": "web-ui/",
+  "pattern": "^\\.pm-composer \\{|--pm-tabbar-h|pm-composer-shell",
+  "match_count": 15,
+  "matches": [
+    {
+      "file": "web-ui/src/styles/mobile.css",
+      "line_numbe
+[2026-06-11T01:00:12.682Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":3547,"num_lines":70}) => web-ui/src/styles/mobile.css (7059 lines):
+3547: .pm-composer {
+3548:   position: absolute;
+3549:   left: 10px; right: 10px;
+3550:   bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 
+[2026-06-11T01:00:34.481Z] OK request_dev_source_edit({"files":["web-ui/src/styles/mobile.css"],"reason":"Reshape mobile voice mode panel to match the composer: rounded, inset, flush above the footer, and shorter (smaller toggle/repeat button).","plan":{) => Dev source edit scope is already approved for this session: web-ui/src/styles/mobile.css
+[2026-06-11T01:01:08.691Z] FAIL apply_dev_source_patchset({"edits":[{"file":"web-ui/src/styles/mobile.css","op":"find_replace","find":".pm-composer.is-voice-active {\n  left: 0;\n  right: 0;\n  bottom: 0;\n  max-height: min(86vh, 760px);\n  overflow-y: auto;) => Unknown tool: apply_dev_source_patchset
+[2026-06-11T01:01:27.673Z] FAIL find_replace_webui_source({"file":"src/styles/mobile.css","find":".pm-composer.is-voice-active {\n  left: 0;\n  right: 0;\n  bottom: 0;\n  max-height: min(86vh, 760px);\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  ) => ERROR: Text not found in web-ui/src/styles/mobile.css. Likely intended locations:
+1) same text with normalized whitespace, lines 4561-4576:
+4559:    tab capsule), so the glow/glass sheet runs to the s
+[2026-06-11T01:01:28.778Z] FAIL find_replace_webui_source({"file":"src/styles/mobile.css","find":".pm-composer.is-voice-active::before {\n  content: '';\n  position: absolute;\n  inset: 0;\n  z-index: 0;\n  pointer-events: none;\n  background:\n    /* Warm g) => ERROR: Text not found in web-ui/src/styles/mobile.css. Likely intended locations:
+1) same text with normalized whitespace, lines 4581-4608:
+4579:    of the screen. This is the real glass material; the
+[2026-06-11T01:01:38.498Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":4561,"end_line":4576,"new_content":".pm-composer.is-voice-active {\n  /* Rounded floating card, inset and flush above the footer — same geometry as\n     t) => OK web-ui/src/styles/mobile.css: replaced lines 4561-4576 (now 7071 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T01:01:43.630Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4589,"num_lines":36}) => web-ui/src/styles/mobile.css (7071 lines):
+4589: /* Single continuous liquid-glass sheet covering the whole voice panel — from
+4590:    its top (where it crossfades with the chat above) all the way t
+[2026-06-11T01:01:49.689Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":4589,"end_line":4620,"new_content":"/* Warm glow accent contained inside the rounded card (the glass material itself\n   now lives directly on .pm-composer) => OK web-ui/src/styles/mobile.css: replaced lines 4589-4620 (now 7051 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T01:01:54.730Z] OK grep_webui_source({"pattern":"min-height: 306px|pm-chat-voice-inline .pm-voice-controls \\{|min-height: 42px|grid-template-columns: minmax\\(0, 1fr\\) 42px|width: 42px;|min-height: 42px;\\r?$|pm-voice-mode-toggle \\{",) => {
+  "searched": "web-ui/src/styles/mobile.css",
+  "pattern": "min-height: 306px|pm-chat-voice-inline .pm-voice-controls \\{|min-height: 42px|grid-template-columns: minmax\\(0, 1fr\\) 42px|width: 42px;
+[2026-06-11T01:01:59.837Z] OK grep_webui_source({"pattern":"min-height: 306px","path":"src/styles/mobile.css"}) => {
+  "searched": "web-ui/src/styles/mobile.css",
+  "pattern": "min-height: 306px",
+  "match_count": 0,
+  "matches": []
+}
+[2026-06-11T01:01:59.898Z] OK grep_webui_source({"pattern":"pm-voice-mode-toggle","path":"src/styles/mobile.css"}) => {
+  "searched": "web-ui/src/styles/mobile.css",
+  "pattern": "pm-voice-mode-toggle",
+  "match_count": 0,
+  "matches": []
+}
+[2026-06-11T01:02:03.851Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4602,"num_lines":16}) => web-ui/src/styles/mobile.css (7051 lines):
+4602:   min-height: 0;
+4603:   z-index: 1;
+4604: }
+4605: .pm-keyboard-open .pm-composer.is-voice-active {
+4606:   bottom: var(--pm-keyboard-offset, 0px);
+[2026-06-11T01:02:07.186Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4616,"num_lines":10}) => web-ui/src/styles/mobile.css (7051 lines):
+4616: .pm-chat-voice-shell {
+4617:   position: relative;
+4618:   min-height: 306px;
+4619:   overflow: visible;
+4620:   border-radius: 0;
+4621:   backgro
+[2026-06-11T01:02:16.407Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":4618,"end_line":4620,"new_content":"  min-height: 248px;\n  overflow: visible;\n  border-radius: inherit;"}) => OK web-ui/src/styles/mobile.css: replaced lines 4618-4620 (now 7051 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T01:02:20.791Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":4768,"num_lines":12}) => web-ui/src/styles/mobile.css (7051 lines):
+4768:   color: var(--pm-text);
+4769: }
+4770: .pm-chat-voice-inline .pm-voice-controls {
+4771:   position: relative;
+4772:   z-index: 5;
+4773:   margin: 
+[2026-06-11T01:02:33.479Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":4774,"end_line":4774,"new_content":"  padding: 4px 12px 10px;"}) => OK web-ui/src/styles/mobile.css: replaced lines 4774-4774 (now 7051 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T01:02:37.175Z] OK read_webui_source({"file":"src/styles/mobile.css","start_line":5058,"num_lines":62}) => web-ui/src/styles/mobile.css (7051 lines):
+5058: .pm-voice-controls {
+5059:   display: grid;
+5060:   grid-template-columns: minmax(0, 1fr) 42px auto;
+5061:   align-items: center;
+5062:   gap: 8px;
+[2026-06-11T01:02:57.414Z] OK replace_lines_webui_source({"file":"src/styles/mobile.css","start_line":5058,"end_line":5119,"new_content":".pm-voice-controls {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) 36px auto;\n  align-items: center;\n  g) => OK web-ui/src/styles/mobile.css: replaced lines 5058-5119 (now 7051 lines). Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=web-ui; write_note tag=dev_edit_complete. dev_edit_id=
+[2026-06-11T01:03:10.424Z] OK prom_apply_dev_changes({"reason":"Reshaped mobile voice mode panel into a rounded, inset liquid-glass card flush above the footer, and made it shorter with smaller controls.","changed_surfaces":["web-ui"],"affected_files":[) => prom_apply_dev_changes succeeded. npm run sync:web-ui ok (4966ms); desktop web UI reload requested. Next, call write_note with tag "dev_edit_complete" to complete dev edit dev_edit_mq8saoru_9057e984.
+[2026-06-11T01:03:19.209Z] OK write_note({"content":"Mobile voice mode panel reshaped in web-ui/src/styles/mobile.css: (1) .pm-composer.is-voice-active is now a rounded inset floating card (left/right:10px, bottom above tabbar+22px, border-r) => Note saved [dev_edit_complete] (735 chars) -> intraday-notes
+[2026-06-11T01:03:58.116Z] OK skill_read({"id":"prometheus-x-posts-workflow"}) => Prometheus X Posts Workflow (prometheus-x-posts-workflow) v1.1.0 bundle
+Description: Reusable scheduled workflow for autonomous X/Twitter posting. Reads the exact schedule-memory.md file with read_fil
+[2026-06-11T01:04:00.902Z] FAIL read_file({"filename":".prometheus/subagents/schedule_prometheus-x-posts_yfkm6/memory/schedule-memory.md"}) => ERROR: .prometheus/subagents/schedule_prometheus-x-posts_yfkm6/memory/schedule-memory.md not found. Likely intended paths:
+1) .prometheus/subagents/schedule_prometheus-x-posts_dh8gf/memory/schedule-me
+[2026-06-11T01:04:04.007Z] OK read_file({"filename":".prometheus/subagents/schedule_prometheus-x-posts_dh8gf/memory/schedule-memory.md"}) => .prometheus/subagents/schedule_prometheus-x-posts_dh8gf/memory/schedule-memory.md (1 lines):
+1: 
+[2026-06-11T01:04:07.789Z] OK path_exists({"path":"workspace/prometheus-x-posts-memory.md"}) => {
+  "path": "prometheus-x-posts-memory.md",
+  "exists": true,
+  "is_file": true,
+  "is_directory": false,
+  "bytes": 7866,
+  "modified": "2026-06-09T20:06:11.062Z"
+}
+[2026-06-11T01:04:07.806Z] OK path_exists({"path":"prometheus-x-posts-memory.md"}) => {
+  "path": "prometheus-x-posts-memory.md",
+  "exists": true,
+  "is_file": true,
+  "is_directory": false,
+  "bytes": 7866,
+  "modified": "2026-06-09T20:06:11.062Z"
+}
+[2026-06-11T01:04:11.351Z] OK read_file({"filename":"prometheus-x-posts-memory.md"}) => prometheus-x-posts-memory.md (116 lines):
+1: # Prometheus X Posts Memory
+2: 
+3: ## Posted Tweets & Replies
+4: 
+5: - Date: 2026-06-07T11:31:00Z
+6:   Type: original
+7:   Content: 2026 AI agents are movi
+[2026-06-11T01:04:17.529Z] OK request_tool_category({"category":"browser_automation"}) => Tool category "browser_automation" activated for session mobile_mq8s9dff_m4e5le.
+[2026-06-11T01:04:27.952Z] OK prom_repo_push({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
+[2026-06-11T01:04:30.552Z] OK browser_open({"url":"https://x.com/home"}) => Browser opened.

@@ -4559,47 +4559,44 @@ body.pm-mobile-active { overflow: hidden; }
    tab capsule), so the glow/glass sheet runs to the screen edge. The controls
    are padded up so they still sit clear of the floating tab bar. */
 .pm-composer.is-voice-active {
-  left: 0;
-  right: 0;
-  bottom: 0;
-  max-height: min(86vh, 760px);
+  /* Rounded floating card, inset and flush above the footer — same geometry as
+     the composer above the tab bar (not full-bleed to the screen edges). */
+  left: 10px;
+  right: 10px;
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 22px);
+  max-height: min(64vh, 560px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0 0 calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 10px);
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow: none;
+  padding: 0 0 6px;
+  /* Same liquid-glass material + border + shadow as .pm-composer. */
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
+    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, rgba(234,106,31,.05));
+  backdrop-filter: blur(3px) saturate(2.0) brightness(1.05);
+  -webkit-backdrop-filter: blur(3px) saturate(2.0) brightness(1.05);
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 22px;
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.15),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.09),
+    0 12px 32px rgba(0,0,0,.42),
+    0 2px 8px rgba(0,0,0,.26);
   color: #f7f1ed;
 }
-/* Single continuous liquid-glass sheet covering the whole voice panel — from
-   its top (where it crossfades with the chat above) all the way to the bottom
-   of the screen. This is the real glass material; the layers below only add the
-   coloured glow accents on top of it. */
+/* Warm glow accent contained inside the rounded card (the glass material itself
+   now lives directly on .pm-composer.is-voice-active, matching the composer). */
 .pm-composer.is-voice-active::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  border-radius: inherit;
   background:
-    /* Warm glow anchored to the very bottom so the glow runs all the way down
-       behind the floating tab capsule to the screen edge (not stopping above
-       the tabs). */
-    radial-gradient(135% 58% at 50% 102%, rgba(255,105,31,.18), rgba(255,75,140,.07) 46%, transparent 72%),
-    /* Near-clear: the same see-through liquid glass as the tab bar so chat stays
-       visible behind the panel as it scrolls. Only a whisper of darkening at the
-       very bottom for control legibility. */
-    linear-gradient(180deg, rgba(14,15,22,0), rgba(14,15,22,.02) 55%, rgba(14,15,22,.07) 100%);
-  backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
-  -webkit-backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
-  /* Soft fade-in at the very top so there is no hard glass edge — it emerges as
-     the chat fades out above it. Ramped a little lower so the transition sits
-     further down. */
-  mask-image: linear-gradient(180deg, transparent 0, #000 92px, #000 100%);
-  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 92px, #000 100%);
+    radial-gradient(120% 60% at 50% 104%, rgba(255,105,31,.16), rgba(255,75,140,.06) 48%, transparent 74%);
 }
 .pm-composer.is-voice-active .pm-chat-voice-shell {
   min-height: 0;
@@ -4618,29 +4615,19 @@ body.pm-mobile-active { overflow: hidden; }
 .pm-chat-voice-shell[hidden] { display: none; }
 .pm-chat-voice-shell {
   position: relative;
-  min-height: 306px;
+  min-height: 248px;
   overflow: visible;
-  border-radius: 0;
+  border-radius: inherit;
   background: transparent;
   border: 0;
   box-shadow: none;
 }
+/* The dark blurred transition band above the panel has been removed — the voice
+   panel now relies solely on the single continuous liquid-glass sheet
+   (.pm-composer.is-voice-active::before) that matches the composer/tab bar, so
+   there is no dark frosted strip over the chat above it. */
 .pm-chat-voice-shell::before {
-  content: '';
-  position: absolute;
-  z-index: 0;
-  left: 0;
-  right: 0;
-  top: -42px;
-  height: 42px;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse at 48% 92%, rgba(255,255,255,.14), rgba(255,255,255,.05) 34%, transparent 76%),
-    linear-gradient(180deg, transparent 0%, rgba(255,255,255,.02) 34%, rgba(255,255,255,.06) 72%, transparent 100%);
-  backdrop-filter: blur(7px) saturate(1.7) brightness(1.02);
-  -webkit-backdrop-filter: blur(7px) saturate(1.7) brightness(1.02);
-  mask-image: linear-gradient(180deg, transparent 0%, rgba(0,0,0,.45) 24%, #000 62%, transparent 100%);
-  -webkit-mask-image: linear-gradient(180deg, transparent 0%, rgba(0,0,0,.45) 24%, #000 62%, transparent 100%);
+  content: none;
 }
 .pm-chat-voice-shell > * {
   position: relative;
@@ -4784,7 +4771,7 @@ body.pm-mobile-active { overflow: hidden; }
   position: relative;
   z-index: 5;
   margin: 0;
-  padding: 8px 12px 18px;
+  padding: 4px 12px 10px;
 }
 /* Soft neutral scrim purely for button legibility — self-blurred so it has NO
    hard edges or seam, no colour boost (the glass material comes from the stage
@@ -4798,11 +4785,8 @@ body.pm-mobile-active { overflow: hidden; }
   top: -36px;
   bottom: calc(-1 * (var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 70px));
   pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(10,11,18,0), rgba(10,11,18,.05) 42%, rgba(10,11,18,.10) 100%);
-  filter: blur(22px);
-  mask-image: linear-gradient(180deg, transparent 0%, #000 34%, #000 100%);
-  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 34%, #000 100%);
+  /* Dark tint removed — the glass material is the clean composer/tabbar sheet. */
+  background: transparent;
 }
 .pm-chat-voice-inline .pm-voice-approval {
   width: 100%;
@@ -5073,14 +5057,14 @@ body.pm-mobile-active { overflow: hidden; }
 
 .pm-voice-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px auto;
+  grid-template-columns: minmax(0, 1fr) 36px auto;
   align-items: center;
-  gap: 8px;
-  margin: 12px 0 4px;
+  gap: 7px;
+  margin: 6px 0 2px;
 }
 .pm-voice-control-btn {
   appearance: none;
-  min-height: 42px;
+  min-height: 36px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,.10);
   background: rgba(4,5,10,.34);
@@ -5090,15 +5074,15 @@ body.pm-mobile-active { overflow: hidden; }
   justify-content: center;
   gap: 7px;
   cursor: pointer;
-  font: 800 13px/1 var(--pm-font);
+  font: 800 12px/1 var(--pm-font);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
-.pm-voice-control-btn svg { width: 17px; height: 17px; }
+.pm-voice-control-btn svg { width: 16px; height: 16px; }
 .pm-voice-repeat-btn {
   justify-content: flex-start;
-  padding: 0 15px;
+  padding: 0 14px;
   min-width: 0;
 }
 .pm-voice-repeat-btn span {
@@ -5108,14 +5092,14 @@ body.pm-mobile-active { overflow: hidden; }
   white-space: nowrap;
 }
 .pm-voice-settings-icon {
-  width: 42px;
+  width: 36px;
   padding: 0;
 }
 .pm-voice-mode-toggle {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-height: 42px;
+  min-height: 36px;
   padding: 3px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,.10);
@@ -5124,14 +5108,14 @@ body.pm-mobile-active { overflow: hidden; }
 }
 .pm-voice-mode-toggle button {
   appearance: none;
-  min-height: 34px;
+  min-height: 28px;
   border: 0;
   border-radius: 999px;
-  padding: 0 13px;
+  padding: 0 11px;
   background: transparent;
   color: rgba(247,241,237,.62);
   cursor: pointer;
-  font: 800 13px/1 var(--pm-font);
+  font: 800 12px/1 var(--pm-font);
 }
 
 /* Voice orb dynamic states */
