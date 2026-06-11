@@ -83,13 +83,23 @@ function isPromRootAffectedPath(rawPath: unknown): boolean {
   ].includes(p);
 }
 
+function isAbsoluteScopePath(p: string): boolean {
+  // POSIX absolute (/Users/...) or Windows drive absolute (C:/...). These are
+  // user projects opened from a configured allowed_path outside the workspace.
+  return p.startsWith('/') || /^[A-Za-z]:\//.test(p);
+}
+
 function normalizeProposalScopePath(rawPath: unknown): string {
-  return String(rawPath || '')
+  const cleaned = String(rawPath || '')
     .replace(/\\/g, '/')
     .trim()
-    .replace(/^\.?\//, '')
     .replace(/\/{2,}/g, '/')
     .replace(/\/$/, '');
+  // Preserve absolute (allowed-path) targets verbatim — only workspace-relative
+  // paths get the leading ./ or / stripped. Stripping it from an absolute path
+  // would silently corrupt the mutation scope and block legitimate writes.
+  if (isAbsoluteScopePath(cleaned)) return cleaned;
+  return cleaned.replace(/^\.?\//, '');
 }
 
 function buildProposalMutationScope(proposal: any): { allowedFiles: string[]; allowedDirs: string[] } | undefined {
@@ -178,14 +188,19 @@ function legacyInferProposalExecutionLane(proposal: any, opts: { touchesInternal
   if (opts.touchesInternalCode || opts.needsBuild) return 'code_change';
   const type = String(proposal?.type || 'general').trim().toLowerCase();
   const text = `${proposal?.title || ''}\n${proposal?.summary || ''}\n${proposal?.details || ''}\n${proposal?.executorPrompt || ''}`.toLowerCase();
-  const hasVerificationIntent = /\b(verify|verification|confirm|check|inspect|audit|review)\b/.test(text);
-  if (hasVerificationIntent && type !== 'task_trigger') return 'review';
+  // No affected files to mutate and read-mostly / internal-orchestration intent
+  // → general. Anything that implies real work in the user's world → action.
+  const noAffectedFiles = !(Array.isArray(proposal?.affectedFiles) && proposal.affectedFiles.length > 0);
+  const hasReadOnlyIntent = /\b(verify|verification|confirm|check|inspect|audit|review|research|investigate|report|summari[sz]e)\b/.test(text);
+  if (noAffectedFiles && hasReadOnlyIntent && type !== 'task_trigger') return 'general';
   return 'action';
 }
 
 function normalizeProposalExecutionLane(raw: any): ProposalExecutionLane | null {
   const value = String(raw || '').trim().toLowerCase();
-  if (value === 'code_change' || value === 'action' || value === 'review') return value as ProposalExecutionLane;
+  // Legacy 'review' lane folds into 'general'.
+  if (value === 'review') return 'general';
+  if (value === 'code_change' || value === 'action' || value === 'general') return value as ProposalExecutionLane;
   return null;
 }
 
@@ -260,20 +275,32 @@ function buildOperationalProposalPrompt(opts: {
   diffBlock: string;
 }): string {
   const { proposal, proposalId, executorPrompt, lane, affectedResourcesBlock, diffBlock } = opts;
-  const modeLabel = lane === 'review' ? 'read-mostly review' : 'bounded action';
+  const isGeneral = lane === 'general';
+
+  const header = isGeneral
+    ? [
+        `[PROPOSAL — GENERAL] Executing an approved general proposal (research / audit / internal Prometheus orchestration).`,
+        ``,
+        `This lane is read + internal-orchestration. You MAY read anything, research, and perform bounded internal Prometheus operations: start or dispatch a team, message a subagent, update a team/subagent, run an investigation, or surface a finding. You MUST NOT mutate the user's project files or take irreversible external-world actions (sending email, posting, payments) unless the approved steps explicitly say so.`,
+        `If you discover real implementation work is needed, do not perform it here — report it and recommend a follow-up action proposal.`,
+      ].join('\n')
+    : [
+        `[PROPOSAL — ACTION] Executing an approved action proposal (get the approved work done).`,
+        ``,
+        `This lane is build-capable. You MAY edit files in the workspace and in configured allowed paths, create artifacts, and take the approved external action (e.g. send the drafted reply, hit the approved endpoint). Stay within the approved scope and affected files.`,
+        ``,
+        `CURRENT-STATE CHECK FIRST (mandatory): before doing the work, re-read the actual target file/tool/page/thread NOW and confirm the gap, bug, or trigger this proposal addresses still exists and is still unhandled. The world may have moved since this proposal was written (the user may have fixed it via another tool, or already replied). If current state shows it is already done/resolved, do NOT redo it — write a note saying it was already handled and complete the task without changes.`,
+      ].join('\n');
+
   const teamHint = lane === 'action'
     ? [
         ``,
-        `TEAM / TASK ACTION HINT: If this proposal asks you to start or dispatch a team, request the team_ops tool category, call the appropriate team tool once, capture the returned run/task/team identifiers, then stop after verification and a note.`,
+        `TEAM / TASK HINT: If this proposal asks you to start or dispatch a team, request the team_ops tool category, call the appropriate team tool once, capture the returned run/task/team identifiers, then verify and note.`,
       ].join('\n')
     : '';
 
   return [
-    `[PROPOSAL ACTION EXECUTION] Executing approved ${modeLabel} proposal.`,
-    ``,
-    `This is not a source-code implementation proposal. Treat listed resources as context, audit surfaces, or expected outputs unless the proposal explicitly asks for a non-code workspace write.`,
-    `Do not run npm/build commands unless the approved instructions explicitly require them.`,
-    `Do not expand the work into broader implementation. Perform the approved action, verify the outcome, write a concise note, and complete the task.`,
+    header,
     teamHint,
     ``,
     `TITLE: ${proposal.title || 'Untitled'}`,
@@ -283,7 +310,7 @@ function buildOperationalProposalPrompt(opts: {
     ``,
     `SUMMARY: ${proposal.summary || ''}`,
     ``,
-    `APPROVED ACTION PLAN:`,
+    `APPROVED PLAN:`,
     proposal.details || proposal.summary || executorPrompt,
     buildExecutionStepsBlock(proposal),
     affectedResourcesBlock,
@@ -297,21 +324,23 @@ function buildOperationalProposalPrompt(opts: {
     `- If blocked, pause with a concise blocker instead of improvising or broadening scope.`,
     `- Write exactly one final write_note with tag "task_complete"; that note completes the task, so do not call step_complete afterward.`,
     ``,
-    lane === 'review'
-      ? `LANE RULES: Prefer read-only tools. Do not mutate files, teams, schedules, memory, or external systems unless the proposal explicitly approves that exact mutation. If a fix is needed, report findings and recommend a follow-up proposal instead of performing the fix.`
-      : `LANE RULES: Do the approved action exactly once. Capture IDs, paths, URLs, statuses, or returned artifacts. Do not run npm/build/dev commands unless the approved steps explicitly require them.`,
+    isGeneral
+      ? `LANE RULES: Prefer read-only and internal-orchestration tools. Do not mutate the user's project files or external systems unless the proposal explicitly approves that exact mutation. Internal Prometheus operations (team/subagent ops, scheduling a follow-up, surfacing findings) are allowed.`
+      : `LANE RULES: After the current-state check confirms the work is still needed, do the approved work within scope. Edit only approved files (workspace or allowed paths). Capture IDs, paths, URLs, statuses, or artifacts. Run build/dev commands only if the approved steps require them.`,
     ``,
     `INSTRUCTIONS:`,
-    `1. Inspect only the state needed to carry out the approved ${lane === 'review' ? 'review' : 'action'}.`,
-    `   After inspection is complete, call step_complete before moving on to artifact creation or triggering work.`,
-    lane === 'review'
-      ? `2. Verify/audit the requested condition without expanding into implementation work.`
-      : `2. Perform the action exactly once unless the approved plan explicitly says otherwise.`,
-    `   After the action is complete, call step_complete before verification.`,
-    lane === 'review'
-      ? `3. Record pass/fail/unknown, evidence checked, findings, and recommended next action.`
-      : `3. Verify the action started, completed, or produced the expected artifact/status.`,
-    `   After verification is complete, call step_complete before the final note.`,
+    isGeneral
+      ? `1. Inspect only the state needed to carry out the approved research/audit/orchestration.`
+      : `1. CURRENT-STATE CHECK: open and read the actual target now; confirm the problem/gap/trigger still exists and is unhandled. If already resolved, note it and finish without changes.`,
+    `   After this step, call step_complete.`,
+    isGeneral
+      ? `2. Perform the approved read/orchestration work without expanding into user-facing implementation.`
+      : `2. Perform the approved work exactly once, within the approved affected files/scope.`,
+    `   After this step, call step_complete.`,
+    isGeneral
+      ? `3. Record findings, identifiers, and any recommended follow-up proposal.`
+      : `3. Verify the change/action produced the expected result; capture identifiers, paths, or status.`,
+    `   After this step, call step_complete.`,
     `4. Write a concise note with identifiers, artifacts, blockers, and next steps, then complete the task.`,
     ``,
     executorPrompt ? `ADDITIONAL EXECUTOR INSTRUCTIONS:\n${executorPrompt}` : '',
@@ -336,16 +365,16 @@ function buildOperationalPlanSteps(
     }));
   }
 
-  const descriptions = lane === 'review'
+  const descriptions = lane === 'general'
     ? [
-        'Inspect the approved evidence, resources, and current state needed for verification.',
-        'Verify the requested status or outcome without expanding into implementation work.',
-        'Record the verification result, blockers, and any referenced artifacts.',
+        'Inspect the approved evidence, resources, and current state needed for this research/audit/orchestration.',
+        'Perform the approved read or internal-orchestration work without expanding into user-facing implementation.',
+        'Record findings, identifiers, and any recommended follow-up.',
         'Write a concise completion note and finish the proposal task.',
       ]
     : [
-        'Inspect the approved context and current state needed for this action.',
-        'Perform the approved action exactly once.',
+        'Current-state check: re-read the actual target and confirm the problem/gap/trigger still exists and is unhandled.',
+        'Perform the approved work exactly once, within the approved affected files/scope.',
         'Verify the result and capture identifiers, statuses, or artifact paths.',
         'Write a concise completion note and finish the proposal task.',
       ];
@@ -628,7 +657,7 @@ export async function dispatchApprovedProposal(
   });
   const usesOperationalExecutionMode = !usesDevSrcSelfEdit && !usesDevSrcSelfEditRepair && executionLane !== 'code_change';
   if (executionLane === 'code_change' && !usesDevSrcSelfEdit && !usesDevSrcSelfEditRepair) {
-    throw new Error('code_change proposals must touch only approved dev self-edit files under src/ and/or web-ui/. Use action or review for non-code approvals.');
+    throw new Error('code_change proposals must touch only approved dev self-edit files under src/ and/or web-ui/. Use action or general for non-code approvals.');
   }
   const defaultBuildCommand = usesDevSrcSelfEditRepair || usesDevSrcSelfEdit
     ? (hasWebUiAffectedFiles ? 'npm run sync:web-ui && npm run build:backend' : 'npm run build:backend')

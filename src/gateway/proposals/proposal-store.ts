@@ -43,7 +43,19 @@ export type ProposalType =
 
 export type ProposalStatus = 'pending' | 'approved' | 'denied' | 'executing' | 'repairing' | 'executed' | 'failed' | 'expired';
 export type ProposalPriority = 'critical' | 'high' | 'medium' | 'low';
-export type ProposalExecutionMode = 'code_change' | 'action' | 'review';
+// Execution lanes (the contract that actually drives executor behavior):
+//   general    — read, research, audit, and internal Prometheus orchestration
+//                (start/dispatch a team, message a subagent, update team/subagent,
+//                surface config/prompt/memory suggestions). No user-file writes
+//                or external-world side effects.
+//   action     — substantive agency in the user's world: build/fix in the
+//                workspace + allowed paths, respond to an incoming email/webhook/
+//                notification. Carries the hardened + current-state contract.
+//   code_change — Prometheus's own src/ + web-ui/ self-edits (sandboxed, private
+//                builds only).
+// Legacy 'review' proposals normalize to 'general' on read (see
+// normalizeProposalExecutionMode).
+export type ProposalExecutionMode = 'code_change' | 'action' | 'general';
 
 export interface ProposalAffectedFile {
   path: string;
@@ -247,7 +259,7 @@ function hasSourceReadEvidence(text: string): boolean {
   );
 }
 
-function validateSrcProposalReadiness(partial: Pick<Proposal, 'type' | 'details' | 'affectedFiles' | 'executorPrompt' | 'riskTier' | 'sourcePipeline'>): string[] {
+function validateSrcProposalReadiness(partial: Pick<Proposal, 'type' | 'executionMode' | 'details' | 'affectedFiles' | 'executorPrompt' | 'riskTier' | 'sourcePipeline'>): string[] {
   const affectedFiles = partial.affectedFiles || [];
   if (!hasSrcAffectedFiles(affectedFiles)) return [];
 
@@ -257,8 +269,11 @@ function validateSrcProposalReadiness(partial: Pick<Proposal, 'type' | 'details'
   const detailsText = String(partial.details || '').toLowerCase();
   const executorText = String(partial.executorPrompt || '').toLowerCase();
 
-  if (partial.type !== 'src_edit') {
-    missing.push('type must be src_edit');
+  // The strict src contract is keyed to the code_change lane, not the type label.
+  // Accept the legacy 'src_edit' type as an implicit code_change for back-compat.
+  const lane = normalizeProposalExecutionMode(partial.executionMode);
+  if (lane !== 'code_change' && partial.type !== 'src_edit') {
+    missing.push('execution_mode must be code_change for src/ or web-ui/ edits');
   }
   if (partial.riskTier !== 'low' && partial.riskTier !== 'high') {
     missing.push('riskTier must be low or high');
@@ -316,7 +331,10 @@ function normalizeExecutionStepKind(raw: any): ProposalExecutionStepKind | undef
 
 function normalizeProposalExecutionMode(raw: any): ProposalExecutionMode | undefined {
   const value = String(raw || '').trim().toLowerCase();
-  if (value === 'code_change' || value === 'action' || value === 'review') {
+  // Legacy 'review' lane folds into 'general' (read-mostly is now a posture of
+  // general, not its own lane).
+  if (value === 'review') return 'general';
+  if (value === 'code_change' || value === 'action' || value === 'general') {
     return value as ProposalExecutionMode;
   }
   return undefined;

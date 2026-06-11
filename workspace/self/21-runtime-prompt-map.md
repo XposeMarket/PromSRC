@@ -309,16 +309,18 @@ Boot turns get full interactive memory even when the user message says "do not c
 
 **This is where AGENTS.md + TOOLS.md get auto-injected** (via `loadWorkspaceBootstrap`, not `buildPersonalityContext`). Main chat worker does not get that inject.
 
-### 5L) Brain runner (fully isolated)
+### 5L) Brain runner
 
-**File:** `src/gateway/brain/brain-runner.ts` — not routed through `handleChat`.
+**File:** `src/gateway/brain/brain-runner.ts` — calls `deps.handleChat(..., 'cron', toolFilter)` with a tight per-job tool allowlist and mutation scope. Because `cron` takes the interactive personality path, the brain receives the full USER/SOUL/MEMORY/intraday stack; the live V2 prompt builders are `_buildThoughtPromptV2` / `_buildDreamPromptV2` / `_buildDreamCleanupPromptV2` (the V1 builders are dead code).
 
-| Job | Approx lines | Notes |
-|-----|--------------|-------|
-| Brain Thought | 1410–1499 | Forbids USER/SOUL/MEMORY writes during run |
-| Brain Dream | ~1570–1695 | Dream evaluates memory candidates |
-| Cleanup | ~1787–1885 | Dedup/maintenance pass |
-| Skill curator | ~2327+ | Skill maintenance only |
+| Job | Notes |
+|-----|-------|
+| Brain Thought | Observation + seed capture + Active Work Ledger upkeep + light research (`web_search`/`web_fetch`, private-only source read). **Mandatory current-state verification** before seeding. Forbids USER/SOUL/MEMORY/proposal writes; may do low-risk existing-skill maintenance. |
+| Brain Dream | Drives off the Active Work Ledger + thoughts; **re-verifies current state** (catches anything fixed since the Thought); deep research (`web_*` + `browser_*`); files hardened `action` proposals + auto-applies existing-skill evolution. |
+| Cleanup | Memory solidifier + skill-curator critic; subtractive only. |
+| Skill curator | Skill maintenance only. |
+
+Proposal lanes filed by the Dream are `general` / `action` / `code_change` (code_change private-only). See [07-source-editing.md](07-source-editing.md) §14.
 
 ### 5M) Legacy / alternate paths
 

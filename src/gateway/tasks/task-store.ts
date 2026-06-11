@@ -187,7 +187,8 @@ export type ProposalExecutionMode =
   | 'standard'
   | 'code_change'
   | 'action'
-  | 'review'
+  | 'general'
+  | 'review' // legacy — folds into 'general'; retained for back-compat on persisted tasks
   | 'task_trigger'
   | 'verification'
   | 'artifact_run'

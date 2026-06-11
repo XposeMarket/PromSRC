@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getSession, setWorkspace } from '../session';
+import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
@@ -128,6 +128,52 @@ export interface RunJobNowOptions {
   // Default false for direct user-triggered runs.
   // Automated recovery callers should pass true.
   respectActiveHours?: boolean;
+}
+
+// Short "last run" orientation injected into a scheduled run's prompt: when it
+// last ran and a trimmed summary of that result, so the run has continuity.
+function buildLastRunContext(job: CronJob): string {
+  if (!job.lastRun) return '';
+  let when = job.lastRun;
+  try {
+    when = new Date(job.lastRun).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch { /* keep ISO */ }
+  const lastResult = String(job.lastResult || '').replace(/\s+/g, ' ').trim();
+  return [
+    `[LAST RUN] This scheduled job last ran ${when}.`,
+    lastResult ? `Previous result (summary): ${lastResult.slice(0, 400)}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+// Continuity: capture messages exchanged in this job's stable thread (auto_<id>)
+// AFTER the previous run, so user replies like "next time do X" reach the next
+// run. The run executes in an isolated session, so we inline these explicitly.
+function buildInterRunContext(job: CronJob): string {
+  try {
+    if (!job.lastRun) return '';
+    const lastRunMs = Date.parse(job.lastRun);
+    if (!Number.isFinite(lastRunMs)) return '';
+    const history = getHistory(`auto_${job.id}`) || [];
+    const since = history.filter((m: any) => {
+      const ts = Number(m?.timestamp || 0);
+      if (!ts || ts <= lastRunMs) return false;
+      if (m?.channel === 'system') return false; // skip the automated run mirror messages
+      const text = String(m?.content || '').trim();
+      if (!text || /^\[Automated Task:/i.test(text)) return false;
+      return m?.role === 'user' || m?.role === 'assistant';
+    });
+    if (!since.length) return '';
+    const lines = since.slice(-12).map((m: any) => {
+      const who = m.role === 'user' ? 'User' : 'You (prior run)';
+      return `${who}: ${String(m.content).replace(/\s+/g, ' ').trim().slice(0, 600)}`;
+    });
+    return [
+      "[SINCE LAST RUN] Messages exchanged in this job's thread since your previous run. Treat any user messages here as updated instructions or feedback for THIS run, and follow them:",
+      ...lines,
+    ].join('\n');
+  } catch {
+    return '';
+  }
 }
 
 function buildScheduledTaskPlan(job: CronJob): TaskPlanStep[] {
@@ -1099,13 +1145,20 @@ export class CronScheduler {
       } else {
         const modelOverride = String(job.model || '').trim() || undefined;
 
-        // Inject schedule memory (dedup keys + learned context only — no run summaries)
+        // Inject schedule memory (dedup keys + learned context only — no run summaries),
+        // last-run orientation, and any messages exchanged in the job thread since
+        // the previous run (user feedback continuity).
         const scheduleMem = loadScheduleMemory(job.id);
-        let effectivePrompt = job.prompt;
         const memText = formatScheduleMemoryForPrompt(scheduleMem);
-        if (memText) {
-          effectivePrompt = [job.prompt, '', memText].join('\n');
-          console.log(`[CronScheduler] Injected schedule context for "${job.name}"`);
+        const lastRunCtx = buildLastRunContext(job);
+        const interRunCtx = buildInterRunContext(job);
+        const promptParts = [job.prompt];
+        if (lastRunCtx) promptParts.push('', lastRunCtx);
+        if (interRunCtx) promptParts.push('', interRunCtx);
+        if (memText) promptParts.push('', memText);
+        let effectivePrompt = promptParts.join('\n');
+        if (memText || lastRunCtx || interRunCtx) {
+          console.log(`[CronScheduler] Injected schedule context for "${job.name}"${interRunCtx ? ' (incl. since-last-run messages)' : ''}`);
         }
 
         const selfLearnInstruction = buildSelfReflectionInstruction({

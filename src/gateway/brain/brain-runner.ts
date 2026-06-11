@@ -93,8 +93,8 @@ function brainThoughtProposalTypes(): string {
 
 function brainThoughtExecutionModes(): string {
   return isPublicBrainProfile()
-    ? 'action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note. Do not propose internal Prometheus implementation or bundled dev-tool changes in public builds.'
-    : 'code_change for Prometheus src/ or web-ui/ edits only; action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note.';
+    ? 'general for research / audit / internal Prometheus orchestration (start a team, message a subagent, surface a finding); action for real work in the user\'s world (build/fix a feature in the workspace or an allowed path, draft+send an approved response to an incoming message/webhook); none when it is only a note. Do not propose internal Prometheus implementation or bundled dev-tool changes in public builds.'
+    : 'general for research / audit / internal Prometheus orchestration; action for real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming message/webhook); code_change for Prometheus\'s own src/ or web-ui/ self-edits only; none when it is only a note.';
 }
 
 function brainThoughtProposalTypesExample(): string {
@@ -105,8 +105,8 @@ function brainThoughtProposalTypesExample(): string {
 
 function brainThoughtExecutionModesExample(): string {
   return isPublicBrainProfile()
-    ? 'action / review / none'
-    : 'code_change / action / review / none';
+    ? 'general / action / none'
+    : 'general / action / code_change / none';
 }
 
 function brainOpportunitySurfaceExample(): string {
@@ -139,6 +139,24 @@ function brainPartialFeatureHeuristic(): string {
     : 'If the user talked about a feature but left it unfinished, inspect the relevant src/, web-ui/, or prom-root files and determine what already exists, what is missing, and the smallest meaningful proposal that moves it forward tomorrow.';
 }
 
+function brainHardenedActionContract(): string {
+  return `Hardened action proposal contract (REQUIRED for every action proposal):
+The details field must contain these exact markdown headings so the user can approve safely at a glance:
+  ## What you asked for
+     The origin — what the user said/planned, with a citation (chat/transcript/note).
+  ## Current state
+     What the target actually does RIGHT NOW. You must have opened the real file/tool/page/thread tonight and confirmed the gap/bug/missing feature still exists and is still unhandled. Cite the files read and the observed present behavior. If it was already done or fixed by another tool, say so and do NOT file the proposal.
+  ## Research
+     Web/competitor/OSS findings with links (why competitors succeed, reusable open-source projects, prior art). Omit only if genuinely not applicable.
+  ## Plan
+     The concrete approved steps and exact files to create/edit.
+  ## Acceptance criteria
+     How the user (or executor) will know it worked.
+  ## Risks / open questions
+     What could go wrong or needs a decision.
+Never file an action proposal whose "Current state" is derived only from the conversation. It must be derived from the live artifact tonight.`;
+}
+
 function brainDreamProposalGuidance(): string {
   if (isPublicBrainProfile()) {
     return `Available proposal types:
@@ -150,25 +168,24 @@ function brainDreamProposalGuidance(): string {
 - task_trigger (bounded one-shot action, team run, verification, or investigation)
 - general
 
-Execution modes (required for executable proposals):
-- action: approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
-- review: read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
+Execution lanes (execution_mode — required for executable proposals; there are exactly two in public builds):
+- general: read + research + internal Prometheus orchestration (start/dispatch a team, message a subagent, update a team/subagent, schedule a follow-up, surface a finding). No user-file writes or external-world side effects.
+- action: real work in the user's world — build/fix a feature in the workspace or an allowed path, create an approved artifact, or draft+send an approved response to an incoming email/webhook/notification. Build-capable. Carries the current-state + hardened contract below.
 
 Public build proposal routing rule:
-- type describes the proposal category shown to the user.
-- execution_mode controls how the approved executor behaves.
+- type describes the proposal category shown to the user; execution_mode (the lane) controls how the approved executor behaves.
 - Do not create proposals for internal Prometheus implementation or bundled dev tooling in public builds.
 - If a signal appears to require internal product implementation changes, record it as deferred product feedback in the Dream output instead of calling write_proposal.
-- task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
-- task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
+- Use execution_mode=general for "research this deeper", "audit/verify and report", or internal orchestration like "start this team / message this subagent".
+- Use execution_mode=action when approval should make real work happen: build/fix the thing the user planned, or respond to an incoming external event.
 
 Operational proposal rules:
-- Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
-- Use execution_mode=review for "verify/check/audit/review and report back" proposals.
-- For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file implementation edit plan.
-- Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
-- Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
-- Do not include implementation-edit headings, diff previews, build steps, or verification profiles in public proposals.
+- For general proposals, affected_files are resource/evidence references or expected artifact locations, not an edit plan.
+- For action proposals, affected_files are the exact files to create/edit (workspace-relative, or absolute for a configured allowed path).
+- Action proposals MUST carry a current-state + hardened structure (see "Hardened action proposal contract" below) so the morning approval is safe at a glance.
+- Include execution_steps with 3-7 concrete approved steps. For action proposals, step 1 must be a current-state re-check. These become the executor's task checklist after approval.
+
+${brainHardenedActionContract()}
 
 Skill proposal rules:
 - Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
@@ -188,25 +205,25 @@ Skill proposal rules:
 - task_trigger (bounded one-shot action, team run, verification, or investigation)
 - general
 
-Execution modes (required for executable proposals):
-- code_change: Prometheus dev self-edit only; affected_files must be exact src/ and/or web-ui/ files; sandboxed; build/verification required
-- action: approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
-- review: read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
+Execution lanes (execution_mode — required for executable proposals; there are exactly three):
+- general: read + research + internal Prometheus orchestration (start/dispatch a team, message a subagent, update a team/subagent, schedule a follow-up, surface a finding). No user-file writes or external-world side effects.
+- action: real work in the user's world — build/fix a feature in the workspace or a configured allowed path, create an approved artifact, or draft+send an approved response to an incoming email/webhook/notification. Build-capable. Carries the current-state + hardened contract below.
+- code_change: Prometheus's OWN dev self-edit only; affected_files must be exact src/ and/or web-ui/ files; sandboxed; build/verification required.
 
 Proposal routing rule:
-- type describes the proposal category shown to the user.
-- execution_mode controls how the approved executor behaves.
-- Do not use src_edit unless execution_mode=code_change and the proposal truly edits Prometheus source code.
-- task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
-- task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
+- type describes the proposal category shown to the user; execution_mode (the lane) controls how the approved executor behaves.
+- code_change is ONLY for editing Prometheus's own source. Editing one of the USER's projects (even if it lives in the workspace or an allowed path) is an action proposal, never code_change.
+- Use general for "research this deeper", "audit/verify and report", or internal orchestration like "start this team / message this subagent".
+- Use action when approval should make real work happen in the user's world (build the feature they planned, fix the bug you confirmed, respond to an incoming event).
 
 Operational proposal rules:
-  - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
-  - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
-- For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file edit plan.
-- Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
-- Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
-- Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
+- For general proposals, affected_files are resource/evidence references or expected artifact locations, not an edit plan.
+- For action proposals, affected_files are the exact files to create/edit (workspace-relative, or absolute for a configured allowed path).
+- Action proposals MUST carry the current-state + hardened structure (see "Hardened action proposal contract" below) so the morning approval is safe at a glance.
+- Include execution_steps with 3-7 concrete approved steps. For action proposals, step 1 must be a current-state re-check. These become the executor's task checklist after approval.
+- Do not include src/code_change headings, diff previews, or build steps on a general or action proposal — those belong only to a real code_change.
+
+${brainHardenedActionContract()}
 
 Skill proposal rules:
 - Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
@@ -823,9 +840,15 @@ export class BrainRunner {
 	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
       try {
         activateToolCategory(sessionId, 'file_ops');
+        // web_search / web_fetch are core tools (no category) — the toolFilter
+        // allowlist below is enough to expose them for light research.
+        if (!isPublicBrainProfile()) {
+          activateToolCategory(sessionId, 'source_read'); // inspect own code/tools for current-state + tool-failure diagnosis
+        }
         const businessCandidatesFile = path.posix.join('Brain', 'business-candidates', dateStr, 'candidates.jsonl');
+        const activeWorkFile = path.posix.join('Brain', 'active-work.jsonl');
         setSessionMutationScope(sessionId, {
-	        allowedFiles: [workspaceOutFile, businessCandidatesFile],
+	        allowedFiles: [workspaceOutFile, businessCandidatesFile, activeWorkFile],
 	        allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(businessCandidatesFile)],
 	      });
 	      const result = await this.deps.handleChat(
@@ -834,10 +857,10 @@ export class BrainRunner {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe, write the thought file, and apply low-risk existing-skill maintenance only. No memory writes, proposals, or new skill creation.`,
+        `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe, verify current state against live artifacts, do light research, maintain the Active Work Ledger, write the thought file, and apply low-risk existing-skill maintenance only. No memory writes, proposals, or new skill creation.`,
         thoughtModelOverride,
         'cron',
-        [
+        brainDreamToolFilter([
           'list_directory',
           'list_files',
           'read_file',
@@ -853,6 +876,20 @@ export class BrainRunner {
           'find_replace',
           'insert_after',
           'delete_lines',
+          // Light research — confirm current state of an idea and scan for prior art.
+          'web_search',
+          'web_search_multi',
+          'web_search_single',
+          'web_fetch',
+          // Private builds only (stripped by brainDreamToolFilter in public builds):
+          // inspect own source/tools to confirm current state and diagnose tool failures.
+          'list_source',
+          'source_stats',
+          'read_source',
+          'grep_source',
+          'list_prom',
+          'read_prom_file',
+          'grep_prom',
           'skill_list',
           'skill_read',
           'skill_inspect',
@@ -860,7 +897,7 @@ export class BrainRunner {
           'skill_resource_read',
           'skill_manifest_write',
           'skill_resource_write',
-        ],
+        ]),
       );
       resultText = abortSignal.aborted
         ? 'ABORTED: Brain thought run aborted by operator.'
@@ -995,12 +1032,14 @@ export class BrainRunner {
 	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
 	    try {
 	      activateToolCategory(sessionId, 'file_ops');
+	      activateToolCategory(sessionId, 'browser'); // deep competitor/OSS research on JS-heavy pages
 	      if (!isPublicBrainProfile()) {
 	        activateToolCategory(sessionId, 'source_read');
 	      }
+	      const activeWorkFile = path.posix.join('Brain', 'active-work.jsonl');
 	      setSessionMutationScope(sessionId, {
-	        allowedFiles: [workspaceOutFile, workspaceProposalsFile, 'BUSINESS.md'],
-	        allowedDirs: [path.posix.dirname(workspaceOutFile), 'entities', path.posix.join('Brain', 'business-reconciliation', dateStr)],
+	        allowedFiles: [workspaceOutFile, workspaceProposalsFile, 'BUSINESS.md', activeWorkFile],
+	        allowedDirs: [path.posix.dirname(workspaceOutFile), 'entities', 'Brain', path.posix.join('Brain', 'business-reconciliation', dateStr)],
 	      });
 	      const result = await this.deps.handleChat(
 	        prompt,
@@ -1008,7 +1047,7 @@ export class BrainRunner {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Automated Brain Dream run for ${dateStr}. Synthesize the thoughts for that date, write durable memory updates, create proposals. This is the nightly execution run.`,
+        `CONTEXT: Automated Brain Dream run for ${dateStr}. Drive off the Active Work Ledger and the day's thoughts: re-verify current state against live artifacts, do deep research (web + browser), update durable memory, and file hardened proposals. This is the nightly execution run.`,
         dreamModelOverride,
         'cron',
         brainDreamToolFilter([
@@ -1027,6 +1066,15 @@ export class BrainRunner {
           'apply_patchset',
           'insert_after',
           'delete_lines',
+          // Deep research — web search + page fetch + browser for JS-heavy sources.
+          'web_search',
+          'web_search_multi',
+          'web_search_single',
+          'web_fetch',
+          'browser_open',
+          'browser_snapshot',
+          'browser_get_page_text',
+          'browser_close',
           'memory_browse',
           'memory_write',
           'list_entities',
@@ -1788,10 +1836,14 @@ STRICT RULES:
 - Do not call write_proposal or create any proposals
 - Do not create new skills directly
 - Do not update cron jobs, configs, or team state
-- Your direct file writes are limited to the thought output file listed above and ${businessCandidatesFileRel} when business candidates exist
+- Your direct file writes are limited to the thought output file listed above, ${businessCandidatesFileRel} when business candidates exist, and the Active Work Ledger (Brain/active-work.jsonl)
 - You may update an existing skill only through skill_manifest_write or skill_resource_write, after reading/inspecting that existing skill
 - Existing-skill updates must be low-risk, additive or narrowly corrective, evidence-backed, and scoped to triggers, metadata, SKILL.md guidance, examples, templates, schemas, or other skill resources
 - When calling skill_manifest_write or skill_resource_write, include changeType, evidence, appliedBy="brain_thought", and reason so Dream can audit the skill change ledger
+- You MAY read freely and do LIGHT research: read any workspace/project file, ${isPublicBrainProfile() ? 'and use web_search/web_fetch' : 'use read_source/grep_source/read_prom_file to inspect Prometheus\'s own code and tools, and use web_search/web_fetch'} to confirm the current state of an idea and scan for prior art. Keep research light (a couple of lookups); the Dream does the deep dive.
+
+WHO YOU ARE THIS RUN:
+You have the user's USER.md, SOUL.md, MEMORY.md, and today's notes in your system context. Use them. Reason like a second brain that already knows what this user is building and cares about: "they planned X with me — let me check whether it actually exists yet", "they added project Y to the workspace — let me look through it for bugs or half-finished work", "this tool keeps failing them — let me see what's actually wrong with it." Proactivity is the point: you do not need an explicit task to investigate something the user clearly cares about.
 
 PRIMARY PURPOSE:
 You are not just auditing for mistakes. You are acting like a proactive second brain. You are trying to notice:
@@ -1803,6 +1855,19 @@ You are not just auditing for mistakes. You are acting like a proactive second b
 - concrete next-step proposals the Dream could investigate into executor-ready plans
 - "the user would probably appreciate if I got ahead on this" moments, even when they were not phrased as explicit tasks
 - useful wonderings: thoughtful "I wonder if..." observations that may be seeds for future help, not only defects
+
+CURRENT-STATE VERIFICATION (MANDATORY — this is the most important rule):
+Separate two kinds of evidence for everything you flag:
+- ORIGIN evidence: where the idea/bug/request came from (a chat, transcript, or note). This only PINS the item.
+- CURRENT-STATE evidence: what the artifact actually does RIGHT NOW.
+You must never flag something as unfinished, broken, or needed based only on the conversation. Before you record any opportunity/bug/seed as live, OPEN THE ACTUAL ARTIFACT TONIGHT — the file, the tool definition, the page, the project folder — and confirm the gap still exists and is still unhandled. Things move on: the user often fixes a bug with Claude/Codex/another tool, or finishes the feature, without doing it through Prometheus. Check the real current state (file contents, recent modification, the project's actual code). If current state shows it is already done or fixed, mark it RESOLVED and do NOT seed it for the Dream. A seed that survives a real current-state check is worth ten that were inferred from chat.
+
+ACTIVE WORK LEDGER (Brain/active-work.jsonl):
+This is the standing, memory-grounded list of things the user is actively working on or circling — it is what makes you proactive even on a day with no note. Read it first if it exists.
+- For each live idea/project/bug you confirm (from today's activity AND from what MEMORY/USER tells you the user is building), upsert one JSONL row (one JSON object per line):
+  {"id":"slug","title":"...","origin":"chat/transcript/note ref or 'memory'","diskPath":"workspace-relative or absolute allowed path, if it is a real project","status":"idea|drafted|in_progress|stalled|resolved","lastVerified":"${dateStr}","currentState":"what you actually observed in the artifact tonight","research":["url or finding"],"evidence":["path:line or ref"]}
+- Update status to "resolved" (and say how you verified) when current-state shows it is already done/fixed.
+- Keep entries concrete and grounded in current state; this ledger is what the Dream investigates and hardens into proposals.
 
 STEP 1 - SCAN AUDIT WINDOW
 
@@ -2238,22 +2303,26 @@ List ${skillEpisodesDirRel}. If ${skillEpisodesDirRel}/episodes.jsonl exists, re
 List ${skillGardenerDirRel}. If live-candidates.jsonl or workflow-episodes.jsonl exists, read them. These are always-on skill gardener signals captured during normal chat: reusable workflows, candidate skill updates, candidate resources/templates, missing trigger signals, lifecycle status, confidence, risk, and evidence.
 
 List ${pendingPropsDirRel} to see what formal proposals are currently pending approval.
+
+ACTIVE WORK LEDGER (Brain/active-work.jsonl): if it exists, read it. This is the standing list of what the user is actively building or circling, maintained by Thought. It is a primary driver of tonight's work — investigate every NON-resolved entry even if no thought today mentioned it. You also have USER.md/SOUL.md/MEMORY.md in context; use them to decide which of the user's projects deserve a proactive look-through tonight.
 ${brainDreamSourceEvidenceTools()}
 
 If no thought files exist in ${thoughtsDirRel}:
 - Note "no thoughts available" in the dream file
+- STILL drive off the Active Work Ledger and what MEMORY/USER tells you the user is building — a quiet day is not a reason to skip proactive investigation
 - Still check ${skillEpisodesDirRel}/episodes.jsonl if present
 - Still check ${skillGardenerDirRel}/live-candidates.jsonl and workflow-episodes.jsonl if present
-- Skip any phase that has no evidence
+- Skip only a phase that genuinely has no evidence from thoughts, the ledger, or memory
 - Still write the dream file and proposals.md
 
-PHASE 2 - CROSS-EXAMINE HIGH-CONFIDENCE ITEMS
+PHASE 2 - CROSS-EXAMINE + RE-VERIFY CURRENT STATE
 
-For any item marked high confidence in sections C, D, E, F, or G of any thought, plus any high-confidence row in ${businessCandidatesFileRel}:
-- Read the cited evidence file or session from ${auditDirRel}
-- Verify the finding is real and accurately described
-- If evidence does not support the claim, downgrade or discard it
-- Only items surviving verification proceed to later phases
+For any item marked high confidence in sections C, D, E, F, or G of any thought, any high-confidence row in ${businessCandidatesFileRel}, and every non-resolved Active Work Ledger entry:
+- Read the cited origin evidence from ${auditDirRel} to confirm it is real and accurately described.
+- THEN RE-VERIFY CURRENT STATE TONIGHT (mandatory). Open the actual live artifact — the file, the tool/code, the project folder, the page, the thread — and confirm the gap/bug/missing-feature STILL exists and is STILL unhandled right now. The Thought may be hours old and the world moves: the user frequently fixes a bug or finishes a feature with another tool (Claude, Codex, manual edits) without going through Prometheus. Use file reads, ${isPublicBrainProfile() ? 'web_fetch' : 'read_source/grep_source/read_prom_file'}, and recent-modification signals to check.
+- If current state shows it is already done/fixed/handled: discard it, update its ledger entry to status "resolved" with how you verified, and do NOT propose it. This single check is what prevents stale proposals — do not skip it.
+- If evidence does not support the claim, downgrade or discard it.
+- Only items that survive BOTH origin verification AND a fresh current-state check proceed to later phases.
 
 Medium and low confidence items:
 - Record them in the dream file under "Deferred Ideas"
@@ -2363,12 +2432,14 @@ For a new skill proposal:
 
 Do not create new skills directly. New skill creation must go through a skill_evolution proposal and wait for approval.
 
-PHASE 5 - INCUBATE OPPORTUNITY SEEDS
+PHASE 5 - INCUBATE OPPORTUNITY SEEDS (and the Active Work Ledger)
 
-For each verified high-confidence opportunity seed:
-- Scout the suggested surface directly before deciding what to propose
-- Read the actual ${brainIncubationFileTargets()}
-- Turn vague intent into a concrete morning-ready proposal only if the evidence supports it
+Work through every verified opportunity seed AND every non-resolved Active Work Ledger entry. For each:
+- Scout the surface directly before deciding what to propose — read the actual ${brainIncubationFileTargets()}, including the user's own project files when the ledger points to one (workspace path or configured allowed path).
+- DEEP RESEARCH (this is your nightly advantage): use web_search/web_fetch (and browser_open + browser_get_page_text for JS-heavy pages) to research the idea properly — competitors and why they succeed, reusable open-source projects or libraries that could accelerate it, prior art, and how others solved the same problem. Capture concrete links and findings.
+- Confirm current state one more time if the seed is build-shaped: the gap/bug must still be present in the live artifact before you propose a fix.
+- Turn vague intent into a concrete morning-ready proposal only if the evidence supports it. Action proposals must carry the hardened contract (What you asked for / Current state / Research / Plan / Acceptance criteria / Risks). Put the research links and the confirmed current-state observation directly in the proposal so the user can approve it safely at a glance.
+- Update the ledger entry: set status (in_progress once a proposal is filed, or resolved if current state shows it is already done), refresh lastVerified, and record the research you did.
 
 Also look for repeated workflows across the thoughts even if no single thought named them as an opportunity. If the user did a similar task multiple times, consider whether Prometheus should propose:
 - a new skill

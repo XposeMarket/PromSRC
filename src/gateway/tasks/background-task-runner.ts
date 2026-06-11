@@ -619,6 +619,10 @@ export class BackgroundTaskRunner {
 		        `- Execute each step directly with tools; after finishing a step, call step_complete(note: "what you did").`,
 		        `- Do NOT call declare_plan again.`,
 		        `- If blocked, state the blocker and best next action concisely.`,
+		        ...(isDevSrcProposalTask(task) ? [
+		          `- GROUND IN self/: workspace/self/ is the canonical architecture/subsystem map for Prometheus. Before and while editing, read self/index.md and the focused self/* files it links for guidance on whatever subsystem you are touching — use read_file('self/index.md'). Do not edit src/ blind; check what self/ documents about that area first.`,
+		          `- KEEP self/ CURRENT: when your change lands successfully and changes how a documented subsystem behaves, update the relevant self/* file(s) to match — treat this as the second half of completion, alongside the final task_complete write_note. If a self/ write is out of scope for this sandbox run, record the exact self/* file and the needed update inside your final write_note so it is never lost.`,
+		        ] : []),
             sandboxNote,
 	        recoveryNote,
 	      ].join('\n');

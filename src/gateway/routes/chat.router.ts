@@ -3123,8 +3123,8 @@ async function handleChat(
     }
     if (executionMode === 'background_agent') {
       return [
-        'EXECUTION MODE: Ephemeral background agent.',
-        'You are running in parallel with the main chat. Work autonomously and decisively.',
+        'EXECUTION MODE: Background agent (parallel worker).',
+        'You are running in parallel with the main chat — a standalone subagent or a one-shot spawned helper. Work autonomously and decisively.',
         'Do not ask clarifying questions. Use tools directly and finish the assigned task.',
       ].join('\n');
     }
