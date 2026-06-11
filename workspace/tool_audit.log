@@ -42828,3 +42828,13 @@ From
 [2026-06-11T12:19:01.031Z] OK prom_repo_sync({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
 [2026-06-11T12:19:09.348Z] FAIL prom_repo_push({"message":"Audit: append recent tool sync and error entries to tool_audit.log"}) => ❌ prom_repo_push rejected: origin/main has commits you don't have locally (likely pushed from the other machine). Git blocked the push so nothing gets overwritten. Use prom_repo_sync instead — it merg
 [2026-06-11T12:19:15.175Z] OK prom_repo_sync({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
+[2026-06-11T12:19:26.763Z] FAIL prom_repo_sync({"message":"Audit: append recent tool sync and error entries to tool_audit.log"}) => ❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:
+workspace/tool_audit.log
+workspace/workspace/logs/voice-debug.log
+
+Merge aborted. Your local commit "
+[2026-06-11T12:19:30.241Z] OK read_file({"filename":"workspace/tool_audit.log","start_line":42820,"num_lines":20}) => tool_audit.log (42836 lines) [window 42820-42836]:
+42820: From https://gith
+42821: [2026-06-11T01:45:17.565Z] FAIL run_command({"command":"git stash push -m \"pull conflict stash\" workspace/tool_audi
+[2026-06-11T12:19:30.582Z] OK read_file({"filename":"workspace/workspace/logs/voice-debug.log","start_line":1,"num_lines":30}) => workspace/logs/voice-debug.log (33818 lines) [window 1-30]:
+1: [2026-06-03T19:33:50.328Z] [voice-preauth] POST /api/mobile/voice-debug pairing=no ua="Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac O
