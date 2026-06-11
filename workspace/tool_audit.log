@@ -42806,3 +42806,23 @@ error: pathspec 'workspace/workspace/logs/voice-debug.log' did not match a
 Updated 0 paths from the index
 [2026-06-11T01:43:35.349Z] OK run_command({"command":"git checkout --ours workspace/logs/voice-debug.log","cwd":"."}) => git checkout --ours workspace/logs/voice-debug.log [exit 0] run=run_5bb2a28154bc4a98 cwd=.
 Updated 0 paths from the index
+[2026-06-11T01:43:41.391Z] FAIL prom_repo_sync({"message":"Sync after divergent branches on main (pull + restart request)"}) => ❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:
+workspace/tool_audit.log
+workspace/workspace/logs/voice-debug.log
+
+Merge aborted. Your local commit "
+[2026-06-11T01:43:47.509Z] OK run_command({"command":"git checkout --theirs workspace/tool_audit.log workspace/logs/voice-debug.log","cwd":"."}) => git checkout --theirs workspace/tool_audit.log workspace/logs/voice-debug.log [exit 0] run=run_82503a6992a04873 cwd=.
+Updated 0 paths from the index
+[2026-06-11T01:44:05.021Z] OK run_command({"command":"git stash push -m \"temp stash for pull\" -- workspace/tool_audit.log workspace/logs/voice-debug.log","cwd":"."}) => git stash push -m "temp stash for pull" -- workspace/tool_audit.log workspace/logs/voice-debug.log [exit 0] run=run_3af25983a0614154 cwd=.
+No local changes to save
+[2026-06-11T01:45:03.265Z] FAIL run_command({"command":"git checkout --theirs workspace/tool_audit.log workspace/logs/voice-debug.log && git pull origin main --no-edit","cwd":"."}) => git checkout --theirs workspace/tool_audit.log workspace/logs/voice-debug.log && git pull origin main --no-edit [exit 2] run=run_10f6877e95804d79 cwd=.
+Updated 0 paths from the index
+From https://gith
+[2026-06-11T01:45:17.565Z] FAIL run_command({"command":"git stash push -m \"pull conflict stash\" workspace/tool_audit.log workspace/logs/voice-debug.log && git pull origin main --no-edit","cwd":"."}) => git stash push -m "pull conflict stash" workspace/tool_audit.log workspace/logs/voice-debug.log && git pull origin main --no-edit [exit 2] run=run_2d560cfc3e0341f0 cwd=.
+No local changes to save
+From 
+[2026-06-11T12:18:34.191Z] FAIL read_file({"filename":"/Users/raul/promsrc/workspace/2026-06-10-intraday-notes.md","start_line":1,"num_lines":50}) => ERROR: /Users/raul/promsrc/workspace/2026-06-10-intraday-notes.md not found. Likely intended paths:
+1) audit/memory/files/2026-06-10-intraday-notes.md
+2) memory/2026-06-10-intraday-notes.md
+3) skills/
+[2026-06-11T12:19:01.031Z] OK prom_repo_sync({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
