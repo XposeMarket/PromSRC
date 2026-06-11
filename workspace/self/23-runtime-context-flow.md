@@ -132,7 +132,7 @@ These arrive as the user turn, not the system prompt:
 | Path | Entry point |
 |------|-------------|
 | Context compactor | chat.router.ts:1527 — no persona, no memory |
-| Brain runner | brain-runner.ts — not routed through handleChat |
+| Brain runner | brain-runner.ts — calls handleChat as `cron` (interactive personality) with a per-job tool allowlist; not a separate pipeline |
 | Realtime voice | realtime.router.ts:166–214 — separate pack |
 | Reactor subagents | reactor.ts:431 — soul-loader.buildSystemPrompt |
 

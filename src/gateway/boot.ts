@@ -101,9 +101,9 @@ function buildDailyBootPrompt(): string {
   return [
     'DAILY STARTUP SUMMARY:',
     'All relevant startup data has already been pre-fetched for you.',
-    'Do not call any tools.',
     'Write a brief 2-3 sentence startup message.',
     'Focus only on what carried over from yesterday\'s intraday notes, whether any compaction summaries suggest something worth resuming, and any recent brain/dream activity worth surfacing from overnight.',
+    'You may call write_note once if something from startup is genuinely worth preserving for later (e.g. an unfinished thread to resume); otherwise skip it. Do not call other tools for this startup message.',
     'If there is no meaningful carryover, say so plainly.',
   ].join('\n').trim();
 }

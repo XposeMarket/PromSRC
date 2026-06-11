@@ -13632,8 +13632,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	              : undefined;
 	            const proposal = createProposal({
 	              type: args.type || 'general',
-                executionMode: ['code_change', 'action', 'review'].includes(String(args.execution_mode || args.executionMode || '').trim())
-                  ? String(args.execution_mode || args.executionMode).trim() as any
+                executionMode: ['code_change', 'action', 'general', 'review'].includes(String(args.execution_mode || args.executionMode || '').trim())
+                  ? (String(args.execution_mode || args.executionMode).trim() === 'review' ? 'general' : String(args.execution_mode || args.executionMode).trim()) as any
                   : undefined,
 	              priority: args.priority || 'medium',
               title: String(args.title || '').slice(0, 120),

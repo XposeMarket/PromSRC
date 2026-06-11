@@ -126,7 +126,7 @@ Pending proposals can be edited with `PATCH`; non-pending proposals cannot. A su
 Special rules for `src/` proposals:
 
 - if a proposal touches `src/`, it must be an approval-ready implementation plan
-- its type must be `src_edit`
+- its `execution_mode` must be `code_change` (legacy `type: src_edit` is still accepted as an implicit code_change for back-compat; the strict contract is keyed to the lane now, not the type label, via `validateSrcProposalReadiness`)
 - `riskTier` must be `low` or `high`
 - `executorPrompt` must be present
 - its `details` must contain these exact sections:
@@ -142,14 +142,23 @@ Special rules for `src/` proposals:
 Approved proposals that carry an executor prompt, or affected files plus details, dispatch into background execution using session IDs of the form `proposal_<proposalId>`.
 Approval records an `approvalSnapshot` before dispatch, so execution has a durable approved version even if later UI state changes.
 
-Execution dispatch modes:
+Execution lanes (the `execution_mode` field — this is the contract that drives the executor, as of the 2026-06-10 lane refactor):
 
-- `dev_src_self_edit` for qualifying internal source proposals
-- `dev_src_self_edit_repair` for repair-only follow-ups
-- `standard` for general proposal execution
-- `task_trigger`, `verification`, and `artifact_run` for bounded operational proposals inferred from proposal type/text
+- `general` — read, research, audit, and **internal Prometheus orchestration** (start/dispatch a team, message a subagent, update a team/subagent, surface a finding). No user-file writes or external-world side effects.
+- `action` — substantive agency in the user's world: build/fix in the workspace + configured allowed paths, create an approved artifact, or draft+send an approved response to an incoming email/webhook/notification. Build-capable. Carries the hardened + current-state contract (see below).
+- `code_change` — Prometheus's OWN `src/`/`web-ui/` self-edits only; sandboxed; build-verified; private builds only.
 
-Operational proposal prompts are intentionally constrained: they are told not to implement source-code changes, not to run builds unless approved, to perform the approved action exactly once, and to finish through the normal step-completion path.
+There are exactly three lanes now. The legacy `review` lane folds into `general` (`normalizeProposalExecutionMode` maps `review` → `general` on read). Internally, `dev_src_self_edit` / `dev_src_self_edit_repair` are still the sandbox sub-modes of the `code_change` lane. The old `standard` / `task_trigger` / `verification` / `artifact_run` task modes are superseded by the lane on `task.proposalExecution.mode`.
+
+Lane resolution (`resolveProposalExecutionLane`, [proposals.router.ts](../../src/gateway/routes/proposals.router.ts)): touches Prometheus internal code or needs a build → `code_change`; else the explicit `execution_mode` (normalized); else inferred — read-only/research/orchestration intent with no affected files → `general`, otherwise `action`.
+
+Lane prompts (`buildOperationalProposalPrompt`):
+- The `general` prompt permits internal orchestration but forbids user-file/external mutation.
+- The `action` prompt is build-capable and **leads with a mandatory current-state check** ("re-read the actual target now; if the gap/bug/trigger is already resolved, stop and report — do not redo it"). This is what prevents stale executions on things the user already fixed via another tool.
+
+Hardened `action` contract (`details` headings, soft-validated): `## What you asked for` · `## Current state` · `## Research` · `## Plan` · `## Acceptance criteria` · `## Risks / open questions`.
+
+Allowed-path note: `action` proposals may target files outside the workspace if they live under a configured `allowed_paths` directory. `normalizeProposalScopePath` preserves absolute paths so the mutation scope covers both workspace-relative and absolute allowed-path targets.
 
 Risk tier affects executor routing:
 

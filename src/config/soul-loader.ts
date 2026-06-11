@@ -20,6 +20,10 @@ const SUBAGENT_SOUL_PATHS = [
   path.join(CONFIG_DIR, 'subagent-soul.md'),
   path.join(process.cwd(), 'src', 'config', 'subagent-soul.md'),
 ];
+const VOICE_SOUL_PATHS = [
+  path.join(CONFIG_DIR, 'voice-soul.md'),
+  path.join(process.cwd(), 'src', 'config', 'voice-soul.md'),
+];
 const SKILLS_DIR = resolveSkillsRoot();
 
 function intEnv(name: string, fallback: number): number {
@@ -80,6 +84,12 @@ export function loadSoul(): string {
 // soul file is not present, so behavior degrades gracefully.
 export function loadSubagentSoul(): string {
   return readFirstExisting(SUBAGENT_SOUL_PATHS) || readFirstExisting(SOUL_PATHS);
+}
+
+// Voice identity contract — parallel to loadSoul() but written for the live voice
+// worker (spoken, conversational). Falls back to the main soul if absent.
+export function loadVoiceSoul(): string {
+  return readFirstExisting(VOICE_SOUL_PATHS) || readFirstExisting(SOUL_PATHS);
 }
 
 export interface SkillInfo {
@@ -259,12 +269,11 @@ export function loadWorkspaceBootstrap(
   const agentsMd = read('AGENTS.md');
   if (agentsMd) sections.push({ label: 'AGENTS.md', content: agentsMd });
 
-  // TOOLS.md - always injected (tool usage notes)
-  const toolsMd = read('TOOLS.md');
-  if (toolsMd) sections.push({ label: 'TOOLS.md', content: toolsMd });
+  // TOOLS.md is intentionally NOT injected anywhere — the live tool menu +
+  // per-category TOOL_BLOCKS are the source of truth for tool usage.
 
   if (promptMode === 'minimal') {
-    // Sub-agents get AGENTS.md + TOOLS.md only.
+    // Sub-agents get AGENTS.md only.
     return sections
       .map(s => `### ${s.label}\n${clampText(s.content, 4000)}`)
       .join('\n\n');

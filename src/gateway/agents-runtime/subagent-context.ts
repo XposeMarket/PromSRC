@@ -15,8 +15,11 @@ const ACTIVE_TASK_STATUSES = ['queued', 'running', 'paused', 'stalled', 'needs_a
 export function buildSubagentAssignmentBlock(subagentId: string | undefined | null): string {
   const id = String(subagentId || '').trim();
   if (!id) return '';
+  // Resolve a display name if this id is a config-registered agent. Standalone
+  // subagents live in .prometheus/subagents/<id> (not config.agents), so a null
+  // here is fine — we don't gate on it. The block renders only when there are
+  // real assignments below, which naturally excludes ephemeral one-shot spawns.
   const agent = getAgentById(id);
-  if (!agent) return ''; // named subagents only
 
   const scheduleLines: string[] = [];
   try {
@@ -36,7 +39,7 @@ export function buildSubagentAssignmentBlock(subagentId: string | undefined | nu
   const taskLines: string[] = [];
   try {
     const tasks = listTasks({ status: [...ACTIVE_TASK_STATUSES] })
-      .filter((t) => t.teamSubagent?.agentId === id)
+      .filter((t) => t.teamSubagent?.agentId === id || (t as any).subagentProfile === id)
       .slice(0, 12);
     for (const t of tasks) {
       const step = t.plan?.length ? ` (step ${Math.min(t.currentStepIndex + 1, t.plan.length)}/${t.plan.length})` : '';
@@ -48,7 +51,7 @@ export function buildSubagentAssignmentBlock(subagentId: string | undefined | nu
 
   if (!scheduleLines.length && !taskLines.length) return '';
 
-  const out: string[] = ['[YOUR ASSIGNMENTS]', `Standing work assigned to you (${agent.name}, id: ${id}):`];
+  const out: string[] = ['[YOUR ASSIGNMENTS]', `Standing work assigned to you (${agent?.name || id}, id: ${id}):`];
   if (scheduleLines.length) {
     out.push('Scheduled jobs:');
     out.push(...scheduleLines);

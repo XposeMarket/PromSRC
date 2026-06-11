@@ -392,8 +392,8 @@ export function getCisSystemTools(): any[] {
                 },
                 execution_mode: {
                   type: 'string',
-                  enum: ['code_change', 'action', 'review'],
-                  description: 'Execution lane used after approval.',
+                  enum: ['code_change', 'action', 'general'],
+                  description: 'Execution lane used after approval. general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file or external-world side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook); requires a hardened "## Current state" section confirming the gap still exists. code_change = Prometheus\'s OWN src/ or web-ui/ self-edit only (sandboxed).',
                 },
                 priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
                 title: { type: 'string' },
@@ -872,10 +872,10 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'write_proposal',
 	        description:
-	          'Submit a proposal for human approval. Use for any change that requires human review before execution. Every executable proposal should choose exactly one execution_mode: code_change, action, or review. The proposal will appear in the Prometheus proposals panel for approval or denial. ' +
+	          'Submit a proposal for human approval. Use for any change that requires human review before execution. Every executable proposal chooses exactly one execution_mode (lane): general, action, or code_change. The proposal will appear in the Prometheus proposals panel for approval or denial. ' +
             'When used by a team manager, executor_agent_id is REQUIRED and must name a subagent on that same team; approved execution will use that subagent model/context and report back to team chat. ' +
             'For executable proposals, include execution_steps as the approved checklist the executor should follow after approval; dispatch requires at least two steps. ' +
-	          'Use execution_mode=code_change only for Prometheus dev self-edits touching src/ or web-ui/. REQUIRED for src/ edits: details MUST contain these exact section headings: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility".',
+	          'Lanes: general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file/external side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook) and REQUIRES a "## Current state" section proving the gap still exists right now. code_change = Prometheus\'s OWN src/ or web-ui/ self-edit only; REQUIRED headings in details: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Editing one of the user\'s OWN projects is action, never code_change.',
         parameters: {
           type: 'object',
           required: ['type', 'title', 'summary', 'details'],
@@ -887,8 +887,8 @@ export function getCisSystemTools(): any[] {
             },
             execution_mode: {
               type: 'string',
-              enum: ['code_change', 'action', 'review'],
-              description: 'Execution lane. code_change = Prometheus dev self-edit under src/ or web-ui/ only. action = approve and do/trigger/create something once. review = read-mostly verification/audit/report.',
+              enum: ['code_change', 'action', 'general'],
+              description: 'Execution lane. general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file/external side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook); requires a "## Current state" section confirming the gap still exists. code_change = Prometheus\'s OWN src/ or web-ui/ self-edit only (sandboxed). Editing a user project is action, never code_change.',
             },
             priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'How urgent (default: medium)' },
             title: { type: 'string', description: 'Short title shown in the proposals panel (max 120 chars)' },

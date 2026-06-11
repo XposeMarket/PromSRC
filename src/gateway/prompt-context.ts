@@ -11,7 +11,7 @@ import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCateg
 import { searchMemoryIndex } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
-import { loadSoul, loadSubagentSoul } from '../config/soul-loader';
+import { loadSoul, loadSubagentSoul, loadVoiceSoul } from '../config/soul-loader';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
 
 // ─── Prompt-cache assembly ─────────────────────────────────────────────────────
@@ -864,7 +864,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
   const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill tools including skill_list/skill_read/skill_resource_*/skill_inspect/skill_manifest_write/skill_import_bundle/skill_create_bundle, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
-  Use: request_tool_category({"category":"browser"}) — stays active for the whole session. Full reference: read_file('TOOLS.md')
+  Use: request_tool_category({"category":"browser"}) — stays active for the whole session.
 
 [FILE EDIT ROUTING] For workspace edits, activate/use file_ops and follow: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts as the default file editor.
 
@@ -1031,14 +1031,9 @@ export async function buildPersonalityContext(
   const configSoul = loadSoul();
 
   if (profile === 'voice_agent') {
+    const voiceSoulContract = loadVoiceSoul();
     const user = loadFullMemoryProfile(workspacePath, 'USER.md');
     const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
-    const voiceAgentMemory = loadVoiceAgentMemory(workspacePath);
-    const today = new Date().toISOString().split('T')[0];
-    const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
-    const intradayNotes = fs.existsSync(intradayPath) ? processIntradayNotes(fs.readFileSync(intradayPath, 'utf-8')) : '';
     const readCapped = (relativePath: string, maxChars: number): string => {
       try {
         const filePath = path.join(workspacePath, relativePath);
@@ -1068,21 +1063,16 @@ export async function buildPersonalityContext(
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
       [
-        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
+        voiceSoulContract ? `[VOICE_SOUL]\n${voiceSoulContract}` : '',
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
-        business ? `[BUSINESS]\n${business}` : '',
-        memory ? `[MEMORY]\n${memory}` : '',
-        voiceAgentMemory ? `[VOICE_AGENT_MEMORY - voice-only routing and behavior notes]\n${voiceAgentMemory}` : '',
         projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
         boot ? `[BOOT_MD - operational startup/workspace guidance, read-only]\n${boot}` : '',
         selfIndex ? `[SELF_INDEX]\n${selfIndex}` : '',
         voiceSelf ? `[SELF_VOICE_SECTION]\n${voiceSelf}` : '',
       ],
       [
-        cisContext,
         retrievedMemoryCtx,
-        intradayNotes ? `[TODAY_NOTES - read-only working context]\n${intradayNotes}` : '',
         referenceHint,
         skillCtx,
         activeSkillCtx,
@@ -1186,7 +1176,12 @@ export async function buildPersonalityContext(
   }
 
   // ── Path B: autonomous execution — full prompt, no changes ─────────────────
-  const isAutonomous = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'cron' || executionMode === 'heartbeat';
+  // NOTE: 'cron' is intentionally NOT autonomous here — a Prometheus-owned scheduled
+  // run gets its owner's normal (interactive/main-chat) stack. The lean "don't ask
+  // questions, proceed" framing comes from the cron execution-mode block + the
+  // [LAST RUN]/[SINCE LAST RUN] context injected into the run prompt, not from a
+  // stripped personality.
+  const isAutonomous = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'heartbeat';
   if (isAutonomous) {
     const isProposalExecution = executionMode === 'proposal_execution';
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
