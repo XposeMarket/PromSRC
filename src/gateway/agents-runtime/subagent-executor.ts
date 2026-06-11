@@ -14637,6 +14637,173 @@ export async function executeTool(name: string, args: any, workspacePath: string
               return { success: false, command, output: String(output || '').trim(), durationMs: Date.now() - start };
             }
           };
+          const quoteArg = (value: string): string => {
+            const s = String(value);
+            return process.platform === 'win32'
+              ? `"${s.replace(/"/g, '\\"')}"`
+              : `'${s.replace(/'/g, `'\\''`)}'`;
+          };
+          const normalizeSyncExclude = (raw: string): string => {
+            let pattern = String(raw || '').trim().replace(/\\/g, '/');
+            pattern = pattern.replace(/^\/+/, '');
+            if (!pattern || pattern.startsWith('#')) return '';
+            if (pattern.endsWith('/')) return `${pattern}**`;
+            return pattern;
+          };
+          const readSyncExcludes = (): string[] => {
+            const defaults = [
+              'oss-agents/',
+              'workspace/oss agents/',
+              'workspace/oss-agents/',
+              'workspace/audit/',
+              'workspace/downloads/',
+              'workspace/uploads/',
+              'workspace/video-debug/',
+              'workspace/logs/',
+              'workspace/tmp/',
+              'workspace/generated/',
+              'workspace/creative-projects/',
+              '.prometheus/',
+              '.agents/',
+              '.claude/',
+              '*.log',
+              '*.tmp',
+              '*.bak',
+              '*.mp4',
+              '*.mov',
+              '*.webm',
+            ];
+            let configured: string[] = [];
+            try {
+              const ignoreFile = path.join(repoRoot, '.prom-repo-sync-ignore');
+              configured = fsmod.existsSync(ignoreFile)
+                ? String(fsmod.readFileSync(ignoreFile, 'utf-8')).split(/\r?\n/)
+                : [];
+            } catch {}
+            return Array.from(new Set([...defaults, ...configured].map(normalizeSyncExclude).filter(Boolean)));
+          };
+          const findEmbeddedGitRepos = (): string[] => {
+            const status = run('git status --porcelain=v1 --untracked-files=normal', 30_000);
+            if (!status.success) return [];
+            const roots = status.output
+              .split(/\r?\n/)
+              .map((line: string) => line.match(/^\?\?\s+(.+)$/)?.[1])
+              .filter((rel: string | undefined): rel is string => Boolean(rel))
+              .map((rel: string) => rel.replace(/^"|"$/g, '').replace(/\\/g, '/').replace(/\/$/, ''));
+            const found = new Set<string>();
+            const skipNames = new Set(['.git', 'node_modules', 'dist', 'release', 'release-public']);
+            const visit = (abs: string, rel: string, depth: number) => {
+              if (depth > 6) return;
+              let stat: any;
+              try { stat = fsmod.statSync(abs); } catch { return; }
+              if (!stat.isDirectory()) return;
+              if (fsmod.existsSync(path.join(abs, '.git'))) {
+                found.add(`${rel.replace(/\\/g, '/')}/**`);
+                return;
+              }
+              let entries: any[] = [];
+              try { entries = fsmod.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+              for (const entry of entries) {
+                if (!entry.isDirectory() || skipNames.has(entry.name)) continue;
+                visit(path.join(abs, entry.name), `${rel}/${entry.name}`, depth + 1);
+              }
+            };
+            for (const rel of roots) visit(path.join(repoRoot, rel), rel, 0);
+            return Array.from(found);
+          };
+          const parsePorcelainPaths = (output: string): string[] => {
+            const paths = new Set<string>();
+            const records = String(output || '').split(String.fromCharCode(0)).filter(Boolean);
+            for (let i = 0; i < records.length; i += 1) {
+              const record = records[i] || '';
+              if (record.length < 4) continue;
+              const statusCode = record.slice(0, 2);
+              const firstPath = record.slice(3).replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+              if (!firstPath) continue;
+              paths.add(firstPath);
+              if ((statusCode.includes('R') || statusCode.includes('C')) && i + 1 < records.length) {
+                const secondPath = String(records[i + 1] || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+                if (secondPath) paths.add(secondPath);
+                i += 1;
+              }
+            }
+            return Array.from(paths);
+          };
+          const simpleGlobMatches = (pattern: string, value: string): boolean => {
+            const parts = String(pattern || '').split('*');
+            if (parts.length === 1) return value === pattern;
+            let index = 0;
+            if (parts[0] && !value.startsWith(parts[0])) return false;
+            index = parts[0]?.length || 0;
+            for (let i = 1; i < parts.length; i += 1) {
+              const part = parts[i] || '';
+              if (!part) continue;
+              const found = value.indexOf(part, index);
+              if (found < 0) return false;
+              index = found + part.length;
+            }
+            const last = parts[parts.length - 1] || '';
+            return !last || value.endsWith(last) || pattern.endsWith('*');
+          };
+          const syncExcludeMatchesPath = (pattern: string, relPath: string): boolean => {
+            const normalizedPattern = String(pattern || '').replace(/\\/g, '/').replace(/^\/+/, '');
+            const normalizedPath = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+            if (!normalizedPattern || !normalizedPath) return false;
+            if (normalizedPattern.endsWith('/**')) {
+              const root = normalizedPattern.slice(0, -3).replace(/\/$/, '');
+              return normalizedPath === root || normalizedPath.startsWith(`${root}/`);
+            }
+            if (!normalizedPattern.includes('/')) {
+              return simpleGlobMatches(normalizedPattern, path.posix.basename(normalizedPath));
+            }
+            return simpleGlobMatches(normalizedPattern, normalizedPath);
+          };
+          const stageSyncEligibleChanges = () => {
+            const excludes = Array.from(new Set([...readSyncExcludes(), ...findEmbeddedGitRepos()]));
+            const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
+            if (!status.success) return { add: status, excludes };
+            const eligiblePaths = parsePorcelainPaths(status.output)
+              .filter((relPath) => !excludes.some((pattern) => syncExcludeMatchesPath(pattern, relPath)));
+            if (!eligiblePaths.length) {
+              return {
+                add: {
+                  success: true,
+                  command: 'git add -A -- <no sync-eligible changes>',
+                  output: '',
+                  durationMs: 0,
+                },
+                excludes,
+              };
+            }
+            let combinedOutput = '';
+            let totalDurationMs = 0;
+            for (let i = 0; i < eligiblePaths.length; i += 80) {
+              const batch = eligiblePaths.slice(i, i + 80);
+              const command = `git add -A -- ${batch.map(quoteArg).join(' ')}`;
+              const add = run(command, 60_000);
+              totalDurationMs += add.durationMs;
+              if (add.output) combinedOutput += `${combinedOutput ? '\n' : ''}${add.output}`;
+              if (!add.success) {
+                return {
+                  add: {
+                    ...add,
+                    output: combinedOutput || add.output,
+                    durationMs: totalDurationMs,
+                  },
+                  excludes,
+                };
+              }
+            }
+            return {
+              add: {
+                success: true,
+                command: `git add -A -- <${eligiblePaths.length} sync-eligible path${eligiblePaths.length === 1 ? '' : 's'}>`,
+                output: combinedOutput.trim(),
+                durationMs: totalDurationMs,
+              },
+              excludes,
+            };
+          };
 
           // Resolve the local PAT store (config dir, never the repo).
           let configDir = path.join(osmod.homedir(), '.prometheus');
@@ -14736,10 +14903,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
             };
           }
 
-          // prom_repo_push — stage everything first so the diff/auto-message reflects untracked files too.
-          const add = run('git add -A', 60_000);
+          // prom_repo_push/sync — stage eligible files first so the diff/auto-message reflects safe untracked files too.
+          const { add, excludes: syncExcludes } = stageSyncEligibleChanges();
           if (!add.success) {
-            return { name, args, result: `prom_repo_push failed during git add -A:\n${sanitize(add.output) || '(no output)'}`, error: true };
+            return {
+              name,
+              args,
+              result:
+                `${name} failed while staging sync-eligible changes:\n${sanitize(add.output) || '(no output)'}\n\n` +
+                `Active sync excludes included:\n${syncExcludes.slice(0, 40).join('\n') || '(none)'}`,
+              error: true,
+            };
           }
 
           // git diff --cached --quiet exits 0 (success) when there is nothing staged.
@@ -14760,7 +14934,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
               name,
               args,
               result: [
-                `${patSaveNote ? patSaveNote + '\n\n' : ''}📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", "Features added: …; Bug fixes: …"). Do not use a generic placeholder.`,
+                `${patSaveNote ? patSaveNote + '\n\n' : ''}📋 No commit message provided. Staged sync-eligible changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", "Features added: …; Bug fixes: …"). Do not use a generic placeholder.`,
+                `Sync excludes applied from .gitignore/.prom-repo-sync-ignore plus embedded repo detection (${syncExcludes.length} patterns).`,
                 '',
                 '── Files changed (name-status) ──',
                 nameStatus.output || '(none)',

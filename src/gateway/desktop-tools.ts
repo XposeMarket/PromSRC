@@ -24,14 +24,20 @@ import {
   desktopBackgroundPrepareSandbox,
   desktopBackgroundStatus,
 } from './desktop-background.js';
+import os from 'os';
 import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
 import { parseCanonicalKey, canonicalKeyToSendKeys } from './desktop-keys.js';
+import { getPlatformDesktopBackend, hasDesktopBackend } from './desktop-platform.js';
+import type { DesktopCaptureRequest } from './desktop-backend.js';
 
 const execFileAsync = promisify(execFile);
 
 export interface DesktopWindowInfo {
   pid: number;
   processName: string;
+  appDisplayName?: string;
+  bundleId?: string;
+  appPath?: string;
   title: string;
   handle: number;
   /** Window bounds in virtual-screen coordinates when available */
@@ -393,8 +399,15 @@ function getPlatformUnsupportedMessage(feature: string): string {
   return `Desktop tool '${feature}' is not supported on platform: ${PLATFORM}.`;
 }
 
+/** True when the current platform delegates primitives to a non-Windows backend
+ *  (i.e. the Swift helper on macOS). The internal primitives below check this and
+ *  route to getPlatformDesktopBackend() instead of running inline PowerShell. */
+const DELEGATE_TO_BACKEND = PLATFORM !== 'win32';
+
+/** Guard at the top of every public desktop_* function. Allows any platform that
+ *  has a DesktopBackend (win32 inline, darwin via helper); throws on the rest. */
 function ensureWindows(): void {
-  if (PLATFORM !== 'win32') {
+  if (!hasDesktopBackend()) {
     throw new Error(getPlatformUnsupportedMessage('desktop automation'));
   }
 }
@@ -404,7 +417,7 @@ function ensureWindows(): void {
  * Returns null if supported, or a human-readable reason string if not.
  */
 export function getDesktopPlatformStatus(): string | null {
-  if (PLATFORM === 'win32') return null;
+  if (hasDesktopBackend()) return null;
   return getPlatformUnsupportedMessage('desktop automation');
 }
 
@@ -467,6 +480,9 @@ function normalizeWindows(raw: any): DesktopWindowInfo[] {
       const row: DesktopWindowInfo = {
         pid: Number(w?.pid || w?.Id || 0) || 0,
         processName: String(w?.processName || w?.ProcessName || '').trim(),
+        appDisplayName: String(w?.appDisplayName || w?.app_display_name || '').trim() || undefined,
+        bundleId: String(w?.bundleId || w?.bundle_id || '').trim() || undefined,
+        appPath: String(w?.appPath || w?.app_path || '').trim() || undefined,
         title: String(w?.title || w?.MainWindowTitle || '').trim(),
         handle: Number(w?.handle || w?.MainWindowHandle || 0) || 0,
       };
@@ -608,6 +624,9 @@ function normalizeDesktopContext(raw: any): DesktopContextGathered {
       activeWindow = {
         pid: Number(aw.pid || 0) || 0,
         processName: proc || 'unknown',
+        appDisplayName: String(aw.appDisplayName || aw.app_display_name || proc || '').trim() || undefined,
+        bundleId: String(aw.bundleId || aw.bundle_id || '').trim() || undefined,
+        appPath: String(aw.appPath || aw.app_path || '').trim() || undefined,
         title,
         handle: h,
       };
@@ -623,6 +642,15 @@ function normalizeDesktopContext(raw: any): DesktopContextGathered {
  */
 /** Exported for the Win32 DesktopBackend (desktop-platform-win32.ts). */
 export async function gatherDesktopContextInternal(): Promise<DesktopContextGathered> {
+  if (DELEGATE_TO_BACKEND) {
+    const ctx = await getPlatformDesktopBackend().gatherContext();
+    return {
+      monitors: ctx.monitors,
+      virtualScreen: ctx.virtualScreen,
+      windows: ctx.windows,
+      activeWindow: ctx.activeWindow,
+    };
+  }
   const script = `
 ${PS_DPI_AWARE_HEADER}
 Add-Type -AssemblyName System.Windows.Forms
@@ -786,10 +814,24 @@ export async function desktopDoctor(sessionId: string): Promise<string> {
 
   try {
     ensureWindows();
-    ok('Platform', 'Windows desktop automation is supported');
+    ok('Platform', `${PLATFORM} desktop automation is supported`);
   } catch (err: any) {
     fail('Platform', err?.message || String(err));
     return lines.join('\n');
+  }
+
+  // macOS: report TCC permission status (Screen Recording + Accessibility), which
+  // gate capture and input respectively. These must be granted in System Settings.
+  if (DELEGATE_TO_BACKEND) {
+    try {
+      const perms = await getPlatformDesktopBackend().checkPermissions();
+      for (const p of perms) {
+        if (p.granted) ok(`Permission: ${p.name}`, 'granted');
+        else fail(`Permission: ${p.name}`, p.remedy || 'not granted');
+      }
+    } catch (err: any) {
+      warn('Permissions', err?.message || String(err));
+    }
   }
 
   let ctx: DesktopContextGathered | null = null;
@@ -890,6 +932,7 @@ export async function getDesktopActiveWindowInfo(): Promise<DesktopWindowInfo | 
 /** Lightweight monitor list for coordinate conversion (desktop_click / scroll).
  *  Exported for the Win32 DesktopBackend (desktop-platform-win32.ts). */
 export async function enumerateMonitorsInternal(): Promise<DesktopMonitorInfo[]> {
+  if (DELEGATE_TO_BACKEND) return getPlatformDesktopBackend().enumerateMonitors();
   const script = `
 ${PS_DPI_AWARE_HEADER}
 Add-Type -AssemblyName System.Windows.Forms
@@ -940,6 +983,45 @@ export async function captureScreenshotInternal(
   // in virtual coordinates (not physical pixels). Capture is DPI-aware.
   const modeStr = mode.kind === 'all' ? 'all' : mode.kind === 'primary' ? 'primary' : 'monitor';
   const midx = mode.kind === 'monitor' ? mode.index : 0;
+
+  if (DELEGATE_TO_BACKEND) {
+    let req: DesktopCaptureRequest;
+    if (cropRegion) {
+      const [x1, y1, x2, y2] = cropRegion;
+      req = { kind: 'region', left: Math.min(x1, x2), top: Math.min(y1, y2),
+              width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
+    } else if (mode.kind === 'monitor') {
+      req = { kind: 'monitor', index: mode.index };
+    } else if (mode.kind === 'primary') {
+      req = { kind: 'primary' };
+    } else {
+      req = { kind: 'all' };
+    }
+    const result = await getPlatformDesktopBackend().capture(req);
+    // Downscale physical -> logical pixels so capture pixels == virtual-screen
+    // coordinates (1:1), matching the Windows DPI-aware assumption that all the
+    // downstream coordinate/SOM/verification math relies on. (Retina seam.)
+    let buf = result.png;
+    const logicalW = result.bounds.width || 1;
+    const logicalH = result.bounds.height || 1;
+    if (result.devicePixelRatio && Math.abs(result.devicePixelRatio - 1) > 0.01) {
+      const img = await Jimp.read(buf);
+      img.resize(logicalW, logicalH, Jimp.RESIZE_BILINEAR);
+      buf = await img.getBufferAsync(Jimp.MIME_PNG);
+    }
+    const outPath = path.join(os.tmpdir(), `prometheus-desktop-${crypto.randomUUID()}.png`);
+    fs.writeFileSync(outPath, buf);
+    return {
+      path: outPath,
+      width: logicalW,
+      height: logicalH,
+      left: result.bounds.left,
+      top: result.bounds.top,
+      captureMode: modeStr,
+      captureMonitorIndex: mode.kind === 'monitor' ? mode.index : undefined,
+    };
+  }
+
   const script = `
 ${PS_DPI_AWARE_HEADER}
 Add-Type -AssemblyName System.Windows.Forms
@@ -1071,6 +1153,7 @@ function findWindowsByName(allWindows: DesktopWindowInfo[], query: string): Desk
 export async function focusWindowHandle(handle: number): Promise<boolean> {
   const h = Number(handle || 0);
   if (!Number.isFinite(h) || h === 0) return false;
+  if (DELEGATE_TO_BACKEND) return getPlatformDesktopBackend().focusWindow(h);
   // Windows restricts SetForegroundWindow from background processes.
   // Multi-step sequence for focus-stealing and stubborn windows.
   const script = `
@@ -1379,7 +1462,10 @@ export async function resolveDesktopActionPoint(
       if (!liveTarget) {
         return { ok: false, message: `${label}: target window from screenshot is no longer visible. Capture a fresh desktop_window_screenshot.` };
       }
-      if (!sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
+      // On macOS, input is delivered to the visible window without requiring it
+      // to be the frontmost/active window (background input — see Hermes model),
+      // so the Windows-style "must be active" guard does not apply.
+      if (!DELEGATE_TO_BACKEND && !sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
         return {
           ok: false,
           message: `${label}: target window is not active (${shortWindowLabel(ctx.activeWindow)} is active). Use desktop_window_screenshot with focus_first=true and the new screenshot_id before clicking.`,
@@ -1445,7 +1531,8 @@ export async function resolveDesktopActionPoint(
     if (!liveTarget) {
       return { ok: false, message: `${label}: target window is no longer visible. Capture a fresh desktop_window_screenshot.` };
     }
-    if (!sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
+    // macOS: background input doesn't require the window to be active (Hermes model).
+    if (!DELEGATE_TO_BACKEND && !sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
       return {
         ok: false,
         message: `${label}: target window is not active (${shortWindowLabel(ctx.activeWindow)} is active). Use desktop_window_screenshot with focus_first=true and the new screenshot_id before clicking.`,
@@ -1627,6 +1714,10 @@ export function resolveDesktopVerificationMode(
 export async function desktopMovePointer(x: number, y: number, settleMs: number = 40): Promise<void> {
   const xx = Math.floor(Number(x));
   const yy = Math.floor(Number(y));
+  if (DELEGATE_TO_BACKEND) {
+    await getPlatformDesktopBackend().movePointer(xx, yy);
+    return;
+  }
   const waitMs = Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 40)));
   const script = `
 ${PS_DPI_AWARE_HEADER}
@@ -1643,6 +1734,15 @@ export async function desktopPerformClickAtCurrent(
   repeat: number,
   modifier?: 'shift' | 'ctrl' | 'alt',
 ): Promise<void> {
+  if (DELEGATE_TO_BACKEND) {
+    const clicks = Math.max(1, Math.min(4, Math.floor(Number(repeat) || 1)));
+    await getPlatformDesktopBackend().click(
+      button === 'right' ? 'right' : 'left',
+      clicks,
+      modifier ? [modifier] : [],
+    );
+    return;
+  }
   const btn = button === 'right' ? 'right' : 'left';
   const downFlag = btn === 'right' ? '0x0008' : '0x0002';
   const upFlag = btn === 'right' ? '0x0010' : '0x0004';
@@ -1669,6 +1769,11 @@ export async function desktopPerformScrollAtCurrent(
   delta: number,
   horizontal: boolean,
 ): Promise<void> {
+  if (DELEGATE_TO_BACKEND) {
+    const d = Math.floor(Number(delta) || 0);
+    await getPlatformDesktopBackend().scroll(horizontal ? d : 0, horizontal ? 0 : d);
+    return;
+  }
   const flag = horizontal ? '0x1000' : '0x0800';
   const script = `
 ${PS_DPI_AWARE_HEADER}
@@ -1690,6 +1795,10 @@ export async function desktopPerformDragInternal(
   steps: number,
 ): Promise<void> {
   const st = Math.max(2, Math.min(100, Math.floor(Number(steps) || 20)));
+  if (DELEGATE_TO_BACKEND) {
+    await getPlatformDesktopBackend().drag(fx, fy, tx, ty, st);
+    return;
+  }
   const script = `
 ${PS_DPI_AWARE_HEADER}
 ${PS_INPUTAPI_HEADER}
@@ -2202,6 +2311,10 @@ export async function windowControlInternal(
   action: 'minimize' | 'maximize' | 'restore' | 'close',
 ): Promise<void> {
   const h = Math.floor(Number(handle));
+  if (DELEGATE_TO_BACKEND) {
+    await getPlatformDesktopBackend().windowControl(h, action);
+    return;
+  }
   const command = action === 'maximize' ? 3 : action === 'minimize' ? 6 : action === 'restore' ? 9 : 0;
   const script = action === 'close'
     ? `
@@ -2380,6 +2493,10 @@ function toSendKeysSpec(keyRaw: string): string {
  *  Extracted from desktopType so the Win32 DesktopBackend can wrap it. Caller
  *  handles length limits, macro recording, and return formatting. */
 export async function typeTextInternal(payload: string): Promise<void> {
+  if (DELEGATE_TO_BACKEND) {
+    await getPlatformDesktopBackend().typeText(payload);
+    return;
+  }
   const escaped = psSingleQuote(payload);
   // Read current clipboard content so we can restore it after pasting.
   // Keep payload on clipboard briefly after Ctrl+V to avoid restore/paste races.
@@ -2466,7 +2583,11 @@ export async function desktopType(text: string): Promise<string> {
 
 export async function desktopPressKey(key: string): Promise<string> {
   ensureWindows();
-  await pressSendKeysSpecInternal(toSendKeysSpec(key));
+  if (DELEGATE_TO_BACKEND) {
+    await getPlatformDesktopBackend().pressKey(parseCanonicalKey(key));
+  } else {
+    await pressSendKeysSpecInternal(toSendKeysSpec(key));
+  }
   _macroRecord({ type: 'key', text: key });
   markDesktopStateChanged();
   return `Pressed key: ${key || 'Enter'}.`;
@@ -2474,6 +2595,7 @@ export async function desktopPressKey(key: string): Promise<string> {
 
 /** Raw clipboard text read (empty string if no text). Exported for Win32Backend. */
 export async function getClipboardTextInternal(): Promise<string> {
+  if (DELEGATE_TO_BACKEND) return getPlatformDesktopBackend().getClipboard();
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
 if ([System.Windows.Forms.Clipboard]::ContainsText()) {
@@ -2485,6 +2607,10 @@ if ([System.Windows.Forms.Clipboard]::ContainsText()) {
 
 /** Raw clipboard text write. Exported for Win32Backend. */
 export async function setClipboardTextInternal(text: string): Promise<void> {
+  if (DELEGATE_TO_BACKEND) {
+    await getPlatformDesktopBackend().setClipboard(text);
+    return;
+  }
   const escaped = psSingleQuote(text);
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -2826,6 +2952,14 @@ export async function desktopGetAccessibilityTree(
   const safeDepth = Math.min(Math.max(Number(maxDepth) || 5, 1), 10);
   const safeMax = Math.min(Math.max(Number(maxNodes) || 300, 10), 1000);
 
+  if (DELEGATE_TO_BACKEND) {
+    return getPlatformDesktopBackend().getAccessibilityTree({
+      windowName: windowName && String(windowName).trim() ? String(windowName).trim() : undefined,
+      depth: safeDepth,
+      maxNodes: safeMax,
+    });
+  }
+
   // Find the target window handle (or 0 = active window)
   let handle = 0;
   if (windowName && String(windowName).trim()) {
@@ -3116,6 +3250,89 @@ try {
   return Number(launchOut.replace('LAUNCHED:', '').trim()) || 0;
 }
 
+interface DarwinLaunchResolution {
+  request: { name?: string; path?: string; bundleId?: string };
+  label: string;
+  matchHints: string[];
+}
+
+async function resolveDarwinLaunchRequest(
+  app: string,
+  appId?: string,
+): Promise<DarwinLaunchResolution> {
+  const rawApp = String(app || '').trim();
+  const rawAppId = String(appId || '').trim();
+  if (rawApp) {
+    const isPath = rawApp.startsWith('/') || /[\\/]/.test(rawApp);
+    const request = isPath ? { path: rawApp } : { name: rawApp };
+    const hint = path.parse(rawApp).name || rawApp;
+    return {
+      request,
+      label: rawApp,
+      matchHints: [rawApp, hint].map((value) => String(value || '').toLowerCase()).filter(Boolean),
+    };
+  }
+  if (!rawAppId) {
+    throw new Error('app or app_id is required.');
+  }
+  const lowerId = rawAppId.toLowerCase();
+  if (lowerId.startsWith('bundle:')) {
+    const bundleId = rawAppId.slice('bundle:'.length).trim();
+    if (!bundleId) throw new Error('bundle app_id is missing its bundle identifier.');
+    return {
+      request: { bundleId },
+      label: rawAppId,
+      matchHints: [bundleId, bundleId.split('.').pop() || ''].map((value) => String(value || '').toLowerCase()).filter(Boolean),
+    };
+  }
+  if (lowerId.startsWith('proc:')) {
+    const processName = rawAppId.slice('proc:'.length).trim();
+    if (!processName) throw new Error('proc app_id is missing its process name.');
+    return {
+      request: { name: processName },
+      label: rawAppId,
+      matchHints: [processName].map((value) => String(value || '').toLowerCase()).filter(Boolean),
+    };
+  }
+
+  const installed = await resolveInstalledAppLaunch(rawAppId).catch(() => null);
+  if (installed) {
+    const target = String(installed.method.target || '').trim();
+    const isBundlePath = /\.app$/i.test(target) || target.startsWith('/');
+    return {
+      request: isBundlePath ? { path: target } : { name: installed.app.displayName },
+      label: `${installed.app.displayName} [${installed.app.id}]`,
+      matchHints: [
+        installed.app.displayName,
+        ...installed.app.aliases,
+        ...installed.app.processNameHints,
+        ...installed.app.windowTitleHints,
+        target ? path.parse(target).name : '',
+      ].map((value) => String(value || '').toLowerCase()).filter(Boolean),
+    };
+  }
+
+  const ctx = await gatherDesktopContextInternal();
+  const match = ctx.windows.find((w) => appIdForWindow(w).toLowerCase() === lowerId);
+  if (match) {
+    const identity = launchIdentityForWindow(match);
+    return {
+      request: identity,
+      label: `${match.appDisplayName || match.processName} [${rawAppId}]`,
+      matchHints: [
+        match.bundleId,
+        match.appDisplayName,
+        match.processName,
+        match.title,
+      ].map((value) => String(value || '').toLowerCase()).filter(Boolean),
+    };
+  }
+
+  throw new Error(
+    `Unknown macOS app_id "${rawAppId}". Use desktop_list_apps to get a launchable bundle:... or proc:... app_id on macOS.`,
+  );
+}
+
 /**
  * Launch a desktop application by name or path and wait for a window to appear.
  * Returns a status string with the window handle once visible.
@@ -3131,6 +3348,42 @@ export async function desktopLaunchApp(
   const rawAppId = String(appId || '').trim();
   const rawArgs = String(appArgs || '').trim();
   if (!rawApp && !rawAppId) return 'ERROR: app or app_id is required.';
+
+  if (DELEGATE_TO_BACKEND) {
+    let resolved: DarwinLaunchResolution;
+    try {
+      resolved = await resolveDarwinLaunchRequest(rawApp, rawAppId);
+    } catch (e: any) {
+      return `ERROR: ${e?.message || e}`;
+    }
+    try {
+      await getPlatformDesktopBackend().launchApp(resolved.request);
+    } catch (e: any) {
+      return `ERROR: Failed to launch '${resolved.label}': ${e?.message || e}`;
+    }
+    // Poll briefly for a window from the launched app to confirm visibility.
+    const wait = clampInt(waitMs, 200, 60000, 6000);
+    const deadline = Date.now() + wait;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 400));
+      const windows = await listWindowsInternal().catch(() => [] as DesktopWindowInfo[]);
+      const match = windows.find((w) =>
+        (resolved.request.bundleId && String(w.bundleId || '').trim().toLowerCase() === resolved.request.bundleId.toLowerCase())
+        || resolved.matchHints.some((hint) =>
+          hint && (
+            String(w.bundleId || '').toLowerCase().includes(hint)
+            || String(w.appDisplayName || '').toLowerCase().includes(hint)
+            || w.processName.toLowerCase().includes(hint)
+            || w.title.toLowerCase().includes(hint)
+          ),
+        ),
+      );
+      if (match) {
+        return `Launched '${resolved.label}'. Window: "${match.title}" (${match.appDisplayName || match.processName}, handle=${match.handle}).`;
+      }
+    }
+    return `Launched '${resolved.label}' (no matching window detected within ${wait}ms; it may still be starting or may not expose a normal on-screen window yet).`;
+  }
 
   let launchTarget = rawApp;
   let launchArgs = rawArgs;
@@ -3530,6 +3783,16 @@ export async function desktopDiffScreenshot(sessionId: string): Promise<string> 
 export async function desktopGetWindowText(windowName?: string): Promise<string> {
   ensureWindows();
   const query = String(windowName || '').trim();
+  if (DELEGATE_TO_BACKEND) {
+    try {
+      const out = await desktopGetAccessibilityTree(query || undefined, 6, 500);
+      const text = String(out || '').trim();
+      if (!text) return 'No text content found in window.';
+      return text.slice(0, 8000);
+    } catch (e: any) {
+      return `ERROR: ${e?.message || e}`;
+    }
+  }
   const script = `
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -3845,12 +4108,34 @@ function appIdForProcess(processName: string): string {
   return `proc:${String(processName || 'unknown').toLowerCase()}`;
 }
 
+function appIdForWindow(window: Pick<DesktopWindowInfo, 'processName' | 'bundleId'>): string {
+  const bundleId = String(window.bundleId || '').trim().toLowerCase();
+  if (bundleId) return `bundle:${bundleId}`;
+  return appIdForProcess(window.processName);
+}
+
+function launchIdentityForWindow(window: Pick<DesktopWindowInfo, 'processName' | 'appDisplayName' | 'bundleId' | 'appPath'>): {
+  bundleId?: string;
+  path?: string;
+  name?: string;
+} {
+  const bundleId = String(window.bundleId || '').trim();
+  const appPath = String(window.appPath || '').trim();
+  const appDisplayName = String(window.appDisplayName || '').trim();
+  const processName = String(window.processName || '').trim();
+  return {
+    bundleId: bundleId || undefined,
+    path: appPath || undefined,
+    name: appDisplayName || processName || undefined,
+  };
+}
+
 function toDesktopWindowState(w: DesktopWindowInfo, activeHandle: number): DesktopWindowState {
   const handle = normalizedWindowHandle(w);
   return {
     windowId: windowIdForHandle(handle),
     handle,
-    appId: appIdForProcess(w.processName),
+    appId: appIdForWindow(w),
     processName: w.processName,
     pid: Number(w.pid) || 0,
     title: w.title,
@@ -3899,7 +4184,7 @@ export async function resolveCanonicalWindow(
 
   if (selector.app_id) {
     const appId = String(selector.app_id).trim().toLowerCase();
-    const matches = windows.filter((w) => appIdForProcess(w.processName) === appId);
+    const matches = windows.filter((w) => appIdForWindow(w) === appId || appIdForProcess(w.processName) === appId);
     if (matches.length === 1) return { ok: true, window: matches[0] };
     if (matches.length > 1) {
       const active = matches.find((w) => normalizedWindowHandle(w) === normalizedWindowHandle(ctx.activeWindow));
@@ -3950,10 +4235,17 @@ export async function desktopListApps(
   // Group running windows by process.
   const runningByApp = new Map<string, DesktopAppState>();
   for (const w of ctx.windows) {
-    const appId = appIdForProcess(w.processName);
+    const appId = appIdForWindow(w);
     let app = runningByApp.get(appId);
     if (!app) {
-      app = { appId, displayName: w.processName, processName: w.processName, isRunning: true, windows: [] };
+      app = {
+        appId,
+        displayName: String(w.appDisplayName || w.processName || '').trim() || w.processName,
+        processName: w.processName,
+        executablePath: w.appPath,
+        isRunning: true,
+        windows: [],
+      };
       runningByApp.set(appId, app);
     }
     app.windows.push(toDesktopWindowState(w, activeHandle));

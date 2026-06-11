@@ -1026,9 +1026,10 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_push',
         description:
-          'Dev-only: stage ALL working-tree changes (git add -A), commit them, and push to origin on the current branch. ' +
+          'Dev-only: stage all sync-eligible working-tree changes, commit them, and push to origin on the current branch. ' +
           'Use this to sync local edits up to GitHub so another machine (e.g. Mac ↔ desktop) can pull them. ' +
-          'COMMIT MESSAGE: if the user gave an explicit message, pass it verbatim. If they did NOT (e.g. "just push my changes"), call this tool WITHOUT a message first — it stages everything and returns the real git diff/stat. Read that diff, then call again with a concise, accurate message that summarizes the ACTUAL changes, e.g. "Fix: voice debug crash on reconnect", "Features added: mobile model badge; Bug fixes: mobile router back nav". Never invent a generic placeholder — base it on the diff. ' +
+          'SYNC EXCLUDES: respects .gitignore plus repo-local .prom-repo-sync-ignore and automatically avoids embedded Git repositories/scratch folders, so local downloaded agent repos, audit/debug logs, media, and bulky workspace artifacts are not pushed by accident. ' +
+          'COMMIT MESSAGE: if the user gave an explicit message, pass it verbatim. If they did NOT (e.g. "just push my changes"), call this tool WITHOUT a message first — it stages eligible changes and returns the real git diff/stat. Read that diff, then call again with a concise, accurate message that summarizes the ACTUAL changes, e.g. "Fix: voice debug crash on reconnect", "Features added: mobile model badge; Bug fixes: mobile router back nav". Never invent a generic placeholder — base it on the diff. ' +
           'AUTH: uses a saved GitHub PAT (GITHUB_PAT/GITHUB_TOKEN env var, or one previously saved via set_pat) when available, otherwise the machine\'s git credential helper. If auth fails and no PAT is available, the tool tells you to ask the user for a PAT and re-call with set_pat. ' +
           'If there are no local changes, it still pushes any unpushed commits (no message needed). Public builds disable this tool.',
         parameters: {
@@ -1066,7 +1067,8 @@ export function getCisSystemTools(): any[] {
         name: 'prom_repo_sync',
         description:
           'Dev-only: the SAFE way to sync edits between machines (e.g. Mac ↔ desktop) without overwriting anything. ' +
-          'It (1) stages + commits ALL local changes, (2) git pull --no-edit to MERGE in whatever the other machine pushed, then (3) pushes the combined result. ' +
+          'It (1) stages + commits all sync-eligible local changes, (2) git pull --no-edit to MERGE in whatever the other machine pushed, then (3) pushes the combined result. ' +
+          'SYNC EXCLUDES: respects .gitignore plus repo-local .prom-repo-sync-ignore and automatically avoids embedded Git repositories/scratch folders, so local downloaded agent repos, audit/debug logs, media, and bulky workspace artifacts are not pushed by accident. ' +
           'Because step 2 merges, edits to DIFFERENT files (e.g. mobile pages here + prompt-context on the other machine) combine automatically — nothing is lost. ' +
           'If the SAME lines of the SAME file were changed on both machines, git reports a real conflict: the merge is aborted (your local commit stays safe, nothing is pushed) and the conflicting files are returned for you to resolve. ' +
           'COMMIT MESSAGE: same as prom_repo_push — pass the user\'s message verbatim, or omit it to first get the diff back and author an accurate one. ' +

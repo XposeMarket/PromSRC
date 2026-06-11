@@ -26,6 +26,7 @@ import type {
   DesktopCanonicalKey,
   DesktopWindowAction,
   DesktopPermissionStatus,
+  DesktopAppLaunchRequest,
 } from './desktop-backend.js';
 import { DesktopUnsupportedError } from './desktop-backend.js';
 import {
@@ -157,8 +158,12 @@ export class Win32Backend implements DesktopBackend {
   async windowControl(handle: number, action: DesktopWindowAction): Promise<void> {
     await windowControlInternal(handle, action);
   }
-  async launchApp(name: string): Promise<void> {
-    await launchProcessInternal(name, '');
+  async launchApp(request: DesktopAppLaunchRequest): Promise<void> {
+    const target = String(request.path || request.name || '').trim();
+    if (!target) {
+      throw new Error('launchApp requires a name or path on Windows.');
+    }
+    await launchProcessInternal(target, '');
   }
   async getAccessibilityTree(opts: { windowName?: string; depth: number; maxNodes: number }): Promise<string> {
     return desktopGetAccessibilityTree(opts.windowName, opts.depth, opts.maxNodes);

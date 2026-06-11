@@ -369,6 +369,75 @@ function finalizeAccumulator(acc: InstalledAppAccumulator, generatedAt: number, 
   };
 }
 
+/** Recursively collect .app bundles (one level into subfolders, e.g. Utilities). */
+function collectAppBundles(dir: string, depth: number, out: string[]): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.name.endsWith('.app')) {
+      out.push(full);
+    } else if (entry.isDirectory() && depth > 0 && !entry.name.endsWith('.app')) {
+      collectAppBundles(full, depth - 1, out);
+    }
+  }
+}
+
+/** macOS installed-app discovery: scan the standard Applications directories for
+ *  .app bundles. Launch is handled separately via `open -a` in the desktop
+ *  backend; these records exist so list/find/search tools work on macOS. */
+async function scanInstalledAppsFromMacOS(): Promise<InstalledAppInventory> {
+  const generatedAt = Date.now();
+  const aliasStore = loadAliasStore();
+  const home = process.env.HOME || '';
+  const searchDirs = [
+    '/Applications',
+    '/Applications/Utilities',
+    '/System/Applications',
+    '/System/Applications/Utilities',
+    home ? path.join(home, 'Applications') : '',
+  ].filter(Boolean);
+
+  const bundlePaths = new Set<string>();
+  for (const dir of searchDirs) {
+    const found: string[] = [];
+    collectAppBundles(dir, 1, found);
+    found.forEach((p) => bundlePaths.add(p));
+  }
+
+  const apps: InstalledAppRecord[] = [];
+  const seenIds = new Set<string>();
+  for (const bundlePath of bundlePaths) {
+    const displayName = path.basename(bundlePath).replace(/\.app$/i, '');
+    if (!displayName) continue;
+    const id = makeInstalledAppId({ executablePath: bundlePath, displayName });
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    const lower = displayName.toLowerCase();
+    const manualAliases = aliasStore[id] || [];
+    apps.push({
+      id,
+      displayName,
+      aliases: uniqStrings([displayName, ...manualAliases]).sort((a, b) => a.localeCompare(b)),
+      executablePath: bundlePath,
+      processNameHints: [lower],
+      windowTitleHints: [displayName],
+      installSources: [`macos:${path.dirname(bundlePath)}`],
+      // On macOS we launch via `open -a <name>` (or the bundle path); record the
+      // bundle path as an 'exe' method for parity with the Windows shape.
+      launchMethods: [{ type: 'exe', target: bundlePath }],
+      lastScannedAt: generatedAt,
+    });
+  }
+
+  apps.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return { generatedAt, apps };
+}
+
 async function scanInstalledAppsFromWindows(): Promise<InstalledAppInventory> {
   const script = `
 $ErrorActionPreference = 'SilentlyContinue'
@@ -536,7 +605,9 @@ export async function getInstalledAppsInventory(options?: InventoryOptions): Pro
   if (!refresh && !inventoryNeedsRefresh(cached, maxAgeMs)) {
     return cached as InstalledAppInventory;
   }
-  const fresh = await scanInstalledAppsFromWindows();
+  const fresh = process.platform === 'darwin'
+    ? await scanInstalledAppsFromMacOS()
+    : await scanInstalledAppsFromWindows();
   saveInventoryCache(fresh);
   return fresh;
 }

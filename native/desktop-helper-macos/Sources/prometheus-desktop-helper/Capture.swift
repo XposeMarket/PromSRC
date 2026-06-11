@@ -70,6 +70,10 @@ func windowInfoList() -> [[String: Any]] {
         let number = (w[kCGWindowNumber as String] as? Int) ?? 0
         let owner = (w[kCGWindowOwnerName as String] as? String) ?? ""
         let title = (w[kCGWindowName as String] as? String) ?? ""
+        let app = pid > 0 ? NSRunningApplication(processIdentifier: pid_t(pid)) : nil
+        let displayName = app?.localizedName ?? owner
+        let bundleId = app?.bundleIdentifier ?? ""
+        let bundleURL = app?.bundleURL?.path ?? ""
         var left = 0, top = 0, width = 0, height = 0
         if let bdict = w[kCGWindowBounds as String] as? [String: Any],
            let b = CGRect(dictionaryRepresentation: bdict as CFDictionary) {
@@ -81,6 +85,9 @@ func windowInfoList() -> [[String: Any]] {
         out.append([
             "pid": pid,
             "processName": owner,
+            "appDisplayName": displayName,
+            "bundleId": bundleId,
+            "appPath": bundleURL,
             "title": title,
             "handle": number,
             "left": left, "top": top, "width": width, "height": height
