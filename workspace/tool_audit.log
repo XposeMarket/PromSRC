@@ -42760,3 +42760,14 @@ ai-surface-smoke-research - Run Raul's browser/desktop test workflow: focus Code
 Updating 8fbfeb7..cd21398
 
 From h
+[2026-06-11T01:08:05.225Z] FAIL prom_repo_sync({"message":"Sync before gateway restart (tool_audit.log conflict)"}) => ❌ prom_repo_sync: pull/merge failed.
+Your local commit "Sync before gateway restart (tool_audit.log conflict)" is safe locally; nothing was pushed.
+
+From https://github.com/XposeMarket/promsrc
+ * bran
+[2026-06-11T01:08:13.407Z] OK gateway_restart({"reason":"User requested pull + restart (pull blocked by divergent branches + tool_audit.log; restart proceeds with current code)","title":"Gateway restart after attempted pull","summary":"Pull faile) => ✅ Quick gateway restart initiated. No npm build was run.
+[2026-06-11T01:39:00.120Z] FAIL prom_repo_pull({}) => ❌ prom_repo_pull failed:
+From https://github.com/XposeMarket/promsrc
+ * branch            main       -> FETCH_HEAD
+hint: You have divergent branches and need to specify how to reconcile them.
+hint: Yo
