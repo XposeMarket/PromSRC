@@ -10,3 +10,20 @@ Mobile voice mode panel now matches composer/tab-bar liquid glass. Edits to web-
 ### [DEV_EDIT_COMPLETE] 2026-06-11T01:03:19.208Z
 _Source: Mobile chat session; session: mobile_mq8s9dff_m4e5le; origin: Mobile app_
 Mobile voice mode panel reshaped in web-ui/src/styles/mobile.css: (1) .pm-composer.is-voice-active is now a rounded inset floating card (left/right:10px, bottom above tabbar+22px, border-radius:22px, composer glass gradient + border + shadow, max-height min(64vh,560px)) instead of full-bleed square; ::before reduced to a contained warm glow (removed full-bleed mask/specular sheet). (2) .pm-chat-voice-shell min-height 306px→248px, border-radius inherit. (3) Controls tightened: inline padding 8/18→4/10, grid 42px→36px col + gap 8→7 + margin 12/4→6/2, control-btn min-height 42→36 font 13→12 svg 17→16, settings-icon 42→36, mode-toggle min-height 42→36 + buttons 34→28 padding 13→11 font 13→12. Synced + reloaded. dev_edit_complete.
+
+### [DISCOVERY] 2026-06-11T01:22:31.570Z
+_Source: Mobile chat session; session: mobile_mq8s9dff_m4e5le; origin: Mobile app_
+Mobile drawer "new chat not appearing until app restart" investigation (web-ui/src/mobile/mobile-shell.js):
+- Drawer DOM + _renderDrawerSessions run ONCE at createMobileShell mount (line 518). openDrawer() (line 915) only adds .open class — it does NOT re-fetch sessions. So a chat created mid-session doesn't show until the shell rebuilds (app restart on iOS PWA standalone, since no pull-to-refresh).
+- New-chat flow (mobile-router onNewChat line 186-212) calls invalidateMobileDrawerSessions('mobile') which resets paging cache, but nothing re-renders the open drawer.
+- refreshMobileDrawerSessions({force}) EXISTS (line 74) and correctly resets page state + re-renders, BUT it guards on `_drawerCallbacks` which is declared (line 72) and NEVER assigned anywhere -> dead code, always early-returns.
+Fix plan: (1) assign _drawerCallbacks where drawer is wired; (2) make openDrawer() call refreshMobileDrawerSessions() so opening always pulls fresh sessions (solves the bug with no gesture); (3) add pull-to-refresh drag gesture on _drawerEl (scroll container) for iOS PWA. All in mobile-shell.js. Drawer scrolls via _drawerEl (infinite-scroll uses _drawerEl.scrollTop, line 717).
+
+### [DEV_EDIT_COMPLETE] 2026-06-11T01:24:37.216Z
+_Source: Mobile chat session; session: mobile_mq8s9dff_m4e5le; origin: Mobile app_
+Fixed mobile drawer "new chat doesn't appear until app restart" in web-ui/src/mobile/mobile-shell.js. Root cause: drawer sessions render only once at createMobileShell mount; openDrawer() only toggled .open and never re-fetched; the existing refreshMobileDrawerSessions() was dead code because _drawerCallbacks was declared but never assigned. Fix: (1) assign _drawerCallbacks={onOpenSession,loadSessions,searchSessions,onNewChat} at the wiring point; (2) openDrawer() now calls refreshMobileDrawerSessions() so opening always pulls fresh sessions; (3) added _wireDrawerPullToRefresh() — drag down at top of drawer (touchstart/move/end on _drawerEl, threshold 64px) shows an inline spinner and calls refreshMobileDrawerSessions({force:true}); injects pm-ptr-spin keyframes once. Verified webui_sync_check, applied live with mobile reload.
+
+### [TRADING_REMINDER] 2026-06-11T02:29:04.796Z
+_Source: Mobile chat session; session: mobile_mq8dsz24_x6fac0; origin: Desktop app_
+Reminder logged at 10:30 PM (June 10, 2026): Raul is still daytrading after 5 PM, reported still up $189 after getting greedy again. Gentle reminder issued.
+_Related task: daytrade_afterhours_

@@ -69,6 +69,112 @@ let _drawerSearch = '';
 let _drawerSearchTimer = null;
 let _drawerSearchSeq = 0;
 let _tabResizeHandlerBound = false;
+let _drawerCallbacks = null;
+let _drawerRefreshing = false;
+async function refreshMobileDrawerSessions({ force = false } = {}) {
+  if (!_drawerEl || !_drawerCallbacks) return;
+  if (_drawerSearch) return;
+  if (_drawerRefreshing && !force) return;
+  _drawerRefreshing = true;
+  try {
+    _resetDrawerPageState(_currentDrawerSessionChannel());
+    await _renderDrawerSessions(_drawerCallbacks);
+  } catch (err) {
+    console.warn('[mobile drawer] refresh failed', err);
+  } finally {
+    _drawerRefreshing = false;
+  }
+}
+
+// Drag-down-to-refresh for the drawer session list. Installed PWAs in iOS
+// standalone mode have no native pull-to-refresh, so this gives the user a way
+// to force-reload sessions by dragging the panel down from the top.
+let _pullToRefreshBound = false;
+function _wireDrawerPullToRefresh() {
+  if (!_drawerEl || _pullToRefreshBound) return;
+  _pullToRefreshBound = true;
+
+  // Inject the spinner keyframes once (avoids depending on the CSS bundle).
+  if (!document.getElementById('pm-ptr-style')) {
+    const st = document.createElement('style');
+    st.id = 'pm-ptr-style';
+    st.textContent = '@keyframes pm-ptr-spin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(st);
+  }
+
+  const THRESHOLD = 64;   // px of pull needed to trigger a refresh
+  const MAX_PULL = 96;    // clamp so the indicator never overshoots
+  let startY = 0;
+  let pulling = false;
+  let armed = false;
+
+  // Lightweight spinner shown above the list while pulling/refreshing.
+  const indicator = document.createElement('div');
+  indicator.className = 'pm-drawer-ptr';
+  indicator.setAttribute('aria-hidden', 'true');
+  indicator.style.cssText = [
+    'position:absolute', 'top:0', 'left:0', 'right:0',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'height:0', 'overflow:hidden', 'pointer-events:none',
+    'opacity:0', 'transition:opacity .15s ease', 'z-index:5',
+  ].join(';');
+  indicator.innerHTML = '<span class="pm-drawer-ptr-spinner" style="width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,.25);border-top-color:var(--pm-orange,#ea6a1f);display:inline-block"></span>';
+  try { _drawerEl.appendChild(indicator); } catch {}
+
+  const setPull = (dist) => {
+    const d = Math.max(0, Math.min(MAX_PULL, dist));
+    indicator.style.height = `${d}px`;
+    indicator.style.opacity = d > 4 ? '1' : '0';
+    const spin = indicator.firstElementChild;
+    if (spin) spin.style.transform = `rotate(${d * 4}deg)`;
+  };
+
+  const reset = () => {
+    pulling = false;
+    armed = false;
+    indicator.style.transition = 'height .2s ease, opacity .15s ease';
+    setPull(0);
+    setTimeout(() => { indicator.style.transition = 'opacity .15s ease'; }, 200);
+  };
+
+  const spin = (on) => {
+    const el = indicator.firstElementChild;
+    if (el) el.style.animation = on ? 'pm-ptr-spin .7s linear infinite' : '';
+  };
+
+  _drawerEl.addEventListener('touchstart', (e) => {
+    if (_drawerSearch) return;
+    if (_drawerEl.scrollTop > 0) return;
+    startY = e.touches?.[0]?.clientY || 0;
+    pulling = true;
+    armed = false;
+  }, { passive: true });
+
+  _drawerEl.addEventListener('touchmove', (e) => {
+    if (!pulling) return;
+    if (_drawerEl.scrollTop > 0) { setPull(0); return; }
+    const y = e.touches?.[0]?.clientY || 0;
+    const dist = y - startY;
+    if (dist <= 0) { setPull(0); return; }
+    indicator.style.transition = 'opacity .15s ease';
+    setPull(dist * 0.5);
+    armed = dist * 0.5 >= THRESHOLD;
+  }, { passive: true });
+
+  _drawerEl.addEventListener('touchend', () => {
+    if (!pulling) return;
+    if (armed) {
+      setPull(THRESHOLD);
+      spin(true);
+      Promise.resolve(refreshMobileDrawerSessions({ force: true }))
+        .catch(() => {})
+        .finally(() => { spin(false); reset(); });
+    } else {
+      reset();
+    }
+  }, { passive: true });
+}
+
 const PM_DRAWER_STATE_KEY = 'pm_mobile_drawer_sessions_view';
 const PM_THEME_KEY = 'prometheus_theme';
 const PM_ACTIVE_TAB_KEY = 'pm_mobile_active_tab';
@@ -499,7 +605,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
   });
   _applyMobileTheme(_getTheme());
+  // Capture live callbacks so refreshMobileDrawerSessions() and pull-to-refresh
+  // can re-render the session list later (e.g. when the drawer is reopened after
+  // a new chat was created). Without this, refreshMobileDrawerSessions() early-returns.
+  _drawerCallbacks = { onOpenSession, loadSessions, searchSessions, onNewChat };
   _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
+  _wireDrawerPullToRefresh();
 
   document.addEventListener('keydown', _escHandler, { passive: true });
   _renderInstallSlot();
@@ -900,6 +1011,10 @@ export function openDrawer() {
   if (!_drawerEl || !_scrimEl) return;
   _drawerEl.classList.add('open');
   _scrimEl.classList.add('open');
+  // Always pull fresh sessions when the drawer opens so chats created mid-session
+  // (e.g. a brand-new chat) appear without needing an app restart. No-ops while a
+  // search is active or a refresh is already running.
+  refreshMobileDrawerSessions().catch(() => {});
 }
 
 export function closeDrawer() {

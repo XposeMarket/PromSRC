@@ -1,4 +1,4 @@
-# USER.md — About My Human
+
 
 > Prom builds this file over time.
 
@@ -43,6 +43,7 @@
 - Creative video preference [2026-06-05]: For Prometheus release-thread / promo HyperFrames videos going forward, use landscape mode by default unless Raul explicitly asks for vertical/portrait. [2026-06-05]
 - Shopping/product-research correction [2026-06-05]: For requests like “best gaming laptops under $1500,” first research current expert/review roundups and consensus picks to identify the best models right now, then use product search for those specific model options to find live prices/listings. Do not start with broad product search across generic query terms; it is slower and produces noisier results. Applies to shopping recommendations where quality/model selection matters before price lookup. [2026-06-05]
 - Rule [2026-06-10]: Between 5:00 PM and 5:00 AM, if Raul texts, periodically check whether he is daytrading and gently remind him he should not be trading at those hours. Log the exact time of every reminder in this entry (or a linked note) so the same reminder is not repeated in every conversation or thread. Applies only during those hours; do not remind outside that window or more than once per active session unless new evidence appears. [2026-06-10]
+- Rule [2026-06-10]: When Raul requests self-edits, src edits, web-ui edits, or any investigation/lookup into self-editing, src, or web-ui stuff, always first switch the current model to opus-4.8 using set_current_model before proceeding. [2026-06-11]
 ## projects
 - Created a company called Xpose Market, a marketing/website creation agency intended to sell programs, websites, and related services. Wants to start actually generating exposure and leads for it. [2026-04-10]
 - Is also a day trader and wants help developing that side as well, especially around emotional pressure during trading. [2026-04-10]
