@@ -1071,7 +1071,7 @@ export function getCisSystemTools(): any[] {
           'SYNC EXCLUDES: respects .gitignore plus repo-local .prom-repo-sync-ignore and automatically avoids embedded Git repositories/scratch folders, so local downloaded agent repos, audit/debug logs, media, and bulky workspace artifacts are not pushed by accident. ' +
           'Because step 2 merges, edits to DIFFERENT files (e.g. mobile pages here + prompt-context on the other machine) combine automatically — nothing is lost. ' +
           'If the SAME lines of the SAME file were changed on both machines, git reports a real conflict: the merge is aborted (your local commit stays safe, nothing is pushed) and the conflicting files are returned for you to resolve. ' +
-          'COMMIT MESSAGE: same as prom_repo_push — pass the user\'s message verbatim, or omit it to first get the diff back and author an accurate one. ' +
+          'COMMIT MESSAGE: pass the user\'s message verbatim, or omit it to first get the diff back and author an accurate one. If omitted and a diff is returned, call prom_repo_sync again with the message — do not switch to prom_repo_push, and do not emulate sync with run_command/raw git unless this tool is unavailable. ' +
           'After a successful sync, run prom_repo_sync (or prom_repo_pull) on the OTHER machine to bring the combined changes down there too. ' +
           'AUTH: same PAT handling as prom_repo_push (set_pat to save a token). Does NOT rebuild/restart — follow with prom_apply_dev_changes if src/ or web-ui/ changed. Public builds disable this tool.',
         parameters: {
