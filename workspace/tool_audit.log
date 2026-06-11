@@ -42790,3 +42790,19 @@ From https://github.com/XposeMarket/promsr
 [2026-06-11T01:43:02.592Z] FAIL prom_repo_pull({}) => ❌ prom_repo_pull blocked: you have uncommitted local changes that overlap incoming changes. Use prom_repo_sync — it commits your changes and merges in one safe step.
 
 From https://github.com/XposeMark
+[2026-06-11T01:43:11.461Z] FAIL prom_repo_sync({"message":"Sync after divergent branches on main (pull + restart request)"}) => ❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:
+workspace/tool_audit.log
+workspace/workspace/logs/voice-debug.log
+
+Merge aborted. Your local commit "
+[2026-06-11T01:43:14.886Z] OK read_file({"filename":"workspace/tool_audit.log","start_line":1,"num_lines":50}) => tool_audit.log (42798 lines) [window 1-50]:
+1: [2026-05-22T03:36:53.207Z] OK present_file({"path":"MEMORY.md"}) => File presented in canvas: MEMORY.md
+2: [2026-05-22T03:37:02.198Z] OK present_file({"p
+[2026-06-11T01:43:15.122Z] OK read_file({"filename":"workspace/workspace/logs/voice-debug.log","start_line":1,"num_lines":50}) => workspace/logs/voice-debug.log (33818 lines) [window 1-50]:
+1: [2026-06-03T19:33:50.328Z] [voice-preauth] POST /api/mobile/voice-debug pairing=no ua="Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac O
+[2026-06-11T01:43:24.328Z] FAIL run_command({"command":"git checkout --ours workspace/tool_audit.log workspace/workspace/logs/voice-debug.log","cwd":"."}) => git checkout --ours workspace/tool_audit.log workspace/workspace/logs/voice-debug.log [exit 1] run=run_6fc900a025334013 cwd=.
+error: pathspec 'workspace/workspace/logs/voice-debug.log' did not match a
+[2026-06-11T01:43:29.931Z] OK run_command({"command":"git checkout --ours workspace/tool_audit.log","cwd":"."}) => git checkout --ours workspace/tool_audit.log [exit 0] run=run_db004711fb01426f cwd=.
+Updated 0 paths from the index
+[2026-06-11T01:43:35.349Z] OK run_command({"command":"git checkout --ours workspace/logs/voice-debug.log","cwd":"."}) => git checkout --ours workspace/logs/voice-debug.log [exit 0] run=run_5bb2a28154bc4a98 cwd=.
+Updated 0 paths from the index
