@@ -42780,3 +42780,13 @@ From https://github.com/XposeMarket/promsrc
  * branch            main       -> FETCH_HEAD
 hint: You have divergent branches and need to specify how to reconcile them.
 hint: Yo
+[2026-06-11T01:40:47.728Z] FAIL prom_repo_sync({"message":"Sync after divergent branches on main (pull + restart request)"}) => ❌ prom_repo_sync: pull/merge failed.
+Your local commit "Sync after divergent branches on main (pull + restart request)" is safe locally; nothing was pushed.
+
+From https://github.com/XposeMarket/promsr
+[2026-06-11T01:40:59.686Z] OK request_tool_category({"category":"workspace_write"}) => Tool category "workspace_write" activated for session 1af125a6-3efc-4406-ad4a-7913de9851a0.
+[2026-06-11T01:42:55.984Z] OK run_command({"command":"git config pull.rebase false","cwd":"."}) => git config pull.rebase false [exit 0] run=run_82f9801ade5c4742 cwd=.
+(no output)
+[2026-06-11T01:43:02.592Z] FAIL prom_repo_pull({}) => ❌ prom_repo_pull blocked: you have uncommitted local changes that overlap incoming changes. Use prom_repo_sync — it commits your changes and merges in one safe step.
+
+From https://github.com/XposeMark
