@@ -554,12 +554,12 @@ body.pm-mobile-active { overflow: hidden; }
      saturation/brightness lift to keep the glass crisp (the iOS look). */
   background:
     linear-gradient(135deg, rgba(255,255,255,.04), rgba(255,255,255,0) 46%, rgba(234,106,31,.015));
-  backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
-  -webkit-backdrop-filter: blur(5px) saturate(1.7) brightness(1.04);
-  border: 1px solid rgba(255,255,255,.30);
+  backdrop-filter: blur(3px) saturate(2.0) brightness(1.05);
+  -webkit-backdrop-filter: blur(3px) saturate(2.0) brightness(1.05);
+  border: 1px solid rgba(255,255,255,.22);
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.55),     /* crisp top rim light */
-    inset 0 -10px 26px rgba(255,255,255,.06),    /* inner floor glow */
+    inset 0 1.5px 1px rgba(255,255,255,.32),     /* dimmed top rim light */
+    inset 0 -10px 26px rgba(255,255,255,.04),    /* inner floor glow */
     0 18px 48px rgba(40,28,16,.20),
     0 4px 12px rgba(40,28,16,.10);
   z-index: 5;
@@ -576,10 +576,10 @@ body.pm-mobile-active { overflow: hidden; }
 :root[data-theme="dark"] .pm-tabbar {
   background:
     linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.01) 48%, rgba(234,106,31,.05));
-  border-color: rgba(255,255,255,.14);
+  border-color: rgba(255,255,255,.10);
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.28),
-    inset 0 -16px 30px rgba(255,255,255,.04),
+    inset 0 1.5px 1px rgba(255,255,255,.18),
+    inset 0 -16px 30px rgba(255,255,255,.03),
     0 18px 48px rgba(0,0,0,.5),
     0 3px 12px rgba(0,0,0,.3);
 }
@@ -608,12 +608,12 @@ body.pm-mobile-active { overflow: hidden; }
   border-radius: inherit;
   background:
     linear-gradient(to bottom,
-      rgba(255,255,255,.22) 0%,
-      rgba(255,255,255,.03) 18%,
+      rgba(255,255,255,.13) 0%,
+      rgba(255,255,255,.02) 18%,
       transparent 34%,
       transparent 70%,
-      rgba(255,255,255,.06) 90%,
-      rgba(255,255,255,.15) 100%),
+      rgba(255,255,255,.04) 90%,
+      rgba(255,255,255,.09) 100%),
     radial-gradient(130% 78% at 50% 122%, rgba(0,0,0,.10), transparent 56%);
   opacity: .72;
 }
@@ -629,22 +629,45 @@ body.pm-mobile-active { overflow: hidden; }
 .pm-tabbar-sheen {
   inset: 0;
   z-index: 3;
-  padding: 1.4px;
-  background: conic-gradient(from 130deg,
-    rgba(120,210,255,0)   0deg,
-    rgba(120,210,255,.5)  55deg,
-    rgba(255,255,255,.9)  125deg,
-    rgba(160,255,210,.45) 205deg,
-    rgba(255,140,210,.5)  290deg,
-    rgba(120,210,255,0)   360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: .42;
-  mix-blend-mode: screen;
+  /* Neutral top sheen only — no preset colours. The background diffusion now
+     lives on the unclipped outer halo (.pm-tabbar-halo). */
+  background: linear-gradient(to bottom, rgba(255,255,255,.09), transparent 30%);
+  opacity: .6;
 }
-:root[data-theme="dark"] .pm-tabbar-sheen { opacity: .32; }
+:root[data-theme="dark"] .pm-tabbar-sheen { opacity: .45; }
+/* ---- outer refraction halo (sibling, unclipped) ----
+   Sits just behind each panel and protrudes a few px past its edge. It paints
+   NO colour of its own — only a backdrop-filter — so it bends/saturates the
+   actual content scrolling behind the panel's outer border, then fades inward
+   so it never draws a band inside the panel body. */
+.pm-glass-halo {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;               /* behind the panel (panels are z-index 5 / 4+content) */
+  backdrop-filter: blur(1.5px) saturate(2.6) brightness(1.04);
+  -webkit-backdrop-filter: blur(1.5px) saturate(2.6) brightness(1.04);
+  /* Opaque at the outer edge, gone ~12px inward: only the protruding lip
+     refracts; the inner part dies before reaching the panel face. */
+  -webkit-mask:
+    linear-gradient(to top,    #000, transparent 12px),
+    linear-gradient(to bottom, #000, transparent 12px),
+    linear-gradient(to left,   #000, transparent 12px),
+    linear-gradient(to right,  #000, transparent 12px);
+  -webkit-mask-composite: source-over;
+  mask:
+    linear-gradient(to top,    #000, transparent 12px),
+    linear-gradient(to bottom, #000, transparent 12px),
+    linear-gradient(to left,   #000, transparent 12px),
+    linear-gradient(to right,  #000, transparent 12px);
+  mask-composite: add;
+}
+.pm-tabbar-halo {
+  left: calc(max(12px, env(safe-area-inset-left)) - 6px);
+  right: calc(max(12px, env(safe-area-inset-right)) - 6px);
+  bottom: calc(env(safe-area-inset-bottom) + 10px - 6px);
+  height: calc(64px + 12px);
+  border-radius: 999px;
+}
 .pm-tab-indicator {
   top: 5px;
   bottom: 5px;
@@ -656,16 +679,16 @@ body.pm-mobile-active { overflow: hidden; }
      the bar's glass reads behind the pill — not a blob in one corner. */
   background:
     linear-gradient(to bottom,
-      rgba(255,255,255,.36) 0%,
-      rgba(255,255,255,.07) 20%,
+      rgba(255,255,255,.22) 0%,
+      rgba(255,255,255,.04) 20%,
       transparent 46%,
       transparent 56%,
-      rgba(255,255,255,.05) 82%,
-      rgba(255,255,255,.22) 100%);
-  border: 1px solid rgba(255,255,255,.46);
+      rgba(255,255,255,.03) 82%,
+      rgba(255,255,255,.13) 100%);
+  border: 1px solid rgba(255,255,255,.30);
   box-shadow:
-    inset 0 1.5px 1.5px rgba(255,255,255,.58),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.28),
+    inset 0 1.5px 1.5px rgba(255,255,255,.34),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
     0 8px 22px rgba(40,28,16,.18),
     0 1px 4px rgba(40,28,16,.12);
   /* Spring with a touch of overshoot for the clean glide + elastic settle. */
@@ -685,16 +708,16 @@ body.pm-mobile-active { overflow: hidden; }
 :root[data-theme="dark"] .pm-tab-indicator {
   background:
     linear-gradient(to bottom,
-      rgba(255,255,255,.26) 0%,
-      rgba(255,255,255,.04) 20%,
+      rgba(255,255,255,.16) 0%,
+      rgba(255,255,255,.025) 20%,
       transparent 46%,
       transparent 56%,
-      rgba(255,255,255,.04) 82%,
-      rgba(255,255,255,.16) 100%);
-  border-color: rgba(255,255,255,.26);
+      rgba(255,255,255,.025) 82%,
+      rgba(255,255,255,.10) 100%);
+  border-color: rgba(255,255,255,.16);
   box-shadow:
-    inset 0 1.5px 1.5px rgba(255,255,255,.38),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.2),
+    inset 0 1.5px 1.5px rgba(255,255,255,.24),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.12),
     0 8px 22px rgba(0,0,0,.42);
 }
 .pm-tab {
@@ -3529,34 +3552,62 @@ body.pm-mobile-active { overflow: hidden; }
      specular on the inner top + bottom edges (not a flat sheen). */
   background:
     linear-gradient(to bottom,
-      rgba(255,255,255,.22) 0%, rgba(255,255,255,.03) 16%,
+      rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
       transparent 34%, transparent 72%,
-      rgba(255,255,255,.06) 90%, rgba(255,255,255,.16) 100%),
+      rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
     linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, rgba(234,106,31,.03));
-  backdrop-filter: blur(6px) saturate(1.7) brightness(1.04);
-  -webkit-backdrop-filter: blur(6px) saturate(1.7) brightness(1.04);
-  border: 1px solid rgba(255,255,255,.34);
+  backdrop-filter: blur(3px) saturate(2.0) brightness(1.05);
+  -webkit-backdrop-filter: blur(3px) saturate(2.0) brightness(1.05);
+  border: 1px solid rgba(255,255,255,.24);
   border-radius: 22px;
   padding: 5px 9px;
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.4),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.22),
+    inset 0 1.5px 1px rgba(255,255,255,.24),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.13),
     0 10px 30px rgba(40,28,16,.18),
     0 2px 8px rgba(40,28,16,.10);
   z-index: 4;
   transition: bottom .18s ease;
 }
+/* Refractive edge band for the composer — mirrors the tabbar sheen: a masked
+   rim ring with its own denser backdrop pull so the background color bleeds and
+   intensifies at the border (the iOS liquid-glass edge), plus a faint chromatic
+   fringe. Kept behind the input content (z-index 0, composer children sit above). */
+.pm-composer::before {
+  content: '';
+  position: absolute;
+  /* Protrude past the border (composer is not overflow-clipped) so the lip
+     refracts the background passing OUTSIDE the panel, not just inside it. */
+  inset: -6px;
+  pointer-events: none;
+  border-radius: 28px;
+  /* No painted colour — pure backdrop refraction of the real background. */
+  -webkit-mask:
+    linear-gradient(to top,    #000, transparent 9px),
+    linear-gradient(to bottom, #000, transparent 9px),
+    linear-gradient(to left,   #000, transparent 9px),
+    linear-gradient(to right,  #000, transparent 9px);
+  -webkit-mask-composite: source-over;
+  mask:
+    linear-gradient(to top,    #000, transparent 9px),
+    linear-gradient(to bottom, #000, transparent 9px),
+    linear-gradient(to left,   #000, transparent 9px),
+    linear-gradient(to right,  #000, transparent 9px);
+  mask-composite: add;
+  backdrop-filter: blur(1.5px) saturate(2.6) brightness(1.04);
+  -webkit-backdrop-filter: blur(1.5px) saturate(2.6) brightness(1.04);
+}
 :root[data-theme="dark"] .pm-composer {
   background:
     linear-gradient(to bottom,
-      rgba(255,255,255,.16) 0%, rgba(255,255,255,.02) 16%,
+      rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
       transparent 34%, transparent 72%,
-      rgba(255,255,255,.04) 90%, rgba(255,255,255,.12) 100%),
+      rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
     linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, rgba(234,106,31,.05));
-  border-color: rgba(255,255,255,.14);
+  border-color: rgba(255,255,255,.10);
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.24),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.14),
+    inset 0 1.5px 1px rgba(255,255,255,.15),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.09),
     0 12px 32px rgba(0,0,0,.42),
     0 2px 8px rgba(0,0,0,.26);
 }

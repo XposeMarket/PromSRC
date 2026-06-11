@@ -1,9 +1,5 @@
 ---
-name: scheduler-operations-playbook
-description: Modern runbook for managing Prometheus scheduled jobs, schedule-owner subagents, expected outputs, run history, stuck-state recovery, delivery verification, and heartbeat-driven automation.
-emoji: "🧩"
-version: 2.1.0
----
+
 
 # Scheduler Operations Playbook
 

@@ -387,9 +387,9 @@ function _ensureLiquidGlassFilters() {
          style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;">
       <defs>
         <filter id="pm-liquid-glint" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves="2" seed="5" result="n" />
-          <feGaussianBlur in="n" stdDeviation="0.4" result="nb" />
-          <feDisplacementMap in="SourceGraphic" in2="nb" scale="16" xChannelSelector="R" yChannelSelector="G" />
+          <feTurbulence type="fractalNoise" baseFrequency="0.006 0.009" numOctaves="2" seed="5" result="n" />
+          <feGaussianBlur in="n" stdDeviation="0.6" result="nb" />
+          <feDisplacementMap in="SourceGraphic" in2="nb" scale="10" xChannelSelector="R" yChannelSelector="G" />
         </filter>
       </defs>
     </svg>`;
@@ -536,6 +536,11 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   // the native switch overlay (iOS haptic) and navigates on release; dragging
   // lets the pill track the finger and snaps to the tab you let go over.
   _wireTabbarSlider(tabbar, { onNavigate, getActiveTab: () => activeTab });
+  // Outer refraction halo — a sibling (NOT a child, so it escapes the tabbar's
+  // overflow:hidden clip) that extends a few px beyond the bar. Its backdrop
+  // filter distorts the real background passing behind the panel's outer edge.
+  // Appended before the bar so the bar paints on top of it.
+  app.appendChild(el('<div class="pm-glass-halo pm-tabbar-halo" aria-hidden="true"></div>'));
   app.appendChild(tabbar);
   _rememberActiveTab(activeTab);
   // Snap the pill onto the active tab once laid out; animate from the previous

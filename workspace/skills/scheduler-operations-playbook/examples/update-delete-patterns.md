@@ -42,17 +42,7 @@ schedule_job({
 })
 ```
 
-### Pattern 3: Ownership/Assignment Fixes
-```javascript
-// Fix subagent assignment issues
-schedule_job({
-  "action": "update", 
-  "job_id": "broken_job",
-  "confirm": true,
-  // Remove subagent_id field entirely = assigns to main
-  "delivery": {"channel": "web"}
-})
-```
+
 
 ## Delete Patterns
 

@@ -48,6 +48,7 @@ const PUBLIC_BUILD_DISABLED_TOOL_NAMES = new Set([
   'prom_apply_dev_changes',
   'prom_repo_push',
   'prom_repo_pull',
+  'prom_repo_sync',
 ]);
 
 const PUBLIC_BUILD_DISABLED_TOOL_CATEGORIES = new Set([

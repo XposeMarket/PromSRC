@@ -1,0 +1,12 @@
+{
+  "skillId": "scheduler-operations-playbook",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-10T07:44:52.190Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\scheduler-operations-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c6191ee2b6c45878"
+}
