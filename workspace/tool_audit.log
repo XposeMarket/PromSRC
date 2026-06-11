@@ -42826,3 +42826,5 @@ From
 2) memory/2026-06-10-intraday-notes.md
 3) skills/
 [2026-06-11T12:19:01.031Z] OK prom_repo_sync({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
+[2026-06-11T12:19:09.348Z] FAIL prom_repo_push({"message":"Audit: append recent tool sync and error entries to tool_audit.log"}) => ❌ prom_repo_push rejected: origin/main has commits you don't have locally (likely pushed from the other machine). Git blocked the push so nothing gets overwritten. Use prom_repo_sync instead — it merg
+[2026-06-11T12:19:15.175Z] OK prom_repo_sync({}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
