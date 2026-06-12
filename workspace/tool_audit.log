@@ -45335,3 +45335,22 @@ and have 1 and 13 different commits each, respectively.
   (use "git 
 [2026-06-12T00:23:29.820Z] FAIL run_command({"command":"git log --oneline --decorate --graph --max-count=20 --all","cwd":"","shell":"powershell","pty":false,"timeoutMs":120000,"visible":false}) => Command approval denied for "git log --oneline --decorate --graph --max-count=20 --all"
 [2026-06-12T00:23:53.215Z] OK prom_repo_sync({"message":"","set_pat":""}) => 📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", 
+[2026-06-12T00:24:00.838Z] FAIL prom_repo_sync({"message":"Sync: add latest runtime audit and voice logs","set_pat":""}) => ❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:
+workspace/tool_audit.log
+workspace/workspace/logs/voice-debug.log
+
+Merge aborted. Your local commit "
+[2026-06-12T00:24:16.372Z] OK run_command({"command":"git status --short; git diff --name-only --diff-filter=U","cwd":"","shell":"powershell","pty":false,"timeoutMs":120000,"visible":false}) => git status --short; git diff --name-only --diff-filter=U [exit 0] run=run_ada047aec39b42ec cwd=C:\Users\rafel\PromSRC
+M workspace/tool_audit.log
+[2026-06-12T00:27:12.407Z] OK run_command({"command":"git status; git log --oneline -5","cwd":"","shell":"powershell","pty":false,"timeoutMs":120000,"visible":false}) => git status; git log --oneline -5 [exit 0] run=run_fa70ae42eeb7473b cwd=C:\Users\rafel\PromSRC
+On branch main
+Your branch and 'origin/main' have diverged,
+and have 2 and 13 different commits each, resp
+[2026-06-12T00:28:14.601Z] FAIL run_command({"command":"git pull origin main --no-edit -X union","cwd":"","shell":"powershell","pty":false,"timeoutMs":120000,"visible":false}) => git pull origin main --no-edit -X union [exit 1] run=run_cfcfa08a7d86426e cwd=C:\Users\rafel\PromSRC
+From https://github.com/XposeMarket/PromSRC
+ * branch            main       -> FETCH_HEAD
+fatal: un
+[2026-06-12T00:28:36.190Z] FAIL run_command({"command":"git status --short; git diff --name-only --diff-filter=U; git merge --abort","cwd":"","shell":"powershell","pty":false,"timeoutMs":120000,"visible":false}) => Command approval denied for "git status --short; git diff --name-only --diff-filter=U; git merge --abort"
+[2026-06-12T00:28:47.142Z] FAIL prom_repo_pull({}) => ❌ prom_repo_pull blocked: you have uncommitted local changes that overlap incoming changes. Use prom_repo_sync — it commits your changes and merges in one safe step.
+
+From https://github.com/XposeMark
