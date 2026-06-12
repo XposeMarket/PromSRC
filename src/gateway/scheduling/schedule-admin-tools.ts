@@ -14,7 +14,7 @@ import { peekPendingEvents } from '../teams/notify-bridge';
 import { getAgents } from '../../config/config';
 import { listManagedTeams } from '../teams/managed-teams';
 import { getBuildStatus } from '../../runtime/build-status';
-import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
+import { ensureScheduleRuntimeForAgent } from './schedule-agent';
 import { normalizeScheduleSpec } from './schedule-pattern';
 
 export interface SchedulerAdminResult {
@@ -66,6 +66,34 @@ function clampLimit(raw: any, fallback = 10, max = 200): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.min(max, Math.max(1, Math.floor(n)));
+}
+
+function normalizeScheduleSkillIds(value: any): string[] {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id: any) => String(id || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeScheduleContextRefs(value: any, existing: any[] = []): any[] {
+  if (!Array.isArray(value)) return [];
+  const existingById = new Map((Array.isArray(existing) ? existing : []).map((ref: any) => [String(ref?.id || ''), ref]));
+  const now = Date.now();
+  return value.map((raw: any) => {
+    const title = String(raw?.title || '').trim().slice(0, 160);
+    const content = String(raw?.content || '').trim().slice(0, 12000);
+    if (!title || !content) return null;
+    const id = String(raw?.id || `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`).trim();
+    const prior = existingById.get(id) || {};
+    return {
+      id,
+      title,
+      content,
+      createdAt: Number(raw?.createdAt || raw?.created_at || prior?.createdAt || now) || now,
+      updatedAt: Number(raw?.updatedAt || raw?.updated_at || now) || now,
+    };
+  }).filter(Boolean);
 }
 
 function findJob(scheduler: SchedulerLike, rawId: any): CronJob | null {
@@ -433,6 +461,15 @@ function buildSchedulePatch(args: any): { patch: Record<string, any>; errors: st
   if (args?.model_override !== undefined || args?.model !== undefined) {
     patch.model = String(args.model_override ?? args.model ?? '').trim() || undefined;
   }
+  if (args?.skillIds !== undefined) {
+    patch.skillIds = normalizeScheduleSkillIds(args.skillIds);
+  }
+  if (args?.context_refs !== undefined || args?.contextReferences !== undefined) {
+    patch.context_refs = normalizeScheduleContextRefs(
+      args.context_refs ?? args.contextReferences,
+      args?.existing_context_refs || args?.existingContextRefs || []
+    );
+  }
   if (args?.team_id !== undefined || args?.teamId !== undefined) {
     const teamId = String(args.team_id ?? args.teamId ?? '').trim();
     patch.team_id = teamId || undefined;
@@ -541,32 +578,39 @@ export function scheduleJobPatchTool(scheduler: SchedulerLike, args: any): Sched
       data: { job: summarizeJob(updated), changes, assigned_team: (updated as any).team_id },
     };
   }
-  const owner = String(updated.subagent_id || '').trim()
-    ? { agentId: String(updated.subagent_id || '').trim(), created: false }
-    : ensureScheduleOwnerAgent({
-        scheduleId: updated.id,
-        scheduleName: updated.name,
-        prompt: updated.prompt,
-        model: updated.model,
-      });
-  ensureScheduleRuntimeForAgent(owner.agentId, {
-    scheduleId: updated.id,
-    scheduleName: updated.name,
-    prompt: updated.prompt,
-    model: updated.model,
-  });
-  if (updated.subagent_id !== owner.agentId || updated.sessionTarget !== 'isolated') {
+  // Ownership rule (must match schedule_job action=update in automation-executor):
+  // jobs default to Prometheus itself. Only ensure a dedicated owner runtime when the
+  // job ALREADY has an explicit subagent_id. Never mint a new subagent on a plain patch —
+  // doing so grafted a schedule_<name>_<hash> owner onto main-owned jobs on every edit.
+  const ownerId = String(updated.subagent_id || '').trim();
+  if (ownerId) {
+    ensureScheduleRuntimeForAgent(ownerId, {
+      scheduleId: updated.id,
+      scheduleName: updated.name,
+      prompt: updated.prompt,
+      model: updated.model,
+    });
+  } else if (
+    (updated as any).assignmentTarget !== 'main' ||
+    updated.sessionTarget !== 'main' ||
+    (updated as any).deliverToMainChannel !== true
+  ) {
     updated = scheduler.updateJob(updated.id, {
-      subagent_id: owner.agentId,
-      sessionTarget: 'isolated',
-      assignmentTarget: owner.created ? 'main' : (updated as any).assignmentTarget,
-      deliverToMainChannel: owner.created ? true : (updated as any).deliverToMainChannel,
+      assignmentTarget: 'main',
+      sessionTarget: 'main',
+      deliverToMainChannel: true,
     } as Partial<CronJob>) || updated;
   }
   return {
     success: true,
-    message: `Applied ${changes.length} change(s) to "${updated.name}" and confirmed schedule owner "${owner.agentId}".`,
-    data: { job: summarizeJob(updated), changes, assigned_owner: owner },
+    message: ownerId
+      ? `Applied ${changes.length} change(s) to "${updated.name}" and confirmed schedule owner "${ownerId}".`
+      : `Applied ${changes.length} change(s) to "${updated.name}" (owned by Prometheus itself).`,
+    data: {
+      job: summarizeJob(updated),
+      changes,
+      assigned_owner: ownerId ? { agentId: ownerId, created: false } : { agentId: 'main', created: false },
+    },
   };
 }
 

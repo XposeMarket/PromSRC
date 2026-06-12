@@ -783,6 +783,8 @@ export function summarizeCronJob(job: any): Record<string, any> {
     assignmentTarget: job?.assignmentTarget || null,
     deliverToMainChannel: job?.deliverToMainChannel === true,
     model: job?.model || null,
+    skillIds: Array.isArray(job?.skillIds) ? job.skillIds : [],
+    context_refs: Array.isArray(job?.context_refs) ? job.context_refs : [],
   };
 }
 

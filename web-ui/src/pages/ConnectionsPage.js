@@ -125,6 +125,7 @@ async function loadConnectionsState() {
 
   renderConnectionsGrid();
   updateConnectionsBadge();
+  loadMcpServers();
 
   const connectorView = document.getElementById('connector-view');
   if (
@@ -1073,6 +1074,292 @@ async function loadConnectorActivity(id, isConnected) {
 const escapeHtml = escHtml;
 
 // ──────────────────────────────────────────────────────────────────────────
+// MCP Servers section — lists servers from /api/mcp/servers (the same store
+// `mcp_server_manage` writes to), so MCP servers Prometheus adds show up here in
+// the Connections panel, not just buried in Settings.
+// ──────────────────────────────────────────────────────────────────────────
+
+let mcpServers = [];
+
+async function loadMcpServers() {
+  try {
+    const data = await api('/api/mcp/servers');
+    mcpServers = Array.isArray(data?.servers) ? data.servers : [];
+  } catch {
+    mcpServers = [];
+  }
+  renderMcpServers();
+}
+
+function mcpServerById(id) {
+  return mcpServers.find((s) => s.id === id);
+}
+
+function mcpStatusMeta(s) {
+  const color = s.status === 'connected' ? 'var(--ok)' : s.status === 'error' ? '#ef4444' : s.status === 'connecting' ? '#f59e0b' : 'var(--muted)';
+  const label = s.status === 'connected' ? `Connected · ${s.toolCount || 0} tool${s.toolCount === 1 ? '' : 's'}`
+    : s.status === 'error' ? 'Error' : s.status === 'connecting' ? 'Connecting…' : 'Disconnected';
+  const needsAuth = s.status === 'error' && /401|403|unauthor|forbidden/i.test(String(s.error || ''));
+  return { color, label, needsAuth };
+}
+
+function renderMcpServers() {
+  const section = document.getElementById('mcp-servers-section');
+  const list = document.getElementById('mcp-servers-list');
+  const count = document.getElementById('mcp-servers-count');
+  if (!section || !list) return;
+  if (!mcpServers.length) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  if (count) count.textContent = `${mcpServers.length}`;
+  // Cards mirror connector cards: click opens the full detail view (instructions,
+  // auth form, quick buttons). No inline prompt.
+  list.innerHTML = mcpServers.map((s) => {
+    const { color, label } = mcpStatusMeta(s);
+    return `<div onclick="openMcpServerView('${escHtml(s.id)}')" style="display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;background:var(--panel-2);cursor:pointer;transition:border-color .12s" onmouseover="this.style.borderColor='var(--brand)'" onmouseout="this.style.borderColor='var(--line)'">
+      <div style="width:9px;height:9px;border-radius:50%;background:${color};flex-shrink:0"></div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.name || s.id)}</div>
+        <div style="font-size:10.5px;color:${color};margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </div>`;
+  }).join('');
+}
+
+// Full detail view for an MCP server — reuses the connector detail panel so it
+// looks and behaves like every other connection (header, "what it accesses",
+// tools, actions). Replaces the old browser prompt().
+function openMcpServerView(id) {
+  const s = mcpServerById(id);
+  if (!s) return;
+  activeConnectorId = `mcp:${id}`;
+  const { color, label, needsAuth } = mcpStatusMeta(s);
+  const connected = s.status === 'connected';
+  const initials = String(s.name || s.id).replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || 'MC';
+
+  const logo = document.getElementById('cv-logo');
+  if (logo) logo.innerHTML = `<div style="width:36px;height:36px;border-radius:9px;background:#6d4aff22;color:#8b6dff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px">${escHtml(initials)}</div>`;
+  document.getElementById('cv-name').textContent = s.name || s.id;
+  document.getElementById('cv-category').textContent = 'MCP Server';
+  document.getElementById('cv-desc').innerHTML =
+    `Model Context Protocol server${s.url ? ` at <code style="font-size:12px">${escHtml(s.url)}</code>` : ''} (${escHtml(s.transport || 'stdio')}).`
+    + (s.error ? `<div style="margin-top:8px;color:#ef4444;font-size:12.5px">⚠ ${escHtml(String(s.error))}</div>` : '');
+
+  const badge = document.getElementById('cv-status-badge');
+  if (badge) { badge.style.display = ''; badge.textContent = connected ? '● Connected' : (s.status === 'error' ? '● Error' : '● Disconnected'); badge.style.color = color; badge.style.background = `${color}22`; }
+
+  // "What Prom can access" → the tools, or a hint to connect.
+  const permsEl = document.getElementById('cv-permissions');
+  if (permsEl) {
+    permsEl.innerHTML = connected
+      ? `<div class="cv-perm-row"><div class="cv-perm-icon" style="background:#6d4aff18;color:#8b6dff">⚡</div><span>${s.toolCount || 0} MCP tool${s.toolCount === 1 ? '' : 's'} available once activated</span></div>`
+      : `<div class="cv-perm-row"><div class="cv-perm-icon" style="background:#6d4aff18;color:#8b6dff">⚡</div><span>Connect to discover the tools this server exposes</span></div>`;
+  }
+
+  const aiToolsEl = document.getElementById('cv-ai-tools');
+  if (aiToolsEl) {
+    const tools = Array.isArray(s.toolNames) ? s.toolNames : [];
+    if (connected && tools.length) {
+      aiToolsEl.style.display = '';
+      aiToolsEl.innerHTML = `<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">AI Tools Unlocked</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px">${tools.map((t) => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">mcp__${escHtml(s.id)}__${escHtml(t)}</code>`).join('')}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"mcp_server_tools"})</code></div>`;
+    } else {
+      aiToolsEl.style.display = 'none';
+      aiToolsEl.innerHTML = '';
+    }
+  }
+
+  renderMcpServerActions(s, { needsAuth, connected });
+
+  const activityWrap = document.getElementById('cv-activity-wrap');
+  if (activityWrap) activityWrap.style.display = 'none';
+
+  const view = document.getElementById('connector-view');
+  if (view) view.style.display = 'flex';
+  const chatView = document.getElementById('chat-view');
+  if (chatView) chatView.style.display = 'none';
+  const topbar = document.getElementById('right-panel-topbar');
+  if (topbar) topbar.style.visibility = 'hidden';
+}
+
+function renderMcpServerActions(s, { needsAuth, connected }) {
+  const el = document.getElementById('cv-actions');
+  if (!el) return;
+  const id = s.id;
+  const remote = s.transport === 'sse' || s.transport === 'http' || !!s.url;
+  const oauthConnected = !!s.oauthConnected;
+  const existingHeaders = Object.entries(s.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+
+  el.innerHTML = `
+    ${connected
+      ? `<button class="cv-btn-disconnect" onclick="mcpServerDisconnect('${escHtml(id)}')">Disconnect</button>`
+      : `<button class="cv-btn-connect" onclick="mcpServerConnect('${escHtml(id)}')" style="background:var(--brand);color:#fff;border:none;border-radius:9px;padding:11px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px">Connect</button>`}
+
+    ${remote ? `
+    <div style="margin-top:6px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+      <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Authentication${needsAuth && !oauthConnected ? ' <span style="color:#ef4444">— required</span>' : ''}</div>
+
+      <!-- Primary: browser OAuth (works with login + 2FA servers like Robinhood) -->
+      <div>
+        <div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:4px">Sign in with the provider</div>
+        <div style="font-size:11.5px;color:var(--muted);line-height:1.5;margin-bottom:8px">Opens the provider's login in your browser (handles username/password, 2FA, and OAuth automatically). Recommended for most remote servers.</div>
+        ${oauthConnected
+          ? `<div style="display:flex;gap:6px"><button class="pam-btn" onclick="startMcpOAuth('${escHtml(id)}')" style="flex:1">Re-authorize</button><button onclick="clearMcpOAuth('${escHtml(id)}')" style="border:1px solid var(--line);background:none;color:var(--muted);border-radius:8px;padding:0 12px;font-size:12px;cursor:pointer">Sign out</button></div>
+             <div style="font-size:11px;color:var(--ok);margin-top:6px">✓ Authorized via OAuth</div>`
+          : `<button class="pam-btn" onclick="startMcpOAuth('${escHtml(id)}')" style="width:100%">🔓 Authorize with browser</button>`}
+        <div id="mcp-oauth-status" class="pam-hint"></div>
+      </div>
+
+      <!-- Fallback: static token / headers -->
+      <details ${needsAuth && !oauthConnected ? '' : ''}>
+        <summary style="font-size:11.5px;color:var(--muted);cursor:pointer">Have a static API token or custom headers instead?</summary>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+          <div>
+            <label class="pam-label">Bearer token</label>
+            <input id="mcp-auth-token" class="pam-input" type="password" placeholder="sent as Authorization: Bearer …"/>
+          </div>
+          <div>
+            <label class="pam-label">Custom headers (one per line)</label>
+            <textarea id="mcp-auth-headers" class="pam-input" rows="3" placeholder="Authorization: Bearer XYZ\nX-Account-Id: 123">${escHtml(existingHeaders)}</textarea>
+          </div>
+          <button class="pam-btn" onclick="saveMcpServerAuth('${escHtml(id)}')">Save &amp; connect</button>
+        </div>
+      </details>
+
+      <div style="border-top:1px solid var(--line);padding-top:10px">
+        <button onclick="askPrometheusToSetupMcp('${escHtml(id)}')" style="width:100%;background:#6d4aff;color:#fff;border:none;border-radius:9px;padding:10px;font-weight:700;cursor:pointer;font-family:inherit;font-size:12.5px">✨ Let Prometheus set it up</button>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">Not sure how this server authenticates? Prometheus researches it and configures it for you.</div>
+      </div>
+    </div>
+    ` : `
+    <div style="margin-top:6px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:12px;color:var(--muted);line-height:1.55">This is a local (stdio) MCP server. It authenticates via environment variables on the server config (edit it in Settings → MCP servers).</div>
+    `}
+
+    <div id="mcp-action-status" class="pam-hint"></div>
+    <button onclick="mcpServerRemove('${escHtml(id)}')" style="background:none;border:1px solid var(--line);color:#ef4444;border-radius:9px;padding:9px;font-weight:600;cursor:pointer;font-family:inherit;font-size:12.5px">Remove server</button>
+  `;
+}
+
+// Browser OAuth flow: start → gateway opens the provider login → poll until the
+// callback completes → connect the server so its tools load.
+let _mcpOAuthPoll = null;
+async function startMcpOAuth(id) {
+  const statusEl = document.getElementById('mcp-oauth-status');
+  if (_mcpOAuthPoll) { clearInterval(_mcpOAuthPoll); _mcpOAuthPoll = null; }
+  if (statusEl) statusEl.textContent = 'Opening provider login in your browser…';
+  try {
+    const r = await api(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, { method: 'POST', body: JSON.stringify({}) });
+    if (r?.success === false) throw new Error(r.error || 'Could not start authorization');
+    if (r?.authorizeUrl) { try { window.open(r.authorizeUrl, '_blank', 'noopener'); } catch {} }
+    if (statusEl) statusEl.innerHTML = `Waiting for you to finish signing in… ${r?.authorizeUrl ? `<a href="${escHtml(r.authorizeUrl)}" target="_blank" style="color:var(--brand)">reopen login</a>` : ''}`;
+    let waited = 0;
+    _mcpOAuthPoll = setInterval(async () => {
+      waited += 2;
+      let st;
+      try { st = await api(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/status`); } catch { return; }
+      if (st?.status === 'connected') {
+        clearInterval(_mcpOAuthPoll); _mcpOAuthPoll = null;
+        if (statusEl) statusEl.textContent = 'Authorized — connecting…';
+        await mcpServerConnect(id);
+        const cur = mcpServerById(id); if (cur) openMcpServerView(id);
+        showToast('MCP authorized', s_safeName(id), 'success');
+      } else if (st?.status === 'error') {
+        clearInterval(_mcpOAuthPoll); _mcpOAuthPoll = null;
+        if (statusEl) statusEl.textContent = 'Authorization failed: ' + (st.error || 'unknown error');
+      } else if (waited > 300) {
+        clearInterval(_mcpOAuthPoll); _mcpOAuthPoll = null;
+        if (statusEl) statusEl.textContent = 'Authorization timed out. Try again.';
+      }
+    }, 2000);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Failed: ' + (e?.message || String(e));
+  }
+}
+
+function s_safeName(id) {
+  const s = mcpServerById(id);
+  return s?.name || id;
+}
+
+async function clearMcpOAuth(id) {
+  if (!confirm('Sign out of this MCP server? You will need to re-authorize to use it.')) return;
+  try { await api(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/clear`, { method: 'POST', body: JSON.stringify({}) }); } catch {}
+  try { await api(`/api/mcp/servers/${encodeURIComponent(id)}/disconnect`, { method: 'POST' }); } catch {}
+  await loadMcpServers();
+  const cur = mcpServerById(id); if (cur) openMcpServerView(id);
+}
+
+async function saveMcpServerAuth(id) {
+  const s = mcpServerById(id);
+  if (!s) return;
+  const statusEl = document.getElementById('mcp-action-status');
+  const token = String(document.getElementById('mcp-auth-token')?.value || '').trim();
+  const rawHeaders = String(document.getElementById('mcp-auth-headers')?.value || '').trim();
+  const headers = {};
+  if (rawHeaders) {
+    for (const line of rawHeaders.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z0-9-]+)\s*:\s*(.+?)\s*$/);
+      if (m) headers[m[1]] = m[2];
+    }
+  }
+  if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
+  if (!Object.keys(headers).length) { if (statusEl) statusEl.textContent = 'Enter a token or at least one header.'; return; }
+  if (statusEl) statusEl.textContent = 'Saving & connecting…';
+  try {
+    const cfg = { ...s, headers };
+    delete cfg.status; delete cfg.toolCount; delete cfg.toolNames; delete cfg.error;
+    const r = await api('/api/mcp/servers', { method: 'POST', body: JSON.stringify(cfg) });
+    if (r?.success === false) throw new Error(r.error || 'Save failed');
+    const c = await api(`/api/mcp/servers/${encodeURIComponent(id)}/connect`, { method: 'POST' });
+    if (c?.success === false) throw new Error(c.error || 'Connect failed');
+    showToast('MCP connected', s.name || id, 'success');
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Failed: ' + (e?.message || String(e));
+    showToast('MCP setup failed', e?.message || String(e), 'error');
+  }
+  await loadMcpServers();
+  const cur = mcpServerById(id);
+  if (cur) openMcpServerView(id); // re-render detail with fresh status
+}
+
+function askPrometheusToSetupMcp(id) {
+  const s = mcpServerById(id);
+  if (!s) return;
+  const prompt = `Set up authentication for the MCP server "${s.name || id}" (${s.url || s.transport}). Research what auth it requires (bearer token, OAuth, API key, custom header, etc.), tell me exactly where to get the credential, and configure it via mcp_server_manage (set the right headers/env), then connect it and confirm its tools are available.`;
+  closeConnectorView();
+  if (typeof window.sendChat === 'function') window.sendChat(prompt);
+  else { const inp = document.getElementById('chat-input'); if (inp) { inp.value = prompt; inp.focus(); } }
+}
+
+async function mcpServerConnect(id) {
+  try {
+    showToast('Connecting…', id, 'info');
+    const r = await api(`/api/mcp/servers/${encodeURIComponent(id)}/connect`, { method: 'POST' });
+    if (r?.success === false) throw new Error(r.error || 'Connect failed');
+    showToast('MCP connected', id, 'success');
+  } catch (e) {
+    showToast('Connect failed', e?.message || String(e), 'error');
+  }
+  await loadMcpServers();
+}
+
+async function mcpServerDisconnect(id) {
+  try { await api(`/api/mcp/servers/${encodeURIComponent(id)}/disconnect`, { method: 'POST' }); } catch {}
+  await loadMcpServers();
+}
+
+async function mcpServerRemove(id) {
+  if (!confirm(`Remove MCP server "${id}"?`)) return;
+  try { await api(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }); showToast('MCP server removed', id, 'success'); } catch (e) { showToast('Remove failed', e?.message || String(e), 'error'); }
+  await loadMcpServers();
+}
+
+
+// ──────────────────────────────────────────────────────────────────────────
 // Add-plugin modal: Build with Prometheus / REST wizard / MCP / From URL
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -1412,3 +1699,12 @@ window.buildRestConnector = buildRestConnector;
 window.buildMcpConnector = buildMcpConnector;
 window.installFromUrl = installFromUrl;
 window.removeUserPlugin = removeUserPlugin;
+window.loadMcpServers = loadMcpServers;
+window.mcpServerConnect = mcpServerConnect;
+window.mcpServerDisconnect = mcpServerDisconnect;
+window.mcpServerRemove = mcpServerRemove;
+window.openMcpServerView = openMcpServerView;
+window.saveMcpServerAuth = saveMcpServerAuth;
+window.askPrometheusToSetupMcp = askPrometheusToSetupMcp;
+window.startMcpOAuth = startMcpOAuth;
+window.clearMcpOAuth = clearMcpOAuth;

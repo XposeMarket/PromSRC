@@ -25,7 +25,7 @@ import { routeTeamEvent } from '../teams/team-event-router';
 import { runTeamMemberRoomTurn, scheduleTeamMemberAutoWake, scheduleTeamMemberDirectWake } from '../teams/team-member-room';
 import { dismissTeamSuggestion } from '../teams/team-detector';
 import { claimAgentForTeamWorkspace } from '../teams/team-workspace';
-import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
+import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1686,36 +1686,72 @@ router.post('/api/teams/:id/workspace/:filename/record-read', (req, res) => {
 });
 
 // ─── Team Workspace API (duplicate block — kept in sync) ────────────────────
+function normalizeScheduleSkillIds(value: any): string[] {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id: any) => String(id || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeScheduleContextRefs(value: any, existing: any[] = []): any[] {
+  if (!Array.isArray(value)) return [];
+  const existingById = new Map((Array.isArray(existing) ? existing : []).map((ref: any) => [String(ref?.id || ''), ref]));
+  const now = Date.now();
+  return value.map((raw: any) => {
+    const title = String(raw?.title || '').trim().slice(0, 160);
+    const content = String(raw?.content || '').trim().slice(0, 12000);
+    if (!title || !content) return null;
+    const id = String(raw?.id || `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`).trim();
+    const prior = existingById.get(id) || {};
+    return {
+      id,
+      title,
+      content,
+      createdAt: Number(raw?.createdAt || raw?.created_at || prior?.createdAt || now) || now,
+      updatedAt: Number(raw?.updatedAt || raw?.updated_at || now) || now,
+    };
+  }).filter(Boolean);
+}
+
+function serializeSchedule(job: any): any {
+  const isEnabled = job.enabled !== false;
+  const isPaused  = job.status === 'paused';
+  const contextRefs = normalizeScheduleContextRefs(job.context_refs || job.contextReferences);
+  return {
+    id: job.id,
+    name: job.name,
+    prompt: job.prompt,
+    cron: job.schedule,
+    run_at: job.runAt,
+    timezone: job.tz,
+    enabled: isEnabled,
+    status: !isEnabled ? 'disabled' : isPaused ? 'paused' : (job.status || 'scheduled'),
+    next_run: job.nextRun,
+    last_run: job.lastRun,
+    last_result: (job.lastResult || '').slice(0, 200),
+    last_duration: job.lastDuration,
+    delivery_channel: job.delivery || 'web',
+    subagent_id: job.subagent_id || '',
+    team_id: job.team_id || '',
+    assignment_target: job.assignmentTarget || (job.team_id ? 'team' : (job.subagent_id ? 'subagent' : 'main')),
+    deliver_to_main_channel: job.deliverToMainChannel === true,
+    skillIds: normalizeScheduleSkillIds(job.skillIds),
+    context_refs: contextRefs,
+    contextReferences: contextRefs,
+  };
+}
+
 router.get('/api/schedules', (_req, res) => {
   const jobs = _cronScheduler.getJobs();
   res.json({
     success: true,
-    schedules: jobs.map((job: any) => {
-      const isEnabled = job.enabled !== false;
-      const isPaused  = job.status === 'paused';
-      return {
-        id: job.id,
-        name: job.name,
-        prompt: job.prompt,
-        cron: job.schedule,
-        run_at: job.runAt,
-        timezone: job.tz,
-        enabled: isEnabled,
-        status: !isEnabled ? 'disabled' : isPaused ? 'paused' : (job.status || 'scheduled'),
-        next_run: job.nextRun,
-        last_run: job.lastRun,
-        last_result: (job.lastResult || '').slice(0, 200),
-        last_duration: job.lastDuration,
-        delivery_channel: job.delivery || 'web',
-        subagent_id: job.subagent_id || '',
-        team_id: job.team_id || '',
-      };
-    }),
+    schedules: jobs.map((job: any) => serializeSchedule(job)),
   });
 });
 
 router.post('/api/schedules', (req: any, res: any) => {
-  const { name, pattern, prompt, timezone, delivery_channel, confirm, subagent_id, team_id, reference_links } = req.body;
+  const { name, pattern, prompt, timezone, delivery_channel, confirm, subagent_id, team_id } = req.body;
   
   // Require confirmation for create
   if (confirm !== true) {
@@ -1731,16 +1767,8 @@ router.post('/api/schedules', (req: any, res: any) => {
   }
   
   try {
-    // Piece 6: append reference links block to prompt if provided
-    const refLinks: string[] = Array.isArray(reference_links)
-      ? reference_links.map((u: any) => String(u).trim()).filter(Boolean)
-      : [];
-    const promptWithRefs = refLinks.length > 0
-      ? `${String(prompt).slice(0, 2000)}\n\n[REFERENCE LINKS]\n${refLinks.map(u => `- ${u}`).join('\n')}`
-      : String(prompt).slice(0, 2000);
-
     const scheduleName = String(name).slice(0, 100);
-    const promptText = promptWithRefs;
+    const promptText = String(prompt).slice(0, 2000);
     const selectedTeamId = String(team_id || '').trim();
     if (selectedTeamId && !getManagedTeam(selectedTeamId)) {
       return res.status(404).json({ success: false, error: `Team not found: ${selectedTeamId}` });
@@ -1761,17 +1789,15 @@ router.post('/api/schedules', (req: any, res: any) => {
       ...(selectedTeamId ? { team_id: selectedTeamId } : {}),
       assignmentTarget: selectedTeamId ? 'team' : (selectedSubagentId ? 'subagent' : 'main'),
       deliverToMainChannel: !selectedTeamId && !selectedSubagentId,
+      skillIds: normalizeScheduleSkillIds(req.body?.skillIds),
+      context_refs: normalizeScheduleContextRefs(req.body?.context_refs || req.body?.contextReferences),
     } as any);
 
     const ownerAgent = selectedTeamId
       ? { agentId: '', created: false }
       : selectedSubagentId
       ? { agentId: selectedSubagentId, created: false }
-      : ensureScheduleOwnerAgent({
-          scheduleId: job.id,
-          scheduleName,
-          prompt: promptText,
-        });
+      : { agentId: 'main', created: false };
     if (selectedSubagentId) {
       ensureScheduleRuntimeForAgent(selectedSubagentId, {
         scheduleId: job.id,
@@ -1781,11 +1807,11 @@ router.post('/api/schedules', (req: any, res: any) => {
     }
     if (!selectedTeamId && !selectedSubagentId) {
       _cronScheduler.updateJob(job.id, {
-        subagent_id: ownerAgent.agentId,
+        subagent_id: undefined,
         assignmentTarget: 'main',
         deliverToMainChannel: true,
       } as any);
-      job.subagent_id = ownerAgent.agentId;
+      job.subagent_id = undefined;
       (job as any).assignmentTarget = 'main';
       (job as any).deliverToMainChannel = true;
     }
@@ -1799,6 +1825,8 @@ router.post('/api/schedules', (req: any, res: any) => {
         next_run: job.nextRun,
         subagent_id: job.subagent_id || '',
         team_id: job.team_id || '',
+        skillIds: normalizeScheduleSkillIds((job as any).skillIds),
+        context_refs: normalizeScheduleContextRefs((job as any).context_refs || (job as any).contextReferences),
         schedule_owner_created: ownerAgent.created,
       },
     });
@@ -1845,11 +1873,7 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
         ? { agentId: '', created: false }
         : incomingSubagentId
         ? { agentId: incomingSubagentId, created: false }
-        : ensureScheduleOwnerAgent({
-            scheduleId: req.params.id,
-            scheduleName: effectiveName,
-            prompt: effectivePrompt,
-          });
+        : { agentId: 'main', created: false };
       if (incomingSubagentId) {
         ensureScheduleRuntimeForAgent(incomingSubagentId, {
           scheduleId: req.params.id,
@@ -1862,6 +1886,9 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
       const normalizedSchedule = hasPattern
         ? normalizeScheduleSpec(req.body.schedule || { pattern }, timezone || existing?.tz || 'UTC')
         : null;
+      const hasSkillIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'skillIds');
+      const hasContextRefs = Object.prototype.hasOwnProperty.call(req.body || {}, 'context_refs')
+        || Object.prototype.hasOwnProperty.call(req.body || {}, 'contextReferences');
 
 	    const updates: any = {
 	      name: name ? String(name).slice(0, 100) : undefined,
@@ -1870,10 +1897,14 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
 	      schedule: normalizedSchedule?.kind === 'recurring' ? normalizedSchedule.cron : undefined,
 	      runAt: normalizedSchedule?.kind === 'one-shot' ? normalizedSchedule.runAt : undefined,
         tz: timezone || undefined,
-        subagent_id: incomingTeamId ? undefined : ownerAgent.agentId,
+        subagent_id: incomingTeamId || !incomingSubagentId ? undefined : ownerAgent.agentId,
         team_id: incomingTeamId || undefined,
         assignmentTarget,
         deliverToMainChannel,
+        skillIds: hasSkillIds ? normalizeScheduleSkillIds(req.body.skillIds) : undefined,
+        context_refs: hasContextRefs
+          ? normalizeScheduleContextRefs(req.body.context_refs || req.body.contextReferences, existing?.context_refs || existing?.contextReferences)
+          : undefined,
 	    };
 	    const job = _cronScheduler.updateJob(req.params.id, updates);
     
@@ -2233,6 +2264,65 @@ router.get('/api/teams/:id/chat/stream', (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/schedules/:id/context-refs', (req: any, res: any) => {
+  try {
+    const job = _cronScheduler.getJobStatus(req.params.id)?.job;
+    if (!job) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    res.json({ success: true, refs: normalizeScheduleContextRefs(job.context_refs || job.contextReferences) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/api/schedules/:id/context-refs', (req: any, res: any) => {
+  try {
+    const job = _cronScheduler.getJobStatus(req.params.id)?.job;
+    if (!job) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    const title = String(req.body?.title || '').trim();
+    const content = String(req.body?.content || '').trim();
+    if (!title || !content) return res.status(400).json({ success: false, error: 'title and content are required' });
+    const refs = normalizeScheduleContextRefs(job.context_refs || job.contextReferences);
+    const now = Date.now();
+    const ref = { id: `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`, title, content, createdAt: now, updatedAt: now };
+    refs.push(ref);
+    _cronScheduler.updateJob(req.params.id, { context_refs: refs });
+    res.json({ success: true, ref });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put('/api/schedules/:id/context-refs/:refId', (req: any, res: any) => {
+  try {
+    const job = _cronScheduler.getJobStatus(req.params.id)?.job;
+    if (!job) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    const refs = normalizeScheduleContextRefs(job.context_refs || job.contextReferences);
+    const idx = refs.findIndex((ref: any) => ref.id === req.params.refId);
+    if (idx < 0) return res.status(404).json({ success: false, error: 'Ref not found' });
+    if (req.body?.title !== undefined) refs[idx].title = String(req.body.title).trim().slice(0, 160);
+    if (req.body?.content !== undefined) refs[idx].content = String(req.body.content).trim().slice(0, 12000);
+    refs[idx].updatedAt = Date.now();
+    _cronScheduler.updateJob(req.params.id, { context_refs: refs });
+    res.json({ success: true, ref: refs[idx] });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.delete('/api/schedules/:id/context-refs/:refId', (req: any, res: any) => {
+  try {
+    const job = _cronScheduler.getJobStatus(req.params.id)?.job;
+    if (!job) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    const refs = normalizeScheduleContextRefs(job.context_refs || job.contextReferences);
+    const filtered = refs.filter((ref: any) => ref.id !== req.params.refId);
+    if (filtered.length === refs.length) return res.status(404).json({ success: false, error: 'Ref not found' });
+    _cronScheduler.updateJob(req.params.id, { context_refs: filtered });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

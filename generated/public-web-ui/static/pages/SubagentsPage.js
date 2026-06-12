@@ -565,6 +565,7 @@ function setSubagentStreamingState(agentId, state) {
 // ── Per-agent detail state (reset on agent switch) ─────────────────────────
 let subagentSystemPrompt = '';
 let subagentContextRefs = [];
+let subagentSkillsCache = [];
 let subagentMemoryNotes = '';
 let subagentHbConfig = { enabled: false, intervalMinutes: 30 };
 let subagentHbMd = '';
@@ -777,14 +778,16 @@ function closeSubagentDetail() {
 
 async function loadSubagentBoardData(agentId) {
   try {
-    const [histData, chatData, ctxData] = await Promise.all([
+    const [histData, chatData, ctxData, skillsData] = await Promise.all([
       api(`/api/agents/history?agentId=${encodeURIComponent(agentId)}&limit=30`),
       api(`/api/agents/${encodeURIComponent(agentId)}/chat?limit=100`),
       api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ refs: [] })),
+      api('/api/skills').catch(() => ({ skills: [] })),
     ]);
     subagentRuns = histData.history || [];
     subagentChatHistory = preserveSubagentProcessMetadata(normalizeSubagentChatMessages(chatData.messages || []));
     subagentContextRefs = ctxData.refs || [];
+    subagentSkillsCache = Array.isArray(skillsData.skills) ? skillsData.skills : [];
   } catch (err) {
     console.error('[Subagents] loadData:', err);
   }
@@ -827,6 +830,15 @@ function addSubagentProcessEntry(type, content, extra = undefined, state = subag
   if (!state) return;
   if (!Array.isArray(state.processEntries)) state.processEntries = [];
   state.processEntries.push(newSubagentProcessEntry(type, content, extra));
+}
+
+
+function formatSubagentElapsedSeconds(seconds) {
+  const total = Math.max(1, Math.round(Number(seconds || 0)));
+  if (total < 60) return `${total}s`;
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return secs ? `${mins}m ${secs}s` : `${mins}m`;
 }
 
 function formatSubagentProcessLines(entries) {
@@ -894,22 +906,51 @@ function sameSubagentChatTurn(a, b) {
   return !Number.isFinite(delta) || delta < 5 * 60 * 1000;
 }
 
+function isLocalSubagentChatMessage(message) {
+  const id = String(message?.id || '');
+  const metadata = message?.metadata || {};
+  return !!(metadata.pending || metadata.localStreamingFallback || id.startsWith('pending_') || id.startsWith('stream_'));
+}
+
+function mergeSubagentChatMessageProcessMetadata(preferred, fallback) {
+  if (!preferred) return fallback;
+  if (!fallback) return preferred;
+  if (hasSubagentProcessMetadata(preferred) || !hasSubagentProcessMetadata(fallback)) return preferred;
+  return {
+    ...preferred,
+    metadata: {
+      ...(preferred.metadata || {}),
+      processEntries: Array.isArray(fallback.metadata?.processEntries) ? [...fallback.metadata.processEntries] : [],
+      thinking: String(fallback.metadata?.thinking || '').trim(),
+    },
+  };
+}
+
+function dedupeSubagentChatMessages(messages) {
+  const out = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const existingIndex = out.findIndex((entry) => sameSubagentChatTurn(entry, message));
+    if (existingIndex < 0) {
+      out.push(message);
+      continue;
+    }
+    const existing = out[existingIndex];
+    const preferIncoming = isLocalSubagentChatMessage(existing) && !isLocalSubagentChatMessage(message);
+    const preferred = preferIncoming ? message : existing;
+    const fallback = preferIncoming ? existing : message;
+    out[existingIndex] = mergeSubagentChatMessageProcessMetadata(preferred, fallback);
+  }
+  return out;
+}
+
 function preserveSubagentProcessMetadata(freshMessages, localMessages = subagentChatHistory) {
   const localWithProcess = (Array.isArray(localMessages) ? localMessages : []).filter(hasSubagentProcessMetadata);
-  if (localWithProcess.length === 0) return freshMessages;
-  return (Array.isArray(freshMessages) ? freshMessages : []).map((fresh) => {
+  const mapped = (Array.isArray(freshMessages) ? freshMessages : []).map((fresh) => {
     if (hasSubagentProcessMetadata(fresh)) return fresh;
     const local = localWithProcess.find((m) => sameSubagentChatTurn(m, fresh));
-    if (!local) return fresh;
-    return {
-      ...fresh,
-      metadata: {
-        ...(fresh.metadata || {}),
-        processEntries: Array.isArray(local.metadata?.processEntries) ? [...local.metadata.processEntries] : [],
-        thinking: String(local.metadata?.thinking || '').trim(),
-      },
-    };
+    return local ? mergeSubagentChatMessageProcessMetadata(fresh, local) : fresh;
   });
+  return dedupeSubagentChatMessages(mapped);
 }
 
 function commitSubagentStreamingReply(agentId, streamState, content, startTs, extraMetadata = {}) {
@@ -936,6 +977,7 @@ function commitSubagentStreamingReply(agentId, streamState, content, startTs, ex
   if (!subagentChatHistory.some((m) => m.id === message.id)) {
     const durationSec = Math.round((Date.now() - startTs) / 1000);
     subagentChatHistory.push(mergeStreamingStateIntoMessage({ ...message, duration: durationSec }));
+    subagentChatHistory = dedupeSubagentChatMessages(subagentChatHistory);
   }
   setSubagentStreamingState(agentId, null);
   if (activeSubagentId === agentId && subagentDetailTab === 'chat') renderSubagentBoard(agentId);
@@ -975,12 +1017,15 @@ function renderSubagentStreamingBubble(agent) {
       </div>`
     : '';
   const content = String(streamState.content || streamState.finalReply || '').trim();
+  const elapsedSec = Math.max(1, Math.round((Date.now() - Number(streamState.startedAt || Date.now())) / 1000));
+  const workLine = `<div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:6px">Working for ${formatSubagentElapsedSeconds(elapsedSec)}</div>`;
   return `
     <div class="msg ai">
       <div class="msg-avatar" style="background:${color};border-color:${color};font-size:15px">${emoji}</div>
       <div class="msg-body">
         <div class="msg-role">${escHtml(agent.name || agent.id)}</div>
         ${progressHtml}
+        ${workLine}
         ${content
           ? `<div id="subagent-streaming-text-content" class="msg-content" style="white-space:pre-wrap;word-break:break-word">${escHtml(content)}</div>`
           : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`}
@@ -1197,6 +1242,28 @@ function renderSubagentOverviewTab(agent) {
     ['Last Run', lastRunEntry ? `<span style="font-size:12px">${timeAgo(lastRunEntry.finishedAt)} · ${lastRunEntry.success?'✅':'❌'} · ${lastRunEntry.stepCount||0} steps</span>` : '<span style="color:var(--muted)">Never</span>'],
   ];
 
+  const attachedSkillIds = Array.isArray(agent.skillIds) ? agent.skillIds : [];
+  const attachedSkills = attachedSkillIds.map(id => subagentSkillsCache.find(s => s.id === id) || { id, name: id, description: 'Missing from current skill registry' });
+  const selectedSkillsHtml = attachedSkills.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+        ${attachedSkills.map(skill => `
+          <span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 8px;font-size:11px;max-width:100%">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">${escHtml(skill.name || skill.id)}</span>
+            <button type="button" onclick="removeSubagentSkill('${escHtml(agent.id)}','${escHtml(skill.id)}')" style="border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:0" title="Remove skill">&times;</button>
+          </span>`).join('')}
+      </div>`
+    : `<div style="border:1px dashed var(--line);border-radius:8px;padding:10px;font-size:11px;color:var(--muted);background:var(--panel-2);margin-top:8px">No skills attached yet.</div>`;
+  const availableSkills = subagentSkillsCache.filter(skill => skill?.id && !attachedSkillIds.includes(skill.id));
+  const skillsPickerHtml = availableSkills.length
+    ? `<div style="display:flex;gap:6px;margin-top:8px">
+        <select id="sa-skill-select-${escHtml(agent.id)}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:7px 10px;font-size:12px;background:var(--panel);color:var(--text)">
+          <option value="">Attach installed skill…</option>
+          ${availableSkills.map(skill => `<option value="${escHtml(skill.id)}">${escHtml(skill.name || skill.id)}</option>`).join('')}
+        </select>
+        <button type="button" onclick="addSubagentSkill('${escHtml(agent.id)}')" style="border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:7px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer">Attach</button>
+      </div>`
+    : `<div style="font-size:10px;color:var(--muted);margin-top:8px">All installed skills are already attached.</div>`;
+
   // Context reference cards
   const refsHtml = subagentContextRefs.length === 0
     ? `<div style="border:1px dashed var(--line);border-radius:8px;padding:12px;font-size:11px;color:var(--muted);background:var(--panel-2)">No context references yet. Add one above — it will be injected when this agent is spawned.</div>`
@@ -1235,6 +1302,18 @@ function renderSubagentOverviewTab(agent) {
       </div>
 
       ${_renderAgentModelPicker(agent, 'sa-model')}
+
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Attached Skills</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">Attached playbooks are surfaced when this agent runs.</div>
+          </div>
+          <button type="button" onclick="reloadSubagentSkills('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:7px;padding:4px 9px;font-size:11px;font-weight:600;cursor:pointer">Refresh</button>
+        </div>
+        ${selectedSkillsHtml}
+        ${skillsPickerHtml}
+      </div>
 
       <div style="display:flex;gap:8px">
         <button onclick="spawnSubagentTask('${escHtml(agent.id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer">▶ Run Task</button>
@@ -1416,12 +1495,14 @@ function renderSubagentChatTab(agent) {
     const contentHtml = isUser
       ? `<div class="msg-content">${!isDirectUserMessage ? `<div style="font-size:11px;font-weight:800;margin-bottom:6px;opacity:0.78">${label}${source ? ` · ${source}` : ''}</div>` : ''}${renderSubagentAttachmentPreviews(attachments, agent.id, m.id)}${visibleContent ? escHtml(visibleContent) : ''}</div>`
       : `<div class="msg-content markdown-body">${typeof marked !== 'undefined' ? marked.parse(m.content) : escHtml(m.content)}</div>`;
-    const metaHtml = stepCount ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${stepCount} steps${durationSec ? ` · ${durationSec}s` : ''}</div>` : '';
+    const workHtml = !isUser && durationSec ? `<div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:6px">Worked for ${formatSubagentElapsedSeconds(durationSec)}</div>` : '';
+    const metaHtml = stepCount ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${stepCount} steps${durationSec ? ` · ${formatSubagentElapsedSeconds(durationSec)}` : ''}</div>` : '';
     return `
       <div class="msg ${isUser ? 'user' : 'ai'}">
         ${!isUser ? `<div class="msg-avatar" style="background:${agentColor(agent.id)};border-color:${agentColor(agent.id)};font-size:15px">${agentEmoji(agent)}</div>` : ''}
         <div class="msg-body">
           ${!isUser ? `<div class="msg-role">${label} · <span style="font-weight:400;opacity:0.75">${timeAgo(m.ts)}${source ? ` · ${source}` : ''}</span></div>` : ''}
+          ${workHtml}
           ${contentHtml}
           ${processHtml}
           ${metaHtml}
@@ -1518,6 +1599,7 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
     finalReply: '',
     fallbackTimer: null,
     source: 'localSse',
+    startedAt: startTs,
   };
   setSubagentStreamingState(agentId, streamState);
   renderSubagentBoard(agentId);
@@ -1819,6 +1901,51 @@ async function saveSubagentCtxRef(agentId) {
     subagentContextRefs = [...subagentContextRefs, d.ref];
     if (titleEl) titleEl.value = '';
     if (contentEl) contentEl.value = '';
+    renderSubagentBoard(agentId);
+  } catch (err) {
+    showToast('Error', err.message, 'error');
+  }
+}
+
+async function saveSubagentSkillIds(agentId, skillIds) {
+  const nextIds = Array.from(new Set((Array.isArray(skillIds) ? skillIds : []).map(id => String(id || '').trim()).filter(Boolean)));
+  const current = subagentsData.find(a => a.id === agentId);
+  if (!current) return;
+  try {
+    const d = await api(`/api/agents/${encodeURIComponent(agentId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ skillIds: nextIds }),
+    });
+    const updated = d.agent || { ...current, skillIds: nextIds };
+    const idx = subagentsData.findIndex(a => a.id === agentId);
+    if (idx >= 0) subagentsData[idx] = { ...subagentsData[idx], ...updated };
+    renderSubagentBoard(agentId);
+  } catch (err) {
+    showToast('Error', err.message, 'error');
+  }
+}
+
+async function addSubagentSkill(agentId) {
+  const select = document.getElementById(`sa-skill-select-${agentId}`);
+  const skillId = String(select?.value || '').trim();
+  if (!skillId) return;
+  const agent = subagentsData.find(a => a.id === agentId);
+  const current = Array.isArray(agent?.skillIds) ? agent.skillIds : [];
+  await saveSubagentSkillIds(agentId, [...current, skillId]);
+  showToast('Saved', 'Skill attached to subagent', 'success');
+}
+
+async function removeSubagentSkill(agentId, skillId) {
+  const agent = subagentsData.find(a => a.id === agentId);
+  const current = Array.isArray(agent?.skillIds) ? agent.skillIds : [];
+  await saveSubagentSkillIds(agentId, current.filter(id => id !== skillId));
+  showToast('Saved', 'Skill removed from subagent', 'success');
+}
+
+async function reloadSubagentSkills(agentId) {
+  try {
+    const data = await api('/api/skills?refresh=1');
+    subagentSkillsCache = Array.isArray(data.skills) ? data.skills : [];
     renderSubagentBoard(agentId);
   } catch (err) {
     showToast('Error', err.message, 'error');
@@ -2325,6 +2452,7 @@ wsEventBus.on('subagent_chat_message', (data) => {
   ));
   if (!subagentChatHistory.some(m => m.id === message.id)) {
     subagentChatHistory.push(message);
+    subagentChatHistory = dedupeSubagentChatMessages(subagentChatHistory);
   }
   if (subagentDetailTab === 'chat') {
     renderSubagentBoard(activeSubagentId);
@@ -2339,7 +2467,8 @@ wsEventBus.on('subagent_chat_stream_event', (data) => {
   const agentId = String(data.agentId || '').trim();
   if (!agentId) return;
   const streamState = getSubagentStreamingState(agentId);
-  if (streamState?.source === 'localSse' && streamState.completed !== true) return;
+  if (streamState?.source === 'localSse') return;
+  if (!streamState && ['final', 'done'].includes(String(data.event || ''))) return;
   applySubagentExternalStreamEvent(agentId, {
     type: data.event,
     ...(data.data || {}),
@@ -2389,6 +2518,9 @@ window.refreshSubagentDetail = refreshSubagentDetail;
 window.openSubagentSettings = openSubagentSettings;
 // Context refs
 window.saveSubagentCtxRef = saveSubagentCtxRef;
+window.addSubagentSkill = addSubagentSkill;
+window.removeSubagentSkill = removeSubagentSkill;
+window.reloadSubagentSkills = reloadSubagentSkills;
 window.openSubagentCtxRefModal = openSubagentCtxRefModal;
 window.closeSubagentCtxRefModal = closeSubagentCtxRefModal;
 window.updateSubagentCtxRef = updateSubagentCtxRef;

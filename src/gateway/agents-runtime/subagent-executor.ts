@@ -118,6 +118,34 @@ const buildTeamDispatchTaskLazy: typeof import('../teams/team-dispatch-runtime')
   const { buildTeamDispatchTask } = getTeamDispatchRuntime();
   return buildTeamDispatchTask(...args);
 };
+
+function normalizeScheduleToolSkillIds(value: any): string[] {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id: any) => String(id || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeScheduleToolContextRefs(value: any, existing: any[] = []): any[] {
+  if (!Array.isArray(value)) return [];
+  const existingById = new Map((Array.isArray(existing) ? existing : []).map((ref: any) => [String(ref?.id || ''), ref]));
+  const now = Date.now();
+  return value.map((raw: any) => {
+    const title = String(raw?.title || '').trim().slice(0, 160);
+    const content = String(raw?.content || '').trim().slice(0, 12000);
+    if (!title || !content) return null;
+    const id = String(raw?.id || `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`).trim();
+    const prior = existingById.get(id) || {};
+    return {
+      id,
+      title,
+      content,
+      createdAt: Number(raw?.createdAt || raw?.created_at || prior?.createdAt || now) || now,
+      updatedAt: Number(raw?.updatedAt || raw?.updated_at || now) || now,
+    };
+  }).filter(Boolean);
+}
 import {
   browserOpen,
   browserSetProfileTarget,
@@ -1654,6 +1682,38 @@ export async function executeTool(name: string, args: any, workspacePath: string
       .map((line, index) => `${clampedStart + index}: ${line}`)
       .join('\n');
     return snippet || `${clampedStart}:`;
+  }
+  // Line-ending–tolerant find/replace. LLMs emit `\n` in their find/replace
+  // text, but files on disk (especially on Windows checkouts) are often CRLF,
+  // so a strict content.includes(find) misses every multi-line edit. This tries
+  // the exact text first, then an all-CRLF and an all-LF variant, and aligns the
+  // replacement's newlines to the file so we never introduce mixed line endings.
+  // Returns null when nothing matches (caller then builds the recovery message).
+  function applyTolerantFindReplace(
+    content: string,
+    find: string,
+    replace: string,
+    replaceAll: boolean,
+  ): { updated: string; count: number } | null {
+    const fileUsesCRLF = /\r\n/.test(content);
+    const variants: string[] = [];
+    const pushVariant = (v: string) => { if (v && !variants.includes(v)) variants.push(v); };
+    pushVariant(find);                                            // exact as provided
+    pushVariant(find.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')); // fully CRLF
+    pushVariant(find.replace(/\r\n/g, '\n'));                     // fully LF
+    for (const variant of variants) {
+      if (!content.includes(variant)) continue;
+      // Align replacement newlines to the file's dominant style.
+      const normalizedReplace = fileUsesCRLF
+        ? replace.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')
+        : replace.replace(/\r\n/g, '\n');
+      const count = replaceAll ? content.split(variant).length - 1 : 1;
+      const updated = replaceAll
+        ? content.split(variant).join(normalizedReplace)
+        : content.replace(variant, normalizedReplace);
+      return { updated, count };
+    }
+    return null;
   }
   function buildTextNotFoundRecovery(displayPath: string, content: string, findText: string, readToolName: string): string {
     const allLines = content.split('\n');
@@ -4351,10 +4411,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'find_replace');
 	          if (blocked) return blocked;
 	          const content = fs.readFileSync(resolved.absPath, 'utf-8');
-	          if (!content.includes(find)) return { name, args, result: buildTextNotFoundRecovery(resolved.normalizedRel, content, find, 'read_file'), error: true };
-	          const updated = args.replace_all === true ? content.split(find).join(replace) : content.replace(find, replace);
+	          const fr = applyTolerantFindReplace(content, find, replace, args.replace_all === true);
+		          if (!fr) return { name, args, result: buildTextNotFoundRecovery(resolved.normalizedRel, content, find, 'read_file'), error: true };
+	          const updated = fr.updated;
 	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
-	          return { name, args, result: `OK ${resolved.normalizedRel}: replaced ${args.replace_all === true ? 'all occurrences' : 'first occurrence'}.`, error: false };
+	          return { name, args, result: `OK ${resolved.normalizedRel}: replaced ${args.replace_all === true ? `all occurrences (${fr.count})` : 'first occurrence'}.`, error: false };
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -5079,12 +5140,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
 	        const content = fs.readFileSync(resolved.absPath, 'utf-8');
-	        if (!content.includes(findText)) {
+	        if (!applyTolerantFindReplace(content, findText, replaceText, args.replace_all === true)) {
 	          return { name, args, result: buildTextNotFoundRecovery(resolved.normalizedRel, content, findText, 'read_prom_file'), error: true };
 	        }
 	        const replaceAll = args.replace_all === true;
-	        const occurrences = replaceAll ? (content.split(findText).length - 1) : 1;
-	        const updated = replaceAll ? content.split(findText).join(replaceText) : content.replace(findText, replaceText);
+	        const _frProm = applyTolerantFindReplace(content, findText, replaceText, replaceAll)!;
+	        const occurrences = _frProm.count; const updated = _frProm.updated;
 	        fs.writeFileSync(resolved.absPath, updated, 'utf-8');
 	        console.log(`[edit_prom] find_replace_prom: ${resolved.normalizedRel} (session: ${sessionId})`);
 	        return { name, args, result: `OK ${resolved.normalizedRel} updated (${occurrences} occurrence${occurrences !== 1 ? 's' : ''} replaced). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
@@ -5302,14 +5363,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: buildPathNotFoundRecovery(`src/${frs_rel}`, frs_srcRoot, frs_rel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const frs_content = fs.readFileSync(frs_absPath, 'utf-8');
-        if (!frs_content.includes(frs_find)) {
+        if (!applyTolerantFindReplace(frs_content, frs_find, frs_replace, args.replace_all === true)) {
           return { name, args, result: buildTextNotFoundRecovery(`src/${frs_rel}`, frs_content, frs_find, 'read_source'), error: true };
         }
         const frs_replaceAll = args.replace_all === true;
-        const frs_occurrences = frs_replaceAll ? (frs_content.split(frs_find).length - 1) : 1;
-        const frs_updated = frs_replaceAll
-          ? frs_content.split(frs_find).join(frs_replace)
-          : frs_content.replace(frs_find, frs_replace);
+        const _frSrc = applyTolerantFindReplace(frs_content, frs_find, frs_replace, frs_replaceAll)!; const frs_occurrences = _frSrc.count;
+        const frs_updated = _frSrc.updated; void (frs_replaceAll
+          ? 0
+          : 0);
         const frs_invalidEdit = rejectInvalidSourceEdit(name, args, frs_absPath, frs_updated);
         if (frs_invalidEdit) return frs_invalidEdit;
         fs.writeFileSync(frs_absPath, frs_updated, 'utf-8');
@@ -5575,14 +5636,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: buildPathNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_webUiRoot, frwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const frwu_content = fs.readFileSync(frwu_absPath, 'utf-8');
-        if (!frwu_content.includes(frwu_find)) {
+        if (!applyTolerantFindReplace(frwu_content, frwu_find, frwu_replace, args.replace_all === true)) {
           return { name, args, result: buildTextNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_content, frwu_find, 'read_webui_source'), error: true };
         }
         const frwu_replaceAll = args.replace_all === true;
-        const frwu_occurrences = frwu_replaceAll ? (frwu_content.split(frwu_find).length - 1) : 1;
-        const frwu_updated = frwu_replaceAll
-          ? frwu_content.split(frwu_find).join(frwu_replace)
-          : frwu_content.replace(frwu_find, frwu_replace);
+        const _frWui = applyTolerantFindReplace(frwu_content, frwu_find, frwu_replace, frwu_replaceAll)!; const frwu_occurrences = _frWui.count;
+        const frwu_updated = _frWui.updated; void (frwu_replaceAll
+          ? 0
+          : 0);
         const frwu_invalidEdit = rejectInvalidSourceEdit(name, args, frwu_absPath, frwu_updated);
         if (frwu_invalidEdit) return frwu_invalidEdit;
         fs.writeFileSync(frwu_absPath, frwu_updated, 'utf-8');
@@ -10639,6 +10700,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             team_id: requestedTeamId,
             assignmentTarget,
             deliverToMainChannel: assignmentTarget === 'main',
+            skillIds: normalizeScheduleToolSkillIds(args.skillIds),
+            context_refs: normalizeScheduleToolContextRefs(args.context_refs || args.contextReferences),
           } as any);
           if (requestedSubagentId) {
             ensureScheduleRuntimeForAgent(requestedSubagentId, {
@@ -10723,6 +10786,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
           if (args.model_override !== undefined || args.model !== undefined) {
             const mv = String(args.model_override || args.model || '').trim();
             patch.model = mv || undefined;
+          }
+          if (args.skillIds !== undefined) {
+            patch.skillIds = normalizeScheduleToolSkillIds(args.skillIds);
+          }
+          if (args.context_refs !== undefined || args.contextReferences !== undefined) {
+            const existingJob = deps.cronScheduler.getJobStatus(jobId)?.job;
+            patch.context_refs = normalizeScheduleToolContextRefs(
+              args.context_refs || args.contextReferences,
+              existingJob?.context_refs || existingJob?.contextReferences || []
+            );
           }
           if (args.delivery !== undefined || args.channel !== undefined) {
             const delivery = (args.delivery && typeof args.delivery === 'object') ? args.delivery : {};
@@ -12659,7 +12732,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const ids = allAgents.map((a: any) => a.id).join(', ') || 'none';
             return { name, args, result: `Agent "${agentId}" not found. Available IDs: ${ids}`, error: true };
           }
-          return { name, args, result: JSON.stringify(agent, null, 2), error: false };
+          let contextRefs: any[] = [];
+          try {
+            const workspacePath = getConfig().getConfig().workspace?.path || process.cwd();
+            contextRefs = new SubagentManager(workspacePath).listContextReferences(agentId);
+          } catch {}
+          return { name, args, result: JSON.stringify({ ...agent, context_refs: contextRefs }, null, 2), error: false };
         } catch (err: any) {
 	          return { name, args, result: `agent_info error: ${err.message}`, error: true };
 	        }
@@ -12694,8 +12772,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	                max_steps: updated.max_steps,
 	                timeout_ms: updated.timeout_ms,
 	                identity: updated.identity || null,
-		                allowed_tools: updated.allowed_tools || [],
+	                allowed_tools: updated.allowed_tools || [],
 	                forbidden_tools: updated.forbidden_tools || [],
+	                skillIds: updated.skillIds || [],
+	                context_refs: subagentMgr.listContextReferences(agentId),
 	                modified_at: updated.modified_at,
 	              },
 	            }, null, 2),

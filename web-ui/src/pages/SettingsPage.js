@@ -2833,7 +2833,7 @@ async function _updateHeartbeatMdPreview(agentId) {
   const preview = document.getElementById('schedule-heartbeat-preview');
   const content = document.getElementById('schedule-heartbeat-content');
   if (!preview || !content) return;
-  if (!agentId) {
+  if (!agentId || agentId === '__main__') {
     preview.style.display = 'none';
     content.textContent = '';
     return;

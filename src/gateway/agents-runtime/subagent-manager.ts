@@ -35,6 +35,7 @@ export interface SubagentDefinition {
   allowed_tools: string[];  // Legacy metadata only. Team dispatch runtime does not restrict by this list.
   forbidden_tools: string[];  // Explicit blacklist
   mcp_servers?: string[];    // Piece 4: MCP server IDs this subagent can use
+  skillIds?: string[];       // Skill playbooks attached to this subagent
   
   // Behavior
   system_instructions: string;    // Detailed personality/rules
@@ -51,6 +52,14 @@ export interface SubagentDefinition {
   modified_at: number;
   created_by: 'user' | 'ai';
   version: string;
+}
+
+export interface SubagentContextReference {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface SubagentCallRequest {
@@ -76,6 +85,8 @@ export interface SubagentCallRequest {
     allowedWorkPaths?: string[];
     allowed_work_paths?: string[];
     mcp_servers?: string[];  // Piece 4
+    skillIds?: string[];
+    context_refs?: Array<{ title: string; content: string }>;
     system_instructions: string;
     heartbeat_instructions?: string;  // Written to HEARTBEAT.md
     constraints: string[];
@@ -172,6 +183,107 @@ export class SubagentManager {
     return resolved;
   }
 
+  private contextRefsPath(agentDir: string): string {
+    return path.join(agentDir, 'context-refs.json');
+  }
+
+  private normalizeContextRefInput(input: any): { title: string; content: string } | null {
+    if (!input || typeof input !== 'object') return null;
+    const title = String(input.title || '').trim();
+    const content = String(input.content || '').trim();
+    if (!title || !content) return null;
+    return { title, content };
+  }
+
+  private makeContextRef(input: { title: string; content: string }): SubagentContextReference {
+    const now = Date.now();
+    return {
+      id: `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      title: input.title,
+      content: input.content,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  private loadContextRefsForAgentDir(agentDir: string): SubagentContextReference[] {
+    const refsPath = this.contextRefsPath(agentDir);
+    try {
+      if (!fs.existsSync(refsPath)) return [];
+      const parsed = JSON.parse(fs.readFileSync(refsPath, 'utf-8'));
+      const refs = Array.isArray(parsed?.refs) ? parsed.refs : [];
+      return refs
+        .map((ref: any) => ({
+          id: String(ref?.id || '').trim(),
+          title: String(ref?.title || '').trim(),
+          content: String(ref?.content || '').trim(),
+          createdAt: Number(ref?.createdAt) || Date.now(),
+          updatedAt: Number(ref?.updatedAt) || Number(ref?.createdAt) || Date.now(),
+        }))
+        .filter((ref: SubagentContextReference) => ref.id && ref.title && ref.content);
+    } catch {
+      return [];
+    }
+  }
+
+  private saveContextRefsForAgentDir(agentDir: string, refs: SubagentContextReference[]): void {
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(this.contextRefsPath(agentDir), JSON.stringify({ refs }, null, 2), 'utf-8');
+  }
+
+  private applyContextRefsPatch(agentDir: string, patchValue: any, mode?: unknown): SubagentContextReference[] {
+    if (patchValue === undefined) return this.loadContextRefsForAgentDir(agentDir);
+
+    let refs = this.loadContextRefsForAgentDir(agentDir);
+    const appendRefs = (items: any[]) => {
+      const nextRefs = items
+        .map((item) => this.normalizeContextRefInput(item))
+        .filter(Boolean)
+        .map((item) => this.makeContextRef(item as { title: string; content: string }));
+      refs = [...refs, ...nextRefs];
+    };
+
+    if (Array.isArray(patchValue)) {
+      refs = String(mode || '').toLowerCase() === 'replace' ? [] : refs;
+      appendRefs(patchValue);
+    } else if (patchValue && typeof patchValue === 'object') {
+      if (Array.isArray(patchValue.replace)) {
+        refs = [];
+        appendRefs(patchValue.replace);
+      }
+      if (Array.isArray(patchValue.add)) {
+        appendRefs(patchValue.add);
+      }
+      if (Array.isArray(patchValue.update)) {
+        const byId = new Map(refs.map((ref) => [ref.id, ref]));
+        for (const item of patchValue.update) {
+          const id = String(item?.id || '').trim();
+          const existing = id ? byId.get(id) : null;
+          if (!existing) continue;
+          const title = item.title !== undefined ? String(item.title || '').trim() : existing.title;
+          const content = item.content !== undefined ? String(item.content || '').trim() : existing.content;
+          if (!title || !content) continue;
+          byId.set(id, { ...existing, title, content, updatedAt: Date.now() });
+        }
+        refs = refs.map((ref) => byId.get(ref.id) || ref);
+      }
+      const deletes = Array.isArray(patchValue.delete)
+        ? patchValue.delete
+        : Array.isArray(patchValue.remove)
+          ? patchValue.remove
+          : [];
+      if (deletes.length > 0) {
+        const ids = new Set(deletes.map((item: any) => String(typeof item === 'object' ? item?.id : item || '').trim()).filter(Boolean));
+        refs = refs.filter((ref) => !ids.has(ref.id));
+      }
+    } else {
+      throw new Error('context_refs must be an array or an object with add/update/delete/replace arrays');
+    }
+
+    this.saveContextRefsForAgentDir(agentDir, refs);
+    return refs;
+  }
+
   /**
    * Get or create a subagent and spawn it with a task
    */
@@ -199,7 +311,10 @@ export class SubagentManager {
         task_id: '',
         status: 'created',
         result_text: `Subagent "${subagentId}" is ready (not executed).`,
-        extracted_data: undefined,
+        extracted_data: {
+          skillIds: definition.skillIds || [],
+          context_refs: this.listContextReferences(subagentId),
+        },
       };
     }
 
@@ -358,6 +473,7 @@ export class SubagentManager {
       allowed_tools: params.allowed_tools ?? [],
       forbidden_tools: params.forbidden_tools ?? [],
       mcp_servers: params.mcp_servers ?? [],
+      skillIds: Array.isArray(params.skillIds) ? Array.from(new Set(params.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean))) : [],
       system_instructions: params.system_instructions,
       constraints: params.constraints,
       success_criteria: params.success_criteria,
@@ -410,6 +526,10 @@ export class SubagentManager {
         '',
         'Use this for durable observations, decisions, open threads, and follow-up context that belongs to this subagent.',
       ].join('\n'), 'utf-8');
+    }
+
+    if (params.context_refs !== undefined) {
+      this.applyContextRefsPatch(agentDir, params.context_refs, 'replace');
     }
 
     // Register into config.json agents array so agent_list() can see it
@@ -489,6 +609,17 @@ export class SubagentManager {
     const contextSection = contextData
       ? `\n\nCONTEXT DATA:\n${JSON.stringify(contextData, null, 2)}`
       : '';
+    const attachedSkills = Array.isArray(def.skillIds)
+      ? Array.from(new Set(def.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean)))
+      : [];
+    const attachedSkillsSection = attachedSkills.length
+      ? [
+          `ATTACHED SKILLS:`,
+          `Before acting, call skill_read for each relevant attached skill ID and follow the loaded instructions.`,
+          ...attachedSkills.map((id) => `- ${id}`),
+          ``,
+        ].join('\n')
+      : '';
 
     return [
       `[SUBAGENT: ${def.name}]`,
@@ -510,6 +641,7 @@ export class SubagentManager {
             ``,
           ].join('\n')
         : '',
+      attachedSkillsSection,
       `TASK: ${taskPrompt}`,
       contextSection,
       ``,
@@ -563,6 +695,7 @@ export class SubagentManager {
         workspace: path.join(this.storePath, def.id),
         executionWorkspace: def.executionWorkspace || this.workspacePath,
         allowedWorkPaths: this.normalizeAllowedWorkPaths(def.allowedWorkPaths),
+        skillIds: def.skillIds || [],
         model: def.model,
         maxSteps: def.max_steps,
         subagentType: 'dynamic',
@@ -626,7 +759,7 @@ export class SubagentManager {
       }
     }
 
-	    const arrayFields = ['allowed_tools', 'forbidden_tools', 'constraints'] as const;
+	    const arrayFields = ['allowed_tools', 'forbidden_tools', 'constraints', 'skillIds'] as const;
     for (const field of arrayFields) {
       if (patch[field] !== undefined) {
         if (!Array.isArray(patch[field])) throw new Error(`${field} must be an array`);
@@ -697,6 +830,10 @@ export class SubagentManager {
       fs.writeFileSync(path.join(agentDir, 'HEARTBEAT.md'), heartbeat || `# HEARTBEAT.md - ${next.name}\n`, 'utf-8');
     }
 
+    if (patch.context_refs !== undefined) {
+      this.applyContextRefsPatch(agentDir, patch.context_refs, patch.context_refs_mode);
+    }
+
     const configManager = getConfig();
     const config = configManager.getConfig();
     const agents: any[] = Array.isArray(config.agents) ? [...config.agents] : [];
@@ -709,6 +846,7 @@ export class SubagentManager {
       subagentType: 'dynamic',
       executionWorkspace: next.executionWorkspace,
       allowedWorkPaths: next.allowedWorkPaths,
+      skillIds: next.skillIds || [],
       modifiedAt: next.modified_at,
 	      teamRole: next.teamRole,
       teamAssignment: next.teamAssignment,
@@ -731,6 +869,12 @@ export class SubagentManager {
 
     console.log(`[SubagentManager] Updated subagent: ${safeId}`);
     return next;
+  }
+
+  listContextReferences(id: string): SubagentContextReference[] {
+    const safeId = String(id || '').trim();
+    if (!/^[a-zA-Z0-9_-]+$/.test(safeId)) return [];
+    return this.loadContextRefsForAgentDir(path.join(this.storePath, safeId));
   }
 
   /**
@@ -894,6 +1038,23 @@ export const subagentSpawnTool = {
             type: 'array',
             items: { type: 'string' },
             description: 'MCP server IDs this subagent can use (e.g., ["github", "brave_search"]). Tools from these servers will be injected as mcp__serverId__toolName.',
+          },
+          skillIds: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Skill IDs to attach to this subagent. The runtime will remind the agent to skill_read these playbooks before relevant work.',
+          },
+          context_refs: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['title', 'content'],
+              properties: {
+                title: { type: 'string' },
+                content: { type: 'string' },
+              },
+            },
+            description: 'Context reference cards to attach when creating this subagent.',
           },
           system_instructions: {
             type: 'string',

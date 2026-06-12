@@ -110,6 +110,23 @@ export function getAgentTeamScheduleTools(): any[] {
                   items: { type: 'string' },
                   description: 'Explicit tool blacklist (e.g., ["run_command", "create_file"])',
                 },
+                skillIds: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Installed skill IDs to attach to this subagent. The runtime will remind the agent to skill_read relevant attached skills before work.',
+                },
+                context_refs: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    required: ['title', 'content'],
+                    properties: {
+                      title: { type: 'string', description: 'Short title for this context card' },
+                      content: { type: 'string', description: 'Context content to attach to the subagent profile' },
+                    },
+                  },
+                  description: 'Context reference cards to attach when creating this subagent. These are the same context refs shown in the Agents UI.',
+                },
                 system_instructions: {
                   type: 'string',
                   description: 'Full system prompt / instructions for this agent. Written to system_prompt.md and used every time the agent runs.',
@@ -202,6 +219,55 @@ export function getAgentTeamScheduleTools(): any[] {
             success_criteria: { type: 'string', description: 'Full replacement success criteria' },
             allowed_tools: { type: 'array', items: { type: 'string' }, description: 'Legacy full replacement individual tool names' },
             forbidden_tools: { type: 'array', items: { type: 'string' }, description: 'Full replacement explicit blacklist' },
+            skillIds: { type: 'array', items: { type: 'string' }, description: 'Full replacement list of installed skill IDs attached to this subagent' },
+            context_refs: {
+              type: 'object',
+              description: 'Update attached context refs. Use add:[{title,content}], update:[{id,title?,content?}], delete:[id], or replace:[{title,content}]. agent_info/agent_update return context ref IDs.',
+              properties: {
+                add: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    required: ['title', 'content'],
+                    properties: {
+                      title: { type: 'string' },
+                      content: { type: 'string' },
+                    },
+                  },
+                  description: 'Context refs to append',
+                },
+                update: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    required: ['id'],
+                    properties: {
+                      id: { type: 'string' },
+                      title: { type: 'string' },
+                      content: { type: 'string' },
+                    },
+                  },
+                  description: 'Existing context refs to update by ID',
+                },
+                delete: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Context ref IDs to remove',
+                },
+                replace: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    required: ['title', 'content'],
+                    properties: {
+                      title: { type: 'string' },
+                      content: { type: 'string' },
+                    },
+                  },
+                  description: 'Replace all existing context refs with this list',
+                },
+              },
+            },
             model: { type: 'string', description: 'Optional model override; pass an empty string to clear' },
             max_steps: { type: 'number', description: 'Maximum tool calls before stopping' },
             timeout_ms: { type: 'number', description: 'Max milliseconds to wait' },
@@ -567,6 +633,24 @@ export function getAgentTeamScheduleTools(): any[] {
             model_override: { type: 'string', description: 'Optional model override for this scheduled job' },
 	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use as the schedule owner. Omit to have Prometheus itself own and execute the scheduled job. IMPORTANT — during update: omit this field entirely to preserve existing ownership (do NOT re-pass it just because the job previously had one). Only include subagent_id if you explicitly want to change who owns the job. Pass an empty string "" to return ownership to Prometheus itself.' },
             team_id: { type: 'string', description: 'Optional: managed team ID. When set, the scheduled run wakes that team manager first; the manager derives the run from team goal/memory and dispatches agents accordingly.' },
+            skillIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Installed skill IDs to attach to this scheduled job. The runtime will remind the scheduled run to skill_read relevant attached skills before work.',
+            },
+            context_refs: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['title', 'content'],
+                properties: {
+                  id: { type: 'string', description: 'Optional existing context reference ID for updates.' },
+                  title: { type: 'string', description: 'Short title for this schedule context card.' },
+                  content: { type: 'string', description: 'Context content injected when the schedule runs.' },
+                },
+              },
+              description: 'Full replacement schedule context cards for create/update. Use schedule_job_detail first if preserving existing cards while updating.',
+            },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
           },
@@ -663,6 +747,24 @@ export function getAgentTeamScheduleTools(): any[] {
             delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web. session_target is legacy; use subagent_id/team_id to change ownership, or clear subagent_id to return ownership to Prometheus itself.' },
             model_override: { type: 'string', description: 'Optional model override; empty string clears.' },
             enabled: { type: 'boolean', description: 'Enable or pause the job.' },
+            skillIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Full replacement list of installed skill IDs attached to this scheduled job.',
+            },
+            context_refs: {
+              type: 'array',
+              description: 'Full replacement schedule context cards. Use schedule_job_detail first if preserving existing cards while editing.',
+              items: {
+                type: 'object',
+                required: ['title', 'content'],
+                properties: {
+                  id: { type: 'string' },
+                  title: { type: 'string' },
+                  content: { type: 'string' },
+                },
+              },
+            },
             expected_outputs: {
               type: 'array',
               description: 'Expected output specs: strings or {path, requiredText, absentText} objects.',

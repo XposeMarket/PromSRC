@@ -410,7 +410,7 @@ function buildHotRestartTargets(restartCtx: RestartContext, fallbackSessionId: s
     });
   }
 
-  if (targets.size === 0 && restartCtx.devEditContinuation) {
+  if (targets.size === 0 && (restartCtx.devEditContinuation || previousSessionId)) {
     const targetSessionId = previousSessionId || (restartCtx.originChannel === 'mobile' ? 'mobile_default' : fallbackSessionId);
     targets.set(targetSessionId, {
       sessionId: targetSessionId,
@@ -436,6 +436,14 @@ export async function runBootMd(
     const results = await Promise.all(targets.map(async (target, index) => {
       const { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog } = getRecentConversationForRestart(target.sessionId);
       const internalSessionId = `${sessionMeta.id}_${sanitizeIdPart(target.sessionId)}_${index}`;
+      const hotRestartContextPacket = buildHotRestartCallerContext(
+        restartCtx,
+        excerpt,
+        lastUserRequest,
+        lastAssistantResponse,
+        recentToolLog,
+        target.recoverySummary,
+      );
       let finalText = '';
       try {
         const result = await handleChat(
@@ -446,7 +454,7 @@ export async function runBootMd(
               console.log(`[boot-md]  -> ${String(data?.action || 'unknown')} (unexpected during hot restart)`);
             }
           },
-          buildHotRestartCallerContext(restartCtx, excerpt, lastUserRequest, lastAssistantResponse, recentToolLog, target.recoverySummary),
+          hotRestartContextPacket,
         );
         finalText = String(result.text || '').trim();
       } catch (err: any) {
@@ -464,6 +472,18 @@ export async function runBootMd(
           role: 'assistant',
           content: finalText,
           timestamp: Date.now(),
+          toolLog: hotRestartContextPacket,
+          processEntries: [{
+            ts: new Date().toLocaleTimeString(),
+            type: 'info',
+            actor: 'Prom Restart',
+            content: hotRestartContextPacket,
+            extra: {
+              packetType: 'hot_restart_context',
+              restartReason: restartCtx.reason,
+              devEditId: restartCtx.devEditContinuation?.id,
+            },
+          }],
         });
       } catch (e: any) {
         console.warn(`[boot-md] Failed to persist hot restart message for ${target.sessionId}: ${e?.message}`);

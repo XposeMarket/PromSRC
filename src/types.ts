@@ -240,6 +240,11 @@ export interface AgentDefinition {
   allowedWorkPaths?: string[];
 
   /**
+   * Skill playbooks attached to this agent and surfaced when it runs.
+   */
+  skillIds?: string[];
+
+  /**
    * Model override for this agent.
    * Format: "provider/model" e.g. "ollama/qwen3:4b" or "openai/gpt-4o"
    * If omitted, uses the global llm.provider + model.

@@ -767,6 +767,7 @@ initChannelsRouter({
   telegramChannel,
   telegramPersonaBots,
   telegramTeamRoomBridge,
+  skillsManager,
   dispatchToAgent: _dispatchToAgent,
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride, flags, turnOrigin) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride, flags, turnOrigin),

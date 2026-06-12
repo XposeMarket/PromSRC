@@ -3016,6 +3016,25 @@ body.side-chat-split-active #chat-view > .chat-input-area {
   white-space: normal;
   word-break: break-word;
 }
+.live-turn-vision-preview {
+  display: block;
+  width: min(180px, 100%);
+  max-height: 112px;
+  margin-top: 7px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+.live-turn-vision-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 112px;
+  object-fit: contain;
+}
 .live-turn-think {
   border-color: rgba(99, 102, 241, 0.45);
   color: color-mix(in srgb, var(--text) 78%, var(--muted) 22%);
@@ -3031,6 +3050,9 @@ body.side-chat-split-active #chat-view > .chat-input-area {
 }
 .live-turn-error {
   border-color: rgba(239, 68, 68, 0.55);
+}
+.live-turn-vision {
+  border-color: rgba(56, 189, 248, 0.55);
 }
 .live-turn-md > :first-child { margin-top: 0; }
 .live-turn-md > :last-child { margin-bottom: 0; }
@@ -6111,3 +6133,192 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
 .pc-arrow:hover { background: #f9fafb; box-shadow: 0 4px 14px rgba(0,0,0,0.22); }
 [data-theme="dark"] .pc-arrow { background: #2a2a2a; border-color: #3a3a3a; color: #e5e7eb; }
 [data-theme="dark"] .pc-arrow:hover { background: #333; }
+
+/* ── Command palette (Ctrl+K) & shortcuts help (Ctrl+/) ──────────────────── */
+.cmdk-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(10, 20, 40, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 18px 18px;
+}
+.cmdk-card {
+  width: min(640px, 96vw);
+  max-height: 70vh;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.cmdk-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  font-size: 15px;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+.cmdk-results {
+  overflow-y: auto;
+  max-height: 50vh;
+  padding: 6px;
+}
+.cmdk-section-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  padding: 8px 10px 4px;
+}
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.cmdk-item.active, .cmdk-item:hover {
+  background: var(--panel-2);
+}
+.cmdk-item-icon {
+  font-size: 16px;
+  width: 22px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.cmdk-item-text {
+  flex: 1;
+  min-width: 0;
+}
+.cmdk-item-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmdk-item-sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmdk-item-kbd {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+.cmdk-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.cmdk-footer {
+  display: flex;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+.cmdk-footer kbd,
+.shortcuts-help-combo kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 2px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.shortcuts-help-card {
+  width: min(520px, 96vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+.shortcuts-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 800;
+  color: var(--text);
+}
+.shortcuts-help-close {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.shortcuts-help-body {
+  padding: 8px 16px 16px;
+  overflow-y: auto;
+}
+.shortcuts-help-group {
+  margin-top: 14px;
+}
+.shortcuts-help-group:first-child {
+  margin-top: 4px;
+}
+.shortcuts-help-group-title {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.shortcuts-help-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--text);
+}
+.shortcuts-help-row:last-child {
+  border-bottom: none;
+}
+.shortcuts-help-plus {
+  margin: 0 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Flash highlight used by the command palette to point at a settings control
+   after jumping to it from search. */
+.cmdk-highlight {
+  animation: cmdkHighlightFlash 1.6s ease-out;
+  border-radius: 8px;
+}
+@keyframes cmdkHighlightFlash {
+  0% { background-color: rgba(249, 115, 22, 0.35); box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.45); }
+  100% { background-color: transparent; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+}

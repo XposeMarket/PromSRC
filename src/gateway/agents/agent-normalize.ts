@@ -20,6 +20,9 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   if (raw?.teamAssignment !== undefined) normalized.teamAssignment = String(raw.teamAssignment || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
   if (raw?.model !== undefined) normalized.model = String(raw.model || '').trim();
+  if (Array.isArray(raw?.skillIds)) {
+    normalized.skillIds = Array.from(new Set(raw.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean)));
+  }
   if (typeof raw?.default === 'boolean') normalized.default = raw.default;
   if (raw?.maxSteps !== undefined) {
     const n = Number(raw.maxSteps);

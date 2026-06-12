@@ -77,6 +77,22 @@ const STATIC_MIME: Record<string, string> = {
 
 const RAW_FILE_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
 
+function isStreamingHttpRequest(req: http.IncomingMessage): boolean {
+  const method = String(req.method || '').toUpperCase();
+  const rawUrl = String(req.url || '/');
+  const pathname = rawUrl.split('?')[0];
+  const accept = String(req.headers.accept || '').toLowerCase();
+
+  if (accept.includes('text/event-stream')) return true;
+  if (method === 'POST' && pathname === '/api/chat') return true;
+  if (method === 'POST' && pathname === '/api/voice-agent/input') return true;
+  if (method === 'POST' && /^\/api\/teams\/[^/]+\/chat$/.test(pathname)) return true;
+  if (method === 'GET' && /^\/api\/bg-tasks\/[^/]+\/stream$/.test(pathname)) return true;
+  if (method === 'GET' && (pathname === '/api/teams/events' || /^\/api\/teams\/[^/]+\/events$/.test(pathname))) return true;
+
+  return false;
+}
+
 function isInsideRoot(filePath: string, root: string): boolean {
   const resolved = path.resolve(filePath);
   const resolvedRoot = path.resolve(root);
@@ -271,14 +287,13 @@ export function createServer(
   redirectHttpsPort?: number,
 ): ServerBundle {
   const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
-    const pathname = String(req.url || '').split('?')[0];
-    const isChatSseRequest = String(req.method || '').toUpperCase() === 'POST' && pathname === '/api/chat';
-    if (!isChatSseRequest) {
+    const isStreamingRequest = isStreamingHttpRequest(req);
+    if (!isStreamingRequest) {
       res.setHeader('Connection', 'close');
       res.shouldKeepAlive = false;
     }
     const destroyRequestSocket = () => {
-      if (isChatSseRequest) return;
+      if (isStreamingRequest) return;
       setImmediate(() => {
         try { req.socket.destroy(); } catch {}
       });
@@ -315,14 +330,18 @@ export function createServer(
     socket.setNoDelay(true);
     socket.setKeepAlive(true, 30_000);
     socket.setTimeout(0);
-    socket.on('end', () => setImmediate(() => {
+    const destroyEndedHttpSocket = () => setImmediate(() => {
       try { socket.destroy(); } catch {}
-    }));
+    });
+    socket.on('end', destroyEndedHttpSocket);
     socket.on('close', () => httpSockets.delete(socket));
     socket.on('error', () => {});
   });
   server.on('upgrade', (req, socket, head) => {
     httpSockets.delete(socket);
+    socket.listeners('end').forEach((listener) => {
+      if (listener.name === 'destroyEndedHttpSocket') socket.off('end', listener as any);
+    });
     let pathname = '';
     try {
       pathname = new URL(String(req.url || ''), 'http://localhost').pathname;
@@ -401,6 +420,7 @@ export function createServer(
     }
     console.log('[Prom] WS connected');
     ws.on('pong', () => { missedPongs = 0; });
+    ws.on('message', () => { missedPongs = 0; });
     heartbeatTimer = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) {
         clearHeartbeat();
