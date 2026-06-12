@@ -14716,9 +14716,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const records = String(output || '').split(String.fromCharCode(0)).filter(Boolean);
             for (let i = 0; i < records.length; i += 1) {
               const record = records[i] || '';
-              if (record.length < 4) continue;
-              const statusCode = record.slice(0, 2);
-              const firstPath = record.slice(3).replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+              const match = record.match(/^(.{2}) (.+)$/s);
+              if (!match) continue;
+              const statusCode = match[1] || '';
+              const firstPath = String(match[2] || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
               if (!firstPath) continue;
               paths.add(firstPath);
               if ((statusCode.includes('R') || statusCode.includes('C')) && i + 1 < records.length) {
@@ -14728,6 +14729,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
               }
             }
             return Array.from(paths);
+          };
+          const isTrackedPath = (relPath: string): boolean => {
+            const check = run(`git ls-files --error-unmatch -- ${quoteArg(relPath)}`, 15_000);
+            return check.success;
+          };
+          const isValidGitPathspec = (relPath: string): boolean => {
+            if (!relPath || relPath.startsWith('../') || path.isAbsolute(relPath)) return false;
+            return fsmod.existsSync(path.join(repoRoot, relPath)) || isTrackedPath(relPath);
+          };
+          const repairSyncPathspec = (relPath: string): string => {
+            const normalized = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+            if (isValidGitPathspec(normalized)) return normalized;
+            const likelySrc = `s${normalized}`;
+            if (normalized.startsWith('rc/') && isValidGitPathspec(likelySrc)) return likelySrc;
+            return '';
           };
           const simpleGlobMatches = (pattern: string, value: string): boolean => {
             const parts = String(pattern || '').split('*');
@@ -14758,18 +14774,47 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }
             return simpleGlobMatches(normalizedPattern, normalizedPath);
           };
+          const getSyncExcludedDirtyPaths = (excludes: string[]): string[] => {
+            const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
+            if (!status.success) return [];
+            return Array.from(new Set(parsePorcelainPaths(status.output)
+              .map((relPath) => repairSyncPathspec(relPath) || relPath)
+              .filter((relPath) => excludes.some((pattern) => syncExcludeMatchesPath(pattern, relPath)))));
+          };
+          const stashSyncExcludedDirtyPaths = (excludes: string[]) => {
+            const paths = getSyncExcludedDirtyPaths(excludes);
+            if (!paths.length) {
+              return { success: true, didStash: false, paths, output: '', restore: () => ({ success: true, output: '' }) };
+            }
+            const message = `prom_repo_sync excluded local changes ${Date.now()}`;
+            const stash = run(`git stash push -u -m ${quoteArg(message)} -- ${paths.map(quoteArg).join(' ')}`, 60_000);
+            return {
+              success: stash.success,
+              didStash: stash.success,
+              paths,
+              output: stash.output,
+              restore: () => stash.success ? run('git stash pop --index stash@{0}', 60_000) : ({ success: true, output: '' }),
+            };
+          };
           const stageSyncEligibleChanges = () => {
             const excludes = Array.from(new Set([...readSyncExcludes(), ...findEmbeddedGitRepos()]));
             const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
             if (!status.success) return { add: status, excludes };
-            const eligiblePaths = parsePorcelainPaths(status.output)
+            const skippedInvalid: string[] = [];
+            const eligiblePaths = Array.from(new Set(parsePorcelainPaths(status.output)
+              .map((relPath) => {
+                const repaired = repairSyncPathspec(relPath);
+                if (!repaired) skippedInvalid.push(relPath);
+                return repaired;
+              })
+              .filter(Boolean)))
               .filter((relPath) => !excludes.some((pattern) => syncExcludeMatchesPath(pattern, relPath)));
             if (!eligiblePaths.length) {
               return {
                 add: {
                   success: true,
                   command: 'git add -A -- <no sync-eligible changes>',
-                  output: '',
+                  output: skippedInvalid.length ? `Skipped invalid git pathspecs:\n${skippedInvalid.join('\n')}` : '',
                   durationMs: 0,
                 },
                 excludes,
@@ -14798,7 +14843,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
               add: {
                 success: true,
                 command: `git add -A -- <${eligiblePaths.length} sync-eligible path${eligiblePaths.length === 1 ? '' : 's'}>`,
-                output: combinedOutput.trim(),
+                output: [
+                  combinedOutput.trim(),
+                  skippedInvalid.length ? `Skipped invalid git pathspecs:\n${skippedInvalid.join('\n')}` : '',
+                ].filter(Boolean).join('\n'),
                 durationMs: totalDurationMs,
               },
               excludes,
@@ -14849,14 +14897,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
           // Detect auth failures so we can ask the user for a PAT instead of returning a raw error.
           const isAuthFailure = (out: string): boolean =>
             /(authentication failed|could not read username|could not read password|terminal prompts disabled|invalid username or password|permission denied|fatal: could not read|remote: (invalid|permission|repository not found)|403 forbidden|401 unauthorized|support for password authentication was removed)/i.test(String(out || ''));
-          const patHelp = (action: string): string => [
+          const patHelp = (action: string): string => {
+            const saveTool = name === 'prom_repo_pull' ? 'prom_repo_push' : name;
+            return [
             `⚠️ ACTION REQUIRED — git ${action} failed because this machine has no working GitHub credentials and no PAT is saved.`,
             '',
             'Do this:',
             `1. Ask the user for a GitHub Personal Access Token (PAT) with "repo" scope (a classic token like ghp_… or a fine-grained token with read/write contents on XposeMarket/PromSRC).`,
-            `2. Once they hand it to you, call prom_repo_push again with set_pat:"<the token>" ${action === 'push' ? '(plus the commit message if you have one)' : '— this saves it'}. It is stored locally at ${patFile} (NOT committed to the repo) and reused automatically afterward.`,
+            `2. Once they hand it to you, call ${saveTool} again with set_pat:"<the token>" ${action === 'push' ? '(plus the commit message if you have one)' : '— this saves it'}. It is stored locally at ${patFile} (NOT committed to the repo) and reused automatically afterward.`,
             `3. Then retry the ${action}. No gateway restart is needed — the PAT is read live from disk on each call.`,
-          ].join('\n');
+            ].join('\n');
+          };
 
           const prefix = patSaveNote ? patSaveNote + '\n\n' : '';
 
@@ -14920,6 +14971,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const stagedCheck = run('git diff --cached --quiet', 30_000);
           const hasStaged = !stagedCheck.success;
           const message = String(args?.message || args?.commit_message || '').trim();
+          const retryTool = name === 'prom_repo_sync' ? 'prom_repo_sync' : 'prom_repo_push';
 
           // No explicit message but there ARE staged changes → return the diff so the model can author a real message.
           if (hasStaged && !message) {
@@ -14934,7 +14986,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
               name,
               args,
               result: [
-                `${patSaveNote ? patSaveNote + '\n\n' : ''}📋 No commit message provided. Staged sync-eligible changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", "Features added: …; Bug fixes: …"). Do not use a generic placeholder.`,
+                `${patSaveNote ? patSaveNote + '\n\n' : ''}📋 No commit message provided. Staged sync-eligible changes — here is what changed. Read it, then call ${retryTool} AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", "Features added: …; Bug fixes: …"). Do not use a generic placeholder.`,
+                name === 'prom_repo_sync'
+                  ? 'Keep using prom_repo_sync for the second call so the no-edit merge + push still happens. Do not switch to prom_repo_push or ad hoc run_command git commands for this sync.'
+                  : 'Keep using prom_repo_push for the second call. Do not switch to ad hoc run_command git commands for this push.',
                 `Sync excludes applied from .gitignore/.prom-repo-sync-ignore plus embedded repo detection (${syncExcludes.length} patterns).`,
                 '',
                 '── Files changed (name-status) ──',
@@ -14967,17 +15022,38 @@ export async function executeTool(name: string, args: any, workspacePath: string
           // ── prom_repo_sync: commit (done above) → pull/merge → push ──────────
           if (name === 'prom_repo_sync') {
             const beforeMerge = (run('git rev-parse HEAD', 15_000).output || '').trim();
+            const excludedStash = stashSyncExcludedDirtyPaths(syncExcludes);
+            if (!excludedStash.success) {
+              return {
+                name,
+                args,
+                result:
+                  `${prefix}❌ prom_repo_sync could not temporarily stash sync-excluded local changes before pull:\n` +
+                  `${excludedStash.paths.join('\n') || '(none)'}\n\n` +
+                  `${sanitize(excludedStash.output) || '(no output)'}`,
+                error: true,
+              };
+            }
             const pull = run(`git pull ${remoteArg} ${branch} --no-edit`, 180_000);
             const commitSafeNote = committed
               ? `Your local commit "${message.split(/\r?\n/)[0]}" is safe locally; nothing was pushed.\n\n`
               : '';
             if (!pull.success) {
               if (isAuthFailure(pull.output)) {
-                return { name, args, result: `${prefix}${commitSafeNote}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}`, error: true };
+                const restore = excludedStash.restore();
+                return {
+                  name,
+                  args,
+                  result:
+                    `${prefix}${commitSafeNote}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}\n\n` +
+                    `${excludedStash.didStash ? `Restored sync-excluded local changes after failed pull: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                  error: true,
+                };
               }
               const conflicts = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
               if (conflicts) {
                 run('git merge --abort', 30_000);
+                const restore = excludedStash.restore();
                 return {
                   name,
                   args,
@@ -14986,11 +15062,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
                     `Merge aborted. ${commitSafeNote}` +
                     'Resolve manually: open those files, keep the intended combined content, then run prom_repo_sync again. ' +
                     '(Editing a given file on only one machine at a time avoids this entirely.)\n\n' +
-                    `${sanitize(pull.output) || '(no output)'}`,
+                    `${sanitize(pull.output) || '(no output)'}\n\n` +
+                    `${excludedStash.didStash ? `Restored sync-excluded local changes after aborted merge: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
                   error: true,
                 };
               }
-              return { name, args, result: `${prefix}❌ prom_repo_sync: pull/merge failed.\n${commitSafeNote}${sanitize(pull.output) || '(no output)'}`, error: true };
+              const restore = excludedStash.restore();
+              return {
+                name,
+                args,
+                result:
+                  `${prefix}❌ prom_repo_sync: pull/merge failed.\n${commitSafeNote}${sanitize(pull.output) || '(no output)'}\n\n` +
+                  `${excludedStash.didStash ? `Restored sync-excluded local changes after failed pull: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                error: true,
+              };
             }
 
             // Push the merged result; retry once if origin advanced between our pull and push.
@@ -15005,11 +15090,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
               }
             }
             if (!push.success && isAuthFailure(push.output)) {
-              return { name, args, result: `${prefix}(Merge succeeded locally; your work is committed and safe.)\n\n${patHelp('push')}\n\nGit output:\n${sanitize(push.output) || '(no output)'}`, error: true };
+              const restore = excludedStash.restore();
+              return {
+                name,
+                args,
+                result:
+                  `${prefix}(Merge succeeded locally; your work is committed and safe.)\n\n${patHelp('push')}\n\nGit output:\n${sanitize(push.output) || '(no output)'}\n\n` +
+                  `${excludedStash.didStash ? `Restored sync-excluded local changes after failed push: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                error: true,
+              };
             }
 
             const mergedIn = beforeMerge ? (run(`git diff --name-only ${beforeMerge} HEAD`, 30_000).output || '').trim() : '';
             const lines: string[] = [];
+            let restoreFailed = false;
             if (patSaveNote) { lines.push(patSaveNote); lines.push(''); }
             lines.push(committed ? `Committed locally: ${message.split(/\r?\n/)[0]}` : 'No local changes to commit.');
             lines.push('');
@@ -15017,11 +15111,22 @@ export async function executeTool(name: string, args: any, workspacePath: string
             lines.push('');
             lines.push(`${push.success ? '✅' : '❌'} push to origin/${branch} ${push.success ? 'succeeded' : 'failed'} (${push.durationMs}ms).`);
             lines.push(sanitize(push.output) || '(no output)');
+            if (excludedStash.didStash) {
+              const restore = excludedStash.restore();
+              lines.push('');
+              lines.push(`Temporarily stashed sync-excluded local changes before pull:\n${excludedStash.paths.join('\n')}`);
+              lines.push(`Restore after sync: ${restore.success ? 'succeeded' : 'failed'}.`);
+              if (restore.output) lines.push(sanitize(restore.output));
+              if (!restore.success) {
+                restoreFailed = true;
+                lines.push('Your sync-excluded changes remain in the latest git stash; recover with git stash list / git stash pop after resolving the message above.');
+              }
+            }
             if (push.success) {
               lines.push('');
               lines.push(`Done — local and origin/${branch} now hold the combined history. Run prom_repo_sync (or prom_repo_pull) on the OTHER machine to bring these changes down there too.`);
             }
-            return { name, args, result: lines.join('\n'), error: !push.success };
+            return { name, args, result: lines.join('\n'), error: !push.success || restoreFailed };
           }
 
           const push = run(`git push ${remoteArg} ${branch}`, 180_000);
