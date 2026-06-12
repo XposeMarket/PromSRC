@@ -14876,6 +14876,61 @@ export async function executeTool(name: string, args: any, workspacePath: string
               restore: () => stash.success ? run('git stash pop --index stash@{0}', 60_000) : ({ success: true, output: '' }),
             };
           };
+          // File-glob (no-slash) exclude patterns like *.log/*.tmp/*.mp4. Directory patterns
+          // (workspace/oss agents/, .claude/, …) are intentionally NOT included here — we only
+          // auto-untrack disposable per-file noise, never whole tracked trees.
+          const fileGlobExcludes = (excludes: string[]): string[] =>
+            excludes.filter((p) => p && !p.includes('/') && !p.endsWith('/**'));
+          // Root cause of recurring sync conflicts: files matching the exclude list (e.g. *.log,
+          // *.mp4) were committed BEFORE the exclude list existed, so they keep diverging through
+          // history on both machines and conflict on every merge. Excluding them from *staging*
+          // does nothing once they are tracked. This untracks them (git rm --cached, keeps the
+          // working copy) so the removal propagates and they stop being synced for good.
+          const untrackSyncExcludedTrackedFiles = (excludes: string[]) => {
+            const globs = fileGlobExcludes(excludes);
+            if (!globs.length) return { removed: [] as string[], output: '' };
+            const listed = run('git ls-files -z', 30_000);
+            if (!listed.success) return { removed: [] as string[], output: listed.output };
+            const tracked = String(listed.output || '').split(String.fromCharCode(0)).filter(Boolean)
+              .map((p) => p.replace(/\\/g, '/'));
+            const toUntrack = tracked.filter((rel) => globs.some((pat) => syncExcludeMatchesPath(pat, rel)));
+            if (!toUntrack.length) return { removed: [] as string[], output: '' };
+            let combined = '';
+            for (let i = 0; i < toUntrack.length; i += 80) {
+              const batch = toUntrack.slice(i, i + 80);
+              const rm = run(`git rm --cached --ignore-unmatch -- ${batch.map(quoteArg).join(' ')}`, 60_000);
+              if (rm.output) combined += `${combined ? '\n' : ''}${rm.output}`;
+              if (!rm.success) return { removed: toUntrack.slice(0, i), output: combined };
+            }
+            // Keep them ignored so other workflows (manual git add -A) don't re-track them.
+            try {
+              const giPath = path.join(repoRoot, '.gitignore');
+              const existing = fsmod.existsSync(giPath) ? String(fsmod.readFileSync(giPath, 'utf-8')) : '';
+              const lines = new Set(existing.split(/\r?\n/).map((l) => l.trim()));
+              const missing = globs.filter((g) => !lines.has(g));
+              if (missing.length) {
+                const block = `${existing.endsWith('\n') || !existing ? '' : '\n'}# prom_repo_sync: auto-ignored exclude-matched noise\n${missing.join('\n')}\n`;
+                fsmod.appendFileSync(giPath, block, 'utf-8');
+                run('git add -- .gitignore', 15_000);
+              }
+            } catch {}
+            return { removed: toUntrack, output: combined };
+          };
+          // When a pull/merge conflicts only on exclude-matched noise files (the other machine
+          // still tracked a *.log we just untracked → modify/delete; or both appended to a log),
+          // resolve them by removing the file rather than aborting the whole sync.
+          const autoResolveExcludedConflicts = (excludes: string[]): string[] => {
+            const globs = fileGlobExcludes(excludes);
+            if (!globs.length) return [];
+            const unmerged = (run('git diff --name-only --diff-filter=U -z', 30_000).output || '')
+              .split(String.fromCharCode(0)).filter(Boolean).map((p) => p.replace(/\\/g, '/'));
+            const resolvable = unmerged.filter((rel) => globs.some((pat) => syncExcludeMatchesPath(pat, rel)));
+            if (!resolvable.length) return [];
+            for (let i = 0; i < resolvable.length; i += 80) {
+              run(`git rm -f --ignore-unmatch -- ${resolvable.slice(i, i + 80).map(quoteArg).join(' ')}`, 60_000);
+            }
+            return resolvable;
+          };
           const stageSyncEligibleChanges = () => {
             const excludes = Array.from(new Set([...readSyncExcludes(), ...findEmbeddedGitRepos()]));
             const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
@@ -15047,6 +15102,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
             };
           }
 
+          // Untrack any tracked files matching the file-glob excludes (*.log/*.mp4/…) so the
+          // exclude list actually takes effect instead of silently failing. git rm --cached stages
+          // the removal (working copies kept), which the commit below then records and propagates.
+          const untrackRes = untrackSyncExcludedTrackedFiles(syncExcludes);
+          const untrackNote = untrackRes.removed.length
+            ? `Untracked ${untrackRes.removed.length} exclude-matched file${untrackRes.removed.length === 1 ? '' : 's'} (kept on disk, now ignored):\n${untrackRes.removed.slice(0, 40).join('\n')}${untrackRes.removed.length > 40 ? `\n… +${untrackRes.removed.length - 40} more` : ''}`
+            : '';
+
           // git diff --cached --quiet exits 0 (success) when there is nothing staged.
           const stagedCheck = run('git diff --cached --quiet', 30_000);
           const hasStaged = !stagedCheck.success;
@@ -15114,6 +15177,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 error: true,
               };
             }
+            let autoResolvedNote = '';
             const pull = run(`git pull ${remoteArg} ${branch} --no-edit`, 180_000);
             const commitSafeNote = committed
               ? `Your local commit "${message.split(/\r?\n/)[0]}" is safe locally; nothing was pushed.\n\n`
@@ -15132,20 +15196,44 @@ export async function executeTool(name: string, args: any, workspacePath: string
               }
               const conflicts = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
               if (conflicts) {
-                run('git merge --abort', 30_000);
-                const restore = excludedStash.restore();
-                return {
-                  name,
-                  args,
-                  result:
-                    `${prefix}❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:\n${conflicts}\n\n` +
-                    `Merge aborted. ${commitSafeNote}` +
-                    'Resolve manually: open those files, keep the intended combined content, then run prom_repo_sync again. ' +
-                    '(Editing a given file on only one machine at a time avoids this entirely.)\n\n' +
-                    `${sanitize(pull.output) || '(no output)'}\n\n` +
-                    `${excludedStash.didStash ? `Restored sync-excluded local changes after aborted merge: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
-                  error: true,
-                };
+                // Auto-resolve conflicts that are only on exclude-matched noise files (logs, media,
+                // or a file we just untracked vs the other machine still tracking it). Removing them
+                // clears the conflict so a real diverged source file isn't held hostage by log churn.
+                const autoRemoved = autoResolveExcludedConflicts(syncExcludes);
+                const conflictsLeft = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
+                if (autoRemoved.length && !conflictsLeft) {
+                  const finish = run('git commit --no-edit', 60_000);
+                  if (finish.success) {
+                    autoResolvedNote = `Auto-resolved excluded-file merge conflicts by untracking: ${autoRemoved.slice(0, 40).join(', ')}${autoRemoved.length > 40 ? `, … +${autoRemoved.length - 40} more` : ''}`;
+                    // Fall through to the push step below — the merge is now complete.
+                  } else {
+                    run('git merge --abort', 30_000);
+                    const restore = excludedStash.restore();
+                    return {
+                      name,
+                      args,
+                      result:
+                        `${prefix}❌ prom_repo_sync: could not finalize merge after auto-resolving excluded files:\n${sanitize(finish.output) || '(no output)'}\n\n` +
+                        `${commitSafeNote}${excludedStash.didStash ? `Restored sync-excluded local changes: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                      error: true,
+                    };
+                  }
+                } else {
+                  run('git merge --abort', 30_000);
+                  const restore = excludedStash.restore();
+                  return {
+                    name,
+                    args,
+                    result:
+                      `${prefix}❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:\n${conflictsLeft || conflicts}\n\n` +
+                      `Merge aborted. ${commitSafeNote}` +
+                      'Resolve manually: open those files, keep the intended combined content, then run prom_repo_sync again. ' +
+                      '(Editing a given file on only one machine at a time avoids this entirely.)\n\n' +
+                      `${sanitize(pull.output) || '(no output)'}\n\n` +
+                      `${excludedStash.didStash ? `Restored sync-excluded local changes after aborted merge: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                    error: true,
+                  };
+                }
               }
               const restore = excludedStash.restore();
               return {
@@ -15186,6 +15274,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             let restoreFailed = false;
             if (patSaveNote) { lines.push(patSaveNote); lines.push(''); }
             lines.push(committed ? `Committed locally: ${message.split(/\r?\n/)[0]}` : 'No local changes to commit.');
+            if (untrackNote) { lines.push(''); lines.push(untrackNote); }
+            if (autoResolvedNote) { lines.push(''); lines.push(autoResolvedNote); }
             lines.push('');
             lines.push(mergedIn ? `Merged in from origin/${branch} (no overwrite):\n${mergedIn}` : `Nothing new on origin/${branch} to merge.`);
             lines.push('');
@@ -15240,6 +15330,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               : 'No local changes to commit — pushing any unpushed commits.',
           );
           if (commitOut) lines.push(commitOut);
+          if (untrackNote) { lines.push(''); lines.push(untrackNote); }
           lines.push('');
           lines.push(`${push.success ? '✅' : '❌'} push to origin/${branch} ${push.success ? 'succeeded' : 'failed'} (${push.durationMs}ms).`);
           lines.push(sanitize(push.output) || '(no output)');
