@@ -53,6 +53,11 @@ Keyboard shortcut flow (n + type + Control+Enter) worked cleanly again. Post app
 _Source: Main chat session; session: 99911502-2b14-43d3-8efa-b79dca4f945f; origin: Desktop app_
 Created standalone subagent `x_account_operator_raulinvests_v1` named Mara to operate Raul's X/Twitter account @Raulinvests. Scope: draft posts, post only when explicitly authorized, monitor mentions/bookmarks/searches, selective engagement, and audience growth around Prometheus/building, trading discipline, AI agents, Xpose/local business marketing, and founder/build-in-public. Hard constraints include no em dashes in tweets, preserve Raul's human/non-corporate voice, use web_fetch first for X URLs, verify auth for exact X surfaces, and close browser after X work.
 
+
+### [DEBUG] 2026-06-11T19:43:10.693Z
+_Source: Main chat session; session: 6253627f-291e-49a0-82fb-9df0ff608233_
+Desktop tools test on macOS: desktop_doctor/monitors/list_windows/screenshot/window_state mostly worked. desktop_get_window_text failed with `spawn powershell.exe ENOENT` on macOS. app_id launch for Calculator failed, raw `/System/Applications/Calculator.app` launched but reported no matching window before find_window found handle 7771. User steered: click visible desktop buttons instead of press_key unless using shortcuts, and avoid unnecessary modifiers.
+
 ### [DISCOVERY] 2026-06-11T20:09:45.028Z
 _Source: Main chat session; session: 7da43dd0-a536-4689-9cda-9a62a718eaf0; origin: Desktop app_
 AI smoke test 2026-06-11: desktop focus worked for Codex (handle 722350) and Claude (handle 66910), with fresh screenshots. Browser automation opened Reddit and X for query `Claude OpenClaw Hermes AI`; Reddit collected 6,359 chars across 5 passes, X collected 23 structured tweets / 12,957 chars. Main signals: Reddit discussion centers Hermes vs OpenClaw, Claude Code + Hermes, token costs, migration/necessity of harnesses; X live search centers AI Agent OS/command-center positioning, Claude+Hermes+OpenClaw dashboards, token-cost concerns, agent-native app platforms, shared memory/context pain.

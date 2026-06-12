@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import ApplicationServices
 
 // prometheus-desktop-helper
 //
@@ -136,14 +137,20 @@ func setClipboard(_ text: String) {
 }
 
 func launchApp(_ params: [String: Any]) throws {
-    guard let name = paramString(params, "name"), !name.isEmpty else {
-        throw HelperError.generic("launchApp requires 'name'")
+    let name = (paramString(params, "name") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let path = (paramString(params, "path") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let bundleId = (paramString(params, "bundleId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    if name.isEmpty && path.isEmpty && bundleId.isEmpty {
+        throw HelperError.generic("launchApp requires 'name', 'path', or 'bundleId'")
     }
-    // Absolute path to a .app bundle, or an application name resolved via `open -a`.
+    // Prefer bundle identifiers for deterministic launches, then absolute paths,
+    // then `open -a` name resolution.
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    if name.hasPrefix("/") {
-        proc.arguments = [name]
+    if !bundleId.isEmpty {
+        proc.arguments = ["-b", bundleId]
+    } else if !path.isEmpty {
+        proc.arguments = [path]
     } else {
         proc.arguments = ["-a", name]
     }
@@ -153,12 +160,14 @@ func launchApp(_ params: [String: Any]) throws {
         try proc.run()
         proc.waitUntilExit()
     } catch {
-        throw HelperError.generic("Failed to launch \(name): \(error.localizedDescription)")
+        let target = !bundleId.isEmpty ? bundleId : (!path.isEmpty ? path : name)
+        throw HelperError.generic("Failed to launch \(target): \(error.localizedDescription)")
     }
     if proc.terminationStatus != 0 {
         let data = err.fileHandleForReading.readDataToEndOfFile()
         let msg = String(data: data, encoding: .utf8) ?? "unknown error"
-        throw HelperError.generic("open failed for \(name): \(msg.trimmingCharacters(in: .whitespacesAndNewlines))")
+        let target = !bundleId.isEmpty ? bundleId : (!path.isEmpty ? path : name)
+        throw HelperError.generic("open failed for \(target): \(msg.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
 }
 

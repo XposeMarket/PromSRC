@@ -1,0 +1,33 @@
+# Prometheus repo sync excludes.
+# These are extra no-sync patterns used by prom_repo_push/prom_repo_sync before
+# staging. They protect local scratch repos, bulky downloads, runtime logs, and
+# generated/debug artifacts even if .gitignore misses something.
+#
+# Format:
+# - Blank lines and lines starting with # are ignored.
+# - Directory patterns ending with / exclude the whole tree.
+# - Other patterns are passed to git as exclude pathspecs.
+
+oss-agents/
+workspace/oss agents/
+workspace/oss-agents/
+workspace/audit/
+workspace/downloads/
+workspace/uploads/
+workspace/video-debug/
+workspace/logs/
+workspace/tmp/
+workspace/generated/
+workspace/creative-projects/
+native/desktop-helper-macos/.build/
+
+.prometheus/
+.agents/
+.claude/
+
+*.log
+*.tmp
+*.bak
+*.mp4
+*.mov
+*.webm

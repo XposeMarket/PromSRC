@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import ApplicationServices
 
 // Mouse + keyboard input via CGEvent. All require Accessibility permission to
 // affect the system; we preflight and throw a clear permission error otherwise.
@@ -15,6 +16,17 @@ private func requireAccessibility() throws {
 
 private func currentMouseLocation() -> CGPoint {
     return CGEvent(source: nil)?.location ?? .zero
+}
+
+/// Post an event either to the global HID tap (foreground app) or, when a target
+/// pid is given, directly to that process so input reaches an app WITHOUT raising
+/// it or stealing the user's focus (the Hermes/cua-driver background model).
+private func postEvent(_ event: CGEvent, pid: Int?) {
+    if let pid = pid, pid > 0 {
+        event.postToPid(pid_t(pid))
+    } else {
+        event.post(tap: .cghidEventTap)
+    }
 }
 
 func movePointer(_ params: [String: Any]) throws {
@@ -34,7 +46,12 @@ func click(_ params: [String: Any]) throws {
     let repeatCount = max(1, paramInt(params, "repeat") ?? 1)
     let modifiers = (params["modifiers"] as? [String]) ?? []
     let flags = modifierFlags(modifiers)
-    let pt = currentMouseLocation()
+    let pid = paramInt(params, "pid")
+    // When targeting a specific app (background click), the event carries its own
+    // coordinates; otherwise click at the current cursor position.
+    let cx = paramDouble(params, "x")
+    let cy = paramDouble(params, "y")
+    let pt = (cx != nil && cy != nil) ? CGPoint(x: cx!, y: cy!) : currentMouseLocation()
 
     let (downType, upType, cgButton): (CGEventType, CGEventType, CGMouseButton)
     switch button {
@@ -52,8 +69,8 @@ func click(_ params: [String: Any]) throws {
         // Encode multi-click count so the OS recognizes double/triple clicks.
         down.setIntegerValueField(.mouseEventClickState, value: Int64(i))
         up.setIntegerValueField(.mouseEventClickState, value: Int64(i))
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        postEvent(down, pid: pid)
+        postEvent(up, pid: pid)
         if i < repeatCount { usleep(80_000) }
     }
 }
@@ -62,9 +79,10 @@ func scroll(_ params: [String: Any]) throws {
     try requireAccessibility()
     let dx = paramInt(params, "deltaX") ?? 0
     let dy = paramInt(params, "deltaY") ?? 0
+    let pid = paramInt(params, "pid")
     if let ev = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
                         wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0) {
-        ev.post(tap: .cghidEventTap)
+        postEvent(ev, pid: pid)
     }
 }
 
@@ -75,25 +93,26 @@ func drag(_ params: [String: Any]) throws {
     let tx = paramDouble(params, "toX") ?? 0
     let ty = paramDouble(params, "toY") ?? 0
     let steps = max(2, min(100, paramInt(params, "steps") ?? 20))
+    let pid = paramInt(params, "pid")
     let from = CGPoint(x: fx, y: fy)
 
-    CGWarpMouseCursorPosition(from)
+    if pid == nil { CGWarpMouseCursorPosition(from) }
     usleep(30_000)
     if let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left) {
-        down.post(tap: .cghidEventTap)
+        postEvent(down, pid: pid)
     }
     for i in 1...steps {
         let x = fx + (tx - fx) * Double(i) / Double(steps)
         let y = fy + (ty - fy) * Double(i) / Double(steps)
         let pt = CGPoint(x: x, y: y)
         if let move = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: pt, mouseButton: .left) {
-            move.post(tap: .cghidEventTap)
+            postEvent(move, pid: pid)
         }
         usleep(8_000)
     }
     let to = CGPoint(x: tx, y: ty)
     if let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: to, mouseButton: .left) {
-        up.post(tap: .cghidEventTap)
+        postEvent(up, pid: pid)
     }
 }
 

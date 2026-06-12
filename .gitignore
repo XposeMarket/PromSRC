@@ -102,6 +102,7 @@ src/**/memory/*.md
 # --- NODE ---
 node_modules/
 /dist/
+native/desktop-helper-macos/.build/
 *.js.map
 /package/
 *.tgz
@@ -128,6 +129,8 @@ desktop.ini
 !workspace/**/
 
 # Bulky workspace projects/runtime folders are kept local and rebuilt/redone as needed.
+oss-agents/
+workspace/oss agents/
 workspace/oss-agents/
 workspace/Prometheus Website/
 workspace/xposemarket-site/
@@ -167,6 +170,9 @@ workspace/generated/**
 !workspace/.prometheus/
 !workspace/.prometheus/**/
 !workspace/.prometheus/**/.gitkeep
+!workspace/oss agents/
+!workspace/oss agents/**/
+!workspace/oss agents/**/.gitkeep
 !workspace/oss-agents/.gitkeep
 !workspace/Prometheus Website/.gitkeep
 !workspace/xposemarket-site/.gitkeep

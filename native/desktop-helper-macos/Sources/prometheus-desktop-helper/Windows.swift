@@ -58,6 +58,14 @@ private func axSize(_ element: AXUIElement) -> CGSize {
     return s
 }
 
+private func axBool(_ element: AXUIElement, _ attr: String) -> Bool? {
+    guard let value = axCopy(element, attr) else { return nil }
+    if CFGetTypeID(value) == CFBooleanGetTypeID() {
+        return CFBooleanGetValue((value as! CFBoolean))
+    }
+    return nil
+}
+
 /// Find the AX window element for a given pid whose frame best matches `bounds`.
 private func findAXWindow(pid: Int, bounds: CGRect) -> AXUIElement? {
     let app = AXUIElementCreateApplication(pid_t(pid))
@@ -76,19 +84,77 @@ private func findAXWindow(pid: Int, bounds: CGRect) -> AXUIElement? {
     return best ?? windows.first
 }
 
+private func resolveTargetWindow(windowName: String) -> (pid: Int, bounds: CGRect, title: String)? {
+    let windows = windowInfoList()
+    if !windowName.isEmpty {
+        if let match = windows.first(where: {
+            (($0["title"] as? String) ?? "").localizedCaseInsensitiveContains(windowName)
+            || (($0["processName"] as? String) ?? "").localizedCaseInsensitiveContains(windowName)
+            || (($0["appDisplayName"] as? String) ?? "").localizedCaseInsensitiveContains(windowName)
+            || (($0["bundleId"] as? String) ?? "").localizedCaseInsensitiveContains(windowName)
+        }) {
+            let pid = (match["pid"] as? Int) ?? 0
+            let title = (match["title"] as? String) ?? ""
+            let left = (match["left"] as? Int) ?? 0
+            let top = (match["top"] as? Int) ?? 0
+            let width = (match["width"] as? Int) ?? 0
+            let height = (match["height"] as? Int) ?? 0
+            return (pid, CGRect(x: left, y: top, width: width, height: height), title)
+        }
+        return nil
+    }
+
+    if let front = NSWorkspace.shared.frontmostApplication {
+        let pid = Int(front.processIdentifier)
+        if let match = windows.first(where: { ($0["pid"] as? Int) == pid }) {
+            let title = (match["title"] as? String) ?? ""
+            let left = (match["left"] as? Int) ?? 0
+            let top = (match["top"] as? Int) ?? 0
+            let width = (match["width"] as? Int) ?? 0
+            let height = (match["height"] as? Int) ?? 0
+            return (pid, CGRect(x: left, y: top, width: width, height: height), title)
+        }
+        return (pid, .zero, front.localizedName ?? "")
+    }
+    return nil
+}
+
 func focusWindow(_ params: [String: Any]) throws -> Bool {
     try requireAX()
     let handle = paramInt(params, "handle") ?? 0
     guard let (pid, bounds) = windowPidAndBounds(handle) else { return false }
-    var ok = false
-    if let app = NSRunningApplication(processIdentifier: pid_t(pid)) {
-        ok = app.activate(options: [.activateIgnoringOtherApps])
-    }
+
+    // NSRunningApplication.activate() alone is unreliable when the caller is a
+    // background CLI helper (no activation policy): macOS cooperative activation
+    // often ignores the request, so the app reports "activated" but never comes
+    // to the foreground. The reliable path with Accessibility permission is to
+    // set the AX frontmost attribute on the app and raise + main the window.
+    let appElement = AXUIElementCreateApplication(pid_t(pid))
+
+    var raised = false
     if let win = findAXWindow(pid: pid, bounds: bounds) {
         AXUIElementPerformAction(win, kAXRaiseAction as CFString)
-        ok = true
+        AXUIElementSetAttributeValue(win, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(win, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        raised = true
     }
-    return ok
+
+    // Make the whole app frontmost (this is what actually flips the active app).
+    AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+
+    // Belt-and-suspenders: also issue the NSRunningApplication activation.
+    if let app = NSRunningApplication(processIdentifier: pid_t(pid)) {
+        if #available(macOS 14.0, *) {
+            app.activate(options: [.activateAllWindows])
+        } else {
+            app.activate(options: [.activateIgnoringOtherApps])
+        }
+    }
+
+    // Give the window server a moment to flip the active app before the caller
+    // checks foreground state.
+    usleep(120_000)
+    return raised
 }
 
 func windowControl(_ params: [String: Any]) throws {
@@ -131,9 +197,16 @@ private func walkAX(_ element: AXUIElement, depth: Int, maxDepth: Int,
     if title.isEmpty { title = axString(element, kAXDescriptionAttribute as String) }
     let p = axPoint(element)
     let s = axSize(element)
+    let focused = axBool(element, kAXFocusedAttribute as String)
+    let enabled = axBool(element, kAXEnabledAttribute as String)
     let indent = String(repeating: "  ", count: depth)
     let titleClip = title.count > 60 ? String(title.prefix(60)) + "…" : title
-    lines.append("\(indent)[\(role)] \"\(titleClip)\" @(\(Int(p.x)),\(Int(p.y))) \(Int(s.width))x\(Int(s.height))")
+    let flags = [
+        focused == true ? "focused" : nil,
+        enabled == false ? "disabled" : nil,
+    ].compactMap { $0 }.joined(separator: ",")
+    let flagSuffix = flags.isEmpty ? "" : " {\(flags)}"
+    lines.append("\(indent)[\(role)] \"\(titleClip)\" @(\(Int(p.x)),\(Int(p.y))) \(Int(s.width))x\(Int(s.height))\(flagSuffix)")
     nodeCount += 1
 
     if let children = axCopy(element, kAXChildrenAttribute as String) as? [AXUIElement] {
@@ -151,27 +224,16 @@ func getAccessibilityTree(_ params: [String: Any]) throws -> String {
     let maxDepth = min(max(paramInt(params, "depth") ?? 5, 1), 10)
     let maxNodes = min(max(paramInt(params, "maxNodes") ?? 300, 10), 1000)
 
-    // Determine the target pid: window match by title, else frontmost app.
-    var pid: Int = 0
-    if !windowName.isEmpty {
-        let windows = windowInfoList()
-        if let match = windows.first(where: {
-            (($0["title"] as? String) ?? "").localizedCaseInsensitiveContains(windowName)
-            || (($0["processName"] as? String) ?? "").localizedCaseInsensitiveContains(windowName)
-        }) {
-            pid = (match["pid"] as? Int) ?? 0
-        } else {
-            return "ERROR: No window matching \"\(windowName)\" found."
-        }
-    } else if let front = NSWorkspace.shared.frontmostApplication {
-        pid = Int(front.processIdentifier)
+    guard let target = resolveTargetWindow(windowName: windowName) else {
+        return windowName.isEmpty
+            ? "ERROR: No target application for accessibility tree."
+            : "ERROR: No window matching \"\(windowName)\" found."
     }
-    if pid == 0 { return "ERROR: No target application for accessibility tree." }
-
-    let app = AXUIElementCreateApplication(pid_t(pid))
+    let root = findAXWindow(pid: target.pid, bounds: target.bounds) ?? AXUIElementCreateApplication(pid_t(target.pid))
     var nodeCount = 0
-    var lines: [String] = ["=== Accessibility Tree (pid=\(pid), depth=\(maxDepth), max=\(maxNodes)) ==="]
-    walkAX(app, depth: 0, maxDepth: maxDepth, nodeCount: &nodeCount, maxNodes: maxNodes, lines: &lines)
+    let targetTitle = target.title.isEmpty ? "(untitled)" : target.title
+    var lines: [String] = ["=== Accessibility Tree (pid=\(target.pid), window=\"\(targetTitle)\", depth=\(maxDepth), max=\(maxNodes)) ==="]
+    walkAX(root, depth: 0, maxDepth: maxDepth, nodeCount: &nodeCount, maxNodes: maxNodes, lines: &lines)
     lines.append("=== captured \(nodeCount) node(s) ===")
     return lines.joined(separator: "\n")
 }

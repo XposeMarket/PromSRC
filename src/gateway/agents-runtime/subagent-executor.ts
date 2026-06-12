@@ -14717,6 +14717,276 @@ export async function executeTool(name: string, args: any, workspacePath: string
               return { success: false, command, output: String(output || '').trim(), durationMs: Date.now() - start };
             }
           };
+          const quoteArg = (value: string): string => {
+            const s = String(value);
+            return process.platform === 'win32'
+              ? `"${s.replace(/"/g, '\\"')}"`
+              : `'${s.replace(/'/g, `'\\''`)}'`;
+          };
+          const normalizeSyncExclude = (raw: string): string => {
+            let pattern = String(raw || '').trim().replace(/\\/g, '/');
+            pattern = pattern.replace(/^\/+/, '');
+            if (!pattern || pattern.startsWith('#')) return '';
+            if (pattern.endsWith('/')) return `${pattern}**`;
+            return pattern;
+          };
+          const readSyncExcludes = (): string[] => {
+            const defaults = [
+              'oss-agents/',
+              'workspace/oss agents/',
+              'workspace/oss-agents/',
+              'workspace/audit/',
+              'workspace/downloads/',
+              'workspace/uploads/',
+              'workspace/video-debug/',
+              'workspace/logs/',
+              'workspace/tmp/',
+              'workspace/generated/',
+              'workspace/creative-projects/',
+              '.prometheus/',
+              '.agents/',
+              '.claude/',
+              '*.log',
+              '*.tmp',
+              '*.bak',
+              '*.mp4',
+              '*.mov',
+              '*.webm',
+            ];
+            let configured: string[] = [];
+            try {
+              const ignoreFile = path.join(repoRoot, '.prom-repo-sync-ignore');
+              configured = fsmod.existsSync(ignoreFile)
+                ? String(fsmod.readFileSync(ignoreFile, 'utf-8')).split(/\r?\n/)
+                : [];
+            } catch {}
+            return Array.from(new Set([...defaults, ...configured].map(normalizeSyncExclude).filter(Boolean)));
+          };
+          const findEmbeddedGitRepos = (): string[] => {
+            const status = run('git status --porcelain=v1 --untracked-files=normal', 30_000);
+            if (!status.success) return [];
+            const roots = status.output
+              .split(/\r?\n/)
+              .map((line: string) => line.match(/^\?\?\s+(.+)$/)?.[1])
+              .filter((rel: string | undefined): rel is string => Boolean(rel))
+              .map((rel: string) => rel.replace(/^"|"$/g, '').replace(/\\/g, '/').replace(/\/$/, ''));
+            const found = new Set<string>();
+            const skipNames = new Set(['.git', 'node_modules', 'dist', 'release', 'release-public']);
+            const visit = (abs: string, rel: string, depth: number) => {
+              if (depth > 6) return;
+              let stat: any;
+              try { stat = fsmod.statSync(abs); } catch { return; }
+              if (!stat.isDirectory()) return;
+              if (fsmod.existsSync(path.join(abs, '.git'))) {
+                found.add(`${rel.replace(/\\/g, '/')}/**`);
+                return;
+              }
+              let entries: any[] = [];
+              try { entries = fsmod.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+              for (const entry of entries) {
+                if (!entry.isDirectory() || skipNames.has(entry.name)) continue;
+                visit(path.join(abs, entry.name), `${rel}/${entry.name}`, depth + 1);
+              }
+            };
+            for (const rel of roots) visit(path.join(repoRoot, rel), rel, 0);
+            return Array.from(found);
+          };
+          const parsePorcelainPaths = (output: string): string[] => {
+            const paths = new Set<string>();
+            const records = String(output || '').split(String.fromCharCode(0)).filter(Boolean);
+            for (let i = 0; i < records.length; i += 1) {
+              const record = records[i] || '';
+              const match = record.match(/^(.{2}) (.+)$/s);
+              if (!match) continue;
+              const statusCode = match[1] || '';
+              const firstPath = String(match[2] || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+              if (!firstPath) continue;
+              paths.add(firstPath);
+              if ((statusCode.includes('R') || statusCode.includes('C')) && i + 1 < records.length) {
+                const secondPath = String(records[i + 1] || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+                if (secondPath) paths.add(secondPath);
+                i += 1;
+              }
+            }
+            return Array.from(paths);
+          };
+          const isTrackedPath = (relPath: string): boolean => {
+            const check = run(`git ls-files --error-unmatch -- ${quoteArg(relPath)}`, 15_000);
+            return check.success;
+          };
+          const isValidGitPathspec = (relPath: string): boolean => {
+            if (!relPath || relPath.startsWith('../') || path.isAbsolute(relPath)) return false;
+            return fsmod.existsSync(path.join(repoRoot, relPath)) || isTrackedPath(relPath);
+          };
+          const repairSyncPathspec = (relPath: string): string => {
+            const normalized = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+            if (isValidGitPathspec(normalized)) return normalized;
+            const likelySrc = `s${normalized}`;
+            if (normalized.startsWith('rc/') && isValidGitPathspec(likelySrc)) return likelySrc;
+            return '';
+          };
+          const simpleGlobMatches = (pattern: string, value: string): boolean => {
+            const parts = String(pattern || '').split('*');
+            if (parts.length === 1) return value === pattern;
+            let index = 0;
+            if (parts[0] && !value.startsWith(parts[0])) return false;
+            index = parts[0]?.length || 0;
+            for (let i = 1; i < parts.length; i += 1) {
+              const part = parts[i] || '';
+              if (!part) continue;
+              const found = value.indexOf(part, index);
+              if (found < 0) return false;
+              index = found + part.length;
+            }
+            const last = parts[parts.length - 1] || '';
+            return !last || value.endsWith(last) || pattern.endsWith('*');
+          };
+          const syncExcludeMatchesPath = (pattern: string, relPath: string): boolean => {
+            const normalizedPattern = String(pattern || '').replace(/\\/g, '/').replace(/^\/+/, '');
+            const normalizedPath = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+            if (!normalizedPattern || !normalizedPath) return false;
+            if (normalizedPattern.endsWith('/**')) {
+              const root = normalizedPattern.slice(0, -3).replace(/\/$/, '');
+              return normalizedPath === root || normalizedPath.startsWith(`${root}/`);
+            }
+            if (!normalizedPattern.includes('/')) {
+              return simpleGlobMatches(normalizedPattern, path.posix.basename(normalizedPath));
+            }
+            return simpleGlobMatches(normalizedPattern, normalizedPath);
+          };
+          const getSyncExcludedDirtyPaths = (excludes: string[]): string[] => {
+            const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
+            if (!status.success) return [];
+            return Array.from(new Set(parsePorcelainPaths(status.output)
+              .map((relPath) => repairSyncPathspec(relPath) || relPath)
+              .filter((relPath) => excludes.some((pattern) => syncExcludeMatchesPath(pattern, relPath)))));
+          };
+          const stashSyncExcludedDirtyPaths = (excludes: string[]) => {
+            const paths = getSyncExcludedDirtyPaths(excludes);
+            if (!paths.length) {
+              return { success: true, didStash: false, paths, output: '', restore: () => ({ success: true, output: '' }) };
+            }
+            const message = `prom_repo_sync excluded local changes ${Date.now()}`;
+            const stash = run(`git stash push -u -m ${quoteArg(message)} -- ${paths.map(quoteArg).join(' ')}`, 60_000);
+            return {
+              success: stash.success,
+              didStash: stash.success,
+              paths,
+              output: stash.output,
+              restore: () => stash.success ? run('git stash pop --index stash@{0}', 60_000) : ({ success: true, output: '' }),
+            };
+          };
+          // File-glob (no-slash) exclude patterns like *.log/*.tmp/*.mp4. Directory patterns
+          // (workspace/oss agents/, .claude/, …) are intentionally NOT included here — we only
+          // auto-untrack disposable per-file noise, never whole tracked trees.
+          const fileGlobExcludes = (excludes: string[]): string[] =>
+            excludes.filter((p) => p && !p.includes('/') && !p.endsWith('/**'));
+          // Root cause of recurring sync conflicts: files matching the exclude list (e.g. *.log,
+          // *.mp4) were committed BEFORE the exclude list existed, so they keep diverging through
+          // history on both machines and conflict on every merge. Excluding them from *staging*
+          // does nothing once they are tracked. This untracks them (git rm --cached, keeps the
+          // working copy) so the removal propagates and they stop being synced for good.
+          const untrackSyncExcludedTrackedFiles = (excludes: string[]) => {
+            const globs = fileGlobExcludes(excludes);
+            if (!globs.length) return { removed: [] as string[], output: '' };
+            const listed = run('git ls-files -z', 30_000);
+            if (!listed.success) return { removed: [] as string[], output: listed.output };
+            const tracked = String(listed.output || '').split(String.fromCharCode(0)).filter(Boolean)
+              .map((p) => p.replace(/\\/g, '/'));
+            const toUntrack = tracked.filter((rel) => globs.some((pat) => syncExcludeMatchesPath(pat, rel)));
+            if (!toUntrack.length) return { removed: [] as string[], output: '' };
+            let combined = '';
+            for (let i = 0; i < toUntrack.length; i += 80) {
+              const batch = toUntrack.slice(i, i + 80);
+              const rm = run(`git rm --cached --ignore-unmatch -- ${batch.map(quoteArg).join(' ')}`, 60_000);
+              if (rm.output) combined += `${combined ? '\n' : ''}${rm.output}`;
+              if (!rm.success) return { removed: toUntrack.slice(0, i), output: combined };
+            }
+            // Keep them ignored so other workflows (manual git add -A) don't re-track them.
+            try {
+              const giPath = path.join(repoRoot, '.gitignore');
+              const existing = fsmod.existsSync(giPath) ? String(fsmod.readFileSync(giPath, 'utf-8')) : '';
+              const lines = new Set(existing.split(/\r?\n/).map((l) => l.trim()));
+              const missing = globs.filter((g) => !lines.has(g));
+              if (missing.length) {
+                const block = `${existing.endsWith('\n') || !existing ? '' : '\n'}# prom_repo_sync: auto-ignored exclude-matched noise\n${missing.join('\n')}\n`;
+                fsmod.appendFileSync(giPath, block, 'utf-8');
+                run('git add -- .gitignore', 15_000);
+              }
+            } catch {}
+            return { removed: toUntrack, output: combined };
+          };
+          // When a pull/merge conflicts only on exclude-matched noise files (the other machine
+          // still tracked a *.log we just untracked → modify/delete; or both appended to a log),
+          // resolve them by removing the file rather than aborting the whole sync.
+          const autoResolveExcludedConflicts = (excludes: string[]): string[] => {
+            const globs = fileGlobExcludes(excludes);
+            if (!globs.length) return [];
+            const unmerged = (run('git diff --name-only --diff-filter=U -z', 30_000).output || '')
+              .split(String.fromCharCode(0)).filter(Boolean).map((p) => p.replace(/\\/g, '/'));
+            const resolvable = unmerged.filter((rel) => globs.some((pat) => syncExcludeMatchesPath(pat, rel)));
+            if (!resolvable.length) return [];
+            for (let i = 0; i < resolvable.length; i += 80) {
+              run(`git rm -f --ignore-unmatch -- ${resolvable.slice(i, i + 80).map(quoteArg).join(' ')}`, 60_000);
+            }
+            return resolvable;
+          };
+          const stageSyncEligibleChanges = () => {
+            const excludes = Array.from(new Set([...readSyncExcludes(), ...findEmbeddedGitRepos()]));
+            const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
+            if (!status.success) return { add: status, excludes };
+            const skippedInvalid: string[] = [];
+            const eligiblePaths = Array.from(new Set(parsePorcelainPaths(status.output)
+              .map((relPath) => {
+                const repaired = repairSyncPathspec(relPath);
+                if (!repaired) skippedInvalid.push(relPath);
+                return repaired;
+              })
+              .filter(Boolean)))
+              .filter((relPath) => !excludes.some((pattern) => syncExcludeMatchesPath(pattern, relPath)));
+            if (!eligiblePaths.length) {
+              return {
+                add: {
+                  success: true,
+                  command: 'git add -A -- <no sync-eligible changes>',
+                  output: skippedInvalid.length ? `Skipped invalid git pathspecs:\n${skippedInvalid.join('\n')}` : '',
+                  durationMs: 0,
+                },
+                excludes,
+              };
+            }
+            let combinedOutput = '';
+            let totalDurationMs = 0;
+            for (let i = 0; i < eligiblePaths.length; i += 80) {
+              const batch = eligiblePaths.slice(i, i + 80);
+              const command = `git add -A -- ${batch.map(quoteArg).join(' ')}`;
+              const add = run(command, 60_000);
+              totalDurationMs += add.durationMs;
+              if (add.output) combinedOutput += `${combinedOutput ? '\n' : ''}${add.output}`;
+              if (!add.success) {
+                return {
+                  add: {
+                    ...add,
+                    output: combinedOutput || add.output,
+                    durationMs: totalDurationMs,
+                  },
+                  excludes,
+                };
+              }
+            }
+            return {
+              add: {
+                success: true,
+                command: `git add -A -- <${eligiblePaths.length} sync-eligible path${eligiblePaths.length === 1 ? '' : 's'}>`,
+                output: [
+                  combinedOutput.trim(),
+                  skippedInvalid.length ? `Skipped invalid git pathspecs:\n${skippedInvalid.join('\n')}` : '',
+                ].filter(Boolean).join('\n'),
+                durationMs: totalDurationMs,
+              },
+              excludes,
+            };
+          };
 
           // Resolve the local PAT store (config dir, never the repo).
           let configDir = path.join(osmod.homedir(), '.prometheus');
@@ -14762,14 +15032,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
           // Detect auth failures so we can ask the user for a PAT instead of returning a raw error.
           const isAuthFailure = (out: string): boolean =>
             /(authentication failed|could not read username|could not read password|terminal prompts disabled|invalid username or password|permission denied|fatal: could not read|remote: (invalid|permission|repository not found)|403 forbidden|401 unauthorized|support for password authentication was removed)/i.test(String(out || ''));
-          const patHelp = (action: string): string => [
+          const patHelp = (action: string): string => {
+            const saveTool = name === 'prom_repo_pull' ? 'prom_repo_push' : name;
+            return [
             `⚠️ ACTION REQUIRED — git ${action} failed because this machine has no working GitHub credentials and no PAT is saved.`,
             '',
             'Do this:',
             `1. Ask the user for a GitHub Personal Access Token (PAT) with "repo" scope (a classic token like ghp_… or a fine-grained token with read/write contents on XposeMarket/PromSRC).`,
-            `2. Once they hand it to you, call prom_repo_push again with set_pat:"<the token>" ${action === 'push' ? '(plus the commit message if you have one)' : '— this saves it'}. It is stored locally at ${patFile} (NOT committed to the repo) and reused automatically afterward.`,
+            `2. Once they hand it to you, call ${saveTool} again with set_pat:"<the token>" ${action === 'push' ? '(plus the commit message if you have one)' : '— this saves it'}. It is stored locally at ${patFile} (NOT committed to the repo) and reused automatically afterward.`,
             `3. Then retry the ${action}. No gateway restart is needed — the PAT is read live from disk on each call.`,
-          ].join('\n');
+            ].join('\n');
+          };
 
           const prefix = patSaveNote ? patSaveNote + '\n\n' : '';
 
@@ -14816,16 +15089,32 @@ export async function executeTool(name: string, args: any, workspacePath: string
             };
           }
 
-          // prom_repo_push — stage everything first so the diff/auto-message reflects untracked files too.
-          const add = run('git add -A', 60_000);
+          // prom_repo_push/sync — stage eligible files first so the diff/auto-message reflects safe untracked files too.
+          const { add, excludes: syncExcludes } = stageSyncEligibleChanges();
           if (!add.success) {
-            return { name, args, result: `prom_repo_push failed during git add -A:\n${sanitize(add.output) || '(no output)'}`, error: true };
+            return {
+              name,
+              args,
+              result:
+                `${name} failed while staging sync-eligible changes:\n${sanitize(add.output) || '(no output)'}\n\n` +
+                `Active sync excludes included:\n${syncExcludes.slice(0, 40).join('\n') || '(none)'}`,
+              error: true,
+            };
           }
+
+          // Untrack any tracked files matching the file-glob excludes (*.log/*.mp4/…) so the
+          // exclude list actually takes effect instead of silently failing. git rm --cached stages
+          // the removal (working copies kept), which the commit below then records and propagates.
+          const untrackRes = untrackSyncExcludedTrackedFiles(syncExcludes);
+          const untrackNote = untrackRes.removed.length
+            ? `Untracked ${untrackRes.removed.length} exclude-matched file${untrackRes.removed.length === 1 ? '' : 's'} (kept on disk, now ignored):\n${untrackRes.removed.slice(0, 40).join('\n')}${untrackRes.removed.length > 40 ? `\n… +${untrackRes.removed.length - 40} more` : ''}`
+            : '';
 
           // git diff --cached --quiet exits 0 (success) when there is nothing staged.
           const stagedCheck = run('git diff --cached --quiet', 30_000);
           const hasStaged = !stagedCheck.success;
           const message = String(args?.message || args?.commit_message || '').trim();
+          const retryTool = name === 'prom_repo_sync' ? 'prom_repo_sync' : 'prom_repo_push';
 
           // No explicit message but there ARE staged changes → return the diff so the model can author a real message.
           if (hasStaged && !message) {
@@ -14840,7 +15129,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
               name,
               args,
               result: [
-                `${patSaveNote ? patSaveNote + '\n\n' : ''}📋 No commit message provided. Staged all changes — here is what changed. Read it, then call prom_repo_push AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", "Features added: …; Bug fixes: …"). Do not use a generic placeholder.`,
+                `${patSaveNote ? patSaveNote + '\n\n' : ''}📋 No commit message provided. Staged sync-eligible changes — here is what changed. Read it, then call ${retryTool} AGAIN with a concise, accurate message that reflects these specific changes (e.g. "Fix: …", "Features added: …; Bug fixes: …"). Do not use a generic placeholder.`,
+                name === 'prom_repo_sync'
+                  ? 'Keep using prom_repo_sync for the second call so the no-edit merge + push still happens. Do not switch to prom_repo_push or ad hoc run_command git commands for this sync.'
+                  : 'Keep using prom_repo_push for the second call. Do not switch to ad hoc run_command git commands for this push.',
+                `Sync excludes applied from .gitignore/.prom-repo-sync-ignore plus embedded repo detection (${syncExcludes.length} patterns).`,
                 '',
                 '── Files changed (name-status) ──',
                 nameStatus.output || '(none)',
@@ -14872,30 +15165,85 @@ export async function executeTool(name: string, args: any, workspacePath: string
           // ── prom_repo_sync: commit (done above) → pull/merge → push ──────────
           if (name === 'prom_repo_sync') {
             const beforeMerge = (run('git rev-parse HEAD', 15_000).output || '').trim();
+            const excludedStash = stashSyncExcludedDirtyPaths(syncExcludes);
+            if (!excludedStash.success) {
+              return {
+                name,
+                args,
+                result:
+                  `${prefix}❌ prom_repo_sync could not temporarily stash sync-excluded local changes before pull:\n` +
+                  `${excludedStash.paths.join('\n') || '(none)'}\n\n` +
+                  `${sanitize(excludedStash.output) || '(no output)'}`,
+                error: true,
+              };
+            }
+            let autoResolvedNote = '';
             const pull = run(`git pull ${remoteArg} ${branch} --no-edit`, 180_000);
             const commitSafeNote = committed
               ? `Your local commit "${message.split(/\r?\n/)[0]}" is safe locally; nothing was pushed.\n\n`
               : '';
             if (!pull.success) {
               if (isAuthFailure(pull.output)) {
-                return { name, args, result: `${prefix}${commitSafeNote}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}`, error: true };
-              }
-              const conflicts = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
-              if (conflicts) {
-                run('git merge --abort', 30_000);
+                const restore = excludedStash.restore();
                 return {
                   name,
                   args,
                   result:
-                    `${prefix}❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:\n${conflicts}\n\n` +
-                    `Merge aborted. ${commitSafeNote}` +
-                    'Resolve manually: open those files, keep the intended combined content, then run prom_repo_sync again. ' +
-                    '(Editing a given file on only one machine at a time avoids this entirely.)\n\n' +
-                    `${sanitize(pull.output) || '(no output)'}`,
+                    `${prefix}${commitSafeNote}${patHelp('pull')}\n\nGit output:\n${sanitize(pull.output) || '(no output)'}\n\n` +
+                    `${excludedStash.didStash ? `Restored sync-excluded local changes after failed pull: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
                   error: true,
                 };
               }
-              return { name, args, result: `${prefix}❌ prom_repo_sync: pull/merge failed.\n${commitSafeNote}${sanitize(pull.output) || '(no output)'}`, error: true };
+              const conflicts = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
+              if (conflicts) {
+                // Auto-resolve conflicts that are only on exclude-matched noise files (logs, media,
+                // or a file we just untracked vs the other machine still tracking it). Removing them
+                // clears the conflict so a real diverged source file isn't held hostage by log churn.
+                const autoRemoved = autoResolveExcludedConflicts(syncExcludes);
+                const conflictsLeft = (run('git diff --name-only --diff-filter=U', 30_000).output || '').trim();
+                if (autoRemoved.length && !conflictsLeft) {
+                  const finish = run('git commit --no-edit', 60_000);
+                  if (finish.success) {
+                    autoResolvedNote = `Auto-resolved excluded-file merge conflicts by untracking: ${autoRemoved.slice(0, 40).join(', ')}${autoRemoved.length > 40 ? `, … +${autoRemoved.length - 40} more` : ''}`;
+                    // Fall through to the push step below — the merge is now complete.
+                  } else {
+                    run('git merge --abort', 30_000);
+                    const restore = excludedStash.restore();
+                    return {
+                      name,
+                      args,
+                      result:
+                        `${prefix}❌ prom_repo_sync: could not finalize merge after auto-resolving excluded files:\n${sanitize(finish.output) || '(no output)'}\n\n` +
+                        `${commitSafeNote}${excludedStash.didStash ? `Restored sync-excluded local changes: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                      error: true,
+                    };
+                  }
+                } else {
+                  run('git merge --abort', 30_000);
+                  const restore = excludedStash.restore();
+                  return {
+                    name,
+                    args,
+                    result:
+                      `${prefix}❌ prom_repo_sync: merge conflict — these files were changed on BOTH machines in overlapping lines:\n${conflictsLeft || conflicts}\n\n` +
+                      `Merge aborted. ${commitSafeNote}` +
+                      'Resolve manually: open those files, keep the intended combined content, then run prom_repo_sync again. ' +
+                      '(Editing a given file on only one machine at a time avoids this entirely.)\n\n' +
+                      `${sanitize(pull.output) || '(no output)'}\n\n` +
+                      `${excludedStash.didStash ? `Restored sync-excluded local changes after aborted merge: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                    error: true,
+                  };
+                }
+              }
+              const restore = excludedStash.restore();
+              return {
+                name,
+                args,
+                result:
+                  `${prefix}❌ prom_repo_sync: pull/merge failed.\n${commitSafeNote}${sanitize(pull.output) || '(no output)'}\n\n` +
+                  `${excludedStash.didStash ? `Restored sync-excluded local changes after failed pull: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                error: true,
+              };
             }
 
             // Push the merged result; retry once if origin advanced between our pull and push.
@@ -14910,23 +15258,45 @@ export async function executeTool(name: string, args: any, workspacePath: string
               }
             }
             if (!push.success && isAuthFailure(push.output)) {
-              return { name, args, result: `${prefix}(Merge succeeded locally; your work is committed and safe.)\n\n${patHelp('push')}\n\nGit output:\n${sanitize(push.output) || '(no output)'}`, error: true };
+              const restore = excludedStash.restore();
+              return {
+                name,
+                args,
+                result:
+                  `${prefix}(Merge succeeded locally; your work is committed and safe.)\n\n${patHelp('push')}\n\nGit output:\n${sanitize(push.output) || '(no output)'}\n\n` +
+                  `${excludedStash.didStash ? `Restored sync-excluded local changes after failed push: ${restore.success ? 'yes' : 'no'}\n${sanitize(restore.output) || ''}` : ''}`,
+                error: true,
+              };
             }
 
             const mergedIn = beforeMerge ? (run(`git diff --name-only ${beforeMerge} HEAD`, 30_000).output || '').trim() : '';
             const lines: string[] = [];
+            let restoreFailed = false;
             if (patSaveNote) { lines.push(patSaveNote); lines.push(''); }
             lines.push(committed ? `Committed locally: ${message.split(/\r?\n/)[0]}` : 'No local changes to commit.');
+            if (untrackNote) { lines.push(''); lines.push(untrackNote); }
+            if (autoResolvedNote) { lines.push(''); lines.push(autoResolvedNote); }
             lines.push('');
             lines.push(mergedIn ? `Merged in from origin/${branch} (no overwrite):\n${mergedIn}` : `Nothing new on origin/${branch} to merge.`);
             lines.push('');
             lines.push(`${push.success ? '✅' : '❌'} push to origin/${branch} ${push.success ? 'succeeded' : 'failed'} (${push.durationMs}ms).`);
             lines.push(sanitize(push.output) || '(no output)');
+            if (excludedStash.didStash) {
+              const restore = excludedStash.restore();
+              lines.push('');
+              lines.push(`Temporarily stashed sync-excluded local changes before pull:\n${excludedStash.paths.join('\n')}`);
+              lines.push(`Restore after sync: ${restore.success ? 'succeeded' : 'failed'}.`);
+              if (restore.output) lines.push(sanitize(restore.output));
+              if (!restore.success) {
+                restoreFailed = true;
+                lines.push('Your sync-excluded changes remain in the latest git stash; recover with git stash list / git stash pop after resolving the message above.');
+              }
+            }
             if (push.success) {
               lines.push('');
               lines.push(`Done — local and origin/${branch} now hold the combined history. Run prom_repo_sync (or prom_repo_pull) on the OTHER machine to bring these changes down there too.`);
             }
-            return { name, args, result: lines.join('\n'), error: !push.success };
+            return { name, args, result: lines.join('\n'), error: !push.success || restoreFailed };
           }
 
           const push = run(`git push ${remoteArg} ${branch}`, 180_000);
@@ -14960,6 +15330,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               : 'No local changes to commit — pushing any unpushed commits.',
           );
           if (commitOut) lines.push(commitOut);
+          if (untrackNote) { lines.push(''); lines.push(untrackNote); }
           lines.push('');
           lines.push(`${push.success ? '✅' : '❌'} push to origin/${branch} ${push.success ? 'succeeded' : 'failed'} (${push.durationMs}ms).`);
           lines.push(sanitize(push.output) || '(no output)');

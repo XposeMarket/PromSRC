@@ -19,6 +19,7 @@ import {
   type DesktopCanonicalKey,
   type DesktopWindowAction,
   type DesktopPermissionStatus,
+  type DesktopAppLaunchRequest,
   type HelperResponse,
 } from './desktop-backend.js';
 import type { DesktopMonitorInfo } from './desktop-tools.js';
@@ -31,12 +32,17 @@ function resolveHelperPath(): string {
   if (override) return override;
   // dist/gateway -> repo root is two levels up from src/gateway at build time;
   // probe a few likely locations relative to this module and cwd.
+  const rel = 'native/desktop-helper-macos/.build';
   const candidates = [
-    path.resolve(__dirname, '../../native/desktop-helper-macos/.build/release/prometheus-desktop-helper'),
-    path.resolve(__dirname, '../../native/desktop-helper-macos/.build/debug/prometheus-desktop-helper'),
-    path.resolve(process.cwd(), 'native/desktop-helper-macos/.build/release/prometheus-desktop-helper'),
-    path.resolve(process.cwd(), 'native/desktop-helper-macos/.build/debug/prometheus-desktop-helper'),
     path.resolve(process.cwd(), 'bin/prometheus-desktop-helper'),
+    // build.sh output (direct swiftc) — preferred for local dev.
+    path.resolve(__dirname, `../../${rel}/prometheus-desktop-helper`),
+    path.resolve(process.cwd(), `${rel}/prometheus-desktop-helper`),
+    // SwiftPM output locations (if `swift build` is ever usable here).
+    path.resolve(__dirname, `../../${rel}/release/prometheus-desktop-helper`),
+    path.resolve(__dirname, `../../${rel}/debug/prometheus-desktop-helper`),
+    path.resolve(process.cwd(), `${rel}/release/prometheus-desktop-helper`),
+    path.resolve(process.cwd(), `${rel}/debug/prometheus-desktop-helper`),
   ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
@@ -196,8 +202,12 @@ export class DarwinBackend implements DesktopBackend {
   async windowControl(handle: number, action: DesktopWindowAction): Promise<void> {
     await this.call('windowControl', { handle, action });
   }
-  async launchApp(name: string): Promise<void> {
-    await this.call('launchApp', { name });
+  async launchApp(request: DesktopAppLaunchRequest): Promise<void> {
+    await this.call('launchApp', {
+      name: request.name ?? '',
+      path: request.path ?? '',
+      bundleId: request.bundleId ?? '',
+    });
   }
 
   // ── Accessibility ──────────────────────────────────────────────────────────

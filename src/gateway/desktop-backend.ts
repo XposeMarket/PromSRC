@@ -95,6 +95,15 @@ export interface DesktopCanonicalKey {
 
 export type DesktopWindowAction = 'minimize' | 'maximize' | 'restore' | 'close';
 
+export interface DesktopAppLaunchRequest {
+  /** Human-facing app name, e.g. "Calculator". */
+  name?: string;
+  /** Absolute path to an app or executable. */
+  path?: string;
+  /** Stable bundle identifier on macOS, e.g. com.apple.calculator. */
+  bundleId?: string;
+}
+
 /** The cross-platform primitive surface. ~14 methods. Implement once per OS. */
 export interface DesktopBackend {
   readonly platform: DesktopPlatformId;
@@ -125,7 +134,7 @@ export interface DesktopBackend {
   // ── Windows / apps ───────────────────────────────────────────────────────────
   focusWindow(handle: number): Promise<boolean>;
   windowControl(handle: number, action: DesktopWindowAction): Promise<void>;
-  launchApp(name: string): Promise<void>;
+  launchApp(request: DesktopAppLaunchRequest): Promise<void>;
 
   // ── Accessibility (OPTIONAL — may throw DesktopUnsupportedError) ──────────────
   /** Returns a text dump of the accessibility/UIA tree, depth- and node-bounded.
