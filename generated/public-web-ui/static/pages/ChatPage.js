@@ -10470,6 +10470,38 @@ function restoreQuestionDraftState(map) {
   } catch {}
 }
 
+function captureApprovalProcessState() {
+  const out = {};
+  try {
+    document.querySelectorAll('.chat-approval-process-body[data-terminal-open="1"]').forEach((body) => {
+      const id = String(body.id || '').replace(/^approval-process-/, '').trim();
+      if (!id || !body.parentElement) return;
+      const toggle = body.parentElement.querySelector('.chat-approval-process-toggle');
+      out[id] = {
+        body,
+        toggleText: toggle?.textContent || 'Close terminal',
+      };
+    });
+  } catch {}
+  return out;
+}
+
+function restoreApprovalProcessState(map) {
+  if (!map) return;
+  try {
+    Object.entries(map).forEach(([id, state]) => {
+      const sel = cssEscapeValue(id);
+      const nextBody = document.getElementById(`approval-process-${id}`)
+        || document.querySelector(`#approval-process-${sel}`);
+      if (!nextBody || !state?.body) return;
+      nextBody.replaceWith(state.body);
+      state.body.dataset.terminalOpen = '1';
+      const toggle = state.body.parentElement?.querySelector?.('.chat-approval-process-toggle');
+      if (toggle) toggle.textContent = state.toggleText || 'Close terminal';
+    });
+  } catch {}
+}
+
 function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
@@ -10477,6 +10509,7 @@ function renderChatMessages() {
   // Preserve scroll positions before the innerHTML rebuild below.
   const _panelScroll = captureProcessPanelScroll();
   const _questionDraft = captureQuestionDraftState();
+  const _approvalProcessState = captureApprovalProcessState();
   const _mainScrollTop = container ? container.scrollTop : 0;
   syncAssistantWorkTimer();
   updateSideChatChrome();
@@ -10525,6 +10558,7 @@ function renderChatMessages() {
     }
     restoreProcessPanelScroll(_panelScroll);
     restoreQuestionDraftState(_questionDraft);
+    restoreApprovalProcessState(_approvalProcessState);
     return;
   }
 
@@ -10536,6 +10570,7 @@ function renderChatMessages() {
   else container.scrollTop = _mainScrollTop;
   restoreProcessPanelScroll(_panelScroll);
   restoreQuestionDraftState(_questionDraft);
+  restoreApprovalProcessState(_approvalProcessState);
 }
 
 function syncAssistantWorkTimer() {

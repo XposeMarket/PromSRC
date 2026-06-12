@@ -1731,10 +1731,32 @@ function _renderMobileApprovalSheet() {
     document.body.appendChild(host);
   }
   const current = pending.find((approval) => String(approval.sessionId || approval.sourceSessionId || '') === String(__pmChat.activeSessionId || '')) || pending[0];
+  const openTerminals = {};
+  try {
+    host.querySelectorAll('[data-process-approval-host][data-terminal-open="1"]').forEach((terminalHost) => {
+      const approvalId = String(terminalHost.getAttribute('data-process-approval-host') || '').trim();
+      if (!approvalId || !terminalHost.parentElement) return;
+      const toggle = terminalHost.parentElement.querySelector?.('[data-pm-process-action="load-approval"]') || null;
+      openTerminals[approvalId] = {
+        host: terminalHost,
+        toggleText: toggle?.textContent || 'Close terminal',
+      };
+    });
+  } catch {}
   host.innerHTML = `<div class="pm-global-approval-backdrop"></div>
     <div class="pm-global-approval-sheet" role="dialog" aria-live="polite" aria-label="Approval required">
       ${_renderMobileApprovalCard(current)}
     </div>`;
+  try {
+    Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
+      const nextHost = host.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
+      if (!nextHost || !snapshot?.host) return;
+      nextHost.replaceWith(snapshot.host);
+      snapshot.host.dataset.terminalOpen = '1';
+      const toggle = snapshot.host.parentElement?.querySelector?.('[data-pm-process-action="load-approval"]');
+      if (toggle) toggle.textContent = snapshot.toggleText || 'Close terminal';
+    });
+  } catch {}
   host.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
   });
@@ -2950,6 +2972,7 @@ function _renderThread(threadEl) {
   // reset panel state every tick.
   const openProc = {};
   const closedProc = new Set();
+  const openTerminals = {};
   try {
     threadEl.querySelectorAll('details.pm-process-stream').forEach((d) => {
       const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
@@ -2960,6 +2983,15 @@ function _renderThread(threadEl) {
       } else {
         closedProc.add(idx);
       }
+    });
+    threadEl.querySelectorAll('[data-process-approval-host][data-terminal-open="1"]').forEach((host) => {
+      const approvalId = String(host.getAttribute('data-process-approval-host') || '').trim();
+      if (!approvalId || !host.parentElement) return;
+      const toggle = host.parentElement.querySelector?.('[data-pm-process-action="load-approval"]') || null;
+      openTerminals[approvalId] = {
+        host,
+        toggleText: toggle?.textContent || 'Close terminal',
+      };
     });
   } catch {}
   threadEl.innerHTML = __pmChat.thread
@@ -2979,6 +3011,14 @@ function _renderThread(threadEl) {
       const msgEl = threadEl.querySelector(`[data-msg-index="${idx}"]`);
       const d = msgEl?.querySelector('details.pm-process-stream');
       if (d) d.removeAttribute('open');
+    });
+    Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
+      const nextHost = threadEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
+      if (!nextHost || !snapshot?.host) return;
+      nextHost.replaceWith(snapshot.host);
+      snapshot.host.dataset.terminalOpen = '1';
+      const toggle = snapshot.host.parentElement?.querySelector?.('[data-pm-process-action="load-approval"]');
+      if (toggle) toggle.textContent = snapshot.toggleText || 'Close terminal';
     });
   } catch {}
   threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
