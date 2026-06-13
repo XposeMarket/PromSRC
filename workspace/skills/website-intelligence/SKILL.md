@@ -1,8 +1,9 @@
 ---
 name: website-intelligence
-description: Full Website Audit
+description: Use this skill when the user asks to audit, analyze, score, or inspect a website for SEO, content, performance heuristics, tech stack, AI/GEO visibility, backlinks/search signals, conversion clarity, or competitor site intelligence. Triggers on phrases like audit this website, analyze site, website score, SEO audit, competitor website, site performance, tech stack, content audit, AI visibility, GEO visibility, and website intelligence. Use it to deploy the website analysis team for full audits or choose quick web_fetch/web_fetch_batch checks for narrow questions.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: audit website, analyze site, website score, SEO audit, competitor website, site performance, tech stack, content audit, AI visibility, GEO visibility, website intelligence, site analysis, conversion audit, homepage audit
 ---
 
 # Website Intelligence

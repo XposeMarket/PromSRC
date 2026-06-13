@@ -485,6 +485,31 @@ export function recordMainChatGoalRuntimeFailure(sessionId: string, expectedGoal
   });
 }
 
+export function recordMainChatGoalInterruptedForRestart(
+  sessionId: string,
+  reason = 'gateway_restart',
+  runtimeStartedAt?: number,
+): MainChatGoalState | null {
+  return updateMainChatGoal(sessionId, (goal) => {
+    if (!goal || goal.status !== 'active') return goal;
+    const now = Date.now();
+    const startedAt = Number(runtimeStartedAt || 0);
+    const lastTurnAt = Number(goal.lastTurnAt || 0);
+    const shouldCountInterruptedTurn = !startedAt || !lastTurnAt || lastTurnAt < startedAt;
+    return {
+      ...goal,
+      status: 'paused',
+      turnsUsed: goal.turnsUsed + (shouldCountInterruptedTurn ? 1 : 0),
+      lastTurnAt: shouldCountInterruptedTurn ? now : goal.lastTurnAt,
+      lastVerdict: 'continue',
+      lastReason: `Interrupted by ${reason}.`,
+      pausedReason: reason,
+      failureReason: undefined,
+      updatedAt: now,
+    };
+  });
+}
+
 export function recordMainChatGoalDeniedAction(
   sessionId: string,
   input: {

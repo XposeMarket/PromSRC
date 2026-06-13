@@ -2,11 +2,36 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "artifact-registry",
   "name": "Artifact Registry",
-  "description": "Index and retrieve Prometheus-generated artifacts from chats, tool observations, tasks, teams, processes, media, canvas, and Brain outputs.",
-  "version": "1.0.0",
+  "description": "Use this skill when Prometheus needs to find, index, normalize, retrieve, or reason about generated artifacts from chats, tool observations, background tasks, teams, Brain runs, processes, media generations, canvas exports, or Creative outputs. Triggers on phrases like find artifact, artifact registry, generated outputs, where did that file go, task artifacts, team artifacts, index outputs, artifact search, canvas export, and generated media history. Use it to map scattered Prometheus output sources into durable searchable artifact records.",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
-  "triggers": ["artifact registry", "find generated file", "list artifacts", "where did the output go", "artifact index"],
-  "categories": ["prometheus", "artifacts", "memory", "workflow"],
-  "requiredTools": ["advanced_memory", "workspace_write", "automations"],
-  "permissions": { "workspaceRead": true, "workspaceWrite": true }
+  "triggers": [
+    "find artifact",
+    "artifact registry",
+    "generated outputs",
+    "where did that file go",
+    "task artifacts",
+    "team artifacts",
+    "index outputs",
+    "artifact search",
+    "canvas export",
+    "generated media history",
+    "output registry",
+    "artifact index"
+  ],
+  "categories": [
+    "prometheus",
+    "artifacts",
+    "memory",
+    "workflow"
+  ],
+  "requiredTools": [
+    "advanced_memory",
+    "workspace_write",
+    "automations"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  }
 }

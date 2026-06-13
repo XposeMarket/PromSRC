@@ -1,8 +1,9 @@
 ---
 name: twitter-thread
-description: Turn any input — an idea, article, research, or insight — into a punchy, structured, high-engagement X/Twitter thread.
-emoji: "🧩"
-version: 1.0.0
+description: Use this skill when the user asks to write, rewrite, structure, or improve an X/Twitter thread from an idea, article, research finding, story, insight, or draft. Triggers on phrases like write a thread, Twitter thread, X thread, turn this into a thread, thread hook, tweet thread, founder thread, summarize as thread, viral thread, and draft a thread. Use it to create numbered tweets with a strong hook, one idea per tweet, recap, CTA, and character-count awareness.
+emoji: "🧵"
+version: 1.1.0
+triggers: write a thread, Twitter thread, X thread, turn this into a thread, thread hook, tweet thread, founder thread, summarize as thread, viral thread, draft a thread, thread rewrite, thread outline, X post thread, social thread
 ---
 
 # Twitter Thread

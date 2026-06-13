@@ -1,19 +1,10 @@
 ---
 name: web-animations
-description: Front end UI Animations
-emoji: "🧩"
-version: 1.0.0
----
-
----
-name: web-animation
 description: >
-  Expert guidance for implementing professional, polished animations and interactions in websites and web apps.
-  ALWAYS use this skill when the user wants any of: page animations, scroll effects, hover animations, entrance effects,
-  parallax, loading animations, micro-interactions, smooth transitions, CSS keyframes, GSAP, Framer Motion, 
-  animated backgrounds, particle effects, or any kind of motion design in a web context. Also trigger when building
-  a "fancy", "professional", "modern", "premium", or "impressive" website — motion is a core part of that bar.
-  Combine with the web-design-system skill for full-stack visual excellence.
+  Use this skill when implementing professional web animation, UI motion, scroll effects, hover states, entrance animations, page transitions, parallax, loading animations, micro-interactions, animated backgrounds, particles, GSAP timelines, Framer Motion components, CSS keyframes, or motion polish for a website/web app. Triggers on phrases like add animations, make it feel alive, scroll effects, hover animation, entrance effect, parallax, micro-interactions, smooth transitions, GSAP, Framer Motion, animated background, particle effect, and premium web motion. Use it to choose performant CSS/JS animation patterns and pair motion with the visual design system.
+emoji: "🎞️"
+version: 1.1.0
+triggers: add animations, make it feel alive, scroll effects, hover animation, entrance effect, parallax, micro-interactions, smooth transitions, GSAP, Framer Motion, animated background, particle effect, premium web motion, CSS keyframes, loading animation, page transitions
 ---
 
 # Web Animation Skill

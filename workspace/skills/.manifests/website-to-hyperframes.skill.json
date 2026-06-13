@@ -2,15 +2,28 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "website-to-hyperframes",
   "name": "website-to-hyperframes",
-  "description": "|",
-  "version": "1.0.0",
+  "description": "Use this skill when the user provides a website URL and wants a HyperFrames video, promo, social ad, product tour, website capture, or video content based on the existing site. Triggers on phrases like turn this website into a video, capture this site, make a promo from my site, website to HyperFrames, social ad from URL, product tour from site, video based on this website, and make a video from this link. Use it to capture the site, extract messaging/assets, storyboard scenes, and build a HyperFrames composition from real website evidence.",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "website-to-hyperframes"
+    "turn website into video",
+    "capture this site",
+    "make promo from my site",
+    "website to HyperFrames",
+    "social ad from URL",
+    "product tour from site",
+    "video based on website",
+    "make video from link",
+    "website promo video",
+    "site capture video",
+    "HyperFrames from website"
   ],
   "categories": [
     "codex",
-    "imported"
+    "imported",
+    "creative",
+    "hyperframes",
+    "website-video"
   ],
   "requiredTools": [],
   "requires": {

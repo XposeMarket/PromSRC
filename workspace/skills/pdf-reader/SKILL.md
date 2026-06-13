@@ -1,8 +1,9 @@
 ---
 name: pdf-reader
-description: Extract text and data from any PDF file using `pdf-parse` (digital PDFs) and `tesseract.js` (scanned/image PDFs). Both are available in Prometheus.
+description: Use this skill when the user provides a PDF and asks to read, extract, summarize, search, parse, OCR, convert to text, pull clauses, inspect tables, or analyze scanned/digital PDF content. Triggers on phrases like read this PDF, extract PDF text, summarize this PDF, search this PDF, OCR PDF, scanned PDF, PDF to text, parse PDF, find the clause, and what does this PDF say. Use it as the canonical PDF extraction workflow with digital-text detection and OCR fallback.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: read this PDF, extract PDF text, summarize PDF, search PDF, OCR PDF, scanned PDF, PDF to text, parse PDF, find clause, what does this PDF say, extract tables from PDF, analyze PDF, read uploaded PDF, PDF extraction, digital PDF
 ---
 
 # PDF Reader — Canonical PDF Workflow

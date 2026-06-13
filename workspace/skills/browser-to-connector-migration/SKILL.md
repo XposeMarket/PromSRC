@@ -1,3 +1,12 @@
+---
+name: browser-to-connector-migration
+description: Use this skill when a repeated Prometheus browser automation workflow should be evaluated for migration into a connector, teach workflow, composite tool, desktop macro, API integration, or durable automation. Triggers on phrases like browser workflow got brittle, make this a connector, browser to connector, repeated browser task, automate this site better, teach workflow, composite tool candidate, API migration, and stop using browser for this. Use it to decide whether to preserve browser automation or replace it with a safer typed integration.
+emoji: "🔁"
+version: 1.1.0
+triggers: browser workflow got brittle, make this a connector, browser to connector, repeated browser task, automate this site better, teach workflow, composite tool candidate, API migration, stop using browser for this, connector migration, browser automation replacement
+---
+
+
 # Browser-to-Connector Migration
 
 Use this skill when a browser workflow has become repetitive or brittle.

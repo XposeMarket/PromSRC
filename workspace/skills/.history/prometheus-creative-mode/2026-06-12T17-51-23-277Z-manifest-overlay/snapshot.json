@@ -1,0 +1,12 @@
+{
+  "skillId": "prometheus-creative-mode",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:23.280Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-creative-mode",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "f8f1152c1623c4f5"
+}

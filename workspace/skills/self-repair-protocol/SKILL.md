@@ -1,8 +1,9 @@
 ---
 name: self-repair-protocol
-description: Read this fully before making any changes. Don't patch blindly.
-emoji: "🧩"
-version: 1.0.0
+description: Use this skill when Prometheus itself, a tool, subagent, workspace state, skill state, config, or workflow is broken and needs diagnostic repair rather than blind patching. Triggers on phrases like self repair, fix Prometheus, tool failed, subagent failed, repair state, workspace broken, diagnose failure, rollback config, tool not registered, skill state broken, and don't patch blindly. Use it to triage exact failure scope, reproduce minimally, inspect environment/config/state, change one thing at a time, verify, and document the repair.
+emoji: "🛠️"
+version: 1.1.0
+triggers: self repair, fix Prometheus, tool failed, subagent failed, repair state, workspace broken, diagnose failure, rollback config, tool not registered, skill state broken, don't patch blindly, repair workflow, Prometheus broken, fix tool error
 ---
 
 # Self-Repair Protocol

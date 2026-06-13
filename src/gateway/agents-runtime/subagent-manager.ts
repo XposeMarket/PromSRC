@@ -116,6 +116,20 @@ export interface SubagentResult {
 
 const SUBAGENT_STORE_DIR = '.prometheus/subagents';
 
+const HEARTBEAT_SILENCE_RULE = [
+  '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+  '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
+].join('\n');
+
+function ensureHeartbeatSilenceRule(content: string, title: string): string {
+  const raw = String(content || '').trimEnd();
+  const base = raw || `# HEARTBEAT.md - ${title}`;
+  if (/heartbeat[\s_-]*ok/i.test(base) && /silence token|nothing else|must not notify/i.test(base)) {
+    return `${base}\n`;
+  }
+  return `${base}\n\n## Silence Rule\n${HEARTBEAT_SILENCE_RULE}\n`;
+}
+
 function normalizePathForCompare(p: string): string {
   const resolved = path.resolve(String(p || ''));
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -504,17 +518,21 @@ export class SubagentManager {
 
     // Keep a legacy HEARTBEAT.md instructions file for schedule-job previews and imports.
     const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
-    const heartbeatContent = params.heartbeat_instructions
-      ? String(params.heartbeat_instructions).trim()
-      : [
+    const heartbeatContent = ensureHeartbeatSilenceRule(
+      params.heartbeat_instructions
+        ? String(params.heartbeat_instructions).trim()
+        : [
           `# HEARTBEAT.md - ${definition.name}`,
           '',
           '## Heartbeat Checklist',
           '- Review queued one-off tasks (if any).',
           '- Perform only clearly actionable work from this role.',
           '- Write outputs to files in this workspace.',
-          '- If nothing is actionable, reply with HEARTBEAT_OK.',
-        ].join('\n');
+          '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+          '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
+        ].join('\n'),
+      definition.name,
+    );
     fs.writeFileSync(heartbeatPath, heartbeatContent, 'utf-8');
 
     const memoryPath = path.join(agentDir, 'MEMORY.md');
@@ -826,8 +844,8 @@ export class SubagentManager {
     fs.writeFileSync(path.join(agentDir, 'system_prompt.md'), this.buildSystemPromptFile(next), 'utf-8');
 
     if (patch.heartbeat_instructions !== undefined) {
-      const heartbeat = String(patch.heartbeat_instructions || '').trim();
-      fs.writeFileSync(path.join(agentDir, 'HEARTBEAT.md'), heartbeat || `# HEARTBEAT.md - ${next.name}\n`, 'utf-8');
+      const heartbeat = ensureHeartbeatSilenceRule(String(patch.heartbeat_instructions || '').trim(), next.name);
+      fs.writeFileSync(path.join(agentDir, 'HEARTBEAT.md'), heartbeat, 'utf-8');
     }
 
     if (patch.context_refs !== undefined) {

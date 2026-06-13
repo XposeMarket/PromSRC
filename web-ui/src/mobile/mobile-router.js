@@ -2,13 +2,13 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=liquid-glass-v7';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=liquid-glass-v20';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderCreativePage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=liquid-glass-v7';
+} from './mobile-pages.js?v=liquid-glass-v20';
 import {
   getDeviceToken,
   loadMobileSessionGroups,

@@ -16,6 +16,7 @@ import {
 } from './tasks/task-store';
 import { collectTurnFileChangesFromProcessEntries } from './file-change-summary';
 import { addMessage, flushSession, getHistory, getWorkspace } from './session';
+import { recordMainChatGoalInterruptedForRestart } from './main-chat-goals';
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
@@ -32,6 +33,7 @@ export interface HotRestartMainChatRecovery {
   chatId?: number;
   userId?: number;
   interruptedAt: number;
+  plannedRestartTool?: string;
   summary: string;
 }
 
@@ -39,17 +41,30 @@ function isTaskRuntime(runtime: LiveRuntimeSnapshot): boolean {
   return !!runtime.taskId || TASK_RUNTIME_KINDS.has(String(runtime.kind || ''));
 }
 
+function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
+  const toolName = String(runtime.checkpoint?.toolName || '').trim();
+  if (!toolName) return undefined;
+  if (toolName === 'gateway_restart') return toolName;
+  if (/^(prom_)?dev_.*apply/i.test(toolName)) return toolName;
+  if (/^(apply_)?dev_source_(changes|edit|patch)$/i.test(toolName)) return toolName;
+  return undefined;
+}
+
 function buildCheckpointText(runtime: LiveRuntimeSnapshot, reason: string): string {
+  const plannedTool = plannedRestartToolName(runtime);
   const lines = [
-    '[Interrupted by gateway restart]',
+    plannedTool ? '[Hot restart checkpoint: planned by this chat]' : '[Interrupted by gateway restart]',
     `Runtime: ${runtime.label || runtime.kind}`,
     runtime.detail ? `Work: ${runtime.detail}` : '',
     `Reason: ${reason}`,
     runtime.checkpoint?.event ? `Last event: ${runtime.checkpoint.event}` : '',
     runtime.checkpoint?.message ? `Last progress: ${String(runtime.checkpoint.message).slice(0, 1000)}` : '',
     runtime.checkpoint?.toolName ? `Last tool: ${runtime.checkpoint.toolName}` : '',
+    plannedTool ? `Restart trigger: ${plannedTool}` : '',
     '',
-    'Prometheus saved this checkpoint before shutdown. Continue from the latest known progress instead of restarting completed work.',
+    plannedTool
+      ? 'Prometheus called this restart tool from this chat, so treat the restart boundary as the expected completion of that tool/apply flow rather than a failure or unexpected interruption.'
+      : 'Prometheus saved this checkpoint before shutdown. Continue from the latest known progress instead of restarting completed work.',
   ].filter(Boolean);
   return lines.join('\n');
 }
@@ -99,6 +114,12 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
   flushSession(runtime.sessionId);
 }
 
+function pauseMainChatGoalRuntimeForRestart(runtime: LiveRuntimeSnapshot, reason: string): void {
+  if (runtime.kind !== 'main_chat' || !runtime.sessionId) return;
+  if (String(runtime.source || '') !== 'goal' && !/main chat goal/i.test(String(runtime.label || ''))) return;
+  recordMainChatGoalInterruptedForRestart(runtime.sessionId, reason, Number(runtime.startedAt || 0));
+}
+
 function pauseTaskForRestart(task: TaskRecord, runtime: LiveRuntimeSnapshot, reason: string): void {
   const current = loadTask(task.id) || task;
   if (current.status === 'complete' || current.status === 'failed') return;
@@ -134,6 +155,7 @@ export function prepareActiveRuntimesForGatewayShutdown(reason = 'gateway_shutdo
       }
 
       if (runtime.kind === 'main_chat' && runtime.sessionId) {
+        pauseMainChatGoalRuntimeForRestart(runtime, reason);
         addCheckpointMessageToSession(runtime, reason);
       }
     } catch (err: any) {
@@ -153,6 +175,13 @@ function shouldAutoResumeTask(task: TaskRecord): boolean {
 
 function runtimeTimestamp(runtime: LiveRuntimeSnapshot): number {
   return Number(runtime.interruptedAt || runtime.updatedAt || runtime.startedAt || 0);
+}
+
+function isMainChatHotRestartRecoveryCandidate(runtime: LiveRuntimeSnapshot): boolean {
+  if (runtime.kind !== 'main_chat' || !runtime.sessionId) return false;
+  if (isRuntimeRecoverableAfterRestart(runtime)) return true;
+  const recovery = String(runtime.recoveryData?.recovery || '').trim();
+  return recovery === 'chat_checkpointed';
 }
 
 function numberOrUndefined(value: unknown): number | undefined {
@@ -175,9 +204,7 @@ function formatRuntimeLastProgress(runtime: LiveRuntimeSnapshot, maxLen = 180): 
 export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs = 0): HotRestartMainChatRecovery[] {
   const cutoff = Math.max(Date.now() - Math.max(60_000, maxAgeMs), Number(sinceMs || 0));
   const runtimes = listDurableRuntimes()
-    .filter((runtime) => runtime.kind === 'main_chat')
-    .filter((runtime) => isRuntimeRecoverableAfterRestart(runtime))
-    .filter((runtime) => !!runtime.sessionId)
+    .filter((runtime) => isMainChatHotRestartRecoveryCandidate(runtime))
     .filter((runtime) => runtimeTimestamp(runtime) >= cutoff)
     .sort((a, b) => runtimeTimestamp(b) - runtimeTimestamp(a));
 
@@ -199,13 +226,20 @@ export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs
       const source = stringOrUndefined(latest?.source || latestOrigin.channel || latestOrigin.source);
       const chatId = numberOrUndefined(latest?.chatId ?? latestRecovery.chatId ?? latestOrigin.chatId);
       const userId = numberOrUndefined(latestRecovery.userId ?? latestOrigin.userId);
+      const plannedRestartTool = ordered.map(plannedRestartToolName).find(Boolean);
       const lines = ordered.slice(0, 4).map((runtime) => {
         const last = formatRuntimeLastProgress(runtime);
         const recovery = String(runtime.recoveryData?.recovery || '').trim();
-        const status = recovery ? `recovery=${recovery}` : 'checkpoint saved';
+        const plannedTool = plannedRestartToolName(runtime);
+        const status = plannedTool
+          ? `planned restart boundary from ${plannedTool}`
+          : (recovery ? `recovery=${recovery}` : 'checkpoint saved');
         return `- main_chat runtime ${runtime.id} (${status})${last ? `; ${last}` : ''}`;
       });
       if (ordered.length > 4) lines.push(`- ${ordered.length - 4} more interrupted main-chat runtime(s) for this session.`);
+      if (plannedRestartTool) {
+        lines.push('Treat this as the expected result of the chat-triggered restart/apply tool, not as work that needs a resume question.');
+      }
       return {
         sessionId,
         runtimeIds: ordered.map((runtime) => runtime.id),
@@ -213,6 +247,7 @@ export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs
         chatId,
         userId,
         interruptedAt: runtimeTimestamp(latest),
+        plannedRestartTool,
         summary: lines.join('\n'),
       };
     })
@@ -222,7 +257,7 @@ export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs
 export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs = 0): string {
   const cutoff = Math.max(Date.now() - Math.max(60_000, maxAgeMs), Number(sinceMs || 0));
   const runtimes = listDurableRuntimes()
-    .filter((runtime) => isRuntimeRecoverableAfterRestart(runtime))
+    .filter((runtime) => isRuntimeRecoverableAfterRestart(runtime) || isMainChatHotRestartRecoveryCandidate(runtime))
     .filter((runtime) => runtimeTimestamp(runtime) >= cutoff)
     .sort((a, b) => runtimeTimestamp(b) - runtimeTimestamp(a));
 
@@ -244,7 +279,11 @@ export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs =
         : `paused; ask before resuming. Resume command: task_control(action:"resume", task_id:"${runtime.taskId}")`;
       lines.push(`- ${kind}: ${label} (${runtime.taskId})${team}; status=${status}; ${resumeHint}${last ? `; ${last}` : ''}`);
     } else if (runtime.kind === 'main_chat' && runtime.sessionId) {
-      lines.push(`- main_chat: ${label} (session ${runtime.sessionId}); checkpoint saved; ask whether to continue in this chat${last ? `; ${last}` : ''}`);
+      const plannedTool = plannedRestartToolName(runtime);
+      const resumeHint = plannedTool
+        ? `planned restart boundary from ${plannedTool}; do not ask to resume just because this checkpoint exists`
+        : 'checkpoint saved; ask whether to continue in this chat';
+      lines.push(`- main_chat: ${label} (session ${runtime.sessionId}); ${resumeHint}${last ? `; ${last}` : ''}`);
     } else {
       lines.push(`- ${kind}: ${label} (${id}); marked interrupted${last ? `; ${last}` : ''}`);
     }
@@ -298,6 +337,7 @@ export function recoverInterruptedRuntimes(opts: {
       }
 
       if (runtime.kind === 'main_chat' && runtime.sessionId) {
+        pauseMainChatGoalRuntimeForRestart(runtime, runtime.interruptReason || 'gateway_restart');
         addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart');
         interruptedChats.push(runtime.sessionId);
         markDurableRuntimeRecovered(runtime.id, 'interrupted', { recovery: 'chat_checkpointed', sessionId: runtime.sessionId });

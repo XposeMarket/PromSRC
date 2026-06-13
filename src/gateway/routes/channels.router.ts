@@ -7,7 +7,7 @@ import { listManagedTeams, getManagedTeam, saveManagedTeam, deleteManagedTeam } 
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
 import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
-import { addMessage, getSession, setWorkspace } from '../session';
+import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { findRecoveryTaskForSubagentChat, handleTaskRecoveryMessage } from '../tasks/task-router';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -922,6 +922,9 @@ async function runSubagentChatTurn(
   } else {
     setWorkspace(sessionId, mainWorkspace);
   }
+  // Direct subagent chat is one long per-agent thread. Reset category expansion
+  // each turn so the tool surface stays intent-scoped instead of accumulating.
+  setActivatedToolCategories(sessionId, []);
   const callerContext = buildSubagentCallerContext(agentId, agent, mainWorkspace, artifactWorkspace);
   const abortSignal = externalAbortSignal || { aborted: false };
   const baseEmit = sendSSE || (() => {});
@@ -966,6 +969,7 @@ async function runSubagentChatTurn(
         undefined,
         Array.isArray(visionAttachments) && visionAttachments.length > 0 ? visionAttachments : undefined,
         effectiveModel.model || undefined,
+        { directSubagentChat: true },
       ),
       timeoutErr,
     ]).finally(() => {

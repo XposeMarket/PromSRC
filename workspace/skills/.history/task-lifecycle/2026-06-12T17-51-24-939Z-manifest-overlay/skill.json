@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "task-lifecycle",
+  "name": "Task Lifecycle",
+  "description": "Guide for (a) choosing the right execution mode — inline, interactive plans, ephemeral background agents, durable task runs, delegated subagents, team coordination — and (b) reading Prometheus's own internal state (agents, tasks, jobs, teams, recent work) via automation_dashboard and the granular tools, then rendering it with show_agent_work. Covers task_control, run_task_now, background_spawn, automation_dashboard, agent_list, schedule_job_*, and show_agent_work.",
+  "emoji": "📋",
+  "version": "4.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "create task",
+    "background task",
+    "multi-step",
+    "long running",
+    "check tasks",
+    "task status",
+    "stalled",
+    "resume task",
+    "complete task",
+    "task list",
+    "existing task",
+    "task control",
+    "declare plan",
+    "background_spawn",
+    "run_task_now",
+    "subagent",
+    "team",
+    "what's going on",
+    "what is going on",
+    "my priorities",
+    "operator snapshot",
+    "what have the agents done",
+    "what has everyone done",
+    "agent work",
+    "what are my subagents doing",
+    "status snapshot",
+    "what's running",
+    "morning snapshot",
+    "show me the work",
+    "internal status"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/tool-cluster-caveats-2026-05-09.md",
+      "type": "doc",
+      "description": "May 9 automation/agent smoke-test caveats for background_join, schedule_job_patch, schedule_job_stuck_control, agent_update, and get_agent_result."
+    },
+    {
+      "path": "notes/tool-category-activation-vs-smoke-test-2026-05-10.md",
+      "type": "doc",
+      "description": "May 10 caveat: tool-category activation is not a smoke test when user asks to confirm tools work."
+    }
+  ]
+}

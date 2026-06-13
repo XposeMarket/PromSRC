@@ -1,34 +1,34 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Optional-pack skill for professional intraday trading strategies and urgent market prep for Micro E-mini Nasdaq-100 (MNQ) and Micro Gold (MGC) futures, including chart/news/levels reads, NY open prep, risk framing, execution protocol, and trade journaling.",
+  "description": "Use this skill when Raul asks for MNQ, MGC, futures trading, trading discipline, premarket planning, trade review, risk sizing, emotional pressure, day-trading rules, or after-hours trading guardrails. It supports structured trading reflection without pretending to provide guaranteed financial outcomes.",
   "triggers": [
-    "mnq open prep",
-    "ny open prep",
-    "tradingview mnq",
-    "mnq news today",
-    "mgc news today",
-    "market open in 5 mins",
-    "futures trading plan",
-    "mnq levels",
-    "mgc levels",
-    "trading psychology",
-    "revenge trading reset"
+    "MNQ",
+    "MGC",
+    "futures trading",
+    "day trading",
+    "trading plan",
+    "trade review",
+    "premarket",
+    "risk sizing",
+    "emotional trading",
+    "trading discipline",
+    "after hours trading",
+    "don't let me trade",
+    "futures setup",
+    "trade journal",
+    "market open plan"
   ],
   "categories": [
     "trading",
-    "futures",
-    "mnq",
-    "mgc",
-    "market-prep",
-    "risk-management"
+    "coaching",
+    "finance"
   ],
   "requiredTools": [
-    "web",
-    "browser_automation"
+    "web_search",
+    "show_stocks",
+    "show_market"
   ],
-  "status": "ready",
   "lifecycle": "active",
-  "ownership": "local",
   "id": "day-trading-mnq-mgc"
 }

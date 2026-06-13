@@ -258,6 +258,19 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           model: args.model != null ? String(args.model) : undefined,
           output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
           save_to_workspace: args.save_to_workspace != null ? args.save_to_workspace === true : undefined,
+          on_image_persisted: (image) => {
+            deps.sendSSE?.('tool_progress', {
+              action: name,
+              name,
+              message: `Generated image saved to ${image.rel_path || image.path}.`,
+              generated_image: image,
+              generated_images: [image],
+              extra: {
+                generated_image: image,
+                generated_images: [image],
+              },
+            });
+          },
         });
         return {
           name,

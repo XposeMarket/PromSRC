@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to start, inspect, manage, resume, pause, cancel, clean up, or summarize background tasks, agent tasks, workflow runs, or task outputs. It provides a lifecycle-first approach to task state and user-facing results.",
+  "triggers": [
+    "task lifecycle",
+    "background task",
+    "start task",
+    "inspect task",
+    "resume task",
+    "pause task",
+    "cancel task",
+    "task output",
+    "task result",
+    "workflow run",
+    "agent task",
+    "cleanup task",
+    "task status",
+    "rerun task",
+    "task management"
+  ],
+  "categories": [
+    "tasks",
+    "automation",
+    "agents"
+  ],
+  "requiredTools": [
+    "automation_dashboard",
+    "automations"
+  ],
+  "lifecycle": "active",
+  "id": "task-lifecycle"
+}

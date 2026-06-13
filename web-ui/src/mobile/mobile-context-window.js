@@ -15,6 +15,9 @@ let _outsideHandler = null;
 let _planFetchAt = 0;
 let _planData = null;
 let _activeProvider = '';
+let _lastSessionId = '';
+let _modelChangeListenerBound = false;
+let _refreshSeq = 0;
 
 function _fmtTokens(value) {
   const n = Number(value);
@@ -31,17 +34,36 @@ function _gaugeClass(pct) {
   return 'ok';
 }
 
-function _fmtReset(iso) {
+function _fmtRelative(diffMs) {
+  if (diffMs <= 0) return 'soon';
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 48) {
+    const rem = mins % 60;
+    return rem ? `in ${hrs}h ${rem}m` : `in ${hrs}h`;
+  }
+  return `in ${Math.round(hrs / 24)}d`;
+}
+
+// Exact reset time. Short windows show a clock time ("at 11:08 AM"); weekly /
+// multi-day windows show date AND time ("Jun 18, 11:08 AM"). A relative hint is
+// appended in parentheses. `label` lets us detect the weekly windows.
+function _fmtReset(iso, label) {
   if (!iso) return '';
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return '';
   const diff = ts - Date.now();
   if (diff <= 0) return 'resets now';
-  const mins = Math.round(diff / 60000);
-  if (mins < 60) return `resets in ${mins}m`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 48) return `resets in ${hrs}h`;
-  return `resets in ${Math.round(hrs / 24)}d`;
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const rel = _fmtRelative(diff);
+  const isLong = /week|day|opus/i.test(String(label || '')) || diff >= 24 * 3600 * 1000;
+  if (isLong) {
+    const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return `resets ${date}, ${time} (${rel})`;
+  }
+  return `resets at ${time} (${rel})`;
 }
 
 export function renderMobileContextChip() {
@@ -114,48 +136,84 @@ function _renderPlan() {
   if (!prov) { wrap.hidden = true; body.innerHTML = ''; return; }
 
   const windows = Array.isArray(prov.windows) ? prov.windows : [];
+  let html = '';
   if (windows.length) {
-    body.innerHTML = windows.map((w) => {
+    html += windows.map((w) => {
       const pct = Math.max(0, Math.min(100, Number(w.used_percent) || 0));
       const left = (100 - pct).toFixed(0);
-      const reset = _fmtReset(w.resets_at);
+      const reset = _fmtReset(w.reset_at || w.resets_at, w.label);
       return `
         <div class="pm-ctx-gauge">
-          <div class="pm-ctx-gauge-head"><span>${escapeHtml(w.label || '')}${reset ? ` · ${escapeHtml(reset)}` : ''}</span><span class="pm-ctx-gauge-pct">${left}% left</span></div>
+          <div class="pm-ctx-gauge-head"><span>${escapeHtml(w.label || '')}</span><span class="pm-ctx-gauge-pct">${left}% left</span></div>
           <div class="pm-ctx-gauge-track"><div class="pm-ctx-gauge-fill ${_gaugeClass(pct)}" style="width:${pct}%"></div></div>
+          ${reset ? `<div class="pm-ctx-gauge-reset">${escapeHtml(reset)}</div>` : ''}
         </div>`;
     }).join('');
-  } else {
-    const t = prov.tokens || {};
-    body.innerHTML = `<div class="pm-ctx-plan-tokens">${_fmtTokens(t.total || 0)} tokens · ${Number(t.calls || 0)} calls tracked</div>`;
   }
+  if (!windows.length) {
+    const t = prov.tokens || {};
+    html += `<div class="pm-ctx-plan-tokens">${_fmtTokens(t.total || 0)} tokens · ${Number(t.calls || 0)} calls tracked</div>`;
+  }
+  body.innerHTML = html;
   wrap.hidden = false;
 }
 
-async function _refresh(sessionId) {
+async function _refresh(sessionId, { force = false, provider = '' } = {}) {
+  const seq = ++_refreshSeq;
+  _lastSessionId = String(sessionId || _lastSessionId || '');
+  const providerOverride = String(provider || '').trim().toLowerCase();
+  if (force) {
+    _planFetchAt = 0;
+    _planData = null;
+    if (providerOverride) _activeProvider = providerOverride;
+    else _activeProvider = '';
+  } else if (providerOverride) {
+    _activeProvider = providerOverride;
+  }
+
   // Context window for the active session.
   try {
     if (sessionId) {
       const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-window`);
-      _renderContext(data && data.success !== false ? data : null);
-    } else {
+      if (seq === _refreshSeq) _renderContext(data && data.success !== false ? data : null);
+    } else if (seq === _refreshSeq) {
       _renderContext(null);
     }
-  } catch { _renderContext(null); }
+  } catch { if (seq === _refreshSeq) _renderContext(null); }
 
-  // Active provider (for plan-usage scoping) + usage limits, cached 60s.
+  // Active provider (for plan-usage scoping) + usage limits. Model-change events
+  // force this cache so plan usage updates at the same time as the context ring.
   try {
     if (!_activeProvider) {
       const p = await mobileGatewayFetch('/api/settings/provider');
       _activeProvider = String(p?.llm?.provider || '').toLowerCase();
     }
     const now = Date.now();
-    if (!_planData || now - _planFetchAt > 60000) {
+    if (force || !_planData || now - _planFetchAt > 60000) {
       const lim = await mobileGatewayFetch('/api/usage/limits');
       if (lim && lim.success !== false) { _planData = lim; _planFetchAt = now; }
     }
-    _renderPlan();
+    if (seq === _refreshSeq) _renderPlan();
+    if (force) console.info('[mobile context] refreshed after model change', { sessionId, provider: _activeProvider });
   } catch { /* leave plan hidden */ }
+}
+
+function _providerFromModelChange(detail = {}) {
+  const modelRef = String(detail?.modelRef || '').trim();
+  const slashIdx = modelRef.indexOf('/');
+  return String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim().toLowerCase();
+}
+
+function _bindModelChangeListener(getSessionId) {
+  if (_modelChangeListenerBound) return;
+  _modelChangeListenerBound = true;
+  window.__pmMobileRefreshContextWindow = (detail = {}) => {
+    const sid = String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || _lastSessionId || '');
+    return _refresh(sid, { force: true, provider: _providerFromModelChange(detail) });
+  };
+  window.addEventListener('pm-model-changed', (event) => {
+    window.__pmMobileRefreshContextWindow?.(event?.detail || {});
+  });
 }
 
 function _close() {
@@ -191,6 +249,7 @@ export function wireMobileContextWindow(page, { getSessionId } = {}) {
   const chip = page.querySelector('#pm-ctx-chip');
   const toggle = page.querySelector('#pm-ctx-toggle');
   if (!chip) return;
+  _bindModelChangeListener(getSessionId);
   // Reset transient state for the fresh page render.
   _open = false; _expanded = false;
   if (_outsideHandler) { document.removeEventListener('pointerdown', _outsideHandler, true); _outsideHandler = null; }

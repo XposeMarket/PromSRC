@@ -132,10 +132,24 @@ function readHeartbeatInstructions(): string {
   }
 }
 
+const HEARTBEAT_SILENCE_RULE = [
+  '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+  '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
+].join('\n');
+
+function ensureHeartbeatSilenceRule(content: string): string {
+  const raw = String(content || '').trimEnd();
+  const base = raw || '# HEARTBEAT.md';
+  if (/heartbeat[\s_-]*ok/i.test(base) && /silence token|nothing else|must not notify/i.test(base)) {
+    return `${base}\n`;
+  }
+  return `${base}\n\n## Silence Rule\n${HEARTBEAT_SILENCE_RULE}\n`;
+}
+
 function writeHeartbeatInstructions(content: string): string {
   const heartbeatPath = getHeartbeatFilePath();
   fs.mkdirSync(path.dirname(heartbeatPath), { recursive: true });
-  fs.writeFileSync(heartbeatPath, String(content || ''), 'utf-8');
+  fs.writeFileSync(heartbeatPath, ensureHeartbeatSilenceRule(content), 'utf-8');
   return heartbeatPath;
 }
 
@@ -156,7 +170,7 @@ function getAgentHeartbeatFilePath(agentId: string): string {
 function writeAgentHeartbeatInstructions(agentId: string, content: string): string {
   const heartbeatPath = getAgentHeartbeatFilePath(agentId);
   fs.mkdirSync(path.dirname(heartbeatPath), { recursive: true });
-  fs.writeFileSync(heartbeatPath, String(content || ''), 'utf-8');
+  fs.writeFileSync(heartbeatPath, ensureHeartbeatSilenceRule(content), 'utf-8');
   return heartbeatPath;
 }
 

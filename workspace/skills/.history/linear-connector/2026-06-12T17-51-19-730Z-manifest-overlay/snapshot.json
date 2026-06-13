@@ -1,0 +1,12 @@
+{
+  "skillId": "linear-connector",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:19.733Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\linear-connector",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c0350081cbc5d135"
+}

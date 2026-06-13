@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to write, revise, publish, schedule, or prepare professional blog posts, thought-leadership articles, SEO posts, client posts, newsletter-style articles, or long-form business content. It supports polished structure, voice, and publication checks.",
+  "triggers": [
+    "blog post",
+    "professional blog",
+    "write article",
+    "thought leadership",
+    "SEO article",
+    "client article",
+    "publish blog",
+    "schedule blog",
+    "newsletter article",
+    "long-form content",
+    "content engine",
+    "blog posting",
+    "revise article",
+    "business post",
+    "website blog"
+  ],
+  "categories": [
+    "writing",
+    "marketing",
+    "content"
+  ],
+  "requiredTools": [
+    "web_search",
+    "browser_automation"
+  ],
+  "lifecycle": "active",
+  "id": "professional-blog-posting-engine"
+}

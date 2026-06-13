@@ -26,8 +26,19 @@ function field(label, inputHtml) {
 
 function numInput(key, value, opts = {}) {
   const { min = '', max = '', step = 1 } = opts;
-  return `<input class="ce-prop-input" type="number" data-key="${key}"
-    value="${num(value)}" min="${min}" max="${max}" step="${step}">`;
+  const v = num(value);
+  const hasMin = min !== '' && min != null;
+  const hasMax = max !== '' && max != null;
+  // Derive a usable slider range when bounds aren't explicit. Computed once at
+  // render time; the panel does not re-render on edits, so the range is stable.
+  const lo = hasMin ? Number(min) : Math.min(0, v) - Math.max(100, Math.abs(v));
+  const hi = hasMax ? Number(max) : Math.max(100, Math.abs(v) * 2 || 100);
+  return `<div class="ce-prop-slider-wrap">
+    <input class="ce-prop-range" type="range" data-key="${key}"
+      value="${v}" min="${lo}" max="${hi}" step="${step}">
+    <input class="ce-prop-input ce-prop-num" type="number" data-key="${key}"
+      value="${v}" min="${min}" max="${max}" step="${step}">
+  </div>`;
 }
 
 function textInput(key, value) {
@@ -87,6 +98,15 @@ function renderTransformSection(el) {
       </div>
       ${field('Rotation', numInput('rotation', el.rotation ?? 0, { min: -360, max: 360, step: 1 }))}
       ${field('Opacity', numInput('opacity', el.opacity ?? 1, { min: 0, max: 1, step: 0.01 }))}
+      ${field('Zoom', numInput('meta.zoom', metaValue(el, 'zoom', 1), { min: 0.1, max: 5, step: 0.01 }))}
+    </div>
+    <div class="ce-prop-section">
+      <div class="ce-prop-section__title">3D / Perspective</div>
+      ${field('Tilt X', numInput('meta.tiltX', metaValue(el, 'tiltX', 0), { min: -80, max: 80, step: 1 }))}
+      ${field('Tilt Y', numInput('meta.tiltY', metaValue(el, 'tiltY', 0), { min: -80, max: 80, step: 1 }))}
+      ${field('Roll', numInput('meta.roll', metaValue(el, 'roll', 0), { min: -180, max: 180, step: 1 }))}
+      ${field('Perspective', numInput('meta.perspective', metaValue(el, 'perspective', 1200), { min: 200, max: 3000, step: 50 }))}
+      ${field('Focus blur', numInput('meta.focusBlur', metaValue(el, 'focusBlur', 0), { min: 0, max: 40, step: 0.5 }))}
     </div>
   `;
 }
@@ -232,6 +252,9 @@ function renderEffectParams(ef, def) {
     if (pd.type === 'color') {
       return field(pd.label, colorInput(`ef.${ef._idx}.params.${pd.key}`, val));
     }
+    if (pd.type === 'select') {
+      return field(pd.label, select(`ef.${ef._idx}.params.${pd.key}`, val, pd.options || []));
+    }
     return field(pd.label, numInput(`ef.${ef._idx}.params.${pd.key}`, val, { min: pd.min, max: pd.max, step: pd.step }));
   }).join('');
 }
@@ -358,8 +381,14 @@ export function createPropertiesPanel({ container, store, getScene, applyOps, on
       const realKey = isHex ? key.slice(0, -4) : key;
 
       const handler = () => {
+        // Keep the slider + number pair (same data-key) visually in sync.
+        if (input.type === 'number' || input.type === 'range') {
+          container.querySelectorAll(`[data-key="${realKey}"]`).forEach(sib => {
+            if (sib !== input && sib.value !== input.value) sib.value = input.value;
+          });
+        }
         let value;
-        if (input.type === 'number') {
+        if (input.type === 'number' || input.type === 'range') {
           value = num(input.value);
         } else if (input.type === 'color') {
           value = input.value;
@@ -405,7 +434,7 @@ export function createPropertiesPanel({ container, store, getScene, applyOps, on
         input.addEventListener('input', handler);
       } else {
         input.addEventListener(event, handler);
-        if (input.type === 'number') input.addEventListener('input', handler);
+        if (input.type === 'number' || input.type === 'range') input.addEventListener('input', handler);
       }
     });
   }

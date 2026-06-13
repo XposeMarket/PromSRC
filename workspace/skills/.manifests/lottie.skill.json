@@ -1,55 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "lottie",
-  "name": "lottie",
-  "description": "Lottie and dotLottie adapter patterns for HyperFrames. Use when embedding lottie-web JSON animations, .lottie files, @lottiefiles/dotlottie-web players, registering instances on window.__hfLottie, or making After Effects exports deterministic in HyperFrames.",
-  "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to use, inspect, embed, create, optimize, or troubleshoot Lottie animations, JSON animation assets, Bodymovin exports, animated icons, or lightweight vector motion in web/UI/video work. It focuses on asset fidelity and runtime compatibility.",
   "triggers": [
-    "lottie"
+    "Lottie",
+    "lottie animation",
+    "Bodymovin",
+    "animated icon",
+    "lottie JSON",
+    "embed Lottie",
+    "optimize Lottie",
+    "vector animation",
+    "lottie player",
+    "animated illustration",
+    "JSON animation",
+    "lottie asset",
+    "lottie export",
+    "UI animation asset"
   ],
   "categories": [
-    "generic",
-    "imported"
+    "creative",
+    "animation",
+    "assets"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "shell",
-      "browser",
-      "desktop",
-      "externalSideEffects"
-    ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": true,
-    "browser": true,
-    "desktop": true,
-    "externalSideEffects": true
-  },
-  "resources": [],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium"
+  "requiredTools": [
+    "media_assets",
+    "creative_mode"
+  ],
+  "lifecycle": "active",
+  "name": "Lottie",
+  "id": "lottie"
 }

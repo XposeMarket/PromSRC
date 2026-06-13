@@ -1,0 +1,12 @@
+{
+  "skillId": "webhook-receiver-framework",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:27.392Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\webhook-receiver-framework",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "e7a99f923ba8df3a"
+}

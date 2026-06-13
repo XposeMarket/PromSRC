@@ -1,8 +1,9 @@
 ---
 name: doc-ingestion
-description: This is the skill that feeds the business brain from real documents instead of manual data entry.
+description: Use this skill when the user uploads or points to documents and wants Prometheus to ingest business facts into BUSINESS.md and entity files. Triggers on phrases like ingest this document, add this contract to memory, extract business facts, update BUSINESS.md from this PDF, parse this proposal, import this invoice, read this spreadsheet into entities, process this SOW, and feed the business brain. Use it to route PDFs, DOCX, spreadsheets, text, and markdown through the right reader, extract structured facts, and write only explicit business/entity facts safely.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: ingest this document, add contract to memory, extract business facts, update BUSINESS.md, parse proposal, import invoice, read spreadsheet into entities, process SOW, feed business brain, document ingestion, create entity files, extract contract terms, ingest PDF, ingest DOCX, import business document
 ---
 
 # Doc Ingestion

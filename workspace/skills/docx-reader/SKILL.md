@@ -1,8 +1,9 @@
 ---
 name: docx-reader
-description: Read, extract, and summarize `.docx` Word documents using Node.js and the `mammoth` package. Use this when the user uploads a Word file and wants it read, summarized, outlined, searched, cleaned into markdown, or converted into usable text/table output. Triggers on requests like: read this docx, summarize this Word document, extract the text from this .docx, what does this document say, pull tables from this Word file, search this uploaded document, or turn this docx into markdown. Best for direct document-reading tasks where Prometheus should take the shortest reliable path instead of doing multi-step guesswork.
+description: Read, extract, and summarize `.docx` Word documents using Node.js and the `mammoth` package. Use this when the user uploads a Word file and wants it read, summarized, outlined, searched, cleaned into markdown, or converted into usable text/table output. Triggers on requests like read this docx, summarize this Word document, extract the text from this .docx, what does this document say, pull tables from this Word file, search this uploaded document, or turn this docx into markdown. Best for direct document-reading tasks where Prometheus should take the shortest reliable path instead of doing multi-step guesswork.
 emoji: "🧩"
-version: 2.0.0
+version: 2.1.0
+triggers: read this docx, read this word document, summarize this docx, summarize this word file, extract this docx, extract text from this word document, what does this document say, pull tables from this docx, search this docx, convert this docx to markdown, analyze this uploaded word file
 triggers: read this docx, read this word document, summarize this docx, summarize this word file, extract this docx, extract text from this word document, what does this document say, pull tables from this docx, search this docx, convert this docx to markdown, analyze this uploaded word file
 ---
 

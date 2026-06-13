@@ -1,0 +1,12 @@
+{
+  "skillId": "workflow-replay-runbook-recorder",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:28.138Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\workflow-replay-runbook-recorder",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "dddedcc0859e1984"
+}

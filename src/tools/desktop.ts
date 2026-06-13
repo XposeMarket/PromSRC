@@ -32,6 +32,10 @@ function ok(stdout: string): ToolResult {
   return { success: true, stdout };
 }
 
+function okData(stdout: string, data: any): ToolResult {
+  return { success: true, stdout, data };
+}
+
 function fail(error: string): ToolResult {
   return { success: false, error };
 }
@@ -180,22 +184,30 @@ export const desktopFindWindowTool: Tool = {
 
 export const desktopFocusWindowTool: Tool = {
   name: 'desktop_focus_window',
-  description: 'Bring a matching window to foreground/focus.',
+  description:
+    'Bring a matching window to foreground/focus and verify the active window afterward. ' +
+    'Returns focused window title, process name, monitor, requested-app-active boolean, and a screenshot_id/path when capture is enabled.',
   schema: {
     name: 'Partial window title or process name to focus',
+    include_screenshot: 'Capture a verification screenshot after focus (default true)',
   },
   jsonSchema: {
     type: 'object',
     required: ['name'],
     properties: {
       name: { type: 'string', description: 'Partial window title or process name' },
+      include_screenshot: { type: 'boolean', description: 'Capture a verification screenshot after focus (default true)' },
     },
     additionalProperties: false,
   },
   execute: async (args: any): Promise<ToolResult> => {
     try {
-      const { desktopFocusWindow } = await dt();
-      return wrapResult(await desktopFocusWindow(String(args?.name || '')));
+      const { desktopFocusWindowVerified } = await dt();
+      const verification = await desktopFocusWindowVerified(DESKTOP_SESSION, String(args?.name || ''), {
+        includeScreenshot: args?.include_screenshot !== false,
+      });
+      if (!verification.ok) return fail(verification.message);
+      return okData(verification.verification.summary, verification.verification);
     } catch (e: any) {
       return fail(String(e?.message || e));
     }

@@ -609,7 +609,8 @@ startupMark('brain runner constructed');
       '- Review active priorities and pending follow-ups.',
       '- Execute only actionable maintenance/ops tasks.',
       '- Write any artifacts to workspace files.',
-      '- If nothing is actionable, reply with HEARTBEAT_OK.',
+      '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+      '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
     ].join('\n'), 'utf-8');
   }
   heartbeatRunner.registerAgent('main', mainWorkspace);
@@ -631,7 +632,8 @@ startupMark('brain runner constructed');
             '## Heartbeat Checklist',
             '- Perform only clearly actionable tasks for this role.',
             '- Persist outputs to files in this workspace.',
-            '- If nothing is actionable, reply with HEARTBEAT_OK.',
+            '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+            '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
           ].join('\n'), 'utf-8');
         }
         heartbeatRunner.registerAgent(entry, agentDir);

@@ -110,6 +110,7 @@ function renderSubagentInlineApprovalCard(input = {}) {
   const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
   const technicalText = approval.command || approval.scopedAction || approval.action;
   const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+  const sourceDirs = Array.isArray(approval.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
   const boundary = approval.commandBoundary || null;
   const boundaryScope = String(boundary?.scope || '').trim();
   const boundaryPaths = Array.isArray(boundary?.externalPaths) ? boundary.externalPaths.filter(Boolean) : [];
@@ -128,6 +129,7 @@ function renderSubagentInlineApprovalCard(input = {}) {
     ${boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? `<br>${escHtml(String(boundary.reason))}` : ''}</div>` : ''}
     ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
     ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
+    ${sourceDirs.length ? `<div class="chat-approval-scope"><span>Workspace docs</span>${sourceDirs.map((dir) => escHtml(String(dir))).join('<br>')}</div>` : ''}
     ${technicalText ? `<details class="chat-approval-technical"><summary>Technical details</summary><pre class="chat-approval-command">${escHtml(technicalText)}</pre></details>` : ''}
     ${pending
       ? `<div class="chat-approval-actions">
@@ -1089,6 +1091,49 @@ function restoreSubagentChatScroll(snapshot, opts = {}) {
   });
 }
 
+function captureSubagentChatDraft() {
+  if (subagentDetailTab !== 'chat') return null;
+  const input = document.getElementById('subagent-chat-input');
+  if (!input) return null;
+  subagentChatDraft = input.value || '';
+  const focused = document.activeElement === input;
+  return focused
+    ? { focused, start: input.selectionStart, end: input.selectionEnd }
+    : { focused: false };
+}
+
+function hydrateSubagentChatComposer(agentId, opts = {}) {
+  if (subagentDetailTab !== 'chat') return;
+  requestAnimationFrame(() => {
+    const msgs = document.getElementById('subagent-chat-messages');
+    if (opts.forceBottom && msgs) msgs.scrollTop = msgs.scrollHeight;
+
+    const input = document.getElementById('subagent-chat-input');
+    if (input) {
+      if (input.value !== subagentChatDraft) input.value = subagentChatDraft;
+      if (input.dataset.subagentDraftBound !== '1') {
+        input.dataset.subagentDraftBound = '1';
+        input.addEventListener('input', () => {
+          subagentChatDraft = input.value;
+          resizeSubagentChatInput();
+          refreshSubagentChatComposerState(agentId);
+        });
+      }
+      resizeSubagentChatInput();
+      if (opts.focus || opts.selection?.focused) {
+        input.focus();
+        const start = Number.isFinite(opts.selection?.start) ? opts.selection.start : input.value.length;
+        const end = Number.isFinite(opts.selection?.end) ? opts.selection.end : start;
+        try { input.setSelectionRange(start, end); } catch {}
+      }
+    }
+
+    renderSubagentChatAttachmentStaging(agentId);
+    bindSubagentChatAttachmentListeners(agentId);
+    refreshSubagentChatComposerState(agentId);
+  });
+}
+
 function renderSubagentBoard(agentId) {
   const agent = subagentsData.find(a => a.id === agentId);
   if (!agent) return;
@@ -1099,6 +1144,7 @@ function renderSubagentBoard(agentId) {
 
   const color = agentColor(agentId);
   const emoji = agentEmoji(agent);
+  const chatDraftSelection = captureSubagentChatDraft();
   const chatScrollSnapshot = getSubagentChatScrollSnapshot();
 
   header.innerHTML = `
@@ -1130,6 +1176,7 @@ function renderSubagentBoard(agentId) {
     agentModelPickerHydrate('sa-model', agent);
   }
   restoreSubagentChatScroll(chatScrollSnapshot);
+  hydrateSubagentChatComposer(agentId, { selection: chatDraftSelection });
 }
 
 function renderSubagentTabContent(agent) {
@@ -1188,24 +1235,7 @@ async function switchSubagentTab(tab, agentId) {
   renderSubagentBoard(agentId);
 
   if (tab === 'chat') {
-    requestAnimationFrame(() => {
-      const msgs = document.getElementById('subagent-chat-messages');
-      if (msgs) msgs.scrollTop = msgs.scrollHeight;
-      const inp = document.getElementById('subagent-chat-input');
-      if (inp) {
-        inp.value = subagentChatDraft;
-        inp.focus();
-        inp.addEventListener('input', () => {
-          subagentChatDraft = inp.value;
-          resizeSubagentChatInput();
-          refreshSubagentChatComposerState(agentId);
-        });
-        resizeSubagentChatInput();
-      }
-      renderSubagentChatAttachmentStaging(agentId);
-      bindSubagentChatAttachmentListeners(agentId);
-      refreshSubagentChatComposerState(agentId);
-    });
+    hydrateSubagentChatComposer(agentId, { focus: true, forceBottom: true });
   }
 }
 
@@ -1531,7 +1561,7 @@ function renderSubagentChatTab(agent) {
           <div id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-self:flex-start;align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800">${queuedCount} queued</div>
           <div id="subagent-chat-file-staging" class="chat-file-staging panel-chat-file-staging" style="display:none"></div>
           <div style="position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden">
-            <textarea id="subagent-chat-input" rows="3" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" style="width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:var(--text);outline:none;min-height:64px;box-sizing:border-box" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}"></textarea>
+            <textarea id="subagent-chat-input" rows="3" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" style="width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:var(--text);outline:none;min-height:64px;box-sizing:border-box" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}">${escHtml(subagentChatDraft)}</textarea>
           </div>
         </div>
         <button id="subagent-chat-send-button" onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:12px;padding:10px 16px;font-size:12px;font-weight:800;cursor:pointer;height:42px;min-width:64px;box-shadow:${isSending ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)'}">${isSending ? 'Stop' : 'Send'}</button>

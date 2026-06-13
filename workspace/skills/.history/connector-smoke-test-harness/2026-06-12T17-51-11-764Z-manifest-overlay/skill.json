@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "connector-smoke-test-harness",
+  "name": "Connector Smoke-Test Harness",
+  "description": "Verify Prometheus connectors with status, credential, read, dry-run write, pagination, and rate-limit checks before they are treated as usable.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["test connector", "connector smoke test", "verify integration", "is this connector working"],
+  "categories": ["prometheus", "connectors", "qa", "integrations"],
+  "requiredTools": ["connector_list", "external_apps", "integration_admin"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true, "externalSideEffects": true }
+}

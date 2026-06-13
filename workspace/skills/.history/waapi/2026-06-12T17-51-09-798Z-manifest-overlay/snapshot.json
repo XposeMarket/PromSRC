@@ -1,0 +1,11 @@
+{
+  "skillId": "waapi",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:09.800Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\waapi",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "6703ad96a13ec074"
+}

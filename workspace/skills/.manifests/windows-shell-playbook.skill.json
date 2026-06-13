@@ -1,57 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "windows-shell-playbook",
-  "name": "windows-shell-playbook",
-  "description": "Windows shell and run_command playbook for PowerShell/cmd-safe commands, path handling, npm/build verification, and avoiding Bash-only syntax such as && on older PowerShell hosts.",
-  "version": "1.0.1",
+  "description": "Use this skill when the user asks to run Windows shell commands, PowerShell commands, scripts, builds, tests, process checks, environment inspection, or command-line troubleshooting on the local Windows machine. It favors bounded commands and avoids fragile quoting patterns.",
   "triggers": [
-    "windows shell",
+    "Windows shell",
     "PowerShell",
-    "cmd.exe",
-    "run_command on Windows",
-    "npm on Windows",
-    "build verification failed",
-    "The token '&&' is not a valid statement separator",
-    "invalid statement separator",
+    "run command",
+    "command line",
+    "shell command",
     "Windows command",
-    "proposal sandbox verification",
-    "shell syntax"
+    "build command",
+    "test command",
+    "process check",
+    "environment variable",
+    "script execution",
+    "terminal command",
+    "npm run",
+    "start process",
+    "command troubleshooting"
   ],
   "categories": [
     "shell",
     "windows",
-    "developer-tools"
+    "operations"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [
-      "workspace_write"
-    ],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [
-      "windows"
-    ],
-    "permissions": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [
-      "workspace_write"
-    ],
-    "defaultWorkflow": [
-      "Read this skill before constructing Windows run_command strings.",
-      "Use explicit powershell -NoProfile -Command with Set-Location for cwd-dependent commands.",
-      "Avoid Bash chaining assumptions; use semicolons or separate commands with explicit error checks."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {},
-  "status": "ready",
+  "requiredTools": [
+    "workspace_write"
+  ],
   "lifecycle": "active",
-  "ownership": "local",
-  "executionEnabled": true
+  "name": "Windows Shell Playbook",
+  "id": "windows-shell-playbook"
 }

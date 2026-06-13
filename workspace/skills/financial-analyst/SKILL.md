@@ -1,8 +1,9 @@
 ---
 name: financial-analyst
-description: Financial Analyst Skill
+description: Use this skill when the user asks for financial analysis, P&L review, cash flow, runway, burn rate, SaaS metrics, unit economics, investor updates, KPI trees, break-even analysis, or finance recommendations. Triggers on phrases like analyze my finances, P&L analysis, cash runway, burn rate, SaaS metrics, unit economics, investor update, financial forecast, break-even, gross margin, MRR, ARR, CAC, LTV, and CFO analysis. Use it to translate financial data into plain-English decisions and action recommendations.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: financial analysis, analyze my finances, P&L analysis, cash runway, burn rate, SaaS metrics, unit economics, investor update, financial forecast, break-even analysis, gross margin, MRR, ARR, CAC, LTV, CFO analysis
 ---
 
 # Financial Analyst Skill

@@ -581,6 +581,15 @@ export function detectToolCategories(text: string): Set<string> {
   const AUTOMATIONS = ['schedule', 'scheduled', 'every day', 'every week', 'recurring', 'cron', 'automate', 'automation', 'remind me', 'daily', 'weekly'];
   const CREATIVE_MODE = ['creative mode', 'image mode', 'video mode', 'design mode', 'enter creative', 'exit creative'];
   const CONNECTORS = ['gmail', 'github', 'slack', 'notion', 'google drive', 'hubspot', 'salesforce', 'stripe', 'ga4', 'external app', 'connected app'];
+  const SOURCE_READ = ['prometheus source', 'prom source', 'read source', 'inspect source', 'grep source', 'read webui source', 'webui source', 'source_read', 'prometheus_source_read'];
+  const SOURCE_WRITE = ['edit prometheus source', 'change prometheus source', 'patch prometheus source', 'modify prometheus source', 'source_write', 'prometheus_source_write', 'dev source edit'];
+  const SOCIAL_INTELLIGENCE = ['social intelligence', 'social profile', 'profile analysis', 'engagement analysis', 'growth trajectory', 'content recommendations', 'social_intel'];
+  const PROPOSAL_ADMIN = ['edit proposal', 'update proposal', 'revise proposal', 'proposal admin', 'proposal_admin', 'pending proposal'];
+  const MCP_SERVER_TOOLS = ['mcp server tools', 'mcp tools', 'mcp__', 'connected mcp', 'server tool', 'mcp_server_tools'];
+  const COMPOSITE_TOOLS = ['composite tool', 'composite tools', 'saved tool', 'multi-step tool', 'composites', 'composite_tools'];
+  const SKILLS_CATEGORY = ['skill create', 'create skill', 'update skill', 'skill authoring', 'skill manifest', 'skill resource', 'skill bundle', 'skill maintenance'];
+  const MODEL_MANAGEMENT = ['agent model', 'agent models', 'model template', 'model templates', 'set agent model', 'agent model template', 'model_management'];
+  const BUSINESS_CATEGORY = ['business entity', 'business entities', 'client entity', 'contact entity', 'vendor entity', 'project entity', 'business context', 'business profile'];
   if (WEB.some(k => lower.includes(k))) cats.add('web');
   if (BROWSER.some(k => lower.includes(k))) cats.add('browser');
   if (DESKTOP.some(k => lower.includes(k))) cats.add('desktop');
@@ -597,6 +606,15 @@ export function detectToolCategories(text: string): Set<string> {
   if (AUTOMATIONS.some(k => lower.includes(k))) cats.add('automations');
   if (CREATIVE_MODE.some(k => lower.includes(k))) cats.add('creative_mode');
   if (CONNECTORS.some(k => lower.includes(k))) cats.add('external_apps');
+  if (SOURCE_READ.some(k => lower.includes(k))) cats.add('prometheus_source_read');
+  if (SOURCE_WRITE.some(k => lower.includes(k))) cats.add('prometheus_source_write');
+  if (SOCIAL_INTELLIGENCE.some(k => lower.includes(k))) cats.add('social_intelligence');
+  if (PROPOSAL_ADMIN.some(k => lower.includes(k))) cats.add('proposal_admin');
+  if (MCP_SERVER_TOOLS.some(k => lower.includes(k))) cats.add('mcp_server_tools');
+  if (COMPOSITE_TOOLS.some(k => lower.includes(k))) cats.add('composite_tools');
+  if (SKILLS_CATEGORY.some(k => lower.includes(k))) cats.add('skills');
+  if (MODEL_MANAGEMENT.some(k => lower.includes(k))) cats.add('model_management');
+  if (BUSINESS_CATEGORY.some(k => lower.includes(k))) cats.add('business');
   const AGENT_BUILDER = ['workflow', 'agent builder', 'agentbuilder', 'architect workflow', 'deploy workflow', 'execute workflow', 'workflow template'];
   const agentBuilderConfigEnabled = (() => { try { return (getConfig().getConfig() as any)?.agent_builder?.enabled === true; } catch { return false; } })();
   if (agentBuilderConfigEnabled && AGENT_BUILDER.some(k => lower.includes(k))) cats.add('agent_builder');
@@ -678,7 +696,7 @@ WORKSPACE ONLY: In the public app, file tools operate on the user workspace and 
     : `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
 	SOURCE CODE REFERENCE FILES: self/index.md is the canonical Prometheus architecture/debug map. Read it with read_file('self/index.md'), not read_source. Use the split self/* files it points to when you only need one subsystem.
 	SRC SURFACES (read-only by default): source_stats|src_stats(file), read_source(file,start_line?,num_lines?), list_source(directory?), and grep_source(pattern, directory?, file_glob?) inspect src/. WEB-UI SURFACES (read-only by default): webui_source_stats|webui_stats(file), read_webui_source(file,start_line?,num_lines?), list_webui_source(directory?), and grep_webui_source(pattern, directory?, file_glob?) inspect web-ui/. PROM-ROOT SURFACE (dev/proposal only): list_prom, prom_file_stats, read_prom_file, and grep_prom inspect allowlisted Prometheus project-root files/directories such as scripts/, electron/, build/, dist/, src/, web-ui/, and .prometheus/.
-	Write (approved dev source sessions only): use request_dev_source_edit for fast user approval in the current dev chat, or write_proposal execution_mode="code_change" for the full proposal lane. request_dev_source_edit must include a grounded plan: user_request, reasoning, evidence with file/line findings, current_state, fix, steps, expected_workflow, verification, and completion_note_tag (default dev_edit_complete). expected_workflow should explain exactly what happens after approval and after edits apply live: scoped tool unlock, verification/preflight, restart/reload/checkpoint behavior, completion note, and final response shape. After approval, follow that declared plan and prefer read_dev_sources plus apply_dev_source_patchset for file tasks; use tiny source tools only for one-off emergency edits. Approved fallback write tools remain: src/: find_replace_source, replace_lines_source, insert_after_source, delete_lines_source, write_source, delete_source; web-ui/: find_replace_webui_source, replace_lines_webui_source, insert_after_webui_source, delete_lines_webui_source, write_webui_source, delete_webui_source; allowlisted prom-root proposal scope only: find_replace_prom, replace_lines_prom, insert_after_prom, delete_lines_prom, write_prom_file, delete_prom_file. Prometheus Mobile is part of the web UI source tree: edit mobile app source under web-ui/src/mobile/*, never hand-edit generated/public-web-ui/static/mobile/* except for emergency verification, and finalize quick live mobile edits with prom_apply_dev_changes changed_surfaces:["mobile"]. For quick live dev edits, finalize with prom_apply_dev_changes rather than raw npm run build; use mode="verify_only" for a no-restart preflight or mode="apply_live" to sync/build/restart/reload. After apply_live/restart/reload succeeds, call write_note with the approved completion_note_tag and dev_edit_id so the dev-edit plan can close before the final user summary. Proposal/code_exec lanes are isolated sandboxes: verify them with the canonical run_command build inside the sandbox, and do not call prom_apply_dev_changes there.
+	Write (approved dev source sessions only): use request_dev_source_edit for fast user approval in the current dev chat, or write_proposal execution_mode="code_change" for the full proposal lane. request_dev_source_edit must include a grounded plan: user_request, reasoning, evidence with file/line findings, current_state, fix, steps, expected_workflow, verification, and completion_note_tag (default dev_edit_complete). expected_workflow should explain exactly what happens after approval and after edits apply live: scoped tool unlock, verification/preflight, restart/reload/checkpoint behavior, completion note, and final response shape. After approval, follow that declared plan and prefer read_dev_sources plus apply_dev_source_patchset for src/web-ui file tasks; use scoped workspace file tools for the approved self docs (self/ and workspace/self/) and tiny source tools only for one-off emergency source edits. Approved fallback write tools remain: src/: find_replace_source, replace_lines_source, insert_after_source, delete_lines_source, write_source, delete_source; web-ui/: find_replace_webui_source, replace_lines_webui_source, insert_after_webui_source, delete_lines_webui_source, write_webui_source, delete_webui_source; approved self docs: read_file, write_file, find_replace, replace_lines, insert_after, delete_lines, create_file, delete_file, mkdir; allowlisted prom-root proposal scope only: find_replace_prom, replace_lines_prom, insert_after_prom, delete_lines_prom, write_prom_file, delete_prom_file. Prometheus Mobile is part of the web UI source tree: edit mobile app source under web-ui/src/mobile/*, never hand-edit generated/public-web-ui/static/mobile/* except for emergency verification, and finalize quick live mobile edits with prom_apply_dev_changes changed_surfaces:["mobile"]. For quick live dev edits, finalize with prom_apply_dev_changes rather than raw npm run build; use mode="verify_only" for a no-restart preflight or mode="apply_live" to sync/build/restart/reload. After apply_live/restart/reload succeeds, call write_note with the approved completion_note_tag and dev_edit_id so the dev-edit plan can close before the final user summary. Proposal/code_exec lanes are isolated sandboxes: verify them with the canonical run_command build inside the sandbox, and do not call prom_apply_dev_changes there.
 	MANDATORY EDIT ROUTE: For workspace file edits, native file tools are the default and expected path: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts to edit files unless the user explicitly asks for shell editing or the native tools cannot perform the transformation.
 	EDIT PRIORITY: Always inspect before editing. For source-controlled Prometheus code, prefer batch tools first: read_dev_sources for multi-file inspection, then apply_dev_source_patchset for approved edits. Use tiny source tools only for one-off emergency edits. For normal workspace files, prefer read_files_batch for multi-file inspection, then apply_patchset for grouped edits; use file_stats/search_files/grep_file/read_file and find_replace/replace_lines/insert_after/delete_lines/write_file/create_file/delete_file only when a narrow one-off tool is faster or safer.`,
 
@@ -784,11 +802,43 @@ export const CATEGORY_POLICIES: Record<string, string> = {
   composite_tools: 'COMPOSITE TOOLS: Activate when the user wants to create, inspect, edit, delete, list, or run saved multi-step composite tools. Composite management tools are not core; request composite_tools first.',
   composites: 'COMPOSITE TOOLS: Activate when the user wants to create, inspect, edit, delete, list, or run saved multi-step composite tools. Composite management tools are not core; request composite_tools first.',
   creative_mode: TOOL_BLOCKS.creative_mode,
+  skills: TOOL_BLOCKS.skills,
+  model_management: 'MODEL MANAGEMENT: get/set agent model defaults and manage reusable agent model templates. switch_model and set_current_model are core; activate only for agent fleet model administration.',
+  business: 'BUSINESS: list/read/write structured business entities and append entity events for clients, contacts, projects, vendors, and social accounts. business_context_mode is core for BUSINESS.md injection.',
 };
 
 // ─── buildToolsContext ────────────────────────────────────────────────────────
 // Builds the [TOOLS] system prompt block dynamically based on activated categories.
 // Base: compact category menu. Expands with policy text as categories are activated.
+
+const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
+  prometheus_source_read: 'inspect Prometheus app/source files: read_dev_sources, read/list/grep_source, read/list/grep_webui_source, and allowlisted prom-root reads.',
+  prometheus_source_write: 'edit Prometheus app/source files after approval: apply_dev_source_patchset, targeted source/web-ui/prom-root write/replace/insert/delete tools, and prom_apply_dev_changes.',
+  social_intelligence: 'run social_intel for social profile metrics, engagement/growth analysis, and content recommendations.',
+  proposal_admin: 'use edit_proposal to revise pending proposal metadata/details/diffs before approval.',
+  mcp_server_tools: 'use dynamic mcp__server__tool functions exposed by connected MCP servers; inspect/setup servers with integration_admin first when needed.',
+  composite_tools: 'manage or run saved multi-step tools: create_composite, get_composite, edit_composite, delete_composite, list_composites, plus saved composite tool names.',
+  skills: 'author and maintain reusable skills: skill_create, skill_create_bundle, import/export/update bundles, skill_manifest_write, skill_resource_write/delete, and skill_inspect.',
+  model_management: 'administer agent model routing/templates: get_agent_models, set_agent_model, list/save/update/apply/select/delete agent model templates.',
+  business: 'manage structured entity files: list_entities, read_entity, write_entity, and append_entity_event for clients, contacts, projects, vendors, and social accounts.',
+};
+
+function buildToolCategoryMatchContext(messageText: string, activatedCategories: Set<string>): string {
+  const detected = detectToolCategories(messageText);
+  const allowed = new Set(getPublicBuildAllowedCategories(Object.keys(TOOL_CATEGORY_MATCH_HINTS) as any));
+  const lines: string[] = [];
+  for (const category of Object.keys(TOOL_CATEGORY_MATCH_HINTS)) {
+    if (!detected.has(category)) continue;
+    if (!allowed.has(category)) continue;
+    if (activatedCategories.has(category)) continue;
+    lines.push(
+      `The user message may need category: ${category}.`,
+      `Use request_tool_category({"category":"${category}"}) if you need tools to ${TOOL_CATEGORY_MATCH_HINTS[category]}`,
+      'Do not activate it if core tools are enough.',
+    );
+  }
+  return lines.length ? `[TOOL_CATEGORY_MATCH]\n${lines.join('\n')}` : '';
+}
 
 const BG_AGENT_RUNTIME_HINT = `BACKGROUND AGENTS: background_spawn(task_prompt, id?) runs a full parallel agent that does real work and reports back. Reach for it proactively — it is a primary tool, not a last resort. Two patterns to default to:
   1) INVESTIGATE-FIRST: before committing to a multi-step path, an uncertain change, or a big answer, spawn an agent to dig in and report findings, then act on what it returns. e.g. "Let me investigate this properly" → background_spawn(a self-contained research/scan task) → proceed once it reports back. Prefer this over guessing or doing a long serial investigation inline.
@@ -836,6 +886,9 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['mcp_server_tools', 'mcp_server_tools (dynamic mcp__server__tool functions from connected servers)'],
     ['composite_tools', 'composite_tools (saved multi-step tools and composite management)'],
     ['creative_mode', 'creative_mode (creative editor tools)'],
+    ['skills', 'skills (skill authoring, packaging, import/export, and resource maintenance)'],
+    ['model_management', 'model_management (agent fleet model administration and templates)'],
+    ['business', 'business (structured business entity lifecycle administration)'],
   ];
   const allowedCategoryIds: Set<string> = new Set(getPublicBuildAllowedCategories([
     'browser_automation',
@@ -855,6 +908,9 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     'mcp_server_tools',
     'composite_tools',
     'creative_mode',
+    'skills',
+    'model_management',
+    'business',
   ] as const));
   const categoryMenu = runtimeCategoryDefs
     .filter(([id]) => allowedCategoryIds.has(id))
@@ -1006,6 +1062,7 @@ export async function buildPersonalityContext(
         else activatedCatsTeach.add(ec);
       }
     }
+    const toolCategoryMatchTeach = buildToolCategoryMatchContext(messageText, activatedCatsTeach);
     const skillCtxTeach = skillsManager.buildTurnContext(messageText);
     const activeSkillCtxTeach = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
@@ -1016,7 +1073,7 @@ export async function buildPersonalityContext(
         soul ? `[SOUL]\n${soul}` : '',
         buildToolsContext(activatedCatsTeach),
       ],
-      [skillCtxTeach, activeSkillCtxTeach],
+      [toolCategoryMatchTeach, skillCtxTeach, activeSkillCtxTeach],
     );
   }
 
@@ -1095,6 +1152,7 @@ export async function buildPersonalityContext(
         else activatedCatsSwitch.add(ec);
       }
     }
+    const toolCategoryMatchSwitch = buildToolCategoryMatchContext(messageText, activatedCatsSwitch);
     const skillCtx = skillsManager.buildTurnContext(messageText);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
@@ -1108,7 +1166,7 @@ export async function buildPersonalityContext(
         memory ? `[MEMORY]\n${memory}` : '',
         buildToolsContext(activatedCatsSwitch),
       ],
-      [cisContext, retrievedMemoryCtx, skillCtx, activeSkillCtx],
+      [cisContext, retrievedMemoryCtx, toolCategoryMatchSwitch, skillCtx, activeSkillCtx],
     );
   }
   // ── Path SUB: subagents (team + standalone) — full main-chat stack, ────────
@@ -1116,7 +1174,56 @@ export async function buildPersonalityContext(
   // soul, and without the managed-team routing policy (a subagent IS a worker,
   // it does not dispatch to teams). Team role / assignment awareness is layered
   // on top via callerContext, which has the task/subagent records.
-  if (executionMode === 'team_subagent' || executionMode === 'background_agent') {
+  if (executionMode === 'background_agent') {
+    const subagentSoul = loadSubagentSoul();
+    const activatedCatsBackground = getActivatedToolCategories(sessionId);
+    const mainWorkspacePath = getConfig().getWorkspacePath();
+    const fallbackMemoryRoots = mainWorkspacePath && path.resolve(mainWorkspacePath) !== path.resolve(workspacePath)
+      ? [mainWorkspacePath]
+      : [];
+    const user = loadFullMemoryProfile(workspacePath, 'USER.md', undefined, fallbackMemoryRoots);
+    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', undefined, fallbackMemoryRoots);
+    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000, fallbackMemoryRoots);
+    const intradayRoot = mainWorkspacePath || workspacePath;
+    const todayBackground = new Date().toISOString().split('T')[0];
+    const intradayPathBackground = path.join(intradayRoot, 'memory', `${todayBackground}-intraday-notes.md`);
+    const intradayNotesBackground = fs.existsSync(intradayPathBackground)
+      ? processIntradayNotes(fs.readFileSync(intradayPathBackground, 'utf-8'), 1, 300)
+      : '';
+    if (extraCats) {
+      for (const ec of extraCats) {
+        if (ec === 'browser_vision' || ec === 'browser') activatedCatsBackground.add('browser');
+        else activatedCatsBackground.add(ec);
+      }
+    }
+    const toolCategoryMatchBackground = buildToolCategoryMatchContext(messageText, activatedCatsBackground);
+    const skillCtx = skillsManager.buildTurnContext(messageText);
+    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    const referenceHintBackground = isPublicDistributionBuild()
+      ? ''
+      : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use read_file('self/index.md'). Follow its links to focused self/* subsystem files as needed.`;
+    setCurrentTurn(sessionId, historyLength);
+    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    return assembleContext(
+      [
+        messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
+        subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
+        user ? `[USER]\n${user}` : '',
+        soul ? `[SOUL]\n${soul}` : '',
+        memory ? `[MEMORY]\n${memory}` : '',
+        buildToolsContext(activatedCatsBackground),
+      ],
+      [
+        toolCategoryMatchBackground,
+        intradayNotesBackground ? `[TODAY_NOTES — latest entry only, read-only context]\n${intradayNotesBackground}` : '',
+        referenceHintBackground,
+        skillCtx,
+        activeSkillCtx,
+      ],
+    );
+  }
+
+  if (executionMode === 'team_subagent') {
     const subagentSoul = loadSubagentSoul();
     const activatedCatsSub = getActivatedToolCategories(sessionId);
     const mainWorkspacePath = getConfig().getWorkspacePath();
@@ -1147,6 +1254,7 @@ export async function buildPersonalityContext(
         else activatedCatsSub.add(ec);
       }
     }
+    const toolCategoryMatchSub = buildToolCategoryMatchContext(messageText, activatedCatsSub);
     const skillCtx = skillsManager.buildTurnContext(messageText);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
     const referenceHintSub = isPublicDistributionBuild()
@@ -1167,6 +1275,7 @@ export async function buildPersonalityContext(
       [
         cisContext,
         retrievedMemoryCtx,
+        toolCategoryMatchSub,
         intradayNotesSub ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotesSub}` : '',
         referenceHintSub,
         skillCtx,
@@ -1219,6 +1328,7 @@ export async function buildPersonalityContext(
         else activatedCatsAuto.add(ec);
       }
     }
+    const toolCategoryMatchAuto = buildToolCategoryMatchContext(messageText, activatedCatsAuto);
     const toolsBlockAuto = buildToolsContext(activatedCatsAuto);
     // Autonomous agents: same hint + pinned skills as interactive chat.
     const skillCtx = skillsManager.buildTurnContext(messageText);
@@ -1234,6 +1344,7 @@ export async function buildPersonalityContext(
       ],
       [
         cisContext,
+        toolCategoryMatchAuto,
         intradayNotes ? `[TODAY_NOTES]\n${intradayNotes}` : '',
         skillCtx,
         activeSkillCtx,
@@ -1269,6 +1380,7 @@ export async function buildPersonalityContext(
         else activatedCatsT1.add(ec);
       }
     }
+    const toolCategoryMatchT1 = buildToolCategoryMatchContext(messageText, activatedCatsT1);
     // First turn: still get the skills hint + any pinned skills.
     const skillCtxT1 = skillsManager.buildTurnContext(messageText);
     const activeSkillCtxT1 = buildActiveSkillsContext(sessionId, skillsManager);
@@ -1286,6 +1398,7 @@ export async function buildPersonalityContext(
       [
         cisContext,
         retrievedMemoryCtx,
+        toolCategoryMatchT1,
         intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
         skillCtxT1,
         activeSkillCtxT1,
@@ -1315,6 +1428,7 @@ export async function buildPersonalityContext(
       else activatedCats.add(ec);
     }
   }
+  const toolCategoryMatch = buildToolCategoryMatchContext(messageText, activatedCats);
   const toolsBlock = buildToolsContext(activatedCats);
 
   // Reference hints — Prom reads these files when actually needed rather than
@@ -1341,6 +1455,7 @@ export async function buildPersonalityContext(
     [
       cisContext,
       retrievedMemoryCtx,
+      toolCategoryMatch,
       intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
       referenceHint,
       skillCtx,

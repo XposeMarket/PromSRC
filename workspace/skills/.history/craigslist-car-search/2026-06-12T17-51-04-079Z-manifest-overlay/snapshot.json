@@ -1,0 +1,11 @@
+{
+  "skillId": "craigslist-car-search",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:04.082Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\craigslist-car-search",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "8f8a10ea5663b01c"
+}

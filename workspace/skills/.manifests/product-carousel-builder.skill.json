@@ -1,31 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks for product recommendations, shopping comparisons, live prices, ratings, review roundups, product cards, gift ideas, or a shopping carousel. It guides expert/review research first when model quality matters, then live product lookup and carousel presentation.",
   "triggers": [
     "product carousel",
-    "show carousel",
-    "shopping carousel",
-    "amazon carousel",
+    "shopping comparison",
     "product recommendations",
-    "show products",
-    "product cards",
-    "find products",
+    "best products",
+    "live prices",
+    "ratings",
+    "reviews",
+    "gift ideas",
+    "buy this",
     "shopping search",
     "compare products",
-    "amazon products",
-    "popular products",
-    "best products under",
-    "best laptops under",
-    "best gaming laptops",
-    "best products right now",
-    "buying guide products"
+    "product cards",
+    "best laptop",
+    "best headphones",
+    "price lookup",
+    "shopping carousel"
   ],
-  "resources": [
-    {
-      "path": "references/research-first-shopping-flow.md",
-      "type": "doc",
-      "description": "Guardrail from Raul's 2026-06-05 correction: research current best models first, then product-search exact candidates for broad/high-consideration shopping requests."
-    }
+  "categories": [
+    "shopping",
+    "research",
+    "visualization"
   ],
+  "requiredTools": [
+    "shopping_search_products",
+    "show_product_carousel",
+    "web_search"
+  ],
+  "lifecycle": "active",
   "id": "product-carousel-builder"
 }

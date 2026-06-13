@@ -1,8 +1,9 @@
 ---
 name: sdr-sales
-description: # SDR Sales Skill
+description: Use this skill when the user asks for SDR workflows, prospect research, target lists, outreach sequences, discovery calls, objection handling, pipeline management, MEDDIC qualification, sales handoff memos, or booking meetings. Triggers on phrases like SDR, sales development, build pipeline, prospect list, sales outreach, discovery call, handle objections, qualify lead, book meetings, MEDDIC, pipeline review, and AE handoff. Use it to create specific, human, non-spammy sales execution assets and coaching.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: SDR, sales development, build pipeline, prospect list, sales outreach, discovery call, handle objections, qualify lead, book meetings, MEDDIC, pipeline review, AE handoff, sales sequence, prospect research, sales coaching
 ---
 
 # SDR Sales Skill

@@ -2,15 +2,22 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "background-coding-agent-lanes",
   "name": "Background Coding Agent Lanes",
-  "description": "Coordinate isolated background coding agents from Prometheus with worktree boundaries, task ownership, progress capture, verification, and diff reconciliation.",
-  "version": "1.0.0",
+  "description": "Use this skill when Prometheus should coordinate one or more background coding agents for parallel implementation, source investigation, review lanes, worktree-isolated coding, diff handoffs, verification, or agent-produced patch reconciliation. Triggers on phrases like background coding agents, parallel coding lanes, delegate coding work, agent worktree, coding subagents, review lane, implementation lane, diff handoff, verify agent patch, and reconcile agent output. Use it to keep Prometheus as owner of lane state, boundaries, verification, and merge decisions.",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "background coding agents",
-    "spawn coding agent",
-    "parallel codex lanes",
-    "agent lanes",
-    "multi agent coding"
+    "parallel coding lanes",
+    "delegate coding work",
+    "agent worktree",
+    "coding subagents",
+    "review lane",
+    "implementation lane",
+    "diff handoff",
+    "verify agent patch",
+    "reconcile agent output",
+    "parallel implementation",
+    "background code review"
   ],
   "categories": [
     "prometheus",

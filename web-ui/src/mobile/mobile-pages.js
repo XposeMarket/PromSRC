@@ -3,8 +3,8 @@ import {
   chatMessages, recentCommands, mobileSchedules, mobileTeams, mobileTeamDetail,
 } from './mobile-data.js';
 import {
-  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions,
-} from './mobile-shell.js?v=liquid-glass-v7';
+  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
+} from './mobile-shell.js?v=liquid-glass-v20';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import { attachMobileButtonHaptic } from './mobile-model-badge.js';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
@@ -62,6 +62,33 @@ function pmToast(msg, kind = 'info') {
 // Expose so shared mobile modules (e.g. the header model badge) can toast too.
 try { window.pmToast = pmToast; } catch {}
 
+function notifyMobileModelChanged(evt = {}, { sessionId = '' } = {}) {
+  const type = String(evt?.type || '').trim();
+  if (type !== 'model_switched' && type !== 'main_model_changed') return null;
+  const rawModelRef = String(evt.modelRef || '').trim();
+  const rawProvider = String(evt.provider || evt.providerId || '').trim();
+  const rawModel = String(evt.model || '').trim();
+  const slashIdx = rawModelRef.indexOf('/');
+  const provider = rawProvider || (slashIdx > 0 ? rawModelRef.slice(0, slashIdx) : '');
+  const model = rawModel || (slashIdx > 0 ? rawModelRef.slice(slashIdx + 1) : rawModelRef);
+  const detail = {
+    provider,
+    providerId: provider,
+    model,
+    modelRef: rawModelRef || (provider && model ? `${provider}/${model}` : model),
+    reason: String(evt.reason || '').trim(),
+    tier: String(evt.tier || '').trim(),
+    source: String(evt.source || '').trim(),
+    sourceEventType: type,
+    sessionId: String(sessionId || evt.sessionId || '').trim(),
+    at: Date.now(),
+  };
+  try { window.__pmLastModelChange = detail; } catch {}
+  try { window.dispatchEvent(new CustomEvent('pm-model-changed', { detail })); } catch {}
+  try { console.info('[mobile model] live model change', detail); } catch {}
+  return detail;
+}
+
 const FLAME = '<span class="pm-brand-flame">🔥</span>';
 const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
 
@@ -99,6 +126,8 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
   statusTimer: null,
   recoverTimer: null,
   renderTimers: {},
+  patchRenderTimers: {},
+  backgroundSpawnLanes: {},
   pendingApprovals: {},
   sentClientRequestIds: {},
   queuedPrompts: {},
@@ -111,6 +140,17 @@ function _activeMobileThread() {
   __pmChat.thread = __pmChat.threads[sid];
   return __pmChat.thread;
 }
+
+function _isMobileChatSessionVisibleToUser(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID) return false;
+  const activeSid = String(__pmChat.activeSessionId || '').trim();
+  if (activeSid !== sid) return false;
+  if (document.visibilityState && document.visibilityState !== 'visible') return false;
+  const hash = String(location.hash || '');
+  return hash === `#mobile/chat/${encodeURIComponent(sid)}` || hash === `#mobile/chat/${sid}`;
+}
+
 
 function _rememberMobileLastChatSession(sessionId) {
   const sid = String(sessionId || '').trim();
@@ -229,6 +269,67 @@ function _isMobileNewChatDraftActiveForVoice() {
     || (voiceSid === MOBILE_CHAT_SESSION_ID && draftThread.length === 0);
 }
 
+async function _ensureDurableMobileVoiceSession({ title = 'Mobile chat', source = 'mobile_voice' } = {}) {
+  const chatSid = String(__pmChat?.activeSessionId || '').trim();
+  const voiceSid = String(__pmVoice?.targetSessionId || '').trim();
+  const currentSid = voiceSid || chatSid || MOBILE_CHAT_SESSION_ID;
+  if (currentSid && currentSid !== MOBILE_CHAT_SESSION_ID) {
+    if (!Array.isArray(__pmChat.threads?.[currentSid])) __pmChat.threads[currentSid] = [];
+    if (!Array.isArray(__pmChat.attachments?.[currentSid])) __pmChat.attachments[currentSid] = [];
+    __pmChat.activeSessionId = currentSid;
+    __pmChat.thread = __pmChat.threads[currentSid];
+    _rememberMobileLastChatSession(currentSid);
+    return currentSid;
+  }
+
+  const sid = createMobileChatSessionId();
+  const draftThread = Array.isArray(__pmChat.threads?.[MOBILE_CHAT_SESSION_ID])
+    ? __pmChat.threads[MOBILE_CHAT_SESSION_ID]
+    : [];
+  const draftAttachments = Array.isArray(__pmChat.attachments?.[MOBILE_CHAT_SESSION_ID])
+    ? __pmChat.attachments[MOBILE_CHAT_SESSION_ID]
+    : [];
+  __pmChat.threads[sid] = draftThread;
+  __pmChat.attachments[sid] = draftAttachments;
+  __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
+  __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
+  __pmChat.activeSessionId = sid;
+  __pmChat.thread = __pmChat.threads[sid];
+  _rememberMobileLastChatSession(sid);
+
+  __pmVoice.targetSessionId = sid;
+  __pmVoice.targetSessionLabel = 'Mobile - Chat';
+  __pmVoice.targetSessionChannel = 'mobile';
+  __pmVoice.targetSessionForced = true;
+  if (__pmVoice.activeVoiceRuntime && String(__pmVoice.activeVoiceRuntime.sessionId || '').trim() === MOBILE_CHAT_SESSION_ID) {
+    __pmVoice.activeVoiceRuntime.sessionId = sid;
+  }
+
+  const cleanTitle = String(title || 'Mobile chat').replace(/\s+/g, ' ').trim().slice(0, 72) || 'Mobile chat';
+  try {
+    await createMobileChatSession(sid, { title: cleanTitle });
+    if (draftThread.length) {
+      await updateMobileChatSessionHistory(sid, _mobileHistoryForServer(draftThread), { resetCompaction: true });
+    }
+  } catch (err) {
+    const msg = String(err?.message || err || '');
+    if (!/409|already exists|exists/i.test(msg)) {
+      console.warn('[mobile voice] failed to create durable voice session:', err);
+    }
+  }
+
+  try {
+    if (location.hash === '#mobile/chat' || location.hash === `#mobile/chat/${encodeURIComponent(MOBILE_CHAT_SESSION_ID)}`) {
+      window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(sid)}`);
+    }
+  } catch {}
+  invalidateMobileDrawerSessions('mobile');
+  refreshMobileDrawerSessions({ force: true, channel: 'mobile' }).catch(() => {});
+  _notifyMobileChatVoiceUpdate(sid, { reason: source, force: true });
+  try { _voiceDebug('mobile-voice-durable-session', { sessionId: sid, source }); } catch {}
+  return sid;
+}
+
 function _serverRoleToMobileRole(role) {
   return String(role || '').toLowerCase() === 'user' ? 'user' : 'ai';
 }
@@ -239,6 +340,10 @@ function _mobileRoleToServerRole(role) {
 
 function _isMobileRestartContextPacketText(value) {
   return /^Restart Context Packet\b/i.test(String(value || '').trim());
+}
+
+function _stripMobileInternalUploadContext(value) {
+  return String(value || '').replace(/\n\n\[UPLOADED FILES\][\s\S]*$/i, '').trim();
 }
 
 function _isMobileInternalServerMessage(m) {
@@ -256,7 +361,8 @@ function _mapServerHistoryToMobile(history) {
 function _mapServerMessageToMobile(m, index = -1) {
   if (_isMobileInternalServerMessage(m)) return null;
   const role = _serverRoleToMobileRole(m?.role);
-  const content = String(m?.content || '');
+  const rawContent = String(m?.content || '');
+  const content = role === 'user' ? _stripMobileInternalUploadContext(rawContent) : rawContent;
   const attachmentPreviews = Array.isArray(m?.attachmentPreviews) ? m.attachmentPreviews : [];
   return {
     role,
@@ -284,14 +390,12 @@ function _mapServerMessageToMobile(m, index = -1) {
     source: String(m?.source || ''),
     channelLabel: String(m?.channelLabel || ''),
     workflowLabel: String(m?.workflowLabel || ''),
-    processEntries: Array.isArray(m?.processEntries) ? m.processEntries.map((entry) => ({
-      id: entry?.id || `proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      type: String(entry?.type || 'info'),
-      text: String(entry?.text || entry?.content || ''),
-      extra: entry?.extra || null,
-      time: entry?.time || (entry?.ts ? _formatChatTime(entry.ts) : ''),
-    })).filter((entry) => entry.text) : [],
+    processEntries: Array.isArray(m?.processEntries) ? m.processEntries.map(_normalizeMobileProcessEntry).filter(Boolean) : [],
   };
+}
+
+if (!__pmChat.patchRenderTimers || typeof __pmChat.patchRenderTimers !== 'object') {
+  __pmChat.patchRenderTimers = {};
 }
 
 function _cloneMobileMessageForBranch(msg) {
@@ -307,7 +411,8 @@ function _cloneMobileMessageForBranch(msg) {
 }
 
 function _mobileMessageCopyText(msg) {
-  return String(msg?.content || msg?.body?.text || '').trim();
+  const text = String(msg?.content || msg?.body?.text || '').trim();
+  return msg?.role === 'user' ? _stripMobileInternalUploadContext(text) : text;
 }
 
 function _isMobileVoiceAgentWorkerHandoff(msg) {
@@ -315,6 +420,41 @@ function _isMobileVoiceAgentWorkerHandoff(msg) {
   return msg?.voiceAgentWorkerHandoff === true
     || label.includes('voice agent handoff')
     || label.includes('realtime agent dispatch');
+}
+
+function _normalizeMobileVoiceWorkerHandoffText(value) {
+  return _stripMobileInternalUploadContext(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function _findMobileVoiceWorkerHandoffByText(thread, text, timestamp = 0) {
+  const target = _normalizeMobileVoiceWorkerHandoffText(text);
+  if (!target || !Array.isArray(thread)) return null;
+  const ts = Number(timestamp || 0);
+  for (let i = thread.length - 1; i >= 0; i -= 1) {
+    const msg = thread[i];
+    if (!msg || msg.role !== 'user' || !_isMobileVoiceAgentWorkerHandoff(msg)) continue;
+    const candidate = _normalizeMobileVoiceWorkerHandoffText(_mobileMessageCopyText(msg));
+    if (!candidate || candidate !== target) continue;
+    const msgTs = Number(msg.timestamp || 0);
+    if (ts > 0 && msgTs > 0 && Math.abs(msgTs - ts) > 120000) continue;
+    return msg;
+  }
+  return null;
+}
+
+function _promoteMobileVoiceWorkerHandoffMessage(target, source) {
+  if (!target || !source) return target;
+  const text = _mobileMessageCopyText(target);
+  target.voiceAgentWorkerHandoff = true;
+  target.source = String(source.source || 'realtime_agent_dispatch');
+  target.channelLabel = String(source.channelLabel || 'Voice Agent handoff');
+  if (!target.body || typeof target.body !== 'object') target.body = { text };
+  target.body.text = String(target.body.text || text);
+  target.body.source = String(source.body?.source || target.source);
+  return target;
 }
 
 function _isMobileHiddenVoiceDraftMessage(msg, index = -1) {
@@ -435,7 +575,7 @@ function _attachMobilePromptVariantsToUserMessage(user, variants, activeIndex) {
 }
 
 function _makeMobileUserMessage(text, attachments = []) {
-  const content = String(text || '').trim();
+  const content = _stripMobileInternalUploadContext(text);
   const attachmentPreviews = Array.isArray(attachments) ? attachments.map(_sanitizeMobileAttachmentPreviewForServer) : [];
   return {
     role: 'user',
@@ -551,6 +691,7 @@ function _rememberMobileActiveRun(sessionId, state = {}) {
       updatedAt: Date.now(),
       disconnected: state.disconnected === true || prev.disconnected === true,
       streamId: state.streamId ? String(state.streamId) : String(prev.streamId || ''),
+      runtimeId: state.runtimeId ? String(state.runtimeId) : String(prev.runtimeId || ''),
       lastSeq: Math.max(
         Math.max(0, Math.floor(Number(prev.lastSeq || 0)) || 0),
         Math.max(0, Math.floor(Number(state.lastSeq || 0)) || 0),
@@ -726,7 +867,7 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     });
     queue.splice(index, 1);
     _renderMobileQueuedPromptsPanel(sid);
-    _appendMobileQueuedSteerTurn(sid, steerMessage, result || {});
+    _appendMobileQueuedSteerTurn(sid, message, result || {});
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');
   } catch (err) {
     pmToast(`Steer failed: ${err?.message || err}`, 'error');
@@ -989,6 +1130,45 @@ function _appendMobileProcess(message, type, text, extra = null) {
   if (message.processEntries.length > 120) message.processEntries.splice(0, message.processEntries.length - 120);
 }
 
+function _mobileProcessEntryKey(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  return [
+    String(entry.type || '').toLowerCase(),
+    String(entry.text || entry.content || '').replace(/\s+/g, ' ').trim().slice(0, 500),
+    String(entry.time || entry.ts || ''),
+  ].join('|');
+}
+
+function _normalizeMobileProcessEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const text = String(entry.text || entry.content || entry.message || '').trim();
+  if (!text) return null;
+  return {
+    id: entry.id || `proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: String(entry.type || 'info').toLowerCase(),
+    text,
+    extra: entry.extra || null,
+    time: entry.time || (entry.ts ? _formatChatTime(entry.ts) : ''),
+  };
+}
+
+function _mergeMobileProcessEntries(message, entries) {
+  if (!message) return;
+  if (!Array.isArray(message.processEntries)) message.processEntries = [];
+  const existing = new Set(message.processEntries.map(_mobileProcessEntryKey).filter(Boolean));
+  for (const raw of Array.isArray(entries) ? entries : []) {
+    const entry = _normalizeMobileProcessEntry(raw);
+    if (!entry) continue;
+    const key = _mobileProcessEntryKey(entry);
+    if (key && existing.has(key)) continue;
+    if (key) existing.add(key);
+    message.processEntries.push(entry);
+  }
+  if (message.processEntries.length > 500) {
+    message.processEntries.splice(0, message.processEntries.length - 500);
+  }
+}
+
 function _appendMobileUserProcess(message, text, extra = null) {
   try {
     const value = String(text || '').replace(/\s+/g, ' ').trim();
@@ -1063,7 +1243,7 @@ function _voiceAgentProcessEntriesFromResult(sessionId, result) {
 }
 
 function _renderMobileProcess(entries, options = {}) {
-  const list = Array.isArray(entries) ? entries : [];
+  const list = (Array.isArray(entries) ? entries : []).filter((entry) => !_isMobileImageGenerationStreamEntry(entry));
   if (!list.length) return '';
   const recent = list.slice(-5);
   const full = list.map((entry) => `
@@ -1117,7 +1297,19 @@ function _appendMobileVisionTrace(message, evt) {
     time: _nowTime(),
     preview,
     previewTitle: `${source} screenshot`,
+    previewKey: _mobileVisionPreviewKey(dataUrl, preview),
   });
+}
+
+function _mobileVisionPreviewKey(dataUrl, preview = {}) {
+  const raw = String(dataUrl || preview?.dataUrl || '').trim();
+  if (!raw) return '';
+  let hash = 0;
+  const seed = `${raw.length}|${raw.slice(0, 96)}|${raw.slice(-96)}|${preview?.width || ''}x${preview?.height || ''}`;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
+  }
+  return `vision_${Math.abs(hash).toString(36)}_${raw.length.toString(36)}`;
 }
 
 function _isMobileStartupStatusText(value) {
@@ -1192,13 +1384,18 @@ function _renderMobileLiveTracePreview(entry) {
   const width = Number(preview?.width || entry?.width || 0);
   const height = Number(preview?.height || entry?.height || 0);
   const dims = width > 0 && height > 0 ? ` (${Math.round(width)}x${Math.round(height)})` : '';
-  return `<button type="button" class="pm-live-vision-preview" title="${escapeHtml(title + dims)}">
-    <img src="${escapeHtml(dataUrl)}" alt="${escapeHtml(title)}" loading="lazy">
+  const aspect = width > 0 && height > 0 ? `${Math.max(1, Math.round(width))} / ${Math.max(1, Math.round(height))}` : '16 / 9';
+  const key = String(entry?.previewKey || _mobileVisionPreviewKey(dataUrl, preview)).trim();
+  return `<button type="button" class="pm-live-vision-preview" data-pm-live-vision-preview="${escapeHtml(key)}" title="${escapeHtml(title + dims)}" style="--pm-vision-aspect:${escapeHtml(aspect)}">
+    <img src="${escapeHtml(dataUrl)}" alt="${escapeHtml(title)}" loading="lazy" decoding="async"${width > 0 ? ` width="${escapeHtml(String(Math.round(width)))}"` : ''}${height > 0 ? ` height="${escapeHtml(String(Math.round(height)))}"` : ''}>
   </button>`;
 }
 
 function _renderMobileLiveTrace(entries) {
-  const list = (Array.isArray(entries) ? entries : []).filter((entry) => String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim());
+  const list = (Array.isArray(entries) ? entries : []).filter((entry) =>
+    !_isMobileImageGenerationStreamEntry(entry)
+    && (String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim())
+  );
   if (!list.length) return '';
   return `<div class="pm-live-trace">${list.map((entry) => {
     const type = String(entry.type || 'info').toLowerCase();
@@ -1284,20 +1481,33 @@ function _normalizeMobileMediaList(value) {
   });
 }
 
-function _collectMessageMedia(m) {
-  const b = m.body || {};
-  const fromImages = _normalizeMobileMediaList(m.generatedImages || b.generatedImages).map(x => ({ ...x, kind: 'image' }));
-  const fromVideos = _normalizeMobileMediaList(m.generatedVideos || b.generatedVideos).map(x => ({ ...x, kind: 'video' }));
-  const fromFiles = _normalizeMobileMediaList(b.files || m.files);
-  const fromArtifacts = _normalizeMobileMediaList((Array.isArray(m.artifacts) ? m.artifacts : []).flatMap((a) => [a?.path, a?.to_path, a?.from_path].filter(Boolean)));
-  const all = [...fromImages, ...fromVideos, ...fromFiles, ...fromArtifacts];
+function _dedupeMobileMediaList(mediaList) {
   const seen = new Set();
-  return all.filter((media) => {
-    const key = media.dataUrl || media.path || media.name;
+  return (Array.isArray(mediaList) ? mediaList : []).filter((media) => {
+    const key = media?.dataUrl || media?.path || media?.name;
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function _collectMessageGeneratedImages(m) {
+  const b = m?.body || {};
+  return _normalizeMobileMediaList(m?.generatedImages || b.generatedImages).map(x => ({ ...x, kind: 'image', generated: true }));
+}
+
+function _collectMessageGeneratedVideos(m) {
+  const b = m?.body || {};
+  return _normalizeMobileMediaList(m?.generatedVideos || b.generatedVideos).map(x => ({ ...x, kind: 'video', generated: true }));
+}
+
+function _collectMessageMedia(m) {
+  const b = m.body || {};
+  const fromImages = _collectMessageGeneratedImages(m);
+  const fromVideos = _collectMessageGeneratedVideos(m);
+  const fromFiles = _normalizeMobileMediaList(b.files || m.files);
+  const fromArtifacts = _normalizeMobileMediaList((Array.isArray(m.artifacts) ? m.artifacts : []).flatMap((a) => [a?.path, a?.to_path, a?.from_path].filter(Boolean)));
+  return _dedupeMobileMediaList([...fromImages, ...fromVideos, ...fromFiles, ...fromArtifacts]);
 }
 
 function _mergeMobileMediaIntoMessage(message, items) {
@@ -1348,6 +1558,11 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   const local = Array.isArray(localThread) ? localThread : [];
   if (!local.length) return next;
   if (!next.length) return local;
+  for (const msg of next) {
+    if (!msg || msg.role !== 'user' || _isMobileVoiceAgentWorkerHandoff(msg)) continue;
+    const localHandoff = _findMobileVoiceWorkerHandoffByText(local, _mobileMessageCopyText(msg), msg.timestamp);
+    if (localHandoff) _promoteMobileVoiceWorkerHandoffMessage(msg, localHandoff);
+  }
   next.forEach((msg, index) => {
     if (!msg || msg.role !== 'ai') return;
     const localSameSlot = local[index]?.role === 'ai' ? local[index] : null;
@@ -1459,7 +1674,9 @@ async function _applyMobileHotRestartNotification(msg = {}) {
     const bodyEl = document.getElementById('pm-chat-body');
     if (threadEl) _flushThreadRender(threadEl, bodyEl, sid);
   }
-  markMobileChatSessionRead(sid, Date.now()).catch(() => {});
+  if (_isMobileChatSessionVisibleToUser(sid)) {
+    markMobileChatSessionRead(sid, Date.now()).catch(() => {});
+  }
   if (msg.notificationId) {
     try { wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId) }); } catch {}
   }
@@ -1557,10 +1774,62 @@ if (!window.__pmMobileDeliveryBridgeInstalled) {
   });
 }
 
+function _renderMobileGeneratedImageBatch(mediaList) {
+  const list = _dedupeMobileMediaList(_normalizeMobileMediaList(mediaList).map((media) => ({ ...media, kind: 'image', generated: true })));
+  if (!list.length) return '';
+  const first = list[0];
+  const firstSrc = _mobileMediaUrl(first, 'inline');
+  const firstDownload = _mobileMediaUrl(first, 'download');
+  const primaryAttrs = `data-pm-media data-pm-generated-primary data-kind="image" data-src="${escapeHtml(firstSrc)}" data-download="${escapeHtml(firstDownload)}" data-name="${escapeHtml(first.name)}" data-path="${escapeHtml(first.path || '')}" data-index="0"`;
+  const thumbs = list.length > 1 ? `<div class="pm-generated-image-thumbs" aria-label="Generated image options">${list.map((media, idx) => {
+    const src = _mobileMediaUrl(media, 'inline');
+    const download = _mobileMediaUrl(media, 'download');
+    const attrs = `data-pm-generated-thumb data-kind="image" data-src="${escapeHtml(src)}" data-download="${escapeHtml(download)}" data-name="${escapeHtml(media.name)}" data-path="${escapeHtml(media.path || '')}" data-index="${idx}"`;
+    return `<button type="button" class="pm-generated-image-thumb${idx === 0 ? ' selected' : ''}" ${attrs} aria-label="Show generated image ${idx + 1}"><img src="${escapeHtml(src)}" alt="${escapeHtml(media.name)}" loading="eager" decoding="async"><span>${idx + 1}</span></button>`;
+  }).join('')}</div>` : '';
+  return `<div class="pm-generated-image-batch" data-count="${escapeHtml(String(list.length))}">
+    <button type="button" class="pm-generated-image-primary" ${primaryAttrs}><img src="${escapeHtml(firstSrc)}" alt="${escapeHtml(first.name)}" loading="eager" decoding="async" fetchpriority="high"></button>
+    ${thumbs}
+  </div>`;
+}
+
+function _mobileHasPendingImageGeneration(message) {
+  const entries = [
+    ...(Array.isArray(message.processEntries) ? message.processEntries : []),
+    ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
+  ];
+  const text = entries
+    .map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase())
+    .join('\n');
+  return /\b(generate_image|generate image|generating image|image generation|i am generating the image|preparing generate image|prepared generate image)\b/.test(text)
+    && !/\b(generate_image complete|generate image complete|generated image|generated images|failed|error)\b/.test(text);
+}
+
+function _isMobileImageGenerationStreamEntry(entry) {
+  const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!text) return false;
+  if (/\b(preparing generate image|prepared generate image|generate_image)\b/.test(text)) return true;
+  if (/^generate image\s*(?:[:(]|complete\b|failed\b)/.test(text)) return true;
+  if (/^generating image\s*(?:[:(]|$)/.test(text)) return true;
+  return false;
+}
+
+function _renderMobileGeneratedImageLoadingCard() {
+  return `<div class="pm-generated-image-batch pm-generated-image-batch--pending" aria-live="polite">
+    <div class="pm-generated-image-loading-panel">
+      <span aria-hidden="true"></span>
+      <i aria-hidden="true"></i>
+    </div>
+  </div>`;
+}
+
 function _renderMobileMediaGallery(mediaList) {
   const list = Array.isArray(mediaList) ? mediaList : [];
   if (!list.length) return '';
-  return `<div class="pm-media-gallery">${list.map((media, idx) => {
+  const generatedImages = list.filter((media) => media.kind === 'image' && media.generated);
+  const rest = list.filter((media) => !(media.kind === 'image' && media.generated));
+  const generatedHtml = generatedImages.length ? _renderMobileGeneratedImageBatch(generatedImages) : '';
+  const restHtml = rest.length ? `<div class="pm-media-gallery">${rest.map((media, idx) => {
     const src = _mobileMediaUrl(media, 'inline');
     const download = _mobileMediaUrl(media, 'download');
     const ext = _mobileFileExt(media.name || media.path).toUpperCase() || 'FILE';
@@ -1573,7 +1842,8 @@ function _renderMobileMediaGallery(mediaList) {
       return `<button type="button" class="pm-media-card video" ${attrs}><video src="${escapeHtml(src)}" muted playsinline preload="metadata"></video><span class="pm-media-play">${ICONS.play}</span><span><strong>${escapeHtml(media.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}</span></button>`;
     }
     return `<button type="button" class="pm-generated-file" ${attrs}><span class="pm-generated-file-icon">${ICONS.clipboard}</span><span class="pm-generated-file-info"><strong>${escapeHtml(media.name)}</strong><em>${escapeHtml(ext)} file${meta ? ` · ${escapeHtml(meta)}` : ''}</em></span></button>`;
-  }).join('')}</div>`;
+  }).join('')}</div>` : '';
+  return `${generatedHtml}${restHtml}`;
 }
 
 function _browseFileIcon(kind) {
@@ -1650,6 +1920,7 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
   const risk = Number(approval.riskScore || 0);
   const statusLabel = status === 'rejected' ? 'denied' : status;
   const devPlan = approval?.devSourceEdit?.plan || null;
+  const sourceDirs = Array.isArray(approval?.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
   const evidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
   const steps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
   const boundary = approval.commandBoundary || null;
@@ -1666,15 +1937,16 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     <strong>${escapeHtml(human.title || _pmApprovalTitle(approval))}</strong>
     ${human.summary ? `<p>${escapeHtml(human.summary)}</p>` : ''}
     ${human.detail ? `<em>${escapeHtml(human.detail)}</em>` : ''}
-    ${risk ? `<small>Risk ${escapeHtml(String(risk))}</small>` : ''}
-    ${boundaryScope && boundaryScope !== 'workspace' ? `<em>Boundary: ${escapeHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? ` - ${escapeHtml(String(boundary.reason))}` : ''}</em>` : ''}
-    ${boundaryPaths.length ? `<details class="pm-approval-technical" open><summary>External paths</summary><pre>${escapeHtml(boundaryPaths.slice(0, 8).join('\n'))}</pre></details>` : ''}
-    ${devPlan?.reasoning ? `<em>${escapeHtml(String(devPlan.reasoning))}</em>` : ''}
-    ${evidence.length ? `<details class="pm-approval-technical" open><summary>Evidence</summary><pre>${escapeHtml(evidence.slice(0, 5).map((item) => `${item.file || 'file'}${item.lines ? `:${item.lines}` : ''} - ${item.finding || ''}`).join('\n'))}</pre></details>` : ''}
-    ${steps.length ? `<details class="pm-approval-technical"><summary>Plan</summary><pre>${escapeHtml(steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
-    ${expectedWorkflow.length ? `<details class="pm-approval-technical" open><summary>Expected workflow after edits</summary><pre>${escapeHtml(expectedWorkflow.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
-    ${technicalText ? `<details class="pm-approval-technical"><summary>Technical details</summary><pre>${escapeHtml(technicalText)}</pre></details>` : ''}
-    ${_pmRenderCommandRunLink(approval)}
+    ${pending && risk ? `<small>Risk ${escapeHtml(String(risk))}</small>` : ''}
+    ${pending && boundaryScope && boundaryScope !== 'workspace' ? `<em>Boundary: ${escapeHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? ` - ${escapeHtml(String(boundary.reason))}` : ''}</em>` : ''}
+    ${pending && boundaryPaths.length ? `<details class="pm-approval-technical" open><summary>External paths</summary><pre>${escapeHtml(boundaryPaths.slice(0, 8).join('\n'))}</pre></details>` : ''}
+    ${pending && sourceDirs.length ? `<em>Workspace docs: ${escapeHtml(sourceDirs.join(', '))}</em>` : ''}
+    ${pending && devPlan?.reasoning ? `<em>${escapeHtml(String(devPlan.reasoning))}</em>` : ''}
+    ${pending && evidence.length ? `<details class="pm-approval-technical" open><summary>Evidence</summary><pre>${escapeHtml(evidence.slice(0, 5).map((item) => `${item.file || 'file'}${item.lines ? `:${item.lines}` : ''} - ${item.finding || ''}`).join('\n'))}</pre></details>` : ''}
+    ${pending && steps.length ? `<details class="pm-approval-technical"><summary>Plan</summary><pre>${escapeHtml(steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
+    ${pending && expectedWorkflow.length ? `<details class="pm-approval-technical" open><summary>Expected workflow after edits</summary><pre>${escapeHtml(expectedWorkflow.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
+    ${pending && technicalText ? `<details class="pm-approval-technical"><summary>Technical details</summary><pre>${escapeHtml(technicalText)}</pre></details>` : ''}
+    ${pending ? _pmRenderCommandRunLink(approval) : ''}
     ${pending ? `<div class="pm-chat-approval-actions">
       <button type="button" class="pm-chat-approval-btn approve" data-pm-approval-action="approve" data-pm-approval-id="${escapeHtml(approval.id)}">Approve</button>
       <button type="button" class="pm-chat-approval-btn reject" data-pm-approval-action="reject" data-pm-approval-id="${escapeHtml(approval.id)}">Reject</button>
@@ -1732,6 +2004,7 @@ function _renderMobileApprovalSheet() {
   }
   const current = pending.find((approval) => String(approval.sessionId || approval.sourceSessionId || '') === String(__pmChat.activeSessionId || '')) || pending[0];
   const openTerminals = {};
+  const approvalDetails = _captureMobileApprovalDetailsState(host);
   try {
     host.querySelectorAll('[data-process-approval-host][data-terminal-open="1"]').forEach((terminalHost) => {
       const approvalId = String(terminalHost.getAttribute('data-process-approval-host') || '').trim();
@@ -1748,6 +2021,7 @@ function _renderMobileApprovalSheet() {
       ${_renderMobileApprovalCard(current)}
     </div>`;
   try {
+    _restoreMobileApprovalDetailsState(host, approvalDetails);
     Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
       const nextHost = host.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
       if (!nextHost || !snapshot?.host) return;
@@ -1761,6 +2035,39 @@ function _renderMobileApprovalSheet() {
     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
   });
   _wireMobileProcessRunActions(host);
+}
+
+function _captureMobileApprovalDetailsState(root) {
+  const out = {};
+  try {
+    root?.querySelectorAll?.('[data-approval-id], [data-pm-approval-id]').forEach((card) => {
+      const approvalId = String(card.getAttribute('data-approval-id') || card.getAttribute('data-pm-approval-id') || '').trim();
+      if (!approvalId) return;
+      card.querySelectorAll('details.pm-approval-technical').forEach((details) => {
+        const label = String(details.querySelector('summary')?.textContent || '').trim();
+        if (!label) return;
+        out[`${approvalId}::${label}`] = details.open === true;
+      });
+    });
+  } catch {}
+  return out;
+}
+
+function _restoreMobileApprovalDetailsState(root, map) {
+  if (!map) return;
+  try {
+    root?.querySelectorAll?.('[data-approval-id], [data-pm-approval-id]').forEach((card) => {
+      const approvalId = String(card.getAttribute('data-approval-id') || card.getAttribute('data-pm-approval-id') || '').trim();
+      if (!approvalId) return;
+      card.querySelectorAll('details.pm-approval-technical').forEach((details) => {
+        const label = String(details.querySelector('summary')?.textContent || '').trim();
+        const key = `${approvalId}::${label}`;
+        if (!Object.prototype.hasOwnProperty.call(map, key)) return;
+        if (map[key]) details.setAttribute('open', '');
+        else details.removeAttribute('open');
+      });
+    });
+  } catch {}
 }
 
 async function _resolveMobileApprovalButton(button) {
@@ -1925,6 +2232,20 @@ function _normalizeMobileFileChanges(fileChanges) {
   };
 }
 
+function _normalizeMobileFileChangeGroups(fileChanges) {
+  const groups = Array.isArray(fileChanges?.groups) ? fileChanges.groups : [];
+  if (!groups.length) return [];
+  return groups.map((group, index) => {
+    const data = _normalizeMobileFileChanges(group?.fileChanges || group);
+    if (!data) return null;
+    return {
+      id: String(group?.id || group?.source || `group_${index + 1}`),
+      label: String(group?.label || (index === 0 ? 'Main agent edits' : 'Background agent edits')).trim(),
+      data,
+    };
+  }).filter(Boolean);
+}
+
 function _renderMobileFileChangeRow(file) {
   const canOpen = file.path && file.status !== 'deleted';
   const kind = _mobileMediaKind({ path: file.path, name: file.displayPath });
@@ -1943,16 +2264,16 @@ function _renderMobileFileChangeRow(file) {
   `;
 }
 
-function _renderMobileFileChanges(fileChanges) {
-  const data = _normalizeMobileFileChanges(fileChanges);
+function _renderMobileFileChangesGroup(data, options = {}) {
   if (!data) return '';
   const visible = data.files.slice(0, 3);
   const rest = data.files.slice(3);
   const fileWord = data.summary.fileCount === 1 ? 'file' : 'files';
+  const label = String(options.label || '').trim();
   return `
     <div class="pm-file-changes-card">
       <div class="pm-file-changes-head">
-        <strong>${data.summary.fileCount} ${fileWord} changed</strong>
+        <strong>${label ? `${escapeHtml(label)} - ` : ''}${data.summary.fileCount} ${fileWord} changed</strong>
         <span><em class="ins">+${data.summary.insertions}</em><em class="del">-${data.summary.deletions}</em></span>
       </div>
       <div class="pm-file-change-list">
@@ -1966,6 +2287,14 @@ function _renderMobileFileChanges(fileChanges) {
       </div>
     </div>
   `;
+}
+
+function _renderMobileFileChanges(fileChanges) {
+  const groups = _normalizeMobileFileChangeGroups(fileChanges);
+  if (groups.length) {
+    return `<div class="pm-file-changes-grouped">${groups.map((group) => _renderMobileFileChangesGroup(group.data, { label: group.label })).join('')}</div>`;
+  }
+  return _renderMobileFileChangesGroup(_normalizeMobileFileChanges(fileChanges));
 }
 
 function _productCarouselImageUrl(item) {
@@ -2697,10 +3026,14 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
   const hasLiveTrace = m.streaming && !answerStarted && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length;
+  const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
   if (hasLiveTrace) {
     inner += _renderMobileLiveTrace(m.liveTraceEntries);
-  } else if (m.streaming && !answerStarted) {
+  } else if (m.streaming && !answerStarted && !hasPendingImageGeneration) {
     inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
+  }
+  if (hasPendingImageGeneration) {
+    inner += _renderMobileGeneratedImageLoadingCard();
   }
   if (b.text) {
     inner += `<div class="markdown-body">${_renderMobileMarkdown(b.text)}</div>`;
@@ -2973,6 +3306,7 @@ function _renderThread(threadEl) {
   const openProc = {};
   const closedProc = new Set();
   const openTerminals = {};
+  const approvalDetails = _captureMobileApprovalDetailsState(threadEl);
   try {
     threadEl.querySelectorAll('details.pm-process-stream').forEach((d) => {
       const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
@@ -3012,6 +3346,7 @@ function _renderThread(threadEl) {
       const d = msgEl?.querySelector('details.pm-process-stream');
       if (d) d.removeAttribute('open');
     });
+    _restoreMobileApprovalDetailsState(threadEl, approvalDetails);
     Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
       const nextHost = threadEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
       if (!nextHost || !snapshot?.host) return;
@@ -3029,6 +3364,120 @@ function _renderThread(threadEl) {
   _wireMobileFileChangeRows(threadEl);
 }
 
+function _patchMobileThreadMessage(threadEl, message, index) {
+  if (!threadEl || !message) return false;
+  const msgIndex = Number.isFinite(Number(index)) ? Number(index) : _activeMobileThread().indexOf(message);
+  if (msgIndex < 0) return false;
+  const currentEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`);
+  if (!currentEl) return false;
+  const nextWrap = document.createElement('div');
+  nextWrap.innerHTML = _renderChatMessageHtml(message, msgIndex);
+  const nextEl = nextWrap.firstElementChild;
+  if (!nextEl) return false;
+  if (currentEl.className !== nextEl.className) {
+    currentEl.replaceWith(nextEl);
+  } else {
+    const currentBubble = currentEl.querySelector('.pm-bubble');
+    const nextBubble = nextEl.querySelector('.pm-bubble');
+    if (!currentBubble || !nextBubble) return false;
+    const openProc = {};
+    const closedProc = new Set();
+    const openTerminals = {};
+    const stableVisionPreviews = {};
+    const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
+    try {
+      currentEl.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
+        const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+        if (key) stableVisionPreviews[key] = node;
+      });
+      currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
+        if (d.open) {
+          const full = d.querySelector('.pm-process-full');
+          openProc[detailIndex] = { scrollTop: full ? full.scrollTop : 0 };
+        } else {
+          closedProc.add(detailIndex);
+        }
+      });
+      currentEl.querySelectorAll('[data-process-approval-host][data-terminal-open="1"]').forEach((host) => {
+        const approvalId = String(host.getAttribute('data-process-approval-host') || '').trim();
+        if (!approvalId || !host.parentElement) return;
+        const toggle = host.parentElement.querySelector?.('[data-pm-process-action="load-approval"]') || null;
+        openTerminals[approvalId] = {
+          host,
+          toggleText: toggle?.textContent || 'Close terminal',
+        };
+      });
+    } catch {}
+    currentBubble.innerHTML = nextBubble.innerHTML;
+    try {
+      currentBubble.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
+        const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+        const stable = key ? stableVisionPreviews[key] : null;
+        if (stable && stable !== node) node.replaceWith(stable);
+      });
+    } catch {}
+    const nextActions = nextEl.querySelector('[data-msg-action]') ? nextEl.querySelectorAll('[data-msg-action]') : null;
+    const currentActionsHost = currentEl.querySelector('.pm-msg-actions');
+    const nextActionsHost = nextEl.querySelector('.pm-msg-actions');
+    if (currentActionsHost && nextActionsHost) currentActionsHost.innerHTML = nextActionsHost.innerHTML;
+    else if (!currentActionsHost && nextActionsHost) currentBubble.insertAdjacentElement('afterend', nextActionsHost);
+    void nextActions;
+    try {
+      currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
+        if (closedProc.has(detailIndex)) d.removeAttribute('open');
+        else if (openProc[detailIndex]) {
+          d.setAttribute('open', '');
+          const full = d.querySelector('.pm-process-full');
+          if (full) full.scrollTop = openProc[detailIndex].scrollTop;
+        }
+      });
+      _restoreMobileApprovalDetailsState(currentEl, approvalDetails);
+      Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
+        const nextHost = currentEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
+        if (!nextHost || !snapshot?.host) return;
+        nextHost.replaceWith(snapshot.host);
+        snapshot.host.dataset.terminalOpen = '1';
+        const toggle = snapshot.host.parentElement?.querySelector?.('[data-pm-process-action="load-approval"]');
+        if (toggle) toggle.textContent = snapshot.toggleText || 'Close terminal';
+      });
+    } catch {}
+  }
+  const patchedEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`) || nextEl;
+  patchedEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
+    btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
+  });
+  _wireMobileProcessRunActions(patchedEl);
+  _wireMobileMediaCards(patchedEl);
+  _wireMobileFileChangeRows(patchedEl);
+  return true;
+}
+
+function _patchLatestMobileStreamingMessage(threadEl, bodyEl, key = 'chat') {
+  const thread = _activeMobileThread();
+  const message = [...thread].reverse().find((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+  if (!message) return false;
+  const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
+  const patched = _patchMobileThreadMessage(threadEl, message, thread.indexOf(message));
+  if (!patched) return false;
+  _syncMobileWorkTimer(threadEl, bodyEl, key);
+  _restoreMobileChatScroll(bodyEl, scrollSnapshot);
+  return true;
+}
+
+function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 50) {
+  if (!threadEl) return false;
+  const timerKey = String(key || 'chat');
+  if (__pmChat.patchRenderTimers?.[timerKey]) return true;
+  if (!__pmChat.patchRenderTimers || typeof __pmChat.patchRenderTimers !== 'object') __pmChat.patchRenderTimers = {};
+  __pmChat.patchRenderTimers[timerKey] = setTimeout(() => {
+    delete __pmChat.patchRenderTimers[timerKey];
+    if (!_patchLatestMobileStreamingMessage(threadEl, bodyEl, timerKey)) {
+      _scheduleThreadRender(threadEl, bodyEl, timerKey, delay);
+    }
+  }, Math.max(16, Number(delay) || 50));
+  return true;
+}
+
 function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
   const hasStreamingAssistant = _activeMobileThread().some((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
   if (hasStreamingAssistant) {
@@ -3037,7 +3486,9 @@ function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
         const activeThreadEl = document.getElementById('pm-chat-thread') || threadEl;
         const activeBodyEl = document.getElementById('pm-chat-body') || bodyEl;
         if (!activeThreadEl) return;
-        _flushThreadRender(activeThreadEl, activeBodyEl, key);
+        if (!_patchLatestMobileStreamingMessage(activeThreadEl, activeBodyEl, key)) {
+          _flushThreadRender(activeThreadEl, activeBodyEl, key);
+        }
       }, 1000);
     }
   } else if (__pmChat.workTimer) {
@@ -3188,6 +3639,10 @@ function _restoreMobileChatScroll(bodyEl, snapshot, { forceBottom = false } = {}
 function _scheduleThreadRender(threadEl, bodyEl, key = 'chat', delay = 90) {
   if (!threadEl) return;
   const timerKey = String(key || 'chat');
+  if (__pmChat.patchRenderTimers?.[timerKey]) {
+    clearTimeout(__pmChat.patchRenderTimers[timerKey]);
+    delete __pmChat.patchRenderTimers[timerKey];
+  }
   if (__pmChat.renderTimers?.[timerKey]) return;
   __pmChat.renderTimers[timerKey] = setTimeout(() => {
     delete __pmChat.renderTimers[timerKey];
@@ -3202,6 +3657,10 @@ function _flushThreadRender(threadEl, bodyEl, key = 'chat', options = {}) {
   if (__pmChat.renderTimers?.[timerKey]) {
     clearTimeout(__pmChat.renderTimers[timerKey]);
     delete __pmChat.renderTimers[timerKey];
+  }
+  if (__pmChat.patchRenderTimers?.[timerKey]) {
+    clearTimeout(__pmChat.patchRenderTimers[timerKey]);
+    delete __pmChat.patchRenderTimers[timerKey];
   }
   const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
   _renderThread(threadEl);
@@ -3636,7 +4095,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       <div class="pm-chat-thread" id="pm-chat-thread"></div>
     </div>
     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
+    <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
     <form class="pm-composer" id="pm-composer">
+      <span class="pm-glass-lens" aria-hidden="true"></span>
+      <span class="pm-glass-border" aria-hidden="true"></span>
       <input id="pm-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-chat-slash-popover" id="pm-chat-slash-popover" hidden></div>
       <div class="pm-skill-trigger-pill" id="pm-skill-trigger-pill" hidden aria-live="polite"></div>
@@ -3679,7 +4141,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         <button type="button" class="pm-camera-icon" id="pm-camera-flip" aria-label="Flip camera">${ICONS.refresh}</button>
       </div>
       <div class="pm-camera-controls">
-        <button type="button" class="pm-camera-shutter" id="pm-camera-shutter" aria-label="Capture image"></button>
+        <button type="button" class="pm-camera-shutter pm-camera-wave-shutter" id="pm-camera-shutter" aria-label="Capture image">
+          <span class="pm-camera-wave-ambient" aria-hidden="true"></span>
+          <span class="pm-camera-wave-line" aria-hidden="true"></span>
+          <canvas class="pm-camera-strands-orb-canvas" id="pm-camera-strands-orb-canvas" aria-hidden="true"></canvas>
+          <span class="pm-camera-glass-glint" aria-hidden="true"></span>
+          <span class="pm-camera-record-core" aria-hidden="true"></span>
+        </button>
       </div>
     </div>
     <div class="pm-mobile-side-sheet" id="pm-mobile-side-sheet" role="dialog" aria-modal="true" aria-label="Side chat">
@@ -3695,6 +4163,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         </header>
         <div class="pm-mobile-side-thread" id="pm-mobile-side-thread"></div>
         <form class="pm-composer pm-mobile-side-composer" id="pm-mobile-side-composer">
+          <span class="pm-glass-lens" aria-hidden="true"></span>
           <div class="pm-composer-row">
             <button type="button" class="pm-icon-btn" id="pm-mobile-side-attach" aria-label="Attach files">${ICONS.paperclip}</button>
             <textarea class="pm-composer-input" id="pm-mobile-side-input" rows="1" placeholder="Follow up" aria-label="Side chat message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
@@ -3713,6 +4182,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const body     = page.querySelector('#pm-chat-body');
   const threadEl = page.querySelector('#pm-chat-thread');
   const form     = page.querySelector('#pm-composer');
+  const backgroundSpawnDock = page.querySelector('#pm-background-spawn-dock');
   const input    = page.querySelector('#pm-composer-input');
   const sendBtn  = page.querySelector('#pm-send-btn');
   const attachBtn = page.querySelector('#pm-attach-btn');
@@ -3732,6 +4202,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const cameraClose = page.querySelector('#pm-camera-close');
   const cameraFlip = page.querySelector('#pm-camera-flip');
   const cameraShutter = page.querySelector('#pm-camera-shutter');
+  const cameraOrbCanvas = page.querySelector('#pm-camera-strands-orb-canvas');
   const commandChip = page.querySelector('#pm-chat-command-chip');
   const sideSheet = page.querySelector('#pm-mobile-side-sheet');
   const sidePanel = page.querySelector('#pm-mobile-side-panel');
@@ -3755,6 +4226,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
 
   _pmRefreshSlashChrome(page, input);
   _installMobileTimestampReveal(threadEl);
+  const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
+  const currentBackgroundDockBridge = () => {
+    _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
+    updateChatComposerSpace();
+  };
+  window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
+  _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
 
   const resizeComposerInput = () => {
     if (!input) return;
@@ -3797,11 +4275,26 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     updateComposerSubmitState();
   }
 
-  function openAttachSheet() {
+  let attachSheetTarget = 'chat';
+  let pendingFileInputTarget = 'chat';
+  const VOICE_PHOTO_FILE_MAX_BYTES = 15 * 1024 * 1024;
+
+  function _isVoicePhotoFile(file) {
+    const type = String(file?.type || '').toLowerCase();
+    const name = String(file?.name || '').toLowerCase();
+    return type.startsWith('image/') || /\.(png|jpe?g|webp|gif|heic|heif|bmp)$/i.test(name);
+  }
+
+  function openAttachSheet(options = {}) {
+    const target = String(options?.target || 'chat').trim() || 'chat';
+    attachSheetTarget = target === 'voice' ? 'voice' : 'chat';
     if (!attachSheet) {
+      pendingFileInputTarget = attachSheetTarget;
       fileInput?.click();
       return;
     }
+    attachSheet.dataset.pmAttachTarget = attachSheetTarget;
+    attachSheet.classList.toggle('voice', attachSheetTarget === 'voice');
     attachSheet.hidden = false;
     requestAnimationFrame(() => attachSheet.classList.add('open'));
   }
@@ -3826,11 +4319,257 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   let cameraHoldTimer = null;
   let cameraPointerActive = false;
   let cameraSuppressClick = false;
+  let cameraOrbRaf = 0;
+  let cameraOrbGl = null;
+  let voiceCameraFrameCacheTimer = null;
+  let voiceCameraFrameCache = null;
+  let voiceCameraAutoCaptureInFlight = null;
+  let voiceCameraAutoCaptureLastAt = 0;
   const CAMERA_RECORD_HOLD_MS = 420;
   const CAMERA_RECORD_MAX_MS = 12000;
 
   function setCameraStatus(text = '') {
     if (cameraStatus) cameraStatus.textContent = text;
+  }
+
+  function _isCameraVoiceRealtimeTarget() {
+    return String(cameraCaptureOptions?.target || '') === 'voice';
+  }
+
+  function stopCameraRealtimeOrb() {
+    if (cameraOrbRaf) cancelAnimationFrame(cameraOrbRaf);
+    cameraOrbRaf = 0;
+    cameraCapture?.classList.remove('voice-realtime');
+    if (cameraOrbGl?.gl) {
+      try { cameraOrbGl.gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch {}
+    }
+    cameraOrbGl = null;
+  }
+
+  function _resizeCameraRealtimeOrbCanvas() {
+    if (!cameraOrbCanvas) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const rect = cameraOrbCanvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round((rect.width || cameraOrbCanvas.clientWidth || 76) * dpr));
+    const height = Math.max(1, Math.round((rect.height || cameraOrbCanvas.clientHeight || 76) * dpr));
+    if (cameraOrbCanvas.width !== width || cameraOrbCanvas.height !== height) {
+      cameraOrbCanvas.width = width;
+      cameraOrbCanvas.height = height;
+      cameraOrbGl?.gl?.viewport?.(0, 0, width, height);
+    }
+  }
+
+  function _initCameraRealtimeOrbGl() {
+    if (cameraOrbGl || !cameraOrbCanvas) return cameraOrbGl;
+    const gl = cameraOrbCanvas.getContext('webgl2', {
+      alpha: true,
+      premultipliedAlpha: true,
+      antialias: true,
+    });
+    if (!gl) return null;
+
+    const vert = `#version 300 es
+in vec2 position;
+void main() {
+  gl_Position = vec4(position, 0.0, 1.0);
+}
+`;
+    const frag = `#version 300 es
+precision highp float;
+
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec3 uColors[8];
+uniform int uColorCount;
+uniform int uStrandCount;
+uniform float uSpeed;
+uniform float uAmplitude;
+uniform float uWaviness;
+uniform float uThickness;
+uniform float uGlow;
+uniform float uTaper;
+uniform float uSpread;
+uniform float uHueShift;
+uniform float uIntensity;
+uniform float uOpacity;
+uniform float uScale;
+uniform float uSaturation;
+
+out vec4 fragColor;
+
+const float PI = 3.14159265;
+
+vec3 spectrum(float t) {
+  return 0.5 + 0.5 * cos(2.0 * PI * (t + vec3(0.00, 0.33, 0.67)));
+}
+
+vec3 samplePalette(float t) {
+  t = fract(t);
+  float scaled = t * float(uColorCount);
+  int idx = int(floor(scaled));
+  float blend = fract(scaled);
+  int nextIdx = idx + 1;
+  if (nextIdx >= uColorCount) nextIdx = 0;
+  return mix(uColors[idx], uColors[nextIdx], blend);
+}
+
+vec3 strandColor(float t) {
+  if (uColorCount > 0) return samplePalette(t);
+  return spectrum(t);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
+  float sphere = length(uv);
+  uv /= max(uScale, 0.0001);
+
+  float e = 0.06 + uIntensity * 0.94;
+  float env = pow(max(cos(uv.x * PI * 1.3), 0.0), uTaper);
+  vec3 col = vec3(0.0);
+
+  for (int i = 0; i < 12; i++) {
+    if (i >= uStrandCount) break;
+
+    float fi = float(i);
+    float ph = fi * 1.7 * uSpread;
+    float freq = (2.0 + fi * 0.35) * uWaviness;
+    float spd = 1.4 + fi * 1.2;
+
+    float tt = uTime * uSpeed;
+    float w = sin(uv.x * freq + tt * spd + ph) * 0.60
+            + sin(uv.x * freq * 1.1 - tt * spd * 0.7 + ph * 1.7) * 0.40;
+
+    float amp = (0.1 + 0.02 * e) * env * uAmplitude;
+    float y = w * amp;
+
+    float d = abs(uv.y - y);
+    float thick = (0.001 + 0.05 * e) * (0.35 + env) * uThickness;
+    float g = thick / (d + thick * 0.45);
+    g = g * g;
+
+    float h = fi / float(uStrandCount) + uv.x * 0.30 + uTime * 0.04 + uHueShift;
+    col += strandColor(h) * g * env;
+  }
+
+  col *= 0.45 + 0.7 * e;
+  col = 1.0 - exp(-col * uGlow);
+
+  float gray = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = max(mix(vec3(gray), col, uSaturation), 0.0);
+
+  float rim = smoothstep(0.50, 0.34, sphere);
+  float edge = smoothstep(0.28, 0.52, sphere);
+  col += vec3(1.0) * edge * 0.14;
+  col *= rim;
+
+  float lum = max(max(col.r, col.g), col.b);
+  float alpha = clamp(max(lum, rim * 0.08), 0.0, 1.0) * uOpacity;
+  fragColor = vec4(col * uOpacity, alpha);
+}
+`;
+    const compile = (type, source) => {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.warn('[camera orb] shader compile failed:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+    const vs = compile(gl.VERTEX_SHADER, vert);
+    const fs = compile(gl.FRAGMENT_SHADER, frag);
+    if (!vs || !fs) return null;
+    const program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.warn('[camera orb] program link failed:', gl.getProgramInfoLog(program));
+      gl.deleteProgram(program);
+      return null;
+    }
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'position');
+    const uniforms = {};
+    [
+      'uTime', 'uResolution', 'uColors', 'uColorCount', 'uStrandCount', 'uSpeed',
+      'uAmplitude', 'uWaviness', 'uThickness', 'uGlow', 'uTaper', 'uSpread',
+      'uHueShift', 'uIntensity', 'uOpacity', 'uScale', 'uSaturation',
+    ].forEach((name) => { uniforms[name] = gl.getUniformLocation(program, name); });
+    gl.clearColor(0, 0, 0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    cameraOrbGl = { gl, program, buffer, position, uniforms };
+    return cameraOrbGl;
+  }
+
+  function _cameraRealtimeOrbPalette() {
+    const hex = ['#F97316', '#7C3AED', '#06B6D4', '#F472B6', '#EAB308'];
+    const values = [];
+    for (let i = 0; i < 8; i += 1) {
+      const raw = hex[i] || hex[hex.length - 1];
+      const value = raw.replace('#', '');
+      values.push(
+        parseInt(value.slice(0, 2), 16) / 255,
+        parseInt(value.slice(2, 4), 16) / 255,
+        parseInt(value.slice(4, 6), 16) / 255,
+      );
+    }
+    return new Float32Array(values);
+  }
+
+  function _drawCameraRealtimeOrb(nowMs = performance.now()) {
+    if (!_isCameraVoiceRealtimeTarget() || !cameraCapture || cameraCapture.hidden) {
+      stopCameraRealtimeOrb();
+      return;
+    }
+    cameraCapture.classList.add('voice-realtime');
+    _resizeCameraRealtimeOrbCanvas();
+    const state = _initCameraRealtimeOrbGl();
+    if (state) {
+      const { gl, program, buffer, position, uniforms } = state;
+      const width = cameraOrbCanvas.width || 1;
+      const height = cameraOrbCanvas.height || 1;
+      const recording = !!cameraRecorder && cameraRecorder.state !== 'inactive';
+      const t = nowMs * 0.001;
+      const pulse = recording ? 0.78 : 0.36 + Math.sin(t * 1.45) * 0.08;
+      gl.viewport(0, 0, width, height);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(program);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.enableVertexAttribArray(position);
+      gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform1f(uniforms.uTime, t);
+      gl.uniform2f(uniforms.uResolution, width, height);
+      gl.uniform3fv(uniforms.uColors, _cameraRealtimeOrbPalette());
+      gl.uniform1i(uniforms.uColorCount, 5);
+      gl.uniform1i(uniforms.uStrandCount, 5);
+      gl.uniform1f(uniforms.uSpeed, recording ? 0.58 : 0.42);
+      gl.uniform1f(uniforms.uAmplitude, 1.18 + pulse * 0.22);
+      gl.uniform1f(uniforms.uWaviness, 1.3 + pulse * 0.04);
+      gl.uniform1f(uniforms.uThickness, 0.9 + pulse * 0.05);
+      gl.uniform1f(uniforms.uGlow, 1.86 + pulse * 0.42);
+      gl.uniform1f(uniforms.uTaper, 4.3);
+      gl.uniform1f(uniforms.uSpread, 1);
+      gl.uniform1f(uniforms.uHueShift, 0);
+      gl.uniform1f(uniforms.uIntensity, 0.46 + pulse * 0.26);
+      gl.uniform1f(uniforms.uOpacity, 1);
+      gl.uniform1f(uniforms.uScale, 1.78);
+      gl.uniform1f(uniforms.uSaturation, 1.5);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    cameraOrbRaf = requestAnimationFrame(_drawCameraRealtimeOrb);
+  }
+
+  function startCameraRealtimeOrb() {
+    if (!_isCameraVoiceRealtimeTarget() || cameraOrbRaf) return;
+    cameraOrbRaf = requestAnimationFrame(_drawCameraRealtimeOrb);
   }
 
   function cameraVideoMimeType() {
@@ -3848,6 +4587,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     cameraCapture?.classList.toggle('recording', !!recording);
     if (cameraRecordTimer) cameraRecordTimer.hidden = !recording;
     if (!recording && cameraRecordTimer) cameraRecordTimer.textContent = '0.0s';
+    if (_isCameraVoiceRealtimeTarget()) startCameraRealtimeOrb();
   }
 
   function updateCameraRecordingTimer() {
@@ -4019,6 +4759,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     }
     cameraOpening = false;
     cameraCaptureOptions = { target: 'chat', onCapture: null, onVideoCapture: null };
+    stopCameraRealtimeOrb();
+    stopVoiceCameraFrameCache();
   }
 
   async function openCameraCapture(options = {}) {
@@ -4037,6 +4779,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     };
     cameraOpening = true;
     cameraCapture.hidden = false;
+    cameraCapture.classList.toggle('voice-realtime', target === 'voice');
+    startCameraRealtimeOrb();
     setCameraStatus('Opening camera...');
     requestAnimationFrame(() => cameraCapture.classList.add('open'));
     try {
@@ -4055,6 +4799,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       cameraVideo.setAttribute('playsinline', '');
       await cameraVideo.play();
       setCameraStatus('');
+      if (target === 'voice') startVoiceCameraFrameCache();
     } catch (err) {
       stopCameraCapture();
       pmToast(err?.message || 'Could not open camera.', 'error');
@@ -4077,6 +4822,105 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         else reject(new Error('Could not capture camera frame.'));
       }, type, quality);
     });
+  }
+
+  function readCameraFrameDataUrl(maxDim = 1024, quality = 0.78) {
+    if (!cameraVideo || !cameraStream) return null;
+    const width = Number(cameraVideo.videoWidth || 0);
+    const height = Number(cameraVideo.videoHeight || 0);
+    if (!width || !height) return null;
+    const scale = Math.min(1, Math.max(320, Number(maxDim) || 1024) / Math.max(width, height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(cameraVideo, 0, 0, canvas.width, canvas.height);
+    return {
+      dataUrl: canvas.toDataURL('image/jpeg', Math.max(0.5, Math.min(0.9, Number(quality) || 0.78))),
+      width: canvas.width,
+      height: canvas.height,
+      capturedAt: Date.now(),
+    };
+  }
+
+  function stopVoiceCameraFrameCache() {
+    if (voiceCameraFrameCacheTimer) clearInterval(voiceCameraFrameCacheTimer);
+    voiceCameraFrameCacheTimer = null;
+    voiceCameraFrameCache = null;
+    if (__pmRealtimeAgent?.autoCaptureCameraFrames === autoCaptureVoiceCameraFrames) {
+      __pmRealtimeAgent.autoCaptureCameraFrames = null;
+    }
+  }
+
+  function refreshVoiceCameraFrameCache() {
+    if (String(cameraCaptureOptions?.target || '') !== 'voice') return null;
+    const frame = readCameraFrameDataUrl(1024, 0.76);
+    if (frame?.dataUrl) voiceCameraFrameCache = frame;
+    return voiceCameraFrameCache;
+  }
+
+  function startVoiceCameraFrameCache() {
+    stopVoiceCameraFrameCache();
+    __pmRealtimeAgent.autoCaptureCameraFrames = autoCaptureVoiceCameraFrames;
+    refreshVoiceCameraFrameCache();
+    voiceCameraFrameCacheTimer = setInterval(refreshVoiceCameraFrameCache, 1200);
+  }
+
+  function stageVoiceCameraDataUrl(dataUrl, sid, name, options = {}) {
+    const url = String(dataUrl || '').trim();
+    if (!url.startsWith('data:image')) return false;
+    _stageMobileRealtimeAgentImage({
+      dataUrl: url,
+      name: name || `Live camera frame ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`,
+      mimeType: 'image/jpeg',
+      base64: '',
+    }, sid, { toast: options.toast !== false });
+    return true;
+  }
+
+  async function autoCaptureVoiceCameraFrames(reason = 'speech_started', options = {}) {
+    if (String(cameraCaptureOptions?.target || '') !== 'voice') return false;
+    if (!cameraStream || !cameraVideo || cameraOpening || cameraRecorder) return false;
+    if (!_voiceAttachmentSessionAvailable()) return false;
+    const now = Date.now();
+    const cooldownMs = Math.max(400, Number(options.cooldownMs || 1400) || 1400);
+    if (voiceCameraAutoCaptureInFlight || now - voiceCameraAutoCaptureLastAt < cooldownMs) return false;
+    voiceCameraAutoCaptureLastAt = now;
+    voiceCameraAutoCaptureInFlight = (async () => {
+      let sid = _voiceAttachmentSessionId();
+      if (sid === MOBILE_CHAT_SESSION_ID) {
+        sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'voice_camera_auto_session_created' });
+      }
+      const frames = [];
+      const cached = voiceCameraFrameCache && now - Number(voiceCameraFrameCache.capturedAt || 0) < 2600
+        ? voiceCameraFrameCache
+        : refreshVoiceCameraFrameCache();
+      if (cached?.dataUrl) frames.push(cached);
+      const wantCount = Math.max(1, Math.min(2, Number(options.count || 2) || 2));
+      if (frames.length < wantCount) {
+        await new Promise((resolve) => setTimeout(resolve, 260));
+        const fresh = refreshVoiceCameraFrameCache();
+        if (fresh?.dataUrl && fresh.dataUrl !== frames[0]?.dataUrl) frames.push(fresh);
+      }
+      const staged = [];
+      frames.slice(0, wantCount).forEach((frame, index) => {
+        if (stageVoiceCameraDataUrl(frame.dataUrl, sid, index === 0 ? 'Live camera view' : 'Live camera follow-up view', { toast: false })) {
+          staged.push(frame.dataUrl);
+        }
+      });
+      if (staged.length) {
+        _kickoffMobileXaiVisionSummary(staged, { name: reason === 'ptt_release' ? 'camera view after speaking' : 'live camera view' }).catch(() => {});
+        _voiceDebug('voice-camera-auto-captured', { reason, frames: staged.length });
+      }
+      return staged.length > 0;
+    })().catch((err) => {
+      _voiceDebug('voice-camera-auto-capture-failed', { reason, message: err?.message || String(err) });
+      return false;
+    }).finally(() => {
+      voiceCameraAutoCaptureInFlight = null;
+    });
+    return voiceCameraAutoCaptureInFlight;
   }
 
   async function captureCameraFrame() {
@@ -4180,9 +5024,11 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       if (requestedSession === MOBILE_CHAT_SESSION_ID && !remembered && !status?.active) return;
       if (__pmChat.activeSessionId !== requestedSession) return;
 
+      let recoveredSessionProcessLog = [];
       if (fullRefresh || force) {
         const session = await loadMobileChatSession(requestedSession).catch(() => null);
         const history = Array.isArray(session?.history) ? session.history : [];
+        recoveredSessionProcessLog = Array.isArray(session?.processLog) ? session.processLog : [];
         const localThread = __pmChat.threads[requestedSession] || [];
         if (history.length) {
           __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
@@ -4233,6 +5079,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
           hasLocalLiveHistory = false;
         }
         aiTurn.streaming = true;
+        _mergeMobileProcessEntries(aiTurn, recoveredSessionProcessLog);
         const rememberedLastSeq = Math.max(
           Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
           Number(remembered?.lastSeq || 0) || 0,
@@ -4243,6 +5090,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         }
         const replay = await loadMobileChatStreamReplay(requestedSession, lastSeq).catch(() => null);
         const events = Array.isArray(replay?.events) ? replay.events : [];
+        if (fullRefresh || force) {
+          const fullReplay = lastSeq === 0 ? replay : await loadMobileChatStreamReplay(requestedSession, 0).catch(() => null);
+          _mergeMobileProcessEntries(aiTurn, processEntriesFromReplayFrames(fullReplay?.events || []));
+        }
         let terminal = '';
         for (const frame of events) {
           const applied = applyMobileChatStreamEvent(aiTurn, replayFrameToEvent(frame));
@@ -4364,7 +5215,9 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   }
 
   function renderThreadSoon() {
-    _scheduleThreadRender(threadEl, body, requestedSession);
+    if (!_scheduleMobileStreamingPatch(threadEl, body, requestedSession)) {
+      _scheduleThreadRender(threadEl, body, requestedSession);
+    }
   }
 
   function _currentChatVoiceSessionLabel() {
@@ -4403,7 +5256,11 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       if (!body || !form) return;
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
       const height = Math.ceil(form.getBoundingClientRect?.().height || 0);
-      const space = Math.max(170, height + 28);
+      page?.style?.setProperty?.('--pm-composer-live-height', `${height}px`);
+      const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
+        ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
+        : 0;
+      const space = Math.max(170, height + dockHeight + (dockHeight ? 42 : 28));
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
       if (form.classList.contains('is-voice-active') && chatVoiceShell && !chatVoiceShell.hidden) {
         const bodyRect = body.getBoundingClientRect?.();
@@ -4594,9 +5451,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       case 'ui_preflight':
       case 'heartbeat':
       case 'tool_progress':
+        if (String(evt.type || '') === 'tool_progress') {
+          _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+          aiTurn.toolActivityStarted = true;
+          _collectMediaFromToolEvent(aiTurn, evt);
+        }
         if (evt.message) {
-          if (String(evt.type || '') === 'tool_progress') _moveMobilePreToolAnswerIntoPreamble(aiTurn);
-          if (String(evt.type || '') === 'tool_progress') aiTurn.toolActivityStarted = true;
           _appendMobileProcess(aiTurn, 'info', String(evt.message), evt);
           _appendMobileLiveTrace(aiTurn, String(evt.type || '') === 'tool_progress' ? 'tool' : 'info', String(evt.message));
         }
@@ -4858,6 +5718,108 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     updateComposerSubmitState();
   }
 
+  function _voiceAttachmentSessionId() {
+    return String(__pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  }
+
+  function _voiceAttachmentSessionAvailable() {
+    return !!(__pmRealtimeAgent.conn || __pmRealtimeAgent.connecting || _isMobileRealtimeAgentMode());
+  }
+
+  async function openVoiceCameraCaptureFromSheet() {
+    if (!_voiceAttachmentSessionAvailable()) {
+      pmToast('Start realtime voice first, then attach a photo.', 'info');
+      return;
+    }
+    let sid = _voiceAttachmentSessionId();
+    if (sid === MOBILE_CHAT_SESSION_ID) {
+      sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'voice_attachment_session_created' });
+    }
+    try {
+      await openCameraCapture({
+        target: 'voice',
+        onCapture: async (normalized, extra) => {
+          const dataUrl = extra?.dataUrl || normalized?.dataUrl || '';
+          _stageMobileRealtimeAgentImage({
+            dataUrl,
+            name: extra?.file?.name || normalized?.name || 'Camera snapshot',
+            mimeType: normalized?.mimeType || extra?.file?.type || 'image/jpeg',
+            base64: normalized?.base64,
+          }, sid);
+          _kickoffMobileXaiVisionSummary([dataUrl], { name: 'camera photo' }).catch(() => {});
+        },
+        onVideoCapture: async (payload) => {
+          const frames = Array.isArray(payload?.frames) ? payload.frames : [];
+          if (!frames.length) { pmToast('Could not sample video frames.', 'error'); return; }
+          _stageMobileRealtimeAgentImage({
+            dataUrl: frames[0].dataUrl,
+            name: `Video clip (${frames.length} frame${frames.length === 1 ? '' : 's'})`,
+            mimeType: frames[0].mimeType || 'image/jpeg',
+          }, sid);
+          for (let i = 1; i < frames.length; i++) {
+            if (!String(frames[i]?.dataUrl || '').trim()) continue;
+            const frameImg = {
+              dataUrl: frames[i].dataUrl,
+              name: frames[i].name || `video-frame-${i + 1}.jpg`,
+              mimeType: frames[i].mimeType || 'image/jpeg',
+              base64: '',
+              realtimeInjected: false,
+            };
+            __pmRealtimeAgent.pendingImages.push(frameImg);
+            _injectRealtimeImageItemToConversation(frameImg, `Video frame ${i + 1} of ${frames.length} from the mobile camera clip - sequential visual context for what I say next.`).catch(() => {});
+          }
+          _kickoffMobileXaiVisionSummary(frames.map((f) => f.dataUrl), { name: 'camera video clip', durationMs: Number(payload?.durationMs || 0) || 0 }).catch(() => {});
+        },
+      });
+    } catch (err) {
+      _voiceDebug('realtime-agent-camera-open-failed', { message: err?.message || String(err) });
+      pmToast(err?.message || 'Could not open camera.', 'error');
+    }
+  }
+
+  async function stageVoicePhotoFiles(files = []) {
+    if (!_voiceAttachmentSessionAvailable()) {
+      pmToast('Start realtime voice first, then attach a photo.', 'info');
+      return;
+    }
+    const list = Array.isArray(files) ? files : [];
+    if (!list.length) return;
+    let sid = _voiceAttachmentSessionId();
+    if (sid === MOBILE_CHAT_SESSION_ID) {
+      sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'voice_attachment_session_created' });
+    }
+    const valid = [];
+    let unsupported = 0;
+    let oversized = 0;
+    for (const file of list.slice(0, 8)) {
+      if (!_isVoicePhotoFile(file)) { unsupported += 1; continue; }
+      if (Number(file?.size || 0) > VOICE_PHOTO_FILE_MAX_BYTES) { oversized += 1; continue; }
+      valid.push(file);
+    }
+    if (unsupported) pmToast('Voice attachments currently support photos only. Use regular chat for other files.', 'error');
+    if (oversized) pmToast(`Photo too large for voice. Limit is ${_formatBytes(VOICE_PHOTO_FILE_MAX_BYTES)}.`, 'error');
+    if (!valid.length) return;
+    try {
+      const normalized = await Promise.all(valid.map(_normalizeMobileFile));
+      const dataUrls = [];
+      normalized.filter(Boolean).forEach((item) => {
+        if (item.kind !== 'image' || !item.dataUrl) return;
+        _stageMobileRealtimeAgentImage({
+          dataUrl: item.dataUrl,
+          name: item.name || 'Photo attachment',
+          mimeType: item.mimeType || 'image/jpeg',
+          base64: item.base64,
+        }, sid);
+        dataUrls.push(item.dataUrl);
+      });
+      if (dataUrls.length) {
+        _kickoffMobileXaiVisionSummary(dataUrls, { name: dataUrls.length > 1 ? 'photo attachments' : 'photo attachment' }).catch(() => {});
+      }
+    } catch (err) {
+      pmToast(err?.message || 'Could not read the selected photo. Check photo or file permission.', 'error');
+    }
+  }
+
   function _onChatVoiceUpdate(sessionId, detail = {}) {
     const sid = String(sessionId || __pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID).trim();
     if (sid && requestedSession === MOBILE_CHAT_SESSION_ID && sid !== MOBILE_CHAT_SESSION_ID) {
@@ -4919,6 +5881,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         inlineChatSessionLabel: __pmVoice.targetSessionLabel,
         autoStart,
         openCameraCapture,
+        openAttachmentSheet: () => openAttachSheet({ target: 'voice' }),
         cameraButton: chatVoiceCamera,
       }).catch((err) => {
         console.warn('[mobile chat] inline voice mount failed:', err);
@@ -5094,13 +6057,20 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     }
     const seq = Math.max(0, Math.floor(Number(evt?.seq || 0)) || 0);
     const streamId = evt?.streamId ? String(evt.streamId) : '';
+    const runtimeId = String(evt?.runtimeId || evt?.run?.id || evt?.activeRun?.id || '').trim();
+    if (runtimeId) {
+      if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+      const run = __pmChat.activeRuns[requestedSession] || {};
+      __pmChat.activeRuns[requestedSession] = { ...run, busy: run.busy !== false, runtimeId };
+      _rememberMobileActiveRun(requestedSession, { runtimeId });
+    }
     if (!seq) return true;
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
     const run = __pmChat.activeRuns[requestedSession] || {};
     const prevSeq = Math.max(0, Math.floor(Number(run.lastSeq || 0)) || 0);
     if (seq <= prevSeq) return false;
-    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, lastSeq: seq, streamId: streamId || run.streamId || '' };
-    _rememberMobileActiveRun(requestedSession, { lastSeq: seq, streamId: streamId || run.streamId || '' });
+    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, lastSeq: seq, streamId: streamId || run.streamId || '', runtimeId: runtimeId || run.runtimeId || '' };
+    _rememberMobileActiveRun(requestedSession, { lastSeq: seq, streamId: streamId || run.streamId || '', runtimeId: runtimeId || run.runtimeId || '' });
     return true;
   }
 
@@ -5113,6 +6083,66 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       streamId: frame.streamId,
       at: frame.at,
     };
+  }
+
+  function processEntriesFromReplayFrames(frames) {
+    const entries = [];
+    for (const frame of Array.isArray(frames) ? frames : []) {
+      const evt = replayFrameToEvent(frame);
+      if (!evt?.type) continue;
+      switch (evt.type) {
+        case 'agent_mode':
+          if (evt.mode) entries.push({ type: 'info', text: `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, extra: evt });
+          break;
+        case 'thinking':
+        case 'agent_thought': {
+          const text = String(evt.thinking || evt.text || '').trim();
+          if (text) entries.push({ type: 'think', text, extra: evt });
+          break;
+        }
+        case 'thinking_delta': {
+          const text = String(evt.thinking || evt.text || '').trim();
+          if (text) entries.push({ type: 'think', text: text.slice(0, 220), extra: evt });
+          break;
+        }
+        case 'info':
+        case 'ui_preflight':
+        case 'heartbeat':
+          if (evt.message) entries.push({ type: 'info', text: String(evt.message), extra: evt });
+          break;
+        case 'tool_call': {
+          const label = _mobileToolLabel(evt);
+          const args = _safeJsonPreview(evt.args || evt.params || evt.input);
+          entries.push({ type: 'tool', text: `${label}${args ? `: ${args}` : ''}`, extra: evt });
+          break;
+        }
+        case 'tool_result': {
+          const label = _mobileToolLabel(evt);
+          const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
+          entries.push({ type: evt.error ? 'error' : 'result', text: `${label}${result ? ` -> ${result}` : ' complete'}`, extra: evt });
+          break;
+        }
+        case 'tool_progress': {
+          const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
+          entries.push({ type: 'info', text: progressText, extra: evt });
+          break;
+        }
+        case 'canvas_present': {
+          const path = String(evt.path || '').trim();
+          if (path) entries.push({ type: 'file', text: `Presented file: ${path}`, extra: evt });
+          break;
+        }
+        case 'model_switched':
+        case 'main_model_changed': {
+          const model = evt.model || evt.modelRef || evt.providerId || '';
+          if (model) entries.push({ type: 'info', text: `Model: ${model}`, extra: evt });
+          break;
+        }
+        default:
+          break;
+      }
+    }
+    return entries;
   }
 
   function applyMobileChatStreamEvent(aiTurn, evt) {
@@ -5138,6 +6168,11 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         if (aiTurn.agentExecutionMode === 'execute') _moveMobilePreToolAnswerIntoPreamble(aiTurn);
         if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
         renderThreadSoon();
+        return 'streaming';
+      case 'runtime_registered':
+        if (evt.runtimeId || evt.run?.id) {
+          aiTurn.runtimeId = String(evt.runtimeId || evt.run?.id || '').trim();
+        }
         return 'streaming';
       case 'thinking_delta': {
         const text = String(evt.thinking || evt.text || '');
@@ -5187,9 +6222,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       case 'tool_progress': {
         _moveMobilePreToolAnswerIntoPreamble(aiTurn);
         aiTurn.toolActivityStarted = true;
-        const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
-        _appendMobileProcess(aiTurn, 'info', progressText, evt);
-        _appendMobileLiveTrace(aiTurn, 'tool', progressText);
+        _collectMediaFromToolEvent(aiTurn, evt);
+        const messageText = String(evt.message || '').trim();
+        const progressText = messageText ? `${_mobileToolLabel(evt)}: ${messageText}` : _mobileToolLabel(evt);
+        if (messageText) {
+          _appendMobileProcess(aiTurn, 'info', progressText, evt);
+          _appendMobileLiveTrace(aiTurn, 'tool', progressText);
+        }
         renderThreadSoon();
         return 'streaming';
       }
@@ -5224,7 +6263,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       }
       case 'model_switched':
       case 'main_model_changed': {
-        const model = evt.model || evt.modelRef || evt.providerId || 'model';
+        const detail = notifyMobileModelChanged(evt, { sessionId: __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
+        const model = detail?.modelRef || detail?.model || evt.model || evt.modelRef || evt.providerId || 'model';
         _appendMobileProcess(aiTurn, 'info', `Model: ${model}`, evt);
         renderThreadSoon();
         return 'streaming';
@@ -5276,7 +6316,9 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     __pmChat.abort = null;
     _clearMobileActiveRun(requestedSession);
     _markMobileSessionRunning(requestedSession, false);
-    markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
+    if (_isMobileChatSessionVisibleToUser(requestedSession)) {
+      markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
+    }
     renderThreadNow();
     updateMobileChatSessionHistory(requestedSession, _mobileHistoryForServer(_activeMobileThread())).catch((err) => {
       console.warn('[mobile chat] failed to persist recovered turn:', err);
@@ -5323,6 +6365,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
 
   async function requestMobileMainChatAbort(sessionId = requestedSession, { showToast = true } = {}) {
     const sid = String(sessionId || requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    const runtimeId = String(
+      __pmChat.activeRuns?.[sid]?.runtimeId ||
+      __pmChat.activeRuns?.[requestedSession]?.runtimeId ||
+      _readMobileActiveRun(sid)?.runtimeId ||
+      ''
+    ).trim();
     const localAbort =
       __pmChat.activeRuns?.[sid]?.abort ||
       __pmChat.activeRuns?.[requestedSession]?.abort ||
@@ -5338,12 +6386,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       const activeThread = _activeMobileThread();
       const aiTurn = _findLatestAssistantTurn(activeThread);
       if (aiTurn?.streaming) {
-        _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Asking the gateway to abort the live runtime.');
+        _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Aborting the live runtime now.');
         const streamed = String(aiTurn.body?.text || aiTurn.content || '').trim();
         aiTurn.body = aiTurn.body || { sender: 'Prometheus', text: '' };
         aiTurn.body.text = streamed
           ? `[Stopped by user]\n\n${streamed}`
-          : '[Generation stopped by user. Gateway abort requested and process log preserved.]';
+          : '[Generation stopped by user. Runtime abort sent and process log preserved.]';
         aiTurn.content = aiTurn.body.text;
         finalizeMobileLiveAiTurn(aiTurn);
       }
@@ -5353,38 +6401,38 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     }
 
     try {
-      const direct = await stopMobileMainChat(sid);
+      const direct = await stopMobileMainChat(sid, { runtimeId, source: 'mobile_stop_button' });
       if (direct?.success) {
-        if (showToast) pmToast('Stop requested.', 'success');
-        return { success: true, message: direct.message || 'Main chat abort requested.', localAbortRequested, result: direct };
+        if (showToast) pmToast('Stopped.', 'success');
+        return { success: true, message: direct.message || 'Main chat aborted.', localAbortRequested, result: direct };
       }
 
       const targetsResult = await loadMobileStopTargets().catch(() => null);
       const targets = Array.isArray(targetsResult?.targets) ? targetsResult.targets : [];
       const match = targets.find((target) =>
         target?.abortable !== false &&
-        String(target?.sessionId || '').trim() === sid
+        ((runtimeId && String(target?.id || '').trim() === runtimeId) || String(target?.sessionId || '').trim() === sid)
       );
       if (match?.id) {
-        const fallback = await stopMobileRuntime(match.id);
+        const fallback = await stopMobileRuntime(match.id, { source: 'mobile_stop_button_fallback' });
         if (fallback?.success) {
-          if (showToast) pmToast('Stop requested.', 'success');
-          return { success: true, message: fallback.message || 'Abort requested.', localAbortRequested, result: fallback };
+          if (showToast) pmToast('Stopped.', 'success');
+          return { success: true, message: fallback.message || 'Runtime aborted.', localAbortRequested, result: fallback };
         }
-        return { success: localAbortRequested, message: fallback?.message || fallback?.error || direct?.message || 'Abort request sent.', localAbortRequested, result: fallback };
+        return { success: localAbortRequested, message: fallback?.message || fallback?.error || direct?.message || 'Abort sent.', localAbortRequested, result: fallback };
       }
 
       return {
         success: localAbortRequested,
         message: localAbortRequested
-          ? 'Local stream abort requested.'
+          ? 'Local stream stopped.'
           : (direct?.message || 'No active main chat turn found for this session.'),
         localAbortRequested,
         result: direct,
       };
     } catch (err) {
       if (!localAbortRequested) throw err;
-      return { success: true, message: 'Local stream abort requested.', localAbortRequested, error: err };
+      return { success: true, message: 'Local stream stopped.', localAbortRequested, error: err };
     }
   }
 
@@ -5443,10 +6491,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     }
 
     if (command === '/stop_now') {
-      const turn = addCommandTurn(command, { text: 'Requesting abort for the active main chat turn...' });
+      const turn = addCommandTurn(command, { text: 'Stopping the active main chat turn...' });
       try {
         const r = await requestMobileMainChatAbort(requestedSession, { showToast: false });
-        updateCommandTurn(turn, { text: r?.message || (r?.success ? 'Main chat abort requested.' : 'No active main chat turn found.') });
+        updateCommandTurn(turn, { text: r?.message || (r?.success ? 'Main chat aborted.' : 'No active main chat turn found.') });
       } catch (err) {
         updateCommandTurn(turn, { text: `Stop failed: ${err.message || err}` });
       }
@@ -5568,8 +6616,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         return;
       }
       if (action === 'stop-runtime' && id) {
-        const r = await stopMobileRuntime(id);
-        updateCommandTurn(turn, { text: r?.message || (r?.success ? 'Abort requested.' : 'Abort failed.'), actions: [] });
+        const r = await stopMobileRuntime(id, { source: 'mobile_stop_menu' });
+        updateCommandTurn(turn, { text: r?.message || (r?.success ? 'Runtime aborted.' : 'Abort failed.'), actions: [] });
       }
     } catch (err) {
       if (String(action || '').startsWith('restart-')) {
@@ -5640,6 +6688,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       __pmVoice.activeVoiceRuntime = null;
       invalidateMobileDrawerSessions('mobile');
     }
+    _clearMobileBackgroundSpawnDockForSession(actualSessionId);
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
     if (stagedVoiceImages.length) {
@@ -5702,11 +6751,11 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       turnFinished = true;
       const targetAiTurn = _mobileStreamTargetTurn(aiTurn);
       if (stoppedByUser) {
-        _appendMobileProcess(targetAiTurn, 'warn', 'Generation stopped by user. Gateway abort requested; process log preserved.');
+        _appendMobileProcess(targetAiTurn, 'warn', 'Generation stopped by user. Runtime abort sent; process log preserved.');
         const streamed = String(targetAiTurn.body.text || '').trim();
         targetAiTurn.body.text = streamed
           ? `[Stopped by user]\n\n${streamed}`
-          : '[Generation stopped by user. Gateway abort requested and process log preserved.]';
+          : '[Generation stopped by user. Runtime abort sent and process log preserved.]';
       }
       targetAiTurn.streaming = false;
       targetAiTurn.workEndedAt = Number(targetAiTurn.workEndedAt || Date.now()) || Date.now();
@@ -5715,6 +6764,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       targetAiTurn.timestamp = Number(targetAiTurn.timestamp || Date.now()) || Date.now();
       targetAiTurn.content = String(targetAiTurn.body?.text || '');
       _mergeMobileLiveTraceIntoProcess(targetAiTurn);
+      const mergedFileChanges = _mergeMobileFileChangesWithBackground(targetAiTurn.fileChanges || null, actualSessionId);
+      if (mergedFileChanges) targetAiTurn.fileChanges = mergedFileChanges;
       if (Number.isFinite(Number(options.reuseExistingUserIndex)) && !stoppedByUser) {
         const userIndex = Number(options.reuseExistingUserIndex);
         const userMsg = _activeMobileThread()[userIndex];
@@ -5726,7 +6777,9 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       __pmChat.abort = null;
       if (!stoppedByUser) _clearMobileActiveRun(actualSessionId);
       _markMobileSessionRunning(actualSessionId, false);
-      if (!stoppedByUser) markMobileChatSessionRead(actualSessionId, Date.now()).catch(() => {});
+      if (!stoppedByUser && _isMobileChatSessionVisibleToUser(actualSessionId)) {
+        markMobileChatSessionRead(actualSessionId, Date.now()).catch(() => {});
+      }
       if (__pmChat.sentClientRequestIds?.[actualSessionId] === clientRequestId) delete __pmChat.sentClientRequestIds[actualSessionId];
       renderThreadNow();
       updateMobileChatSessionHistory(actualSessionId, _mobileHistoryForServer(_activeMobileThread())).catch((err) => {
@@ -5787,12 +6840,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         if (!stoppedByUser) runNextQueuedMobilePrompt();
       },
     });
+    let stopSent = false;
     const abortHandle = { abort: () => {
+      if (stopSent) return;
+      stopSent = true;
       stoppedByUser = true;
-      _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Asking the gateway to abort the live runtime.');
+      const run = __pmChat.activeRuns?.[actualSessionId] || {};
+      const runtimeId = String(run.runtimeId || aiTurn.runtimeId || _readMobileActiveRun(actualSessionId)?.runtimeId || '').trim();
+      _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Aborting the live runtime now.', runtimeId ? { runtimeId } : undefined);
       _clearMobileActiveRun(actualSessionId);
       _markMobileSessionRunning(actualSessionId, false);
-      stopMobileMainChat(actualSessionId).catch((err) => {
+      stopMobileMainChat(actualSessionId, { runtimeId, source: 'mobile_stop_button' }).catch((err) => {
         _appendMobileProcess(aiTurn, 'error', `Backend abort request failed: ${err?.message || err}`);
         renderThreadNow();
       });
@@ -5804,6 +6862,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       ...(__pmChat.activeRuns[actualSessionId] || {}),
       busy: true,
       abort: abortHandle,
+      runtimeId: __pmChat.activeRuns[actualSessionId]?.runtimeId || '',
     };
     __pmChat.abort = abortHandle;
   }
@@ -5830,13 +6889,23 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       const ownClientRequestId = String(__pmChat.sentClientRequestIds?.[requestedSession] || '').trim();
       if (incomingClientRequestId && incomingClientRequestId === ownClientRequestId) return;
       const payload = msg.data?.message && typeof msg.data.message === 'object' ? msg.data.message : {};
-      const text = String(payload.content || payload.text || payload.body?.text || '').trim();
+      const text = _stripMobileInternalUploadContext(payload.content || payload.text || payload.body?.text || '');
       const attachments = Array.isArray(payload.attachmentPreviews)
         ? payload.attachmentPreviews
         : (Array.isArray(payload.body?.attachments) ? payload.body.attachments : []);
       const ts = Number(payload.timestamp || msg.at || Date.now()) || Date.now();
+      const existingWorkerHandoff = _findMobileVoiceWorkerHandoffByText(activeThread, text, ts);
+      if (existingWorkerHandoff) {
+        existingWorkerHandoff._clientRequestId = incomingClientRequestId || existingWorkerHandoff._clientRequestId;
+        if (attachments.length && !Array.isArray(existingWorkerHandoff.attachmentPreviews)) {
+          existingWorkerHandoff.attachmentPreviews = attachments;
+        }
+        _markMobileSessionRunning(requestedSession, true);
+        setBusy(true);
+        return;
+      }
       const previousUser = [...activeThread].reverse().find((turn) => turn?.role === 'user');
-      const previousText = String(previousUser?.body?.text || previousUser?.content || '').trim();
+      const previousText = _stripMobileInternalUploadContext(previousUser?.body?.text || previousUser?.content || '');
       const previousTs = Number(previousUser?.timestamp || 0);
       const isDuplicate = previousUser
         && previousText === text
@@ -5981,6 +7050,23 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       }
     }
   };
+  const onBackgroundSpawnEvent = (msg = {}) => {
+    if (__pmChat.activeSessionId !== requestedSession) return;
+    if (!_pushMobileBackgroundSpawnEvent(msg, requestedSession)) return;
+    _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
+    updateChatComposerSpace();
+  };
+  const onBackgroundSpawnDone = (msg = {}) => {
+    if (__pmChat.activeSessionId !== requestedSession) return;
+    if (!_completeMobileBackgroundSpawnLane(msg, requestedSession)) return;
+    const mergedLateFileChanges = _mergeMobileLatestAssistantBackgroundFileChanges(requestedSession);
+    _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
+    updateChatComposerSpace();
+    if (mergedLateFileChanges) {
+      renderThreadNow();
+      updateMobileChatSessionHistory(requestedSession, _mobileHistoryForServer(_activeMobileThread())).catch(() => {});
+    }
+  };
   window.addEventListener('focus', runRecoveryOnReturn);
   document.addEventListener('visibilitychange', runRecoveryOnVisibility);
   wsEventBus?.on?.('ws:open', runRecoveryOnWsOpen);
@@ -5988,6 +7074,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   wsEventBus?.on?.('main_chat_stream_event', onMainChatStreamEvent);
   wsEventBus?.on?.('voice_interruption', onVoiceInterruptionEvent);
   wsEventBus?.on?.('voice_agent_tool_event', onVoiceAgentToolEvent);
+  wsEventBus?.on?.('bg_agent_event', onBackgroundSpawnEvent);
+  wsEventBus?.on?.('bg_agent_done', onBackgroundSpawnDone);
   const refreshSkillTriggerPill = () => _pmRenderSkillTriggerPill(page, input);
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
@@ -6000,6 +7088,11 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     wsEventBus?.off?.('main_chat_stream_event', onMainChatStreamEvent);
     wsEventBus?.off?.('voice_interruption', onVoiceInterruptionEvent);
     wsEventBus?.off?.('voice_agent_tool_event', onVoiceAgentToolEvent);
+    wsEventBus?.off?.('bg_agent_event', onBackgroundSpawnEvent);
+    wsEventBus?.off?.('bg_agent_done', onBackgroundSpawnDone);
+    if (window.__pmMobileBackgroundSpawnDockChanged === currentBackgroundDockBridge) {
+      window.__pmMobileBackgroundSpawnDockChanged = previousBackgroundDockBridge;
+    }
     if (__pmChat.workTimer) {
       clearInterval(__pmChat.workTimer);
       __pmChat.workTimer = null;
@@ -6015,6 +7108,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     chatVoiceClose?.removeEventListener('click', _closeChatVoiceMode);
     chatVoiceHost?._pmCleanup?.();
     body?.classList.remove('pm-chat-voice-occluded');
+    stopCameraCapture();
     _teardownKeyboardController();
   };
 
@@ -6210,13 +7304,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     sideDragY = null;
   }, { passive: true });
 
-  attachBtn?.addEventListener('click', openAttachSheet);
+  attachBtn?.addEventListener('click', () => openAttachSheet({ target: 'chat' }));
   attachSheetScrim?.addEventListener('click', closeAttachSheet);
   attachSheet?.querySelectorAll('[data-pm-attach-action]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const action = String(btn.getAttribute('data-pm-attach-action') || '');
-      if (action === 'camera') openCameraCapture();
-      else if (action === 'files') {
+      const target = String(attachSheetTarget || attachSheet?.dataset?.pmAttachTarget || 'chat');
+      if (action === 'camera') {
+        if (target === 'voice') openVoiceCameraCaptureFromSheet();
+        else openCameraCapture();
+      } else if (action === 'files') {
+        pendingFileInputTarget = target === 'voice' ? 'voice' : 'chat';
         closeAttachSheet();
         fileInput?.click();
       }
@@ -6290,8 +7388,14 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   document.addEventListener('visibilitychange', __pmChat.cameraVisibilityHandler);
   fileInput?.addEventListener('change', async () => {
     const files = Array.from(fileInput.files || []).slice(0, 8);
+    const target = String(pendingFileInputTarget || 'chat');
+    pendingFileInputTarget = 'chat';
     fileInput.value = '';
     if (!files.length) return;
+    if (target === 'voice') {
+      await stageVoicePhotoFiles(files);
+      return;
+    }
     try {
       const normalized = await Promise.all(files.map(_normalizeMobileFile));
       getPendingAttachments().push(...normalized);
@@ -6447,9 +7551,156 @@ function _loadVoiceSettings() {
 }
 
 function _saveVoiceSettings(settings) {
+  const previous = { ...(__pmVoice.settings || {}) };
   __pmVoice.settings = { ...__pmVoice.settings, ...settings };
   __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
   try { localStorage.setItem(PM_VOICE_SETTINGS_KEY, JSON.stringify(__pmVoice.settings)); } catch {}
+  _applyVoiceSettingsLive(previous, __pmVoice.settings || {}, settings || {});
+}
+
+function _mobileRealtimeListenModeFromSettings(settings = __pmVoice?.settings || {}) {
+  return settings?.listenMode === 'always_listening' ? 'always_listening' : 'push_to_talk';
+}
+
+function _mobileRealtimeProviderKeyFromSettings(settings = __pmVoice?.settings || {}) {
+  const mode = String(settings?.voiceMode || '').trim();
+  if (mode === 'openai_realtime' && settings?.voiceAgentRealtimeAgent !== false) return 'openai_realtime';
+  if (mode === 'xai' && settings?.voiceAgentXaiRealtime === true) return 'xai_realtime';
+  return 'split';
+}
+
+function _mobileRealtimeTurnDetectionForListenMode(listenMode, settings = __pmVoice?.settings || {}) {
+  if (listenMode !== 'always_listening') return null;
+  const wakePhrase = _cleanMobileWakePhrase(settings?.wakePhrase || '');
+  const quietActive = !!(wakePhrase && settings?.wakeGateActive === true);
+  return {
+    type: 'server_vad',
+    threshold: 0.5,
+    prefix_padding_ms: 300,
+    silence_duration_ms: 500,
+    create_response: !quietActive && !__pmRealtimeAgent?.quiet?.active,
+  };
+}
+
+function _sendMobileRealtimeAgentSessionUpdateFromSettings(reason = 'settings_live_update') {
+  const conn = __pmRealtimeAgent?.conn;
+  const dc = conn?.dc;
+  if (!conn || !dc || dc.readyState !== 'open') return false;
+  const settings = __pmVoice?.settings || {};
+  const listenMode = _mobileRealtimeListenModeFromSettings(settings);
+  const turnDetection = _mobileRealtimeTurnDetectionForListenMode(listenMode, settings);
+  conn.listenMode = listenMode;
+  __pmRealtimeAgent.listenMode = listenMode;
+  _syncMobileRealtimeAgentQuietFromSettings?.();
+  try {
+    if (conn.provider === 'xai') {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          voice: _mobileXaiVoice(settings.serverVoice || settings.realtimeVoice),
+          speed: Number(settings.xaiSpeed || 1.0),
+          input_audio_format: 'pcm16',
+          output_audio_format: 'pcm16',
+          turn_detection: turnDetection,
+        },
+      }));
+    } else {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          audio: {
+            input: {
+              turn_detection: turnDetection,
+              transcription: { model: 'gpt-4o-transcribe' },
+            },
+            output: {
+              voice: settings.realtimeVoice || 'marin',
+              speed: Number(settings.realtimeSpeed || 1.05),
+            },
+          },
+        },
+      }));
+    }
+    if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
+    else _setMobileRealtimeAgentMicEnabled(false);
+    _voiceDebug?.('voice-settings-live-session-update', { reason, provider: conn.provider || 'openai_webrtc', listenMode });
+    return true;
+  } catch (err) {
+    _voiceDebug?.('voice-settings-live-session-update-failed', { reason, message: err?.message || String(err) });
+    return false;
+  }
+}
+
+function _updateRealtimeSpeechConnectionFromSettings(reason = 'settings_live_update') {
+  const conn = __pmVoice?.realtimeSpeechConnection;
+  const dc = conn?.dc;
+  if (!dc || dc.readyState !== 'open') return false;
+  try {
+    dc.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          output: {
+            voice: __pmVoice.settings?.realtimeVoice || __pmVoice.provider?.voice || 'marin',
+            speed: Number(__pmVoice.settings?.realtimeSpeed || __pmVoice.provider?.speed || 1.05),
+          },
+        },
+      },
+    }));
+    _voiceDebug?.('voice-settings-live-tts-update', { reason });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function _restartMobileRealtimeAgentForSettings(reason = 'settings_changed') {
+  const wasListening = __pmVoice?.listening === true;
+  const nextListenMode = _mobileRealtimeListenModeFromSettings(__pmVoice?.settings || {});
+  const sid = String(__pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  _stopMobileRealtimeAgentSession?.();
+  if (_mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings || {}) === 'split') return;
+  if (nextListenMode !== 'always_listening' && !wasListening) return;
+  _startMobileRealtimeAgentSession?.(sid, { listenMode: nextListenMode })
+    .then(() => {
+      if (nextListenMode === 'always_listening' || wasListening) _setMobileRealtimeAgentMicEnabled?.(true);
+      _voiceDebug?.('voice-settings-live-restarted-agent', { reason, listenMode: nextListenMode });
+    })
+    .catch((err) => _voiceDebug?.('voice-settings-live-restart-failed', { reason, message: err?.message || String(err) }));
+}
+
+function _applyVoiceSettingsLive(previous = {}, next = {}, changed = {}) {
+  const keys = Object.keys(changed || {});
+  if (!keys.length) return;
+  const oldKey = _mobileRealtimeProviderKeyFromSettings(previous);
+  const newKey = _mobileRealtimeProviderKeyFromSettings(next);
+  const activeConn = __pmRealtimeAgent?.conn;
+  const activeProviderKey = activeConn
+    ? (activeConn.provider === 'xai' ? 'xai_realtime' : 'openai_realtime')
+    : '';
+  const realtimeKeys = ['voiceMode', 'sttProvider', 'ttsProvider', 'listenMode', 'wakePhrase', 'wakeGateActive', 'realtimeVoice', 'realtimeSpeed', 'serverVoice', 'xaiSpeed', 'voiceAgentRealtimeAgent', 'voiceAgentXaiRealtime'];
+  const touchedRealtime = keys.some((key) => realtimeKeys.includes(key));
+  if (keys.some((key) => ['realtimeVoice', 'realtimeSpeed', 'ttsProvider', 'voiceMode'].includes(key))) {
+    _updateRealtimeSpeechConnectionFromSettings('settings_changed');
+    if (String(previous.ttsProvider || '') === 'openai_realtime' && String(next.ttsProvider || '') !== 'openai_realtime') _closeRealtimeSpeechConnection?.();
+  }
+  if (!touchedRealtime && !activeConn) return;
+  if (activeConn && (newKey === 'split' || (activeProviderKey && newKey !== activeProviderKey))) {
+    _restartMobileRealtimeAgentForSettings('provider_changed');
+    return;
+  }
+  if (!activeConn && newKey !== oldKey && newKey !== 'split' && _mobileRealtimeListenModeFromSettings(next) === 'always_listening') {
+    _restartMobileRealtimeAgentForSettings('provider_enabled');
+    return;
+  }
+  if (!activeConn) return;
+  if (activeConn.provider === 'xai' && keys.some((key) => ['serverVoice', 'realtimeVoice', 'xaiSpeed'].includes(key))) {
+    _restartMobileRealtimeAgentForSettings('xai_voice_or_speed_changed');
+    return;
+  }
+  _sendMobileRealtimeAgentSessionUpdateFromSettings('settings_changed');
 }
 
 function _mobileVoiceDefaultProviderFromStatus(status) {
@@ -7749,6 +9000,8 @@ const __pmRealtimeAgent = {
     pendingWorkerDispatch: null,
     suppressAssistantTranscript: false,
     finalSummaryPending: false,
+    finalSummaryContentKey: '',
+    queuedFinalSummary: '',
   },
 };
 
@@ -7828,6 +9081,53 @@ function _syncMobileRealtimeAgentQuietFromSettings() {
   );
   __pmRealtimeAgent.quiet.pendingActivate = false;
   return { wakePhrase, active: __pmRealtimeAgent.quiet.active };
+}
+
+// Seed the live realtime session with the recent chat thread so the voice agent
+// picks up the conversation the user just had on screen instead of starting cold.
+// Injected as a single system context item right after the data channel opens —
+// robust against instruction clamping and independent of any server restart.
+function _seedMobileRealtimeAgentConversationHistory(dc, sessionId) {
+  try {
+    if (!dc || dc.readyState !== 'open') return false;
+    const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
+    if (!sid) return false;
+    const thread = Array.isArray(__pmChat?.threads?.[sid]) ? __pmChat.threads[sid] : [];
+    const turns = thread
+      .filter((msg) => {
+        const role = String(msg?.role || '');
+        if (role !== 'user' && role !== 'ai' && role !== 'assistant') return false;
+        if (_isMobileHiddenVoiceDraftMessage?.(msg)) return false;
+        const text = _mobileMessageCopyText(msg);
+        return !!text && !_isMobileRestartContextPacketText?.(text);
+      })
+      .slice(-12)
+      .map((msg) => {
+        const speaker = String(msg?.role || '') === 'user' ? 'User' : 'Prometheus';
+        const text = _mobileMessageCopyText(msg).replace(/\s+/g, ' ').slice(0, 600);
+        return text ? `${speaker}: ${text}` : '';
+      })
+      .filter(Boolean);
+    if (!turns.length) return false;
+    const block = [
+      'You are joining an in-progress chat the user just had on screen. Continue from here — do not reintroduce yourself, do not ask what they need from scratch, and reference what was already said. Recent conversation:',
+      '',
+      turns.join('\n'),
+    ].join('\n');
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: block }],
+      },
+    }));
+    _voiceDebug('realtime-agent-seed-history', { sessionId: sid, turns: turns.length });
+    return true;
+  } catch (err) {
+    _voiceDebug('realtime-agent-seed-history-failed', { message: err?.message || String(err) });
+    return false;
+  }
 }
 
 function _sendMobileRealtimeAgentContextUpdate(contextPacket, options = {}) {
@@ -7985,11 +9285,23 @@ function _requestMobileRealtimeAgentFinalSummary(text) {
   const dc = __pmRealtimeAgent.conn?.dc;
   if (!content || !dc || dc.readyState !== 'open') return false;
   if (__pmRealtimeAgent.quiet.active) return false;
+  const contentKey = `${content.length}:${content.slice(0, 160)}`;
+  if (__pmRealtimeAgent.turn.finalSummaryPending || __pmRealtimeAgent.activeResponse || __pmVoice.realtimeSpeechActiveResponse || __pmVoice.speaking) {
+    if (contentKey !== __pmRealtimeAgent.turn.finalSummaryContentKey) {
+      __pmRealtimeAgent.turn.queuedFinalSummary = content;
+      _voiceDebug('realtime-agent-final-summary-queued', {
+        contentLen: content.length,
+        activeResponse: !!__pmRealtimeAgent.activeResponse,
+        speaking: !!__pmVoice.speaking,
+      });
+    }
+    return true;
+  }
   try {
-    if (__pmRealtimeAgent.activeResponse) _cancelMobileRealtimeAgentResponseForDispatch();
-    try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
     __pmRealtimeAgent.turn.suppressAssistantTranscript = true;
     __pmRealtimeAgent.turn.finalSummaryPending = true;
+    __pmRealtimeAgent.turn.finalSummaryContentKey = contentKey;
+    __pmRealtimeAgent.turn.queuedFinalSummary = '';
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -8029,6 +9341,7 @@ function _requestMobileRealtimeAgentFinalSummary(text) {
   } catch (err) {
     __pmRealtimeAgent.turn.suppressAssistantTranscript = false;
     __pmRealtimeAgent.turn.finalSummaryPending = false;
+    __pmRealtimeAgent.turn.finalSummaryContentKey = '';
     _markVoiceSpeakingEnd();
     _voiceDebug('realtime-agent-final-summary-failed', { message: err?.message || String(err) });
     return false;
@@ -8246,7 +9559,7 @@ function _handleMobileRealtimeAgentQuietTranscript(transcript) {
 
 function _isMobileRealtimeAgentMode() {
   const mode = String(__pmVoice?.settings?.voiceMode || '').trim();
-  if (mode === 'openai_realtime') return true;
+  if (mode === 'openai_realtime') return __pmVoice?.settings?.voiceAgentRealtimeAgent !== false;
   if (mode === 'xai') return __pmVoice?.settings?.voiceAgentXaiRealtime === true;
   return false;
 }
@@ -8256,9 +9569,33 @@ function _wantsMobileXaiRealtime() {
     && __pmVoice?.settings?.voiceAgentXaiRealtime === true;
 }
 
+function _mobileVoiceDeviceTimeContext() {
+  const now = new Date();
+  const offsetMinutes = -now.getTimezoneOffset();
+  const timezone = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
+  })();
+  const format = (options) => {
+    try { return now.toLocaleString('en-US', options); } catch { return ''; }
+  };
+  return {
+    source: 'device',
+    capturedAt: Date.now(),
+    localIso: now.toISOString(),
+    timezone,
+    utcOffsetMinutes: offsetMinutes,
+    dateLabel: format({ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+    timeLabel: format({ hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
+  };
+}
+
+
 async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
   if (_wantsMobileXaiRealtime()) return _startMobileXaiRealtimeSession(sessionId, options);
-  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  let sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (sid === MOBILE_CHAT_SESSION_ID) {
+    sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'realtime_agent_bootstrap' });
+  }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
   if (
     __pmRealtimeAgent.conn?.dc?.readyState === 'open'
@@ -8266,6 +9603,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
   ) {
     __pmRealtimeAgent.conn.listenMode = listenMode;
     __pmRealtimeAgent.listenMode = listenMode;
+    _sendMobileRealtimeAgentSessionUpdateFromSettings('realtime_agent_reuse');
     if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
     _voiceDebug('realtime-agent-reuse', {
       sessionId: sid,
@@ -8298,6 +9636,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         voiceRuntime: wakePhrase
           ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
           : undefined,
+        deviceTime: _mobileVoiceDeviceTimeContext(),
         ...(workerContextPacket ? { contextPacket: workerContextPacket } : {}),
       }),
     });
@@ -8463,16 +9802,12 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
           type: 'realtime',
           audio: {
             input: {
-              turn_detection: listenMode === 'always_listening'
-                ? {
-                    type: 'server_vad',
-                    threshold: 0.5,
-                    prefix_padding_ms: 300,
-                    silence_duration_ms: 500,
-                    create_response: !__pmRealtimeAgent.quiet.active,
-                  }
-                : null,
+              turn_detection: _mobileRealtimeTurnDetectionForListenMode(listenMode),
               transcription: { model: 'gpt-4o-transcribe' },
+            },
+            output: {
+              voice: __pmVoice?.settings?.realtimeVoice || 'marin',
+              speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
             },
           },
         },
@@ -8481,6 +9816,10 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     } catch (err) {
       _voiceDebug('realtime-agent-session-update-failed', { message: err?.message || String(err) });
     }
+
+    // Seed the live session with the chat thread the user just had on screen so
+    // the voice agent continues the conversation instead of starting fresh.
+    _seedMobileRealtimeAgentConversationHistory(dc, sid);
 
     __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true };
     if (__pmRealtimeAgent.quiet.active) _sendMobileRealtimeAgentCreateResponseFlag(false);
@@ -8559,6 +9898,7 @@ function _setMobileRealtimeAgentMicEnabled(enabled) {
 
 // --- xAI / Grok realtime (WebSocket transport) for mobile -------------------
 const MOBILE_XAI_REALTIME_SAMPLE_RATE = 24000;
+const MOBILE_XAI_REALTIME_INPUT_SAMPLE_RATE = 24000;
 
 function _mobileXaiVoice(value) {
   const voices = new Set(['eve', 'ara', 'rex', 'sal', 'leo']);
@@ -8611,34 +9951,137 @@ function _mobileXaiRealtimeDownsampleFloat32(input, inputRate, outputRate) {
   return out;
 }
 
-function _createMobileXaiPlayback() {
+function _resampleInt16ToFloat32(int16, inputRate, outputRate) {
+  if (!int16 || !int16.length) return new Float32Array(0);
+  const inRate = Math.max(1, Number(inputRate || MOBILE_XAI_REALTIME_SAMPLE_RATE) || MOBILE_XAI_REALTIME_SAMPLE_RATE);
+  const outRate = Math.max(1, Number(outputRate || inRate) || inRate);
+  const outLength = inRate === outRate
+    ? int16.length
+    : Math.max(1, Math.round((int16.length * outRate) / inRate));
+  const out = new Float32Array(outLength);
+  if (inRate === outRate) {
+    for (let i = 0; i < int16.length; i += 1) {
+      const s = int16[i] || 0;
+      out[i] = s < 0 ? s / 0x8000 : s / 0x7fff;
+    }
+    return out;
+  }
+  const ratio = inRate / outRate;
+  for (let i = 0; i < outLength; i += 1) {
+    const pos = i * ratio;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const aRaw = int16[Math.min(idx, int16.length - 1)] || 0;
+    const bRaw = int16[Math.min(idx + 1, int16.length - 1)] || aRaw;
+    const a = aRaw < 0 ? aRaw / 0x8000 : aRaw / 0x7fff;
+    const b = bRaw < 0 ? bRaw / 0x8000 : bRaw / 0x7fff;
+    out[i] = a + ((b - a) * frac);
+  }
+  return out;
+}
+
+function _createMobileXaiPlayback(options = {}) {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  const ctx = new AudioCtx({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
-  let nextStartTime = 0;
-  const sources = new Set();
+  const ctx = new AudioCtx();
+  const sourceRate = Math.max(1, Number(options.sampleRate || MOBILE_XAI_REALTIME_SAMPLE_RATE) || MOBILE_XAI_REALTIME_SAMPLE_RATE);
+  const outputRate = Math.max(1, Math.round(ctx.sampleRate || sourceRate));
+  const processorSize = 1024;
+  const processor = ctx.createScriptProcessor(processorSize, 1, 1);
+  const driver = ctx.createBufferSource();
+  driver.buffer = ctx.createBuffer(1, processorSize, outputRate);
+  driver.loop = true;
+  const mutedGain = ctx.createGain();
+  mutedGain.gain.value = 1;
+  const queue = [];
+  let queuedSamples = 0;
+  let current = null;
+  let currentOffset = 0;
+  let playing = false;
+  let closed = false;
+  let smoothGain = 0;
+  let underruns = 0;
+  const prebufferSamples = Math.max(processorSize, Math.round(outputRate * 0.11));
+  const maxQueueSamples = Math.max(prebufferSamples * 2, Math.round(outputRate * 1.8));
+
+  const popSample = () => {
+    while (!current || currentOffset >= current.length) {
+      current = queue.shift() || null;
+      currentOffset = 0;
+      if (!current) return null;
+    }
+    const sample = current[currentOffset++] || 0;
+    queuedSamples = Math.max(0, queuedSamples - 1);
+    return sample;
+  };
+
+  processor.onaudioprocess = (event) => {
+    const out = event.outputBuffer.getChannelData(0);
+    if (closed) {
+      out.fill(0);
+      return;
+    }
+    if (!playing && queuedSamples >= prebufferSamples) playing = true;
+    for (let i = 0; i < out.length; i += 1) {
+      const sample = playing ? popSample() : null;
+      if (sample == null) {
+        if (playing) underruns += 1;
+        playing = false;
+        const step = 1 / 96;
+        smoothGain = Math.max(0, smoothGain - step);
+        out[i] = 0;
+      } else {
+        const step = 1 / 128;
+        smoothGain = Math.min(1, smoothGain + step);
+        out[i] = sample * smoothGain;
+      }
+    }
+  };
+  driver.connect(processor);
+  processor.connect(mutedGain);
+  mutedGain.connect(ctx.destination);
+  try { driver.start(0); } catch {}
+
+  const trimQueue = () => {
+    while (queuedSamples > maxQueueSamples && queue.length > 1) {
+      const chunk = queue.shift();
+      queuedSamples = Math.max(0, queuedSamples - (chunk?.length || 0));
+      current = null;
+      currentOffset = 0;
+    }
+  };
+
   return {
     ctx,
     enqueue(int16) {
       if (!int16 || !int16.length) return;
-      const float = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) float[i] = int16[i] < 0 ? int16[i] / 0x8000 : int16[i] / 0x7fff;
-      const buffer = ctx.createBuffer(1, float.length, MOBILE_XAI_REALTIME_SAMPLE_RATE);
-      buffer.copyToChannel(float, 0);
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      src.connect(ctx.destination);
-      const startAt = Math.max(ctx.currentTime, nextStartTime);
-      src.start(startAt);
-      nextStartTime = startAt + buffer.duration;
-      sources.add(src);
-      src.onended = () => sources.delete(src);
+      const float = _resampleInt16ToFloat32(int16, sourceRate, outputRate);
+      if (!float.length) return;
+      queue.push(float);
+      queuedSamples += float.length;
+      trimQueue();
+      try { if (ctx.state === 'suspended') ctx.resume?.(); } catch {}
     },
     interrupt() {
-      for (const src of sources) { try { src.stop(); } catch {} }
-      sources.clear();
-      nextStartTime = 0;
+      queue.length = 0;
+      queuedSamples = 0;
+      current = null;
+      currentOffset = 0;
+      playing = false;
+      smoothGain = 0;
     },
-    close() { this.interrupt(); try { ctx.close?.(); } catch {} },
+    async resume() { try { await ctx.resume?.(); } catch {} },
+    close() {
+      closed = true;
+      this.interrupt();
+      try { driver.stop(0); } catch {}
+      try { driver.disconnect(); } catch {}
+      try { processor.disconnect(); } catch {}
+      try { mutedGain.disconnect(); } catch {}
+      try { ctx.close?.(); } catch {}
+    },
+    stats() {
+      return { queuedSamples, outputRate, sourceRate, underruns };
+    },
   };
 }
 
@@ -8672,7 +10115,10 @@ async function _ensureMobileXaiRealtimeMic() {
 }
 
 async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {}) {
-  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  let sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (sid === MOBILE_CHAT_SESSION_ID) {
+    sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'openai_realtime_ws_bootstrap' });
+  }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
   const bootstrap = options.bootstrap || {};
   const clientSecret = String(bootstrap.clientSecret || '').trim();
@@ -8788,7 +10234,8 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
   }
   if (!ws) throw new Error(lastWsError || 'OpenAI realtime WebSocket failed.');
   openAiCapture.ws = ws;
-  const playback = _createMobileXaiPlayback();
+  const playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+  await playback.resume?.();
 
   ws.addEventListener('close', (ev) => {
     _voiceDebug('openai-realtime-ws-closed', { code: ev.code, reason: ev.reason, protocol: ws.protocol, model });
@@ -8826,9 +10273,7 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
     _handleMobileRealtimeAgentEvent(event, sid).catch(() => {});
   });
 
-  const turnDetection = listenMode === 'always_listening'
-    ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: !__pmRealtimeAgent.quiet.active }
-    : null;
+  const turnDetection = _mobileRealtimeTurnDetectionForListenMode(listenMode);
   try {
     ws.send(JSON.stringify({
       type: 'session.update',
@@ -8844,7 +10289,10 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
             transcription: { model: 'gpt-4o-transcribe' },
             turn_detection: turnDetection,
           },
-          output: { voice: bootstrap.voice || 'marin' },
+          output: {
+            voice: __pmVoice?.settings?.realtimeVoice || bootstrap.voice || 'marin',
+            speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
+          },
         },
       },
     }));
@@ -8869,10 +10317,19 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
 }
 
 async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
-  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
-  if (__pmRealtimeAgent.conn?.dc?.readyState === 'open' && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid) return __pmRealtimeAgent.conn;
-  if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
+  let sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (sid === MOBILE_CHAT_SESSION_ID) {
+    sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'xai_realtime_agent_bootstrap' });
+  }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  if (__pmRealtimeAgent.conn?.dc?.readyState === 'open' && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid) {
+    __pmRealtimeAgent.conn.listenMode = listenMode;
+    __pmRealtimeAgent.listenMode = listenMode;
+    _sendMobileRealtimeAgentSessionUpdateFromSettings('xai_realtime_agent_reuse');
+    if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
+    return __pmRealtimeAgent.conn;
+  }
+  if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
   __pmRealtimeAgent.listenMode = listenMode;
 
   __pmRealtimeAgent.connecting = (async () => {
@@ -8887,7 +10344,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     const micTrack = micStream.getAudioTracks()[0];
     micTrack.enabled = true;
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    const captureCtx = new AudioCtx({ sampleRate: 16000 });
+    const captureCtx = new AudioCtx();
     const source = captureCtx.createMediaStreamSource(micStream);
     const processor = captureCtx.createScriptProcessor(2048, 1, 1);
     const mutedGain = captureCtx.createGain();
@@ -8897,7 +10354,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       appends: 0,
       nonSilent: 0,
       peakMax: 0,
-      sampleRate: Math.round(captureCtx.sampleRate || 16000),
+      sampleRate: MOBILE_XAI_REALTIME_INPUT_SAMPLE_RATE,
       pending: [],
       ws: null,
       ready: false,
@@ -8921,7 +10378,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       }
       if (peak > xaiCapture.peakMax) xaiCapture.peakMax = peak;
       if (peak > 0.003) xaiCapture.nonSilent += 1;
-      const rate = xaiCapture.sampleRate || 16000;
+      const rate = xaiCapture.sampleRate || MOBILE_XAI_REALTIME_INPUT_SAMPLE_RATE;
       const pcm = _mobileXaiRealtimeDownsampleFloat32(input, captureCtx.sampleRate || rate, rate);
       if (pcm.length > 0) {
         const audio = _mobileInt16ToBase64(pcm);
@@ -8948,6 +10405,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
         voice: _mobileXaiVoice(__pmVoice?.settings?.serverVoice || __pmVoice?.settings?.realtimeVoice),
         speed: Number(__pmVoice?.settings?.xaiSpeed || 1.0),
         voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true } : undefined,
+        deviceTime: _mobileVoiceDeviceTimeContext(),
         ...(workerContextPacket ? { contextPacket: workerContextPacket } : {}),
       }),
     });
@@ -8958,7 +10416,8 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     const ws = new WebSocket(bootstrap.wsUrl, [`xai-client-secret.${bootstrap.clientSecret}`]);
     ws.binaryType = 'arraybuffer';
     xaiCapture.ws = ws;
-    const playback = _createMobileXaiPlayback();
+    const playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+    await playback.resume?.();
 
     ws.addEventListener('close', (ev) => {
       _voiceDebug('xai-realtime-socket-closed', { code: ev.code, reason: ev.reason, protocol: ws.protocol });
@@ -9002,9 +10461,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       _handleMobileRealtimeAgentEvent(event, sid).catch(() => {});
     });
 
-    const turnDetection = listenMode === 'always_listening'
-      ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: !__pmRealtimeAgent.quiet.active }
-      : null;
+    const turnDetection = _mobileRealtimeTurnDetectionForListenMode(listenMode);
     try {
       ws.send(JSON.stringify({
         type: 'session.update',
@@ -9012,10 +10469,9 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
           modalities: ['audio', 'text'],
           instructions: bootstrap.instructions,
           voice: bootstrap.voice,
-          audio: {
-            input: { format: { type: 'audio/pcm', rate: xaiCapture.sampleRate || 16000 } },
-            output: { format: { type: 'audio/pcm', rate: MOBILE_XAI_REALTIME_SAMPLE_RATE } },
-          },
+          speed: Number(__pmVoice?.settings?.xaiSpeed || bootstrap.speed || 1.0),
+          input_audio_format: 'pcm16',
+          output_audio_format: 'pcm16',
           input_audio_transcription: { model: 'grok-stt' },
           turn_detection: turnDetection,
         },
@@ -9246,11 +10702,24 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   }
   if (type === 'response.done' || type === 'response.audio.done' || type === 'response.output_audio.done' || type === 'response.cancelled') {
     __pmRealtimeAgent.activeResponse = false;
+    __pmVoice.realtimeSpeechActiveResponse = false;
     __pmRealtimeAgent.quiet.suppressResponse = false;
     if (__pmRealtimeAgent.turn.finalSummaryPending) {
       __pmRealtimeAgent.turn.finalSummaryPending = false;
       __pmRealtimeAgent.turn.suppressAssistantTranscript = false;
+      __pmRealtimeAgent.turn.finalSummaryContentKey = '';
       _markVoiceSpeakingEnd();
+    }
+    const queuedFinalSummary = String(__pmRealtimeAgent.turn.queuedFinalSummary || '').trim();
+    if (queuedFinalSummary && !__pmRealtimeAgent.quiet.active) {
+      __pmRealtimeAgent.turn.queuedFinalSummary = '';
+      setTimeout(() => {
+        if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) {
+          _requestMobileRealtimeAgentFinalSummary(queuedFinalSummary);
+        } else {
+          __pmRealtimeAgent.turn.queuedFinalSummary = queuedFinalSummary;
+        }
+      }, 80);
     }
     __pmRealtimeAgent.narrationPending = false;
     __pmRealtimeAgent.lastResponseEndedAt = Date.now();
@@ -9266,8 +10735,15 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     // Flush any staged photo into the conversation the moment the user starts
     // speaking (server-VAD/always-listening), BEFORE the model's auto-response, so
     // the image is attached to this spoken turn.
-    if (type === 'input_audio_buffer.speech_started' && __pmRealtimeAgent.pendingImages.length) {
-      _flushMobileRealtimeAgentPendingImages('speech_started').catch(() => {});
+    if (type === 'input_audio_buffer.speech_started') {
+      const autoCapture = typeof __pmRealtimeAgent.autoCaptureCameraFrames === 'function'
+        ? __pmRealtimeAgent.autoCaptureCameraFrames('speech_started', { count: 2, cooldownMs: 1000 })
+        : null;
+      const flushImages = () => {
+        if (__pmRealtimeAgent.pendingImages.length) _flushMobileRealtimeAgentPendingImages('speech_started').catch(() => {});
+      };
+      if (autoCapture?.finally) autoCapture.finally(flushImages);
+      else flushImages();
     }
     _voiceDebug('realtime-agent-audio-buffer-event', { type, itemId: event?.item_id || '', previousItemId: event?.previous_item_id || '' });
     return;
@@ -9358,6 +10834,7 @@ async function _abortMobileActiveWorkerFromRealtime(sessionId, source = 'realtim
   if (!sid) return false;
   let requested = false;
   const run = __pmChat.activeRuns?.[sid] || __pmChat.activeRuns?.[__pmChat.activeSessionId];
+  const runtimeId = String(run?.runtimeId || _readMobileActiveRun(sid)?.runtimeId || '').trim();
   try {
     if (run?.abort && typeof run.abort.abort === 'function') {
       run.abort.abort();
@@ -9365,7 +10842,7 @@ async function _abortMobileActiveWorkerFromRealtime(sessionId, source = 'realtim
     }
   } catch {}
   try {
-    const result = await stopMobileMainChat(sid, source);
+    const result = await stopMobileMainChat(sid, { runtimeId, source });
     requested = requested || result?.success === true;
   } catch (err) {
     _voiceDebug('realtime-agent-abort-failed', { sessionId: sid, message: err?.message || String(err) });
@@ -9743,10 +11220,10 @@ async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
 // Stage a captured photo: show it in the chat bubble AND inject it into the
 // realtime conversation now (no response). The user's next spoken/typed turn is
 // what triggers the model's response — so the image is "attached" to what they say.
-function _stageMobileRealtimeAgentImage(attachment, sessionId) {
+function _stageMobileRealtimeAgentImage(attachment, sessionId, options = {}) {
   const dataUrl = String(attachment?.dataUrl || '').trim();
   if (!dataUrl) return false;
-  const sid = String(sessionId || __pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  const sid = String(sessionId || __pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   const img = {
     dataUrl,
     name: String(attachment?.name || 'Camera snapshot').trim(),
@@ -9778,7 +11255,9 @@ function _stageMobileRealtimeAgentImage(attachment, sessionId) {
     _renderRecent();
     _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_image_staged', force: true });
   } catch {}
-  try { pmToast('Photo ready — say what you want to know about it.', 'success'); } catch {}
+  if (options.toast !== false) {
+    try { pmToast('Photo ready - say what you want to know about it.', 'success'); } catch {}
+  }
   _voiceDebug('realtime-agent-image-staged', { count: __pmRealtimeAgent.pendingImages.length });
   return true;
 }
@@ -10060,6 +11539,9 @@ async function _sendMobileRealtimeAgentVideoFrames(payload = {}, options = {}) {
 
 // PTT and always-listening hooks for the mobile mic UI
 function _mobileRealtimeAgentPttPress(sessionId) {
+  if (typeof __pmRealtimeAgent.autoCaptureCameraFrames === 'function') {
+    __pmRealtimeAgent.autoCaptureCameraFrames('ptt_press', { count: 1, cooldownMs: 650 }).catch(() => {});
+  }
   if (!__pmRealtimeAgent.conn) {
     _startMobileRealtimeAgentSession(sessionId, { listenMode: 'push_to_talk' })
       .then(() => _setMobileRealtimeAgentMicEnabled(true))
@@ -10104,13 +11586,20 @@ function _mobileRealtimeAgentPttRelease() {
     return;
   }
   _setMobileRealtimeAgentMicEnabled(false);
-  // Flush any staged photo into the conversation BEFORE committing the audio +
-  // creating the response, so the image is attached to this spoken turn.
-  if (__pmRealtimeAgent.pendingImages.length) {
-    _flushMobileRealtimeAgentPendingImages('ptt_release').finally(() => commitAndRespond());
-  } else {
-    commitAndRespond();
-  }
+  const autoCapture = typeof __pmRealtimeAgent.autoCaptureCameraFrames === 'function'
+    ? __pmRealtimeAgent.autoCaptureCameraFrames('ptt_release', { count: 1, cooldownMs: 450 })
+    : null;
+  const flushThenCommit = () => {
+    // Flush any staged photo into the conversation BEFORE committing the audio +
+    // creating the response, so the image is attached to this spoken turn.
+    if (__pmRealtimeAgent.pendingImages.length) {
+      _flushMobileRealtimeAgentPendingImages('ptt_release').finally(() => commitAndRespond());
+    } else {
+      commitAndRespond();
+    }
+  };
+  if (autoCapture?.finally) autoCapture.finally(flushThenCommit);
+  else flushThenCommit();
 }
 
 async function _mobileRealtimeAgentEnableAlwaysListening(sessionId) {
@@ -10590,7 +12079,8 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
     return false;
   }
 
-  stopMobileMainChat(sid).catch((err) => {
+  const runtimeId = String(result.runtimeId || result.activeRun?.id || __pmChat.activeRuns?.[sid]?.runtimeId || _readMobileActiveRun(sid)?.runtimeId || '').trim();
+  stopMobileMainChat(sid, { runtimeId, source: 'mobile_voice_interruption' }).catch((err) => {
     if (latestAi) {
       _appendMobileProcess(latestAi, 'error', `Backend abort request failed: ${err?.message || err}`, eventExtra);
     }
@@ -10659,6 +12149,7 @@ async function _trySubmitVoiceAsLiveSteer(sessionId, transcript = '') {
       realtimeAgent: _isMobileRealtimeAgentMode(),
       clientRequestId: String(activeVoice?.activeRequestId || ''),
       voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice.settings?.wakeGateActive === true } : undefined,
+      deviceTime: _mobileVoiceDeviceTimeContext(),
       ...(contextPacket ? { contextPacket } : {}),
     };
     let result = null;
@@ -10730,6 +12221,7 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
       voiceMode: String(__pmVoice.settings?.voiceMode || 'default'),
       realtimeAgent: _isMobileRealtimeAgentMode(),
       voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice.settings?.wakeGateActive === true } : undefined,
+      deviceTime: _mobileVoiceDeviceTimeContext(),
       ...(contextPacket ? { contextPacket } : {}),
     };
     // Try SSE streaming first: pipe each sentence into TTS as the model generates it.
@@ -10753,6 +12245,44 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
       });
     }
     if (!result?.success && !result?.ok) return { shouldContinueToWorker: true, result: null };
+    // The server may have rotated a voice-first new chat off the throwaway
+    // 'mobile_default' draft slot to a real mobile_<id> session so it lists in
+    // the drawer. Adopt that id locally so the open conversation, drawer entry,
+    // and downstream worker dispatch all point at the same durable session.
+    let workSid = sid;
+    const resolvedSid = String(result?.resolvedSessionId || '').trim();
+    if (resolvedSid && resolvedSid !== sid) {
+      try {
+        if (Array.isArray(__pmChat.threads?.[sid]) && !Array.isArray(__pmChat.threads?.[resolvedSid])) {
+          __pmChat.threads[resolvedSid] = __pmChat.threads[sid];
+        }
+        if (Array.isArray(__pmChat.attachments?.[sid]) && !Array.isArray(__pmChat.attachments?.[resolvedSid])) {
+          __pmChat.attachments[resolvedSid] = __pmChat.attachments[sid];
+        }
+        if (sid === MOBILE_CHAT_SESSION_ID) {
+          __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
+          __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
+        }
+        if (String(__pmChat.activeSessionId || '').trim() === sid) {
+          __pmChat.activeSessionId = resolvedSid;
+          __pmChat.thread = __pmChat.threads[resolvedSid];
+        }
+        if (String(__pmVoice.targetSessionId || '').trim() === sid || !__pmVoice.targetSessionId) {
+          __pmVoice.targetSessionId = resolvedSid;
+          __pmVoice.targetSessionLabel = 'Mobile - Chat';
+          __pmVoice.targetSessionChannel = 'mobile';
+          __pmVoice.targetSessionForced = true;
+          _paintVoiceTarget?.();
+        }
+        invalidateMobileDrawerSessions('mobile');
+        refreshMobileDrawerSessions({ force: true, channel: 'mobile' }).catch(() => {});
+        _notifyMobileChatVoiceUpdate?.(resolvedSid, { reason: 'voice_session_rotated', force: true });
+        workSid = resolvedSid;
+        _voiceDebug('voice-agent-session-rotated', { from: sid, to: resolvedSid });
+      } catch (rotateErr) {
+        _voiceDebug('voice-agent-session-rotate-failed', { from: sid, to: resolvedSid, message: rotateErr?.message || String(rotateErr) });
+      }
+    }
     const alreadySpoken = !!result?.streamedSpeech && !!streamingDispatcher;
     _applyVoiceRuntimeDirectives(result, { deferAfterReply: true });
     _voiceDebug('voice-agent-endpoint', {
@@ -10765,8 +12295,8 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
     const voiceProcessEntries = _voiceAgentProcessEntriesFromResult(sid, result);
     if (result?.action === 'handoff_new_work') {
       if (reply) {
-        if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
-        const thread = __pmChat.threads[sid];
+        if (!__pmChat.threads[workSid]) __pmChat.threads[workSid] = [];
+        const thread = __pmChat.threads[workSid];
         const eventId = String(result?.eventId || result?.steerEventId || '').trim();
         const alreadyHasAck = thread.some((turn) => (
           turn?.role === 'ai'
@@ -10784,12 +12314,12 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
             processEntries: voiceProcessEntries,
             voiceInterruptionEventId: eventId || undefined,
           });
-          _persistMobileThreadSnapshot(sid);
+          _persistMobileThreadSnapshot(workSid);
           _renderRecent();
         }
       }
       if (reply && !alreadySpoken) {
-        _voiceDebug('ack-tts-started', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: true });
+        _voiceDebug('ack-tts-started', { sessionId: workSid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: true });
         _ttsSpeak(reply)
           .then(() => _voiceDebug('ack-tts-dispatched', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: true }))
           .catch((err) => _voiceDebug('ack-tts-error', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, message: err?.message || String(err) }))
@@ -12128,7 +13658,7 @@ void main() {
     if (mode !== 'openai_realtime') _closeRealtimeSpeechConnection();
     _recomputeVoiceProvider();
     _paintProviderBanner();
-    if (wasListening) {
+    if (wasListening && !__pmRealtimeAgent.conn) {
       _stopListening(true);
       if (_isAlwaysListeningMode()) setTimeout(() => _startAlwaysListening(), 250);
     }
@@ -12144,7 +13674,13 @@ void main() {
     } else {
       pressArm = false;
       mic.classList.remove('pressed');
-      if (__pmVoice.listening) _stopListening(true);
+      if (__pmRealtimeAgent.conn) {
+        __pmVoice.listening = false;
+        mic.classList.remove('recording');
+        _setMobileRealtimeAgentMicEnabled(false);
+      } else if (__pmVoice.listening) {
+        _stopListening(true);
+      }
       _setReadyVoiceState();
       pmToast('Push to Speak enabled. Wake phrase cleared.', 'info');
     }
@@ -12161,17 +13697,17 @@ void main() {
   });
   page.querySelector('#pm-voice-realtime-agent')?.addEventListener('change', (ev) => {
     const enabled = ev?.target?.checked !== false;
-    if (__pmVoice.listening) _stopListening(true);
-    _stopMobileRealtimeAgentSession();
     _saveVoiceSettings({ voiceAgentRealtimeAgent: enabled });
+    if (__pmVoice.listening && !__pmRealtimeAgent.conn) _stopListening(true);
+    if (!enabled) _stopMobileRealtimeAgentSession();
     pmToast(enabled ? 'Realtime end-to-end agent enabled' : 'Realtime agent disabled', 'info');
     _paintProviderBanner();
   });
   page.querySelector('#pm-voice-xai-realtime')?.addEventListener('change', (ev) => {
     const enabled = ev?.target?.checked === true;
-    if (__pmVoice.listening) _stopListening(true);
-    _stopMobileRealtimeAgentSession();
     _saveVoiceSettings({ voiceAgentXaiRealtime: enabled });
+    if (__pmVoice.listening && !__pmRealtimeAgent.conn) _stopListening(true);
+    if (!enabled) _stopMobileRealtimeAgentSession();
     pmToast(enabled ? 'xAI Realtime enabled' : 'xAI Realtime disabled', 'info');
     _paintProviderBanner();
   });
@@ -12192,7 +13728,7 @@ void main() {
     if (previousOutput === 'openai_realtime' || ttsProvider === 'openai_realtime') _closeRealtimeSpeechConnection();
     _recomputeVoiceProvider();
     _paintProviderBanner();
-    if (wasListening) {
+    if (wasListening && !__pmRealtimeAgent.conn) {
       _stopListening(true);
       if (_isAlwaysListeningMode()) setTimeout(() => _startAlwaysListening(), 250);
     }
@@ -12416,66 +13952,16 @@ void main() {
   }
   _refreshRepeatBtn();
   if (cameraBtn) cameraBtn.onclick = async () => {
-    // Live camera -> realtime voice agent. Tap = photo, hold = video (≤12s,
-    // sampled ~1 frame/sec). The capture is STAGED (shown in the chat bubble) and
-    // attached to the user's next spoken turn — take a pic, then say "look at this".
-    // Guard on voice MODE (not an open data channel) so a brief reconnect doesn't
-    // wrongly block capture; staged images flush once the session is ready.
-    const sid = String(__pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
-    const hasSession = !!(__pmRealtimeAgent.conn || __pmRealtimeAgent.connecting);
-    if (!hasSession && !_isMobileRealtimeAgentMode()) {
-      pmToast('Start realtime voice first, then take a photo or video.', 'info');
+    const openAttachmentSheet = ctx?.openAttachmentSheet;
+    if (typeof openAttachmentSheet !== 'function') {
+      pmToast('Attachments are only available from the chat voice view.', 'info');
       return;
     }
-    const openCamera = ctx?.openCameraCapture;
-    if (typeof openCamera !== 'function') {
-      pmToast('Camera is only available from the chat voice view.', 'info');
+    if (!(__pmRealtimeAgent.conn || __pmRealtimeAgent.connecting) && !_isMobileRealtimeAgentMode()) {
+      pmToast('Start realtime voice first, then attach a photo.', 'info');
       return;
     }
-    try {
-      await openCamera({
-        target: 'voice',
-        onCapture: async (normalized, extra) => {
-          const dataUrl = extra?.dataUrl || normalized?.dataUrl || '';
-          _stageMobileRealtimeAgentImage({
-            dataUrl,
-            name: extra?.file?.name || normalized?.name || 'Camera snapshot',
-            mimeType: normalized?.mimeType || extra?.file?.type || 'image/jpeg',
-            base64: normalized?.base64,
-          }, sid);
-          // xAI voice: summarize via Grok now (no-op for OpenAI, which got the image directly).
-          _kickoffMobileXaiVisionSummary([dataUrl], { name: 'camera photo' }).catch(() => {});
-        },
-        onVideoCapture: async (payload) => {
-          const frames = Array.isArray(payload?.frames) ? payload.frames : [];
-          if (!frames.length) { pmToast('Could not sample video frames.', 'error'); return; }
-          // Show the first frame in the bubble; queue every frame for the model.
-          _stageMobileRealtimeAgentImage({
-            dataUrl: frames[0].dataUrl,
-            name: `Video clip (${frames.length} frame${frames.length === 1 ? '' : 's'})`,
-            mimeType: frames[0].mimeType || 'image/jpeg',
-          }, sid);
-          for (let i = 1; i < frames.length; i++) {
-            if (!String(frames[i]?.dataUrl || '').trim()) continue;
-            const frameImg = {
-              dataUrl: frames[i].dataUrl,
-              name: frames[i].name || `video-frame-${i + 1}.jpg`,
-              mimeType: frames[i].mimeType || 'image/jpeg',
-              base64: '',
-              realtimeInjected: false,
-            };
-            __pmRealtimeAgent.pendingImages.push(frameImg);
-            // Inject each frame now (audio idle) as sequential visual context.
-            _injectRealtimeImageItemToConversation(frameImg, `Video frame ${i + 1} of ${frames.length} from the mobile camera clip — sequential visual context for what I say next.`).catch(() => {});
-          }
-          // xAI voice: run the whole clip through Grok vision as one summary.
-          _kickoffMobileXaiVisionSummary(frames.map((f) => f.dataUrl), { name: 'camera video clip', durationMs: Number(payload?.durationMs || 0) || 0 }).catch(() => {});
-        },
-      });
-    } catch (err) {
-      _voiceDebug('realtime-agent-camera-open-failed', { message: err?.message || String(err) });
-      pmToast(err?.message || 'Could not open camera.', 'error');
-    }
+    openAttachmentSheet();
   };
   repeatBtn.addEventListener('click', () => __pmVoice.lastAi && _ttsSpeak(__pmVoice.lastAi));
 
@@ -13380,43 +14866,17 @@ void main() {
       __pmVoice.activeVoiceRuntime = null;
       activeVoiceRuntime = null;
     }
-    _prewarmMobileVoiceWorkerContext({ sessionId: voiceNewChatDraft ? MOBILE_CHAT_SESSION_ID : (__pmVoice.targetSessionId || __pmChat.activeSessionId), source: 'mobile_submit_speech_start', originalUserPrompt: finalText });
     let targetSessionId = voiceNewChatDraft
       ? MOBILE_CHAT_SESSION_ID
       : activeVoiceRuntime?.isStreamActive === true && activeVoiceRuntime?.sessionId
       ? String(activeVoiceRuntime.sessionId).trim()
       : await _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced });
     if (targetSessionId === MOBILE_CHAT_SESSION_ID) {
-      const actualSessionId = createMobileChatSessionId();
       const voiceTitle = String(finalText || 'New Chat').replace(/\s+/g, ' ').trim().slice(0, 72) || 'New Chat';
-      __pmChat.threads[actualSessionId] = Array.isArray(__pmChat.threads[MOBILE_CHAT_SESSION_ID])
-        ? __pmChat.threads[MOBILE_CHAT_SESSION_ID]
-        : [];
-      __pmChat.attachments[actualSessionId] = Array.isArray(__pmChat.attachments[MOBILE_CHAT_SESSION_ID])
-        ? __pmChat.attachments[MOBILE_CHAT_SESSION_ID]
-        : [];
-      __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
-      __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
-      __pmChat.activeSessionId = actualSessionId;
-      __pmChat.thread = __pmChat.threads[actualSessionId];
-      __pmVoice.targetSessionId = actualSessionId;
-      __pmVoice.targetSessionLabel = 'Mobile - Chat';
-      __pmVoice.targetSessionChannel = 'mobile';
-      __pmVoice.targetSessionForced = true;
-      targetSessionId = actualSessionId;
-      try {
-        await createMobileChatSession(actualSessionId, { title: voiceTitle });
-      } catch (err) {
-        const msg = String(err?.message || err || '');
-        if (!/409|already exists|exists/i.test(msg)) {
-          console.warn('[mobile voice] failed to create voice-first mobile session:', err);
-        }
-      }
-      invalidateMobileDrawerSessions('mobile');
+      targetSessionId = await _ensureDurableMobileVoiceSession({ title: voiceTitle, source: 'mobile_voice_session_created' });
       _paintVoiceTarget?.();
-      _prewarmMobileVoiceWorkerContext({ sessionId: targetSessionId, source: 'mobile_voice_session_created', originalUserPrompt: finalText, force: true });
-      _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_session_created', force: true });
     }
+    _prewarmMobileVoiceWorkerContext({ sessionId: targetSessionId, source: 'mobile_submit_speech_start', originalUserPrompt: finalText, force: true });
     const hadPendingInterruption = !!__pmVoice.pendingInterruptContext;
     if (hadPendingInterruption) {
       __pmVoice.pendingInterruptContext = null;
@@ -13635,6 +15095,8 @@ void main() {
       __pmChat.busy = Object.values(__pmChat.activeRuns || {}).some((run) => run?.busy);
       _clearMobileActiveRun(targetSessionId);
       _markMobileSessionRunning(targetSessionId, false);
+      invalidateMobileDrawerSessions('mobile');
+      refreshMobileDrawerSessions({ force: true, channel: 'mobile' }).catch(() => {});
     };
     const stream = streamChat({ message: finalText, sessionId: targetSessionId, callerContext }, {
       onInfo: (m) => {
@@ -13762,7 +15224,8 @@ void main() {
           }
           return;
         }
-        const model = evt.model || evt.modelRef || evt.providerId || 'model';
+        const detail = notifyMobileModelChanged(evt, { sessionId: targetSessionId });
+        const model = detail?.modelRef || detail?.model || evt.model || evt.modelRef || evt.providerId || 'model';
         _appendMobileProcess(chatAiTurn, 'info', `Model: ${model}`, evt);
       },
       onFinal: (text, evt = {}) => {
@@ -13849,11 +15312,16 @@ void main() {
         }
       },
     });
+    let voiceStopSent = false;
     voiceAbortHandle = { abort: () => {
-      _appendMobileProcess(chatAiTurn, 'warn', 'Stop requested. Asking the gateway to abort the live runtime.');
+      if (voiceStopSent) return;
+      voiceStopSent = true;
+      const run = __pmChat.activeRuns?.[targetSessionId] || {};
+      const runtimeId = String(run.runtimeId || chatAiTurn.runtimeId || _readMobileActiveRun(targetSessionId)?.runtimeId || '').trim();
+      _appendMobileProcess(chatAiTurn, 'warn', 'Stop requested. Aborting the live runtime now.', runtimeId ? { runtimeId } : undefined);
       stopVoiceAgentNarration();
       clearVoiceActiveRun();
-      stopMobileMainChat(targetSessionId).catch((err) => {
+      stopMobileMainChat(targetSessionId, { runtimeId, source: 'mobile_voice_stop' }).catch((err) => {
         _appendMobileProcess(chatAiTurn, 'error', `Backend abort request failed: ${err?.message || err}`);
       });
       stream.abort();
@@ -13864,6 +15332,7 @@ void main() {
       busy: true,
       abort: voiceAbortHandle,
       source: 'voice',
+      runtimeId: __pmChat.activeRuns[targetSessionId]?.runtimeId || '',
     };
     __pmChat.busy = true;
     _rememberMobileActiveRun(targetSessionId);
@@ -13886,7 +15355,11 @@ void main() {
     // + TTS in a single session. No transcript posting, no gateway voice agent
     // decision call. Bypasses the entire split flow when active.
     if (_isMobileRealtimeAgentMode()) {
-      const sid = __pmVoice.targetSessionId || __pmChat.activeSessionId || 'mobile_default';
+      let sid = String(__pmVoice.targetSessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+      if (sid === MOBILE_CHAT_SESSION_ID) {
+        sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'realtime_voice_session_created' });
+        _paintVoiceTarget?.();
+      }
       const listenMode = _isAlwaysListeningMode() ? 'always_listening' : 'push_to_talk';
       const wakePhrase = _cleanMobileWakePhrase(__pmVoice?.settings?.wakePhrase || '');
       const quietActive = listenMode === 'always_listening' && __pmVoice?.settings?.wakeGateActive === true && !!wakePhrase;
@@ -15113,9 +16586,10 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     inner += _renderMobileWorkTimer(assistantLike);
     inner += `<span class="pm-sender">${escapeHtml(sender)}</span>`;
     inner += progress;
+    const hasPendingImageGeneration = _mobileHasPendingImageGeneration(message) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
     inner += text
       ? `<div class="markdown-body">${_renderMobileMarkdown(text)}</div>`
-      : (streaming ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
+      : (streaming && !hasPendingImageGeneration ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
     inner += attachmentHtml;
     inner += _renderMobileMediaGallery(_collectMessageMedia({
       ...message,
@@ -15127,6 +16601,9 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       inner += `<div class="pm-chat-approvals-inline">${_renderMobileApprovalCard(message.approvalRequest, { compact: false })}</div>`;
     }
     inner += _renderMobileStreamProcess(message);
+    if (hasPendingImageGeneration) {
+      inner += _renderMobileGeneratedImageLoadingCard();
+    }
   }
   return `
     <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'}" style="max-width:92%;margin-bottom:10px;"${streaming && !fromUser ? ' data-streaming="1"' : ''}>
@@ -15137,10 +16614,13 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     </div>`;
 }
 
+const _mobileAgentComposerDrafts = {};
+
 function _renderMobileAgentComposerHtml(prefix, placeholder) {
   const id = String(prefix || 'pm-agent-chat');
   return `
     <form class="pm-composer pm-agent-chat-composer" id="${id}-form" style="position:relative;left:auto;right:auto;bottom:auto;margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;box-shadow:none;">
+      <span class="pm-glass-lens" aria-hidden="true"></span>
       <input id="${id}-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-attach-tray" id="${id}-attach-tray" hidden></div>
       <div class="pm-composer-row">
@@ -15151,7 +16631,7 @@ function _renderMobileAgentComposerHtml(prefix, placeholder) {
     </form>`;
 }
 
-function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubmit, onAbort }) {
+function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubmit, onAbort, draftKey = '' }) {
   const id = String(prefix || 'pm-agent-chat');
   const form = slot.querySelector(`#${id}-form`);
   const input = slot.querySelector(`#${id}-input`);
@@ -15159,7 +16639,15 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
   const attachBtn = slot.querySelector(`#${id}-attach-btn`);
   const fileInput = slot.querySelector(`#${id}-file-input`);
   const attachTray = slot.querySelector(`#${id}-attach-tray`);
-  const pending = [];
+  const draftId = String(draftKey || '').trim();
+  let draft = null;
+  if (draftId) {
+    if (!_mobileAgentComposerDrafts[draftId]) _mobileAgentComposerDrafts[draftId] = { text: '', pending: [] };
+    draft = _mobileAgentComposerDrafts[draftId];
+    if (!Array.isArray(draft.pending)) draft.pending = [];
+  }
+  const pending = draft ? draft.pending : [];
+  if (input && draft?.text) input.value = draft.text;
 
   const resize = () => {
     if (!input) return;
@@ -15199,6 +16687,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     const files = pending.splice(0, pending.length);
     if (input) {
       input.value = '';
+      if (draft) draft.text = '';
       resize();
     }
     renderAttachments();
@@ -15206,7 +16695,11 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     return { text, files };
   };
 
-  input?.addEventListener('input', () => { resize(); update(); });
+  input?.addEventListener('input', () => {
+    if (draft) draft.text = input.value || '';
+    resize();
+    update();
+  });
   input?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -15245,7 +16738,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     update();
   });
 
-  requestAnimationFrame(() => { resize(); update(); });
+  requestAnimationFrame(() => { renderAttachments(); resize(); update(); });
   return { input, update, consume, pending };
 }
 
@@ -15322,7 +16815,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     case 'tool_progress': {
       const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
       const text = String(evt.message || '').trim();
-      if (!text) return false;
+      try { _collectMediaFromToolEvent(message, evt); } catch {}
+      if (!text) return true;
       message._progress = `${action}: ${text}`.slice(0, 140);
       _pushMobileStreamProcessEntry(message, 'info', `${action}: ${text}`, evt.actor ? { actor: evt.actor } : null);
       return true;
@@ -15395,6 +16889,283 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     default:
       return false;
   }
+}
+
+function _mobileBackgroundSpawnLanes() {
+  if (!__pmChat.backgroundSpawnLanes || typeof __pmChat.backgroundSpawnLanes !== 'object') {
+    __pmChat.backgroundSpawnLanes = {};
+  }
+  return __pmChat.backgroundSpawnLanes;
+}
+
+function _mobileBackgroundSpawnClearedIds() {
+  if (!__pmChat.backgroundSpawnClearedIds || typeof __pmChat.backgroundSpawnClearedIds !== 'object') {
+    __pmChat.backgroundSpawnClearedIds = {};
+  }
+  return __pmChat.backgroundSpawnClearedIds;
+}
+
+function _mobileBackgroundSpawnId(msg = {}) {
+  return String(msg.bgId || msg.backgroundId || msg.serverAgentId || msg.agentId || '').trim();
+}
+
+function _mobileBackgroundSpawnMatchesSession(msg = {}, sessionId = __pmChat.activeSessionId) {
+  const id = _mobileBackgroundSpawnId(msg);
+  if (id && _mobileBackgroundSpawnClearedIds()[id]) return false;
+  const sid = String(msg.sessionId || msg.spawnerSessionId || '').trim();
+  return !sid || sid === String(sessionId || '').trim();
+}
+
+function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {
+  const id = _mobileBackgroundSpawnId(msg);
+  if (!id) return null;
+  const lanes = _mobileBackgroundSpawnLanes();
+  const existing = lanes[id] || {};
+  const lane = {
+    id,
+    sessionId: String(msg.sessionId || existing.sessionId || sessionId || '').trim(),
+    label: String(msg.label || msg.name || existing.label || 'Background Spawn').trim(),
+    task: String(msg.task || msg.prompt || existing.task || '').trim(),
+    status: String(msg.state || existing.status || 'running').trim(),
+    expanded: existing.expanded === true,
+    startedAt: Number(existing.startedAt || Date.now()),
+    updatedAt: Date.now(),
+    message: existing.message || {
+      role: 'ai',
+      from: 'Background Spawn',
+      content: '',
+      body: { sender: 'Background Spawn', text: '' },
+      processEntries: [],
+      streaming: true,
+      createdAt: Date.now(),
+      workStartedAt: Date.now(),
+    },
+    fileChanges: msg.fileChanges || existing.fileChanges || null,
+    plan: existing.plan || null,
+  };
+  lanes[id] = lane;
+  return lane;
+}
+
+function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
+  const eventType = String(msg.eventType || '').trim();
+  if (!eventType) return null;
+  return {
+    ...msg,
+    type: eventType,
+    action: msg.action || msg.name || msg.toolName || '',
+    name: msg.name || msg.action || msg.toolName || '',
+    actor: msg.actor || 'Background Agent',
+  };
+}
+
+function _extractMobileBackgroundPlanSteps(value) {
+  if (Array.isArray(value)) return value.map((step) => String(step || '').trim()).filter(Boolean);
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value.steps)) return _extractMobileBackgroundPlanSteps(value.steps);
+    if (Array.isArray(value.plan)) return _extractMobileBackgroundPlanSteps(value.plan);
+  }
+  return [];
+}
+
+function _updateMobileBackgroundSpawnPlan(lane, msg = {}) {
+  if (!lane) return;
+  const eventType = String(msg.eventType || msg.type || '').trim();
+  const action = String(msg.action || msg.name || msg.toolName || '').trim();
+  if (eventType === 'tool_call' && action === 'bg_plan_declare') {
+    const steps = _extractMobileBackgroundPlanSteps(msg.args || msg.params || msg.input || msg);
+    if (steps.length) {
+      lane.plan = {
+        steps: steps.map((text, index) => ({ text, status: index === 0 ? 'in_progress' : 'pending' })),
+        activeIndex: 0,
+      };
+    }
+    return;
+  }
+  if (eventType !== 'tool_result' || action !== 'bg_plan_advance') return;
+  if (!lane.plan || !Array.isArray(lane.plan.steps) || !lane.plan.steps.length) return;
+  const resultText = String(msg.result || msg.output || '').trim();
+  const match = resultText.match(/Step\s+(\d+)\s*\/\s*(\d+)\s+complete/i);
+  if (!match) return;
+  const completedIndex = Math.max(0, Number(match[1]) - 1);
+  const total = Math.max(lane.plan.steps.length, Number(match[2]) || lane.plan.steps.length);
+  lane.plan.steps.forEach((step, index) => {
+    if (index <= completedIndex) step.status = 'done';
+    else if (index === completedIndex + 1 && index < total) step.status = 'in_progress';
+    else step.status = 'pending';
+  });
+  lane.plan.activeIndex = completedIndex + 1 < lane.plan.steps.length ? completedIndex + 1 : -1;
+}
+
+function _renderMobileBackgroundSpawnPlan(lane) {
+  const steps = Array.isArray(lane?.plan?.steps) ? lane.plan.steps : [];
+  if (!steps.length) return '';
+  const done = steps.filter((step) => step.status === 'done').length;
+  return `
+    <div class="pm-background-spawn-plan">
+      <div class="pm-background-spawn-plan-head">
+        <strong>Progress</strong>
+        <span>${done}/${steps.length}</span>
+      </div>
+      <div class="pm-background-spawn-plan-list">
+        ${steps.map((step, index) => {
+          const status = ['done', 'failed', 'in_progress'].includes(String(step.status || '')) ? String(step.status) : 'pending';
+          const dot = status === 'done' ? '&#10003;' : status === 'failed' ? '&times;' : String(index + 1);
+          return `
+            <div class="pm-background-spawn-plan-step ${escapeHtml(status)}">
+              <span>${dot}</span>
+              <p>${escapeHtml(String(step.text || `Step ${index + 1}`).slice(0, 180))}</p>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSessionId) {
+  if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
+  const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
+  const evt = _normalizeMobileBackgroundSpawnEvent(msg);
+  if (!lane || !evt) return false;
+  lane.status = lane.status === 'completed' || lane.status === 'failed' ? lane.status : 'running';
+  if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
+  _updateMobileBackgroundSpawnPlan(lane, msg);
+  const changed = _applyMobileAgentStreamEvent(lane.message, evt, 'Background Spawn');
+  if (lane.message?.fileChanges) lane.fileChanges = lane.message.fileChanges;
+  lane.updatedAt = Date.now();
+  return changed;
+}
+
+function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {
+  if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
+  const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
+  if (!lane) return false;
+  const failed = msg.state === 'failed' || !!msg.error;
+  lane.status = failed ? 'failed' : 'completed';
+  if (msg.fileChanges) {
+    lane.fileChanges = msg.fileChanges;
+    lane.message.fileChanges = msg.fileChanges;
+  }
+  lane.message.streaming = false;
+  lane.message._done = true;
+  lane.message.workEndedAt = Date.now();
+  lane.message.workDurationMs = Math.max(0, lane.message.workEndedAt - Number(lane.message.workStartedAt || lane.message.createdAt || lane.message.workEndedAt));
+  if (failed) {
+    _appendMobileProcess(lane.message, 'error', `Background Spawn failed${msg.error ? `: ${String(msg.error).slice(0, 260)}` : ''}`, { actor: 'Background Agent', ...msg });
+  } else {
+    const result = String(msg.result || '').trim();
+    _appendMobileProcess(lane.message, 'final', `Background Spawn complete${result ? `: ${result.slice(0, 260)}` : ''}`, { actor: 'Background Agent', ...msg });
+    if (result && !String(lane.message.content || '').trim()) {
+      lane.message.content = result;
+      lane.message.body = { ...(lane.message.body || {}), text: result };
+    }
+  }
+  lane.updatedAt = Date.now();
+  return true;
+}
+
+function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessionId) {
+  const host = dock || document.getElementById('pm-background-spawn-dock');
+  if (!host) return;
+  const activeSession = String(sessionId || '').trim();
+  const lanes = Object.values(_mobileBackgroundSpawnLanes())
+    .filter((lane) => lane && (!lane.sessionId || lane.sessionId === activeSession))
+    .sort((a, b) => Number(a.startedAt || 0) - Number(b.startedAt || 0));
+  host.hidden = lanes.length === 0;
+  if (!lanes.length) {
+    host.innerHTML = '';
+    return;
+  }
+  host.innerHTML = lanes.map((lane) => {
+    const entries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
+    const latest = entries[entries.length - 1];
+    const latestText = String(latest?.text || latest?.content || lane.task || 'Working in parallel...').trim();
+    const status = String(lane.status || 'running').toLowerCase();
+    const processHtml = entries.length
+      ? _renderMobileProcess(entries).replace('<details class="pm-process-stream"', `<details class="pm-process-stream"${lane.expanded ? ' open' : ''}`)
+      : '<div class="pm-background-spawn-empty">Waiting for live events...</div>';
+    const planHtml = _renderMobileBackgroundSpawnPlan(lane);
+    return `
+      <section class="pm-background-spawn-lane ${escapeHtml(status)}${lane.expanded ? ' expanded' : ''}" data-bg-id="${escapeHtml(lane.id)}">
+        <button type="button" class="pm-background-spawn-summary" data-pm-bg-toggle="${escapeHtml(lane.id)}">
+          <span class="pm-background-spawn-avatar">BG</span>
+          <span class="pm-background-spawn-main">
+            <strong>${escapeHtml(lane.label || 'Background Spawn')}</strong>
+            <em>${escapeHtml(latestText)}</em>
+          </span>
+          <span class="pm-background-spawn-status">${escapeHtml(status === 'in_progress' ? 'running' : status)}</span>
+          <span class="pm-background-spawn-chevron">${lane.expanded ? '^' : 'v'}</span>
+        </button>
+        ${lane.task ? `<div class="pm-background-spawn-task">${escapeHtml(lane.task)}</div>` : ''}
+        <div class="pm-background-spawn-panel">${planHtml}${processHtml}</div>
+      </section>
+    `;
+  }).join('');
+  host.querySelectorAll('[data-pm-bg-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const lane = _mobileBackgroundSpawnLanes()[String(btn.getAttribute('data-pm-bg-toggle') || '')];
+      if (!lane) return;
+      lane.expanded = !lane.expanded;
+      _renderMobileBackgroundSpawnDock(host, sessionId);
+      try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+    });
+  });
+}
+
+function _clearMobileBackgroundSpawnDockForSession(sessionId = __pmChat.activeSessionId) {
+  const sid = String(sessionId || '').trim();
+  const lanes = _mobileBackgroundSpawnLanes();
+  const cleared = _mobileBackgroundSpawnClearedIds();
+  Object.keys(lanes).forEach((id) => {
+    const lane = lanes[id];
+    if (!sid || !lane?.sessionId || lane.sessionId === sid) {
+      cleared[id] = true;
+      delete lanes[id];
+    }
+  });
+  _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid);
+  try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+}
+
+function _collectMobileBackgroundFileChangeGroups(sessionId = __pmChat.activeSessionId) {
+  const sid = String(sessionId || '').trim();
+  return Object.values(_mobileBackgroundSpawnLanes())
+    .filter((lane) => lane && (lane.fileChanges || lane.message?.fileChanges) && (!sid || !lane.sessionId || lane.sessionId === sid))
+    .map((lane) => ({
+      id: `bg_${lane.id}`,
+      source: `background:${lane.id}`,
+      label: lane.label && lane.label !== 'Background Spawn' ? `Background Spawn - ${lane.label}` : 'Background Spawn edits',
+      fileChanges: lane.fileChanges || lane.message?.fileChanges,
+    }));
+}
+
+function _mergeMobileFileChangesWithBackground(mainFileChanges, sessionId = __pmChat.activeSessionId) {
+  const existingGroups = Array.isArray(mainFileChanges?.groups) ? mainFileChanges.groups : [];
+  const groups = existingGroups.length ? existingGroups.slice() : [];
+  if (!existingGroups.length && _normalizeMobileFileChanges(mainFileChanges)) {
+    groups.push({ id: 'main', source: 'main', label: 'Main agent edits', fileChanges: mainFileChanges });
+  }
+  const seen = new Set(groups.map((group) => String(group?.source || group?.id || '')));
+  for (const group of _collectMobileBackgroundFileChangeGroups(sessionId)) {
+    const key = String(group.source || group.id || '');
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    groups.push(group);
+  }
+  if (!groups.length) return mainFileChanges || null;
+  if (groups.length === 1 && groups[0]?.source === 'main' && !Array.isArray(mainFileChanges?.groups)) return mainFileChanges;
+  return { groups };
+}
+
+function _mergeMobileLatestAssistantBackgroundFileChanges(sessionId = __pmChat.activeSessionId) {
+  const thread = __pmChat.threads?.[sessionId] || [];
+  const latest = [...thread].reverse().find((turn) => _isMobileAssistantMessage(turn));
+  if (!latest) return false;
+  const merged = _mergeMobileFileChangesWithBackground(latest.fileChanges || null, sessionId);
+  if (!merged || merged === latest.fileChanges) return false;
+  latest.fileChanges = merged;
+  return true;
 }
 
 async function _renderTeamChatTab(slot, teamId) {
@@ -15647,7 +17418,7 @@ async function _renderTeamChatTab(slot, teamId) {
         sizeLabel: files[idx]?.sizeLabel,
       }));
     }
-    const userMsg = { role: 'user', from: 'user', content: messageForRuntime, body: { text: messageForRuntime, attachments: attachmentPreviews }, attachmentPreviews, createdAt: Date.now() };
+    const userMsg = { role: 'user', from: 'user', content: userVisibleText, body: { text: userVisibleText, attachments: attachmentPreviews }, attachmentPreviews, createdAt: Date.now() };
     liveMsg = { role: 'manager', from: 'manager', fromLabel: 'Manager', content: '', _progress: 'Manager is thinking...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
     messages.push(userMsg, liveMsg);
     renderList();
@@ -15688,6 +17459,7 @@ async function _renderTeamChatTab(slot, teamId) {
 
   composer = _installMobileAgentComposer(slot, 'pm-team-chat', {
     placeholder: 'Message the team manager...',
+    draftKey: 'team:manager',
     isBusy,
     onAbort: () => {
       try { currentStream?.abort?.(); } catch {}
@@ -18031,6 +19803,7 @@ export async function renderCreativePage(page, { navigate } = {}) {
       </section>
 
       <div class="pm-creative-composer" id="pm-creative-composer">
+        <span class="pm-glass-lens" aria-hidden="true"></span>
         <div class="pm-creative-composer-row">
           <button class="pm-icon-btn" data-composer="add" aria-label="Attach">${ICONS.plus}</button>
           <input type="text" class="pm-creative-input" id="pm-creative-prompt" placeholder="Type to imagine" autocomplete="off"/>
@@ -19320,7 +21093,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       }));
     }
 
-    const userMsg = { role: 'user', content: messageForRuntime, body: { text: messageForRuntime, attachments: attachmentPreviews }, attachmentPreviews, createdAt: Date.now() };
+    const userMsg = { role: 'user', content: userVisibleText, body: { text: userVisibleText, attachments: attachmentPreviews }, attachmentPreviews, createdAt: Date.now() };
     messages.push(userMsg);
     liveMsg = { role: 'agent', content: '', _progress: `${agent.name} is thinking...`, createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
     messages.push(liveMsg);
@@ -19363,6 +21136,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
 
   composer = _installMobileAgentComposer(slot, 'pm-sa-chat', {
     placeholder: `Message ${agent.name || 'this subagent'}...`,
+    draftKey: `subagent:${agent.id || ''}`,
     isBusy,
     onAbort: () => {
       try { currentStream?.abort?.(); } catch {}

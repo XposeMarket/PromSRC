@@ -10,6 +10,14 @@ type GenerateImageArgs = {
   model?: string;
   output_dir?: string;
   save_to_workspace?: boolean;
+  on_image_persisted?: (image: {
+    path: string;
+    rel_path?: string;
+    cache_path?: string;
+    mime_type: string;
+    file_name: string;
+    bytes: number;
+  }) => void | Promise<void>;
 };
 
 export async function executeGenerateImage(args: GenerateImageArgs): Promise<ToolResult> {
@@ -25,6 +33,7 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
     model: args?.model != null ? String(args.model) : undefined,
     output_dir: args?.output_dir != null ? String(args.output_dir) : undefined,
     save_to_workspace: args?.save_to_workspace,
+    on_image_persisted: args?.on_image_persisted,
   });
 
   if (!result.success) {
@@ -76,7 +85,7 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
 
 export const generateImageTool = {
   name: 'generate_image',
-  description: 'Generate a new raster image from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. Use this for one-shot image generation, including brand kits, posters, thumbnails, concept art, and requests that reference uploaded files.',
+  description: 'Generate one or more raster images from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. For separate options/variations, set count > 1 and ask for separate standalone images, not a collage. Use count=1 only when the user wants one image or explicitly wants a single collage/grid/contact sheet.',
   execute: executeGenerateImage,
   schema: {
     prompt: 'Text prompt describing the image to generate',
@@ -85,14 +94,14 @@ export const generateImageTool = {
     count: 'Optional number of images to generate at once (1-4)',
     provider: 'Optional provider override: auto, openai, openai_codex, or xai. openai may use either an OpenAI API key or saved OpenAI OAuth/Codex auth; use xai for Grok Imagine.',
     model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality',
-    output_dir: 'Optional workspace-relative output directory (default: generated/images)',
+    output_dir: 'Optional workspace-relative parent output directory. Each generation run is saved in a new child folder. Default: generated/images',
     save_to_workspace: 'If false, keep the image only in Prometheus cache',
   },
   jsonSchema: {
     type: 'object',
     required: ['prompt'],
     properties: {
-      prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
+      prompt: { type: 'string', description: 'Text prompt describing the image(s) to generate. For count > 1, say each output must be a separate standalone image and must not be a collage, grid, contact sheet, split-screen, or multi-panel image.' },
       reference_images: {
         type: 'array',
         items: { type: 'string' },
@@ -108,7 +117,7 @@ export const generateImageTool = {
         type: 'integer',
         minimum: 1,
         maximum: 4,
-        description: 'How many images to generate at once',
+        description: 'How many separate image outputs to generate at once. Use values greater than 1 for options, variations, sets, or several standalone images; do not use count > 1 for a single collage/grid image.',
       },
       provider: {
         type: 'string',
@@ -116,7 +125,7 @@ export const generateImageTool = {
         description: 'Image generation provider override. openai may use either direct OpenAI API credentials or saved OpenAI OAuth/Codex auth.',
       },
       model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
-      output_dir: { type: 'string', description: 'Workspace-relative output directory' },
+      output_dir: { type: 'string', description: 'Workspace-relative parent output directory. Each generation run is saved in a new child folder.' },
       save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
     },
     additionalProperties: false,

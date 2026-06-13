@@ -1,35 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks for competitive intelligence, competitor research, market positioning, feature comparison, pricing comparison, SWOT, win/loss themes, or strategy against other companies. It structures source-grounded evidence into actionable positioning and recommendations.",
   "triggers": [
-    "competitive analysis",
+    "competitive intelligence",
     "competitor research",
-    "battle card",
+    "SWOT",
+    "feature comparison",
+    "pricing comparison",
+    "market positioning",
+    "compare products",
+    "competitor strategy",
+    "competitive analysis",
     "win loss",
-    "competitive landscape",
-    "market map",
-    "how do we compare",
-    "competitive positioning",
-    "benchmark",
-    "rival",
-    "competitor pricing",
-    "competitor features",
-    "how does x compare",
-    "compare this repo against prometheus",
-    "oss competitor analysis",
-    "compare ui against prometheus"
+    "rival research",
+    "benchmark competitors",
+    "positioning map",
+    "competitive moat",
+    "category analysis"
   ],
   "categories": [
     "research",
-    "competitive-intelligence",
-    "product",
-    "oss-analysis",
-    "ui-analysis"
+    "business",
+    "strategy"
   ],
   "requiredTools": [
-    "web",
-    "file_ops",
-    "prometheus_source_read"
+    "web_search",
+    "web_fetch"
   ],
+  "lifecycle": "active",
   "id": "competitive-intelligence"
 }

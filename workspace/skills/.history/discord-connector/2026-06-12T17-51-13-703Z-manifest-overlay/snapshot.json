@@ -1,0 +1,12 @@
+{
+  "skillId": "discord-connector",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:13.707Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\discord-connector",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "50a9049839b5b9a0"
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to create brand kits, mockups, ads, graphics, client visuals, or presentation assets that must preserve an exact uploaded or downloaded logo. It requires treating the real logo asset as source of truth instead of relying on generative recreation.",
+  "triggers": [
+    "exact logo",
+    "preserve logo",
+    "brand kit",
+    "client logo",
+    "logo fidelity",
+    "use this logo",
+    "brand mockup",
+    "business card mockup",
+    "social media mockup",
+    "logo asset workflow",
+    "don't change the logo",
+    "exact brand asset",
+    "client brand visuals",
+    "logo placement",
+    "brand kit workflow"
+  ],
+  "categories": [
+    "creative",
+    "branding",
+    "assets"
+  ],
+  "requiredTools": [
+    "media_assets",
+    "creative_mode"
+  ],
+  "lifecycle": "active",
+  "id": "exact-logo-brand-kit-workflow"
+}

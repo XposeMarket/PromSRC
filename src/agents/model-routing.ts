@@ -90,7 +90,7 @@ export function getAgentModelDefaultKeys(
     case 'subagent':
       return [...(roleKey ? [roleKey] : []), 'subagent'];
     case 'background_agent':
-      return ['background_agent', 'background_task'];
+      return ['main_chat'];
     default:
       return [typeKey];
   }

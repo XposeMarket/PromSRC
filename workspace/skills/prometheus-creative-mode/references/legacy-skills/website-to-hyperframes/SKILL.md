@@ -1,7 +1,9 @@
 ---
 name: website-to-hyperframes
-description: |
-  Capture a website and create a HyperFrames video from it. Use when: (1) a user provides a URL and wants a video, (2) someone says "capture this site", "turn this into a video", "make a promo from my site", (3) the user wants a social ad, product tour, or any video based on an existing website, (4) the user shares a link and asks for any kind of video content. Even if the user just pastes a URL — this is the skill to use.
+description: Use this legacy reference when adapting a website URL into a Prometheus Creative/HyperFrames video, promo, social ad, product tour, or website capture workflow. Triggers on phrases like capture this site, turn this website into a video, make a promo from my site, website to HyperFrames, product tour from URL, social ad from website, and video from this link. Use it as compatibility guidance for translating standalone HyperFrames website-to-video steps into Prometheus Creative Video tools.
+emoji: "🎬"
+version: 1.1.0
+triggers: capture this site, turn website into video, make promo from my site, website to HyperFrames, product tour from URL, social ad from website, video from link, website capture video, HyperFrames legacy website workflow, Prometheus Creative website video
 ---
 
 # Website to HyperFrames

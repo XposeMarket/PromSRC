@@ -1,6 +1,9 @@
 ---
 name: ascii-video
-description: "ASCII video: convert video/audio to colored ASCII MP4/GIF."
+description: "Use this skill when the user asks for ASCII video, colored ASCII animation, terminal-style video, text art video, character-art motion, audio-reactive ASCII visualizers, video-to-ASCII conversion, matrix-style visuals, lyrics rendered as ASCII, or retro text-based motion graphics. Triggers on phrases like ASCII video, convert video to ASCII, terminal-style animation, text art video, audio visualizer in ASCII, character art animation, matrix effect, and colored ASCII GIF. Use it to choose between Prometheus Creative Video integration, Python/ffmpeg raster rendering, and HTML Motion finishing."
+emoji: "🔤"
+version: 1.1.0
+triggers: ASCII video, convert video to ASCII, terminal-style animation, text art video, audio visualizer in ASCII, character art animation, matrix effect, colored ASCII GIF, ASCII MP4, retro text visualization, lyrics as ASCII, video-to-ASCII conversion, ASCII motion graphics
 ---
 
 # ASCII Video Production Pipeline

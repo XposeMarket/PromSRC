@@ -246,7 +246,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
         'manager', 'team_manager', 'subagent', 'team_subagent', 'background_task',
         'subagent_planner', 'subagent_orchestrator', 'subagent_researcher', 'subagent_analyst',
         'subagent_builder', 'subagent_operator', 'subagent_verifier',
-        'switch_model_low', 'switch_model_medium', 'coordinator', 'background_agent',
+        'switch_model_low', 'switch_model_medium', 'coordinator',
       ];
       const defaults: Record<string, string> = {};
       for (const key of keys) {

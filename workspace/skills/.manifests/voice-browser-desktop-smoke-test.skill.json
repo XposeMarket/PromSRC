@@ -1,48 +1,34 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "Voice Browser Desktop Smoke Test",
-  "description": "Repeat Raul's quick voice-driven Prometheus smoke test: open/search X for an AI-related topic, scroll it, focus Codex, then focus Claude, and only report after the tool-backed sequence completes.",
-  "version": "1.0.1",
+  "description": "Use this skill when Raul asks to test voice mode, realtime voice, browser automation, desktop automation, mobile screenshot delivery, Codex/Claude focus, or end-to-end voice-driven visible actions. It emphasizes short natural replies, fresh screenshots, and proof sent to the origin/mobile surface.",
   "triggers": [
-    "do the test again",
-    "voice test again",
-    "run that test again",
-    "browser test",
-    "go look for things about AI then focus Codex and Claude",
-    "open X search and focus Codex",
-    "open X search then focus Claude",
-    "test browser and desktop focus",
-    "X search AI scroll Codex Claude",
-    "Prometheus voice tool test",
+    "voice smoke test",
+    "realtime voice test",
     "browser desktop smoke test",
-    "test X Codex Claude",
-    "repeat the X search test",
-    "interrupt me during the browser desktop test"
+    "desktop screenshot test",
+    "focus Codex",
+    "focus Claude",
+    "voice automation",
+    "mobile screenshot",
+    "test voice tools",
+    "browser automation test",
+    "desktop automation test",
+    "end-to-end smoke test",
+    "voice mode QA",
+    "visible action proof",
+    "send screenshot to mobile"
   ],
   "categories": [
-    "browser_automation",
-    "desktop_automation",
-    "voice_testing"
+    "testing",
+    "voice",
+    "automation"
   ],
-  "requires": {
-    "toolCategories": [
-      "browser_automation",
-      "desktop_automation"
-    ]
-  },
-  "toolBinding": {
-    "recommendedToolCategories": [
-      "browser_automation",
-      "desktop_automation"
-    ],
-    "defaultWorkflow": [
-      "Read x-browser-automation-playbook and desktop-automation-playbook if not already loaded.",
-      "Open X/search or a browser search for the requested AI-related topic.",
-      "Scroll once or inspect the visible results only enough to prove the browser step ran.",
-      "Focus Codex, then focus Claude.",
-      "Reply briefly only after the tool sequence completes."
-    ]
-  },
+  "requiredTools": [
+    "desktop_automation",
+    "browser_automation",
+    "delivery_send_screenshot"
+  ],
+  "lifecycle": "active",
   "id": "voice-browser-desktop-smoke-test"
 }

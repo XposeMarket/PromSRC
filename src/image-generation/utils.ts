@@ -29,6 +29,7 @@ type PersistGeneratedImageInput = {
   provider: string;
   prompt: string;
   outputDir?: string;
+  outputRunDir?: string;
   saveToWorkspace: boolean;
 };
 
@@ -81,6 +82,21 @@ function buildUniqueFilePath(directory: string, baseName: string, extension: str
     counter += 1;
   }
   return candidate;
+}
+
+export function buildImageGenerationRunOutputDir(input: {
+  outputDir?: string;
+  provider: string;
+  prompt: string;
+  createdAt?: Date;
+}): string {
+  const cfg = getImageGenerationConfig();
+  const baseDir = String(input.outputDir || cfg.default_output_dir || DEFAULT_IMAGE_OUTPUT_DIR).trim() || DEFAULT_IMAGE_OUTPUT_DIR;
+  const providerStem = sanitizePathSegment(input.provider);
+  const promptStem = sanitizePathSegment(String(input.prompt || '').slice(0, 48));
+  const timestamp = (input.createdAt || new Date()).toISOString().replace(/[:.]/g, '-');
+  const runFolder = `${providerStem}_${timestamp}_${promptStem}`;
+  return path.join(baseDir, runFolder);
 }
 
 function getWorkspaceRoot(): string {
@@ -255,7 +271,7 @@ export async function persistGeneratedImage(input: PersistGeneratedImageInput): 
     };
   }
 
-  const outputDir = String(input.outputDir || cfg.default_output_dir || DEFAULT_IMAGE_OUTPUT_DIR).trim() || DEFAULT_IMAGE_OUTPUT_DIR;
+  const outputDir = String(input.outputRunDir || input.outputDir || cfg.default_output_dir || DEFAULT_IMAGE_OUTPUT_DIR).trim() || DEFAULT_IMAGE_OUTPUT_DIR;
   const workspaceDir = ensurePathInWorkspace(workspaceRoot, outputDir);
   await ensureDirectory(workspaceDir);
   const workspacePath = buildUniqueFilePath(workspaceDir, baseName, extension);

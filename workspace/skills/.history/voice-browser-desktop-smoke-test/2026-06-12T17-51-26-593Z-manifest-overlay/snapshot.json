@@ -1,0 +1,12 @@
+{
+  "skillId": "voice-browser-desktop-smoke-test",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:26.597Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\voice-browser-desktop-smoke-test",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "e957afccc9b8b4a2"
+}

@@ -1,0 +1,11 @@
+{
+  "skillId": "pptx-writer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:02.888Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\pptx-writer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "27e1b218b0d98c71"
+}

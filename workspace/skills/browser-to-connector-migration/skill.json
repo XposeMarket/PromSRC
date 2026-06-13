@@ -2,11 +2,38 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "browser-to-connector-migration",
   "name": "Browser-to-Connector Migration",
-  "description": "Identify repeated browser workflows and decide whether Prometheus should preserve them as teach workflows, composites, desktop flows, or API connectors.",
-  "version": "1.0.0",
+  "description": "Use this skill when a repeated Prometheus browser automation workflow should be evaluated for migration into a connector, teach workflow, composite tool, desktop macro, API integration, or durable automation. Triggers on phrases like browser workflow got brittle, make this a connector, browser to connector, repeated browser task, automate this site better, teach workflow, composite tool candidate, API migration, and stop using browser for this. Use it to decide whether to preserve browser automation or replace it with a safer typed integration.",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
-  "triggers": ["browser to connector", "turn browser workflow into api", "repeated browser task", "teach workflow", "migrate automation"],
-  "categories": ["prometheus", "browser", "connectors", "automation"],
-  "requiredTools": ["browser_automation", "connector_list", "integration_admin", "workspace_write"],
-  "permissions": { "workspaceRead": true, "workspaceWrite": true, "browser": true, "externalSideEffects": true }
+  "triggers": [
+    "browser workflow got brittle",
+    "make this a connector",
+    "browser to connector",
+    "repeated browser task",
+    "automate this site better",
+    "teach workflow",
+    "composite tool candidate",
+    "API migration",
+    "stop using browser for this",
+    "connector migration",
+    "browser automation replacement"
+  ],
+  "categories": [
+    "prometheus",
+    "browser",
+    "connectors",
+    "automation"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "connector_list",
+    "integration_admin",
+    "workspace_write"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "browser": true,
+    "externalSideEffects": true
+  }
 }

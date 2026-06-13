@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "skill.md",
+  "description": "Use this skill when the user asks to inspect, edit, patch, verify, or repair files, markdown, configs, skills, docs, scripts, UI files, source-adjacent assets, or Prometheus repo files. It enforces read-before-edit, minimal patches, verification, repair loops, and honest reporting.",
+  "triggers": [
+    "update file",
+    "edit file",
+    "patch file",
+    "file edit",
+    "file surgery",
+    "edit markdown",
+    "update skill",
+    "patch skill",
+    "replace lines",
+    "add section",
+    "remove section",
+    "fix config",
+    "rewrite document",
+    "verify file edit",
+    "clean up file",
+    "careful code edit",
+    "inspect before editing",
+    "verify build",
+    "source edit",
+    "web-ui edit"
+  ],
+  "categories": [
+    "files",
+    "engineering",
+    "verification"
+  ],
+  "requiredTools": [
+    "file_stats",
+    "read_file",
+    "grep_file",
+    "search_files"
+  ],
+  "lifecycle": "active",
+  "id": "file-surgery"
+}

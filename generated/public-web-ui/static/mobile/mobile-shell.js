@@ -71,13 +71,14 @@ let _drawerSearchSeq = 0;
 let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
 let _drawerRefreshing = false;
-async function refreshMobileDrawerSessions({ force = false } = {}) {
+export async function refreshMobileDrawerSessions({ force = false, channel = '' } = {}) {
   if (!_drawerEl || !_drawerCallbacks) return;
   if (_drawerSearch) return;
   if (_drawerRefreshing && !force) return;
   _drawerRefreshing = true;
   try {
-    _resetDrawerPageState(_currentDrawerSessionChannel());
+    const targetChannel = String(channel || _currentDrawerSessionChannel() || 'mobile').trim() || 'mobile';
+    _resetDrawerPageState(targetChannel);
     await _renderDrawerSessions(_drawerCallbacks);
   } catch (err) {
     console.warn('[mobile drawer] refresh failed', err);
@@ -207,6 +208,9 @@ function _resetDrawerPageState(channel = '') {
 
 export function invalidateMobileDrawerSessions(channel = '') {
   _resetDrawerPageState(channel);
+  if (_drawerEl?.classList?.contains('open')) {
+    refreshMobileDrawerSessions({ force: true, channel: channel || _currentDrawerSessionChannel() }).catch(() => {});
+  }
 }
 
 function _currentDrawerSessionChannel() {
@@ -325,6 +329,15 @@ function _lastActiveTab() {
   try { return sessionStorage.getItem(PM_ACTIVE_TAB_KEY) || ''; } catch { return ''; }
 }
 
+// ---- Tab-bar magnifying loupe (CSS clip-mask, WebKit-reliable) -------------
+// The lens is a pure-CSS effect now: a scaled clone of the icon row clipped to a
+// feathered circle that follows --pm-lens-x (see .pm-tab-magnify in mobile.css).
+// CSS moves the mask, so there is ZERO per-frame JS during a drag — that keeps
+// the slider free and smooth (the old feImage/feDisplacementMap approach didn't
+// magnify in iOS WebKit and re-encoding its data-URI every pointermove is what
+// made the slider lag and feel like it was locking onto tabs).
+
+
 // Position the sliding glass pill exactly over a tab button by measuring its
 // real layout box. Percentages on `transform: translateX` are relative to the
 // element's own width, so we drive `left`/`width` in pixels instead.
@@ -339,6 +352,8 @@ function _positionTabIndicator(tabbar, tabId, { animate = true } = {}) {
     if (!width) { window.requestAnimationFrame(place); return; }
     indicator.style.setProperty('--pm-ind-x', `${left}px`);
     indicator.style.setProperty('--pm-ind-w', `${width}px`);
+    // Glue the magnify lens center to the resting pill center.
+    tabbar.style.setProperty('--pm-lens-x', `${left + width / 2}px`);
   };
   if (animate) {
     indicator.classList.add('is-moving');
@@ -363,6 +378,9 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   let velocity = 0;            // px between the last two pointermove samples
   let dragging = false;
   let pendingTab = null;       // currently highlighted tab during the gesture
+  // While pressed/dragging the pill swells past the bar so it reads as a lens
+  // lifting off the surface (and the icon underneath magnifies via CSS).
+  const PRESS_GROW = 1.18;
 
   const tabs = () => Array.from(tabbar.querySelectorAll('.pm-tab'));
   const indicator = () => tabbar.querySelector('.pm-tab-indicator');
@@ -405,9 +423,28 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     left = Math.max(minLeft, Math.min(maxLeft, left));
     ind.style.setProperty('--pm-ind-x', `${left}px`);
     ind.style.setProperty('--pm-ind-w', `${width}px`);
-    const stretch = 1 + Math.min(Math.abs(velocity) * 0.018, 0.32);
-    const lean = Math.max(-16, Math.min(16, velocity * 0.7));
-    ind.style.transform = `translateX(${lean}px) scaleX(${stretch})`;
+    // Track the lens center to the live pill center so the magnify follows
+    // the finger 1:1 across the bar (half-over-icon = half-magnified).
+    const pillCenterX = left + width / 2;
+    tabbar.style.setProperty('--pm-lens-x', `${pillCenterX}px`);
+    // Elastic stretch and lean — same as before.
+    const stretch = 1 + Math.min(Math.abs(velocity) * 0.024, 0.42);
+    const lean = Math.max(-22, Math.min(22, velocity * 0.9));
+    // Expose pill left/right edges in tabbar-space so the CSS clip-path
+    // inset() can match the pill rectangle exactly on BOTH sides — a circle
+    // radius was asymmetric (bled early on the leading edge).
+    const visualHalfW = (width * stretch) / 2;
+    const barW = tabbar.offsetWidth;
+    const pillLeft  = pillCenterX - visualHalfW;
+    const pillRight = barW - (pillCenterX + visualHalfW);
+    const pillSpan  = visualHalfW * 2;  // visual width of pill
+    tabbar.style.setProperty('--pm-pill-left',  `${pillLeft}px`);
+    tabbar.style.setProperty('--pm-pill-right', `${pillRight}px`);
+    tabbar.style.setProperty('--pm-pill-span',  `${pillSpan}px`);
+    // Keep legacy --pm-lens-r for any other consumers.
+    tabbar.style.setProperty('--pm-lens-r', `${visualHalfW}px`);
+    ind.style.transform = `translateX(${lean}px) scaleX(${stretch}) scaleY(${PRESS_GROW})`;
+
   };
 
   // Spring the pill onto a tab and let the elastic stretch relax to rest.
@@ -415,7 +452,14 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     const ind = indicator();
     if (!ind || !tabEl) return;
     ind.style.setProperty('--pm-ind-x', `${tabEl.offsetLeft}px`);
-    ind.style.setProperty('--pm-ind-w', `${tabEl.offsetWidth}px`);
+    const ctr = tabEl.offsetLeft + tabEl.offsetWidth / 2;
+    tabbar.style.setProperty('--pm-lens-x', `${ctr}px`);
+    // Reset pill bounds to resting (un-stretched) so inverse mask clears correctly.
+    const hw = tabEl.offsetWidth / 2;
+    const barW = tabbar.offsetWidth;
+    tabbar.style.setProperty('--pm-pill-left',  `${ctr - hw}px`);
+    tabbar.style.setProperty('--pm-pill-right', `${barW - (ctr + hw)}px`);
+    tabbar.style.setProperty('--pm-pill-span',  `${hw * 2}px`);
     ind.style.transform = '';     // relax to identity via the CSS spring transition
   };
 
@@ -423,6 +467,7 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     if (pointerId === null || (e && e.pointerId !== undefined && e.pointerId !== pointerId)) return;
     try { tabbar.releasePointerCapture(pointerId); } catch {}
     tabbar.classList.remove('pm-tabbar-dragging');
+    tabbar.classList.remove('pm-tabbar-pressing');
     const wasDragging = dragging;
     pointerId = null;
     dragging = false;
@@ -451,6 +496,22 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     velocity = 0;
     dragging = false;
     pendingTab = t;
+    // Swell the pill immediately on press (before any drag) so a press-and-hold
+    // already magnifies, then the swell tracks through the drag.
+    tabbar.classList.add('pm-tabbar-pressing');
+    const ind = indicator();
+    if (ind) ind.style.transform = `scaleY(${PRESS_GROW})`;
+    // Set pill bounds immediately on press so the inverse mask hides the icon
+    // right away (before any drag starts).
+    const pillEl = indicator();
+    if (pillEl) {
+      const pl = parseFloat(pillEl.style.getPropertyValue('--pm-ind-x') || t.offsetLeft);
+      const pw = parseFloat(pillEl.style.getPropertyValue('--pm-ind-w') || t.offsetWidth);
+      const barW2 = tabbar.offsetWidth;
+      tabbar.style.setProperty('--pm-pill-left',  `${pl}px`);
+      tabbar.style.setProperty('--pm-pill-right', `${barW2 - (pl + pw)}px`);
+      tabbar.style.setProperty('--pm-pill-span',  `${pw}px`);
+    }
   });
 
   tabbar.addEventListener('pointermove', (e) => {
@@ -469,8 +530,16 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
       pendingTab = nearest;
       setActive(nearest);
       // Buzz on every tab the pill slides over (not just the page we started on).
-      // pmHaptic toggles the native iOS switch so iOS emits a real haptic, and
-      // also fires navigator.vibrate on Android.
+      // On iOS the global pmHaptic switch toggle is programmatic and does NOT
+      // emit a system haptic, so sliding over a tab you never physically pressed
+      // felt dead. Each .pm-tab carries its own native <input switch> overlay —
+      // clicking *that specific* switch is what actually fires an iOS haptic.
+      // Toggle the entered tab's own switch so every tab crossed buzzes, then
+      // keep pmHaptic for Android's navigator.vibrate.
+      try {
+        const sw = nearest.querySelector('.pm-haptic-switch-overlay');
+        if (sw) sw.click();
+      } catch {}
       pmHaptic(8);
     }
     followDrag(e.clientX);
@@ -630,10 +699,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       aria-label="Primary"
     >
       <span class="pm-tabbar-sheen" aria-hidden="true"></span>
+      <span class="pm-glass-lens" aria-hidden="true"></span>
+      <span class="pm-glass-border" aria-hidden="true"></span>
       <span class="pm-tab-indicator" aria-hidden="true"></span>
     </nav>
   `);
-  mobileNavTabs.forEach(tab => {
+  mobileNavTabs.forEach((tab, i) => {
     const b = el(`
       <button class="pm-tab ${tab.id === activeTab ? 'active' : ''}" data-tab="${tab.id}" role="tab" aria-label="${escapeHtml(tab.label)}" aria-selected="${tab.id === activeTab ? 'true' : 'false'}">
         ${ICONS[tab.icon] || ''}
@@ -642,16 +713,30 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       </button>
     `);
     tabbar.appendChild(b);
+    // Set the tab's left-offset custom prop once it's laid out so the inverse
+    // mask circle (which is in tabbar coords) can be shifted into each tab's
+    // own coordinate space. We do this after first paint.
+    window.requestAnimationFrame(() => {
+      b.style.setProperty('--pm-tab-left-px', `${b.offsetLeft}px`);
+    });
   });
+  // True magnifying-lens layer (iOS liquid glass): an icon-only clone of the 4
+  // tabs, scaled up and stacked exactly over the real row, then clipped to a
+  // feathered circle that follows the pill (--pm-lens-x). Only the icon pixels
+  // physically under the glass enlarge, so a half-covered icon is only half
+  // magnified — instead of the old binary whole-icon scale.
+  const magnify = el(`<div class="pm-tab-magnify" aria-hidden="true"></div>`);
+  mobileNavTabs.forEach(tab => {
+    const cell = el(`<div class="pm-tab-magnify-cell">${ICONS[tab.icon] || ''}<span class="pm-tab-magnify-label">${escapeHtml(tab.label)}</span></div>`);
+    magnify.appendChild(cell);
+  });
+  tabbar.appendChild(magnify);
+  // The loupe magnify + feathered clip is pure CSS driven by --pm-lens-x; no JS
+  // filter setup needed (see .pm-tab-magnify in mobile.css).
   // Tap OR drag the glass pill across the bar to switch pages. Tapping lands on
   // the native switch overlay (iOS haptic) and navigates on release; dragging
   // lets the pill track the finger and snaps to the tab you let go over.
   _wireTabbarSlider(tabbar, { onNavigate, getActiveTab: () => activeTab });
-  // Outer refraction halo — a sibling (NOT a child, so it escapes the tabbar's
-  // overflow:hidden clip) that extends a few px beyond the bar. Its backdrop
-  // filter distorts the real background passing behind the panel's outer edge.
-  // Appended before the bar so the bar paints on top of it.
-  app.appendChild(el('<div class="pm-glass-halo pm-tabbar-halo" aria-hidden="true"></div>'));
   app.appendChild(tabbar);
   _rememberActiveTab(activeTab);
   // Snap the pill onto the active tab once laid out; animate from the previous
@@ -671,6 +756,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       const bar = document.querySelector('.pm-tabbar');
       const active = bar?.querySelector('.pm-tab.active')?.getAttribute('data-tab');
       if (bar && active) _positionTabIndicator(bar, active, { animate: false });
+      // Refresh per-tab left-offset custom props so the inverse lens mask stays aligned.
+      if (bar) {
+        bar.querySelectorAll('.pm-tab').forEach(t => {
+          t.style.setProperty('--pm-tab-left-px', `${t.offsetLeft}px`);
+        });
+      }
     }, { passive: true });
   }
 
@@ -1014,7 +1105,7 @@ export function openDrawer() {
   // Always pull fresh sessions when the drawer opens so chats created mid-session
   // (e.g. a brand-new chat) appear without needing an app restart. No-ops while a
   // search is active or a refresh is already running.
-  refreshMobileDrawerSessions().catch(() => {});
+  refreshMobileDrawerSessions({ force: true }).catch(() => {});
 }
 
 export function closeDrawer() {
@@ -1326,8 +1417,35 @@ export function initMobileCanvasSheet() {
     _dragY = null;
   });
 
-  // Global delegated handler — intercepts all data-pm-media taps anywhere in the app
+  // Global delegated handler — intercepts all generated image selectors and data-pm-media taps anywhere in the app
   document.body.addEventListener('click', (ev) => {
+    const generatedThumb = ev.target?.closest?.('[data-pm-generated-thumb]');
+    if (generatedThumb) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const batch = generatedThumb.closest('.pm-generated-image-batch');
+      const primary = batch?.querySelector?.('[data-pm-generated-primary]');
+      const img = primary?.querySelector?.('img');
+      const name = generatedThumb.getAttribute('data-name') || 'Generated image';
+      const src = generatedThumb.getAttribute('data-src') || '';
+      if (primary) {
+        ['kind', 'src', 'download', 'name', 'path', 'index'].forEach((key) => {
+          const attr = `data-${key}`;
+          const value = generatedThumb.getAttribute(attr) || '';
+          primary.setAttribute(attr, value);
+        });
+      }
+      if (img && src) {
+        img.src = src;
+        img.alt = name;
+        try { img.decode?.().catch?.(() => {}); } catch {}
+      }
+      const nameEl = primary?.querySelector?.('b');
+      if (nameEl) nameEl.textContent = name;
+      batch?.querySelectorAll?.('[data-pm-generated-thumb]')?.forEach((thumb) => thumb.classList.toggle('selected', thumb === generatedThumb));
+      return;
+    }
+
     const btn = ev.target?.closest?.('[data-pm-media]');
     if (!btn) return;
     ev.preventDefault();

@@ -17,12 +17,149 @@ const SKILL_TOOL_NAMES = new Set([
   'skill_export_bundle',
   'skill_update_from_source',
   'skill_create',
+  'skill_audit_all',
+  'skill_update_metadata',
+  'skill_repair_metadata',
 ]);
 
-function splitCsv(value: any): string[] {
-  return Array.isArray(value)
-    ? value.map((v: any) => String(v || '').trim()).filter(Boolean)
-    : String(value || '').split(',').map((v) => v.trim()).filter(Boolean);
+export function splitCsv(value: any): string[] {
+  if (Array.isArray(value)) {
+    return value.map((v: any) => String(v || '').trim()).filter(Boolean);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = parseJsonLike(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((v: any) => String(v || '').trim()).filter(Boolean);
+      }
+    } catch {}
+  }
+  return raw.split(',').map((v) => v.trim()).filter(Boolean);
+}
+
+export interface SkillMetadataAudit {
+  id: string;
+  name: string;
+  kind: string;
+  score: number;
+  issues: string[];
+  description: string;
+  triggers: string[];
+  hasManifestOverlay: boolean;
+}
+
+const PLACEHOLDER_DESCRIPTION_RE = /^(\(no description\)|tbd|todo|placeholder|description|skill|n\/a|none)\.?$/i;
+
+// Pure metadata-quality scorer. Returns issues + a 0-100 score so fleet tools
+// can flag skills whose triggers/descriptions will route poorly, without any
+// file mutation. Higher score = better discovery metadata.
+export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
+  const description = String(skill?.description || '').trim();
+  const triggers: string[] = Array.isArray(skill?.triggers)
+    ? skill.triggers.map((t: any) => String(t || '').trim()).filter(Boolean)
+    : [];
+  const issues: string[] = [];
+  let score = 100;
+
+  if (!description) {
+    issues.push('missing_description');
+    score -= 45;
+  } else {
+    if (PLACEHOLDER_DESCRIPTION_RE.test(description)) {
+      issues.push('placeholder_description');
+      score -= 35;
+    }
+    if (description.length < 40) {
+      issues.push('description_too_short');
+      score -= 20;
+    }
+    if (!/\b(use (this|it)|triggers? on|use when|use for)\b/i.test(description)) {
+      issues.push('description_missing_usage_guidance');
+      score -= 10;
+    }
+  }
+
+  if (triggers.length === 0) {
+    issues.push('no_triggers');
+    score -= 40;
+  } else {
+    if (triggers.length < 3) {
+      issues.push('too_few_triggers');
+      score -= 15;
+    }
+    const unique = new Set(triggers.map((t) => t.toLowerCase()));
+    if (unique.size < triggers.length) {
+      issues.push('duplicate_triggers');
+      score -= 5;
+    }
+    if (triggers.some((t) => t.length < 3)) {
+      issues.push('weak_short_trigger');
+      score -= 5;
+    }
+  }
+
+  if (skill?.validation && skill.validation.ok === false) {
+    issues.push('manifest_validation_error');
+    score -= 15;
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  return {
+    id: String(skill?.id || ''),
+    name: String(skill?.name || skill?.id || ''),
+    kind: String(skill?.kind || 'simple'),
+    score,
+    issues,
+    description,
+    triggers,
+    hasManifestOverlay: skill?.manifestSource === 'overlay' || !!skill?.overlayPath,
+  };
+}
+
+export function skillMatchesScope(skill: any, scope: string): boolean {
+  const s = String(scope || 'all').trim().toLowerCase();
+  if (!s || s === 'all') return true;
+  const hay = `${skill?.id || ''} ${skill?.name || ''} ${String(skill?.description || '')} ${(skill?.categories || []).join(' ')}`.toLowerCase();
+  if (s === 'prometheus-related' || s === 'prometheus') {
+    return /prometheus|gateway|subagent|\bteam\b|schedule|memory|desktop|browser|hyperframes|creative|connector|skill|composite|webhook|mcp|brain|approval|artifact|context-pack|runbook/.test(hay);
+  }
+  return hay.includes(s);
+}
+
+// Build a manifest overlay object from structured metadata args, preserving
+// existing fields unless explicitly overridden. Returns null when nothing changes.
+export function buildMetadataManifest(skill: any, args: any): Record<string, unknown> | null {
+  const manifest: Record<string, unknown> = {};
+  const existingEntrypoint = String(skill?.entrypoint || '').trim();
+  if (existingEntrypoint) manifest.entrypoint = existingEntrypoint;
+  let changed = false;
+  if (args.description !== undefined && args.description !== null) {
+    const d = String(args.description).trim();
+    if (d && d !== String(skill?.description || '').trim()) { manifest.description = d; changed = true; }
+  }
+  if (args.triggers !== undefined && args.triggers !== null) {
+    const t = splitCsv(args.triggers);
+    if (t.length) { manifest.triggers = t; changed = true; }
+  }
+  if (args.categories !== undefined && args.categories !== null) {
+    const c = splitCsv(args.categories);
+    if (c.length) { manifest.categories = c; changed = true; }
+  }
+  if (args.requiredTools !== undefined || args.required_tools !== undefined) {
+    const r = splitCsv(args.requiredTools ?? args.required_tools);
+    if (r.length) { manifest.requiredTools = r; changed = true; }
+  }
+  if (args.lifecycle !== undefined && args.lifecycle !== null) {
+    const l = String(args.lifecycle).trim();
+    if (l) { manifest.lifecycle = l; changed = true; }
+  }
+  if (args.name !== undefined && args.name !== null) {
+    const n = String(args.name).trim();
+    if (n && n !== String(skill?.name || '').trim()) { manifest.name = n; changed = true; }
+  }
+  return changed ? manifest : null;
 }
 
 function stripSkillEmojiFrontmatter(content: string): string {
@@ -339,6 +476,116 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         } catch (scErr: any) {
           return { name, args, result: `skill_create failed: ${scErr.message}`, error: true };
         }
+      }
+
+      case 'skill_audit_all': {
+        deps.skillsManager.scanSkills();
+        const scope = String(args.scope || 'all');
+        const onlyProblems = args.onlyProblems !== false && args.only_problems !== false;
+        const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
+        const all = deps.skillsManager.getAll().filter((s: any) => skillMatchesScope(s, scope));
+        const audits = all.map((s: any) => scoreSkillMetadata(s)).sort((a: SkillMetadataAudit, b: SkillMetadataAudit) => a.score - b.score);
+        const flagged = audits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
+        const list = onlyProblems ? flagged : audits;
+        const summary = {
+          scope,
+          totalScanned: all.length,
+          flagged: flagged.length,
+          threshold,
+          avgScore: audits.length ? Math.round(audits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / audits.length) : 100,
+          skills: list.map((a: SkillMetadataAudit) => ({ id: a.id, name: a.name, score: a.score, issues: a.issues })),
+        };
+        return { name, args, result: JSON.stringify(summary, null, 2), error: false };
+      }
+
+      case 'skill_update_metadata': {
+        const skillId = String(args.id || args.skill_id || '').trim();
+        if (!skillId) return { name, args, result: 'skill_update_metadata: id is required', error: true };
+        const skill = deps.skillsManager.get(skillId);
+        if (!skill) return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
+        const manifest = buildMetadataManifest(skill, args);
+        if (!manifest) {
+          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, categories, requiredTools, lifecycle, or name).`, error: true };
+        }
+        try {
+          const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {
+            changeType: args.changeType || args.change_type ? String(args.changeType || args.change_type) : 'metadata_update',
+            evidence: Array.isArray(args.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args.evidence ? [String(args.evidence)] : undefined),
+            appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
+            reason: args.reason ? String(args.reason) : undefined,
+          });
+          const after = scoreSkillMetadata(updated);
+          return {
+            name, args,
+            result: `Updated metadata for ${updated.name} (${updated.id}). Fields: ${Object.keys(manifest).join(', ')}. New quality score: ${after.score}${after.issues.length ? `, remaining issues: ${after.issues.join(', ')}` : ' (clean)'}.`,
+            error: false,
+          };
+        } catch (metaErr: any) {
+          return { name, args, result: `skill_update_metadata failed: ${metaErr.message}`, error: true };
+        }
+      }
+
+      case 'skill_repair_metadata': {
+        deps.skillsManager.scanSkills();
+        const mode = String(args.mode || 'preview').trim().toLowerCase();
+        const scope = String(args.scope || 'all');
+        const ids = splitCsv(args.ids).map((s) => s.toLowerCase());
+        const repairs = Array.isArray(args.repairs) ? args.repairs : [];
+        if (mode === 'apply') {
+          if (args.confirm !== true) {
+            return { name, args, result: 'skill_repair_metadata: apply mode requires confirm:true. Run mode:"preview" first to inspect the proposed patch set.', error: true };
+          }
+          if (!repairs.length) {
+            return { name, args, result: 'skill_repair_metadata: apply mode requires a repairs array of {id, description?, triggers?, categories?, requiredTools?, lifecycle?, name?} objects (typically the edited preview set).', error: true };
+          }
+          const applied: any[] = [];
+          const failed: any[] = [];
+          for (const r of repairs) {
+            const rid = String(r?.id || '').trim();
+            if (!rid) { failed.push({ id: rid, error: 'missing id' }); continue; }
+            const sk = deps.skillsManager.get(rid);
+            if (!sk) { failed.push({ id: rid, error: 'not found' }); continue; }
+            const manifest = buildMetadataManifest(sk, r);
+            if (!manifest) { failed.push({ id: rid, error: 'no changes' }); continue; }
+            try {
+              const updated = deps.skillsManager.writeManifestOverlay(rid, manifest, {
+                changeType: 'metadata_repair',
+                appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
+                reason: args.reason ? String(args.reason) : 'bulk metadata repair',
+              });
+              applied.push({ id: updated.id, fields: Object.keys(manifest), score: scoreSkillMetadata(updated).score });
+            } catch (e: any) {
+              failed.push({ id: rid, error: e.message });
+            }
+          }
+          return { name, args, result: JSON.stringify({ mode: 'apply', applied: applied.length, failed: failed.length, results: applied, errors: failed }, null, 2), error: false };
+        }
+        // preview mode: return the flagged skills as an editable repair template
+        const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
+        const all = deps.skillsManager.getAll().filter((s: any) => {
+          if (ids.length) return ids.includes(String(s.id || '').toLowerCase());
+          return skillMatchesScope(s, scope);
+        });
+        const flagged = all
+          .map((s: any) => ({ skill: s, audit: scoreSkillMetadata(s) }))
+          .filter(({ audit }: { skill: any; audit: SkillMetadataAudit }) => audit.score < threshold || audit.issues.length > 0)
+          .sort((a: { skill: any; audit: SkillMetadataAudit }, b: { skill: any; audit: SkillMetadataAudit }) => a.audit.score - b.audit.score);
+        const template = flagged.map(({ skill, audit }: { skill: any; audit: SkillMetadataAudit }) => ({
+          id: audit.id,
+          name: audit.name,
+          score: audit.score,
+          issues: audit.issues,
+          currentDescription: audit.description,
+          currentTriggers: audit.triggers,
+          // Fill these in, then resend with mode:"apply", confirm:true, repairs:[...]
+          description: '',
+          triggers: '',
+        }));
+        return {
+          name, args,
+          result: `${JSON.stringify({ mode: 'preview', scope, flagged: template.length, threshold, repairs: template }, null, 2)}\n\nTo apply: edit description/triggers in each repair entry, then call skill_repair_metadata({mode:"apply", confirm:true, repairs:[...]}).`,
+          error: false,
+        };
       }
 
       default:

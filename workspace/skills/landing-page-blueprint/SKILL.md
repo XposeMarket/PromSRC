@@ -1,8 +1,9 @@
 ---
 name: landing-page-blueprint
-description: Use this skill whenever creating or editing a landing page (single-page marketing site, product splash page, waitlist page, lead-gen page, SaaS homepage).
+description: Use this skill when the user asks to create, edit, improve, or blueprint a landing page, SaaS homepage, waitlist page, product splash page, lead-gen page, or single-page marketing site. Triggers on phrases like build a landing page, create homepage, SaaS landing page, waitlist page, lead-gen page, product page, improve this landing page, conversion page, website hero, CTA section, and landing page copy. Use it to produce conversion-focused section architecture, copy, and canvas-ready plus production-ready HTML/CSS/JS outputs.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: build landing page, create homepage, SaaS landing page, waitlist page, lead-gen page, product splash page, improve landing page, conversion page, website hero, CTA section, landing page copy, single page website, marketing site, product page
 ---
 
 # Landing Page Blueprint

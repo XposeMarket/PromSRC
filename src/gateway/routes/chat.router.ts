@@ -48,7 +48,7 @@ import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, type TurnOrigin } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, type TurnOrigin } from '../session';
 import { collectRichArtifacts, productCarouselToArtifact } from '../rich-artifacts';
 import { getConnector, isConnectorConnected } from '../../integrations/connector-registry.js';
 import type { GmailConnector } from '../../integrations/connectors/gmail.js';
@@ -114,7 +114,7 @@ import {
 } from '../site-shortcuts';
 import {
   desktopFindWindow,
-  desktopFocusWindow,
+  desktopFocusWindowVerified,
   desktopWindowControl,
   desktopClick,
   desktopDrag,
@@ -1752,9 +1752,11 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
+  runtimeOptions?: { directSubagentChat?: boolean },
 ): Promise<HandleChatResult> {
   try {
   const ollama = getOllamaClient();
+  const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const isBootStartupTurn = /\bBOOT\.md\b/i.test(String(callerContext || ''));
   const isHotRestartTurn = /\[HOT RESTART CONTEXT\]/i.test(String(callerContext || ''));
   const bootAllowedTools = new Set(['list_files', 'read_file']);
@@ -2183,6 +2185,9 @@ async function handleChat(
   const MAX_PLAN_FINALIZATION_GUARD = 4;
   let writeNoteFinalizationGuard = 0;
   const MAX_WRITE_NOTE_FINALIZATION_GUARD = 1;
+  let backgroundFinalizationGuard = 0;
+  const MAX_BACKGROUND_FINALIZATION_GUARD = 1;
+  const backgroundResultInjectedIds = new Set<string>();
   const orchestrationSkillEnabled = isOrchestrationSkillEnabled();
   const greetingLikeTurn = isGreetingLikeMessage(message);
   const progressState: {
@@ -2301,7 +2306,7 @@ async function handleChat(
     const modeKeys = executionMode === 'interactive'
       ? ['main_chat']
       : executionMode === 'background_agent'
-        ? ['background_agent', 'background_task']
+        ? ['main_chat']
         : executionMode === 'team_manager'
           ? ['team_manager', 'manager']
           : executionMode === 'team_subagent'
@@ -2432,10 +2437,6 @@ async function handleChat(
     if (devPlanSteps.length >= 2) {
       seedProgressFromLines(devPlanSteps, 'declared', { manualStepAdvance: true });
       stepCursor = 0;
-      manualPlanSkillScoutRequired = false;
-      manualPlanSkillScoutCompleted = true;
-      manualPlanSkillListDone = false;
-      manualPlanSkillReadCount = 0;
       consecutiveStepFailures = 0;
     }
   };
@@ -2447,24 +2448,6 @@ async function handleChat(
   // do NOT advance the cursor — they are information-gathering within the same step.
   // Write/action tools DO advance the cursor because they represent completing a unit of work.
   let stepCursor = 0;
-  // Declared-plan skill scout gate:
-  // Step 1 should run a quick skill scan (skill_list, optional skill_read) before other actions.
-  let manualPlanSkillScoutRequired = false;
-  let manualPlanSkillScoutCompleted = false;
-  let manualPlanSkillListDone = false;
-  let manualPlanSkillReadCount = 0;
-  const declaredPlanSkillScoutBlockMessage = (attemptedTool?: string): string => {
-    const blockedLine = attemptedTool
-      ? `Blocked: declared-plan skill scout pre-step is incomplete, so "${attemptedTool}" cannot run yet.`
-      : 'Blocked: declared-plan skill scout pre-step is incomplete.';
-    return [
-      blockedLine,
-      'Required next tool call: skill_list({}).',
-      'After skill_list succeeds, optionally call skill_read({"id":"<relevant-skill-id>"}) if a relevant skill appears.',
-      'Then call complete_plan_step({"note":"Skill scout complete"}).',
-      'This closes only the hidden scout pre-step; declared plan step 1 has not started or advanced.',
-    ].join('\n');
-  };
   // consecutiveFailures: how many times the current step has failed in a row.
   // Resets on any success. Used to stay on the step during retries.
   let consecutiveStepFailures = 0;
@@ -3109,6 +3092,8 @@ async function handleChat(
       return [
         'EXECUTION MODE: Heartbeat check.',
         'Run concise, decisive checks and report only actionable issues.',
+        'If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. HEARTBEAT_OK is a silence token and must not be sent to the user/chat/channel as a normal message.',
+        'When creating or editing any HEARTBEAT.md for yourself or another agent, always preserve that HEARTBEAT_OK silence rule in the file.',
       ].join('\n');
     }
     if (executionMode === 'cron') {
@@ -3137,7 +3122,7 @@ async function handleChat(
     return '';
   })();
   const responseStyleInstruction = executionMode === 'heartbeat'
-    ? 'Default to concise status output, but provide full detail when HEARTBEAT.md explicitly asks for full reporting.'
+    ? 'Report only actionable heartbeat results. For no-op heartbeats, output exactly HEARTBEAT_OK and nothing else.'
     : 'Match the user\'s tone and pacing. Be natural, warm, and conversational. Use concise replies for quick asks, and expand with context, personality, and guidance when helpful or when the user invites depth.';
   const planProtocolInstruction = executionMode === 'background_agent'
     ? 'If this background-agent task has 2+ meaningful phases, call bg_plan_declare FIRST (2-8 short steps). Keep executing within the current step until the phase is actually complete, then call bg_plan_advance(note) to move forward. Do NOT use declare_plan/complete_plan_step in background_agent mode.'
@@ -5442,28 +5427,6 @@ RULES:
 
       if (shouldForceManualPlanRetry) {
         continuationNudges++;
-        if (
-          manualPlanSkillScoutRequired
-          && !manualPlanSkillScoutCompleted
-          && progressState.manualStepAdvance
-          && stepCursor === 0
-        ) {
-          const guideMsg = declaredPlanSkillScoutBlockMessage();
-          console.log(
-            `[v2] PLAN POST-CHECK: forcing continuation (${continuationNudges}/${MAX_CONTINUATION_NUDGES}) - skill scout pre-step incomplete`,
-          );
-          sendSSE('info', {
-            message: 'Post-check: continuing - declared-plan skill scout pre-step needs skill_list.',
-          });
-          if (candidateText) {
-            messages.push({ role: 'assistant', content: candidateText });
-          }
-          messages.push({
-            role: 'user',
-            content: guideMsg,
-          });
-          continue;
-        }
         const currentStepIndex = progressState.items.findIndex(
           (i) => i.status === 'in_progress' || i.status === 'pending',
         );
@@ -5820,6 +5783,65 @@ RULES:
         continue;
       }
 
+      const pendingSpawnedBgRuns: Array<{ id: string; timeoutMs?: number }> = allToolResults
+        .filter((r) => r.name === 'background_spawn' && !r.error)
+        .map((r) => {
+          try {
+            const parsed = JSON.parse(r.result);
+            const id = String(parsed?.id || '').trim();
+            if (!id || backgroundResultInjectedIds.has(id)) return null;
+            const timeoutMs = Number(parsed?.timeoutMs);
+            return {
+              id,
+              timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.floor(timeoutMs) : undefined,
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean) as Array<{ id: string; timeoutMs?: number }>;
+
+      if (pendingSpawnedBgRuns.length > 0 && backgroundFinalizationGuard < MAX_BACKGROUND_FINALIZATION_GUARD) {
+        backgroundFinalizationGuard++;
+        const pendingBgIds = pendingSpawnedBgRuns.map((run) => run.id);
+        console.log(
+          `[v2] FINALIZATION BLOCKED: waiting for ${pendingSpawnedBgRuns.length} background agent(s) before synthesized final response`,
+        );
+        sendSSE('info', {
+          message: `Waiting for ${pendingSpawnedBgRuns.length} background agent${pendingSpawnedBgRuns.length > 1 ? 's' : ''} before final response...`,
+        });
+        const joinedResults = await Promise.all(
+          pendingSpawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs })),
+        );
+        const resultBlocks = joinedResults
+          .map((r, i) => {
+            const bgId = pendingBgIds[i];
+            backgroundResultInjectedIds.add(bgId);
+            if (!r) return `[Background Agent ${bgId} — missing]\nNo background agent record was found.`;
+            const state = r.state === 'completed' ? 'completed' : r.state === 'timed_out' ? 'timed out' : 'failed';
+            const body = r.state === 'completed' ? (r.result || '(no output)') : (r.error || r.state);
+            return `[Background Agent ${bgId} — ${state}]\n${body}`;
+          })
+          .filter(Boolean);
+
+        if (candidateText) {
+          messages.push({ role: 'assistant', content: candidateText });
+        }
+        messages.push({
+          role: 'user',
+          content: [
+            '[BACKGROUND_AGENT_RESULTS]',
+            ...resultBlocks,
+            '',
+            'Do not treat this as an error. You attempted to finalize while one or more background_spawn agents were still outstanding.',
+            'Review your drafted final response together with these background agent results.',
+            'Now produce one complete synthesized final answer that incorporates your own work and the background agents findings/results.',
+            'Do not merely append the background output; reconcile it into the answer the user actually needs.',
+          ].join('\n\n'),
+        });
+        continue;
+      }
+
       // If model dumped massive reasoning with no usable reply, generate a fallback
       const emptyModelFinalFallback = 'ERROR: The model returned an empty response. Please retry the message or switch models.';
       let finalText = sanitizeFinalReply(
@@ -5910,7 +5932,7 @@ RULES:
           try {
             const parsed = JSON.parse(r.result);
             const id = String(parsed?.id || '').trim();
-            if (!id) return null;
+            if (!id || backgroundResultInjectedIds.has(id)) return null;
             const timeoutMs = Number(parsed?.timeoutMs);
             return {
               id,
@@ -6037,42 +6059,6 @@ RULES:
       const toolCallId = String((call as any)?.id || '').trim();
       const toolName = call.function?.name || 'unknown';
       const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
-
-      // For declared plans, reserve step 1 for skill scouting only.
-      // This keeps skill discovery contained to the first step so later steps stay focused.
-      if (
-        manualPlanSkillScoutRequired
-        && !manualPlanSkillScoutCompleted
-        && progressState.manualStepAdvance
-        && stepCursor === 0
-      ) {
-        const isSkillScoutTool =
-          toolName === 'skill_list'
-          || toolName === 'skill_read'
-          || toolName === 'request_tool_category'
-          || toolName === 'business_context_mode'
-          || toolName === 'complete_plan_step'
-          || toolName === 'step_complete'
-          || toolName === 'declare_plan';
-        if (!isSkillScoutTool) {
-          const guideMsg = declaredPlanSkillScoutBlockMessage(toolName);
-          allToolResults.push({ name: toolName, args: toolArgs, result: guideMsg, error: true });
-          logToolCall(workspacePath, toolName, toolArgs, guideMsg, true);
-          sendSSE('tool_result', {
-            action: toolName,
-            result: guideMsg,
-            error: true,
-            stepNum: allToolResults.length,
-          });
-          messages.push({
-            role: 'tool',
-            tool_name: toolName,
-            tool_call_id: toolCallId || undefined,
-            content: guideMsg,
-          });
-          continue;
-        }
-      }
 
       if (toolName === 'desktop_click') {
         const hasFiniteX = Number.isFinite(Number(toolArgs?.x));
@@ -6507,17 +6493,9 @@ RULES:
         if (plannedSteps.length >= 2) {
           seedProgressFromLines(plannedSteps, 'declared', { manualStepAdvance: true });
           stepCursor = 0; // reset cursor whenever a fresh plan is declared
-          manualPlanSkillScoutRequired = plannedSteps.length >= 2;
-          manualPlanSkillScoutCompleted = false;
-          manualPlanSkillListDone = false;
-          manualPlanSkillReadCount = 0;
           consecutiveStepFailures = 0;
           console.log(`[v2] declare_plan: seeded ${plannedSteps.length} steps: ${plannedSteps.join(' -> ')}`);
         } else {
-          manualPlanSkillScoutRequired = false;
-          manualPlanSkillScoutCompleted = false;
-          manualPlanSkillListDone = false;
-          manualPlanSkillReadCount = 0;
           stepCursor = 0;
           consecutiveStepFailures = 0;
         }
@@ -6534,7 +6512,7 @@ RULES:
           role: 'tool',
           tool_name: toolName,
           tool_call_id: toolCallId || undefined,
-          content: `${planSummary}${planActiveBehavior ? `\n\n${planActiveBehavior}` : ''}\n\n${declaredPlanSkillScoutBlockMessage()}`,
+          content: `${planSummary}${planActiveBehavior ? `\n\n${planActiveBehavior}` : ''}`,
         });
         resetProgressRoundStats();
         continue;
@@ -6587,41 +6565,13 @@ RULES:
       if (toolName === 'complete_plan_step' || toolName === 'step_complete') {
         const note = String(toolArgs?.note || '').trim();
         const isTaskSession = sessionId.startsWith('task_');
-        const completingSkillScoutOnly =
-          progressState.manualStepAdvance
-          && manualPlanSkillScoutRequired
-          && !manualPlanSkillScoutCompleted
-          && stepCursor === 0
-          && manualPlanSkillListDone;
-        let completedSkillScoutOnly = false;
         let completionSummary = note
           ? `Plan step completed: ${note}`
           : 'Plan step completed.';
 
-        if (
-          manualPlanSkillScoutRequired
-          && !manualPlanSkillScoutCompleted
-          && progressState.manualStepAdvance
-          && stepCursor === 0
-          && !manualPlanSkillListDone
-        ) {
-          const scoutMsg = declaredPlanSkillScoutBlockMessage(toolName);
-          allToolResults.push({ name: toolName, args: toolArgs, result: scoutMsg, error: true });
-          sendSSE('tool_result', { action: toolName, result: scoutMsg, error: true, stepNum: allToolResults.length });
-          messages.push({
-            role: 'tool',
-            tool_name: toolName,
-            tool_call_id: toolCallId || undefined,
-            content: scoutMsg,
-          });
-          markProgressStepResult(false, toolName);
-          resetProgressRoundStats();
-          continue;
-        }
-
         // Task-runner sessions must persist step completion in task-store so
         // background-task-runner can detect the step advancement.
-        if (isTaskSession && !completingSkillScoutOnly) {
+        if (isTaskSession) {
           const taskId = sessionId.replace(/^task_/, '');
           const liveTask = loadTask(taskId);
           if (!liveTask) {
@@ -6672,22 +6622,7 @@ RULES:
           completionSummary = `${completionSummary} (Handled as plan-step completion in interactive chat.)`;
         }
 
-        if (
-          manualPlanSkillScoutRequired
-          && !manualPlanSkillScoutCompleted
-          && progressState.manualStepAdvance
-          && stepCursor === 0
-          && manualPlanSkillListDone
-        ) {
-          completionSummary = `Skill scout pre-step completed (skill_list + ${manualPlanSkillReadCount} skill_read call(s)). Declared plan step 1 has NOT advanced; proceed with step 1 now.`;
-          manualPlanSkillScoutCompleted = true;
-          manualPlanSkillScoutRequired = false;
-          manualPlanSkillListDone = false;
-          manualPlanSkillReadCount = 0;
-          completedSkillScoutOnly = true;
-        }
-
-        if (progressState.manualStepAdvance && !completedSkillScoutOnly) {
+        if (progressState.manualStepAdvance) {
           advanceProgressStep('step_done');
         }
 
@@ -6699,9 +6634,7 @@ RULES:
           tool_call_id: toolCallId || undefined,
           content: completionSummary,
         });
-        if (!completedSkillScoutOnly) {
-          markProgressStepResult(true, toolName);
-        }
+        markProgressStepResult(true, toolName);
         resetProgressRoundStats();
         continue;
       }
@@ -6921,16 +6854,6 @@ RULES:
 
 	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
 	      const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(), sessionId);
-      if (
-        manualPlanSkillScoutRequired
-        && !manualPlanSkillScoutCompleted
-        && progressState.manualStepAdvance
-        && stepCursor === 0
-        && !toolResult.error
-      ) {
-        if (toolName === 'skill_list') manualPlanSkillListDone = true;
-        if (toolName === 'skill_read') manualPlanSkillReadCount++;
-      }
       if (canReplayReadOnlyCall(toolName)) cachedReadOnlyToolResults.set(callKey, toolResult);
       // After any write tool, invalidate cached reads for that file so a
       // subsequent read_file gets fresh content instead of the stale cached version.
@@ -7129,7 +7052,7 @@ RULES:
 
     finalizeProgressRound();
 
-    if (!sessionId.startsWith('subagent_') && midWorkflowCompactionsThisTurn < 3 && messages.length > 3) {
+    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3 && messages.length > 3) {
       const midCompact = await maybeRunMidWorkflowCompaction({
         sessionId,
         messages,
@@ -7560,13 +7483,14 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean },
+    flags?: { syntheticGoalContinuation?: boolean; directSubagentChat?: boolean },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
     callerOnToken?: (token: string) => void,
 ): Promise<HandleChatResult> {
   const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
+  const isDirectSubagentChatTurn = isSubagentChatSession && flags?.directSubagentChat === true;
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
   const isTimerTurn = /^\s*\[Timer fired\]/i.test(String(message || ''));
   const turnOrigin = normalizeTurnOrigin(turnOriginInput, sessionId, isTimerTurn || isGoalContinuationTurn ? { channel: 'system', surface: 'automation', device: 'server' } : undefined);
@@ -7724,7 +7648,22 @@ async function runInteractiveTurn(
   sendSSE('ui_preflight', { message: 'Preparing chat context...' });
   const canvasCtx = getCanvasContextBlock(sessionId);
   const originCtx = formatTurnOriginContext(turnOrigin, sessionId);
-  const mergedCallerContext = [originCtx, callerContext, canvasCtx || undefined].filter(Boolean).join('\n\n') || undefined;
+  const assignedTaskAttentionCtx = (() => {
+    try {
+      const task = findBlockedTaskForSession(sessionId);
+      if (!task) return '';
+      return [
+        '[ASSIGNED TASK ATTENTION]',
+        buildBlockedTaskStatusMessage(task),
+        'This context is informational for this turn. Do not claim the task resumed just because the user replied.',
+        `Use task_control(action:"get", task_id:"${task.id}") to inspect the current state. Use task_control(action:"resume", task_id:"${task.id}") only when the user clearly asks to continue this task, or task_control(action:"rerun", task_id:"${task.id}") when they ask to retry from the start.`,
+        '[/ASSIGNED TASK ATTENTION]',
+      ].join('\n');
+    } catch {
+      return '';
+    }
+  })();
+  const mergedCallerContext = [originCtx, callerContext, canvasCtx || undefined, assignedTaskAttentionCtx || undefined].filter(Boolean).join('\n\n') || undefined;
   const result = await handleChat(
     message,
     sessionId,
@@ -7739,6 +7678,7 @@ async function runInteractiveTurn(
 	    reasoningOptions,
 	    undefined, // providerOverride
 	    callerOnToken,
+      { directSubagentChat: isDirectSubagentChatTurn },
 	  );
 
   const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
@@ -8605,9 +8545,46 @@ function summarizeVoiceObservation(sessionId: string): Record<string, any> {
   return { browser, desktop };
 }
 
+// Recent back-and-forth of the actual chat, so the voice agent picks up the
+// ongoing conversation instead of acting like a fresh session. The worker
+// context packet only carries the single latest user/assistant turn plus run
+// status; this gives the realtime agent the recent dialogue window.
+function buildVoiceConversationTranscript(sessionId: string, maxTurns = 12, maxCharsPerTurn = 600): string {
+  try {
+    const session = getSession(sessionId);
+    const history = Array.isArray(session?.history) ? session.history : [];
+    const turns = history
+      .filter((msg: any) => {
+        const role = String(msg?.role || '');
+        if (role !== 'user' && role !== 'assistant' && role !== 'ai') return false;
+        const text = String(msg?.content || msg?.body?.text || '').trim();
+        if (!text) return false;
+        // Skip injected rolling-compaction summaries and system-style scaffolding.
+        if (text.startsWith(ROLLING_COMPACTION_SUMMARY_PREFIX) || text.startsWith(LEGACY_COMPACTION_SUMMARY_PREFIX)) return false;
+        return true;
+      })
+      .slice(-maxTurns)
+      .map((msg: any) => {
+        const speaker = String(msg?.role || '') === 'user' ? 'User' : 'Prometheus';
+        const text = voiceNarrationClean(msg?.content || msg?.body?.text || '', maxCharsPerTurn);
+        return text ? `${speaker}: ${text}` : '';
+      })
+      .filter(Boolean);
+    return turns.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+function voiceRequestTimeInput(source: Record<string, any> = {}): any {
+  if (!source || typeof source !== 'object') return undefined;
+  return source.deviceTime || source.device_time || source.clientTime || source.client_time;
+}
+
 function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string, any> = {}): Record<string, any> {
   const sid = String(sessionId || 'default').trim() || 'default';
   const activeRuntime = findActiveMainChatRuntimeForSession(sid, String(options.expectedRuntimeId || options.runtimeId || ''));
+  const currentTime = buildVoiceTimeContext(voiceRequestTimeInput(options));
   const checkpoint = activeRuntime?.checkpoint && typeof activeRuntime.checkpoint === 'object' ? activeRuntime.checkpoint : {};
   const session = getSession(sid);
   const history = Array.isArray(session?.history) ? session.history : [];
@@ -8674,7 +8651,8 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     lastVoiceInterruption: checkpoint.voiceInterruptionEvent || null,
     latestUser: latestUser ? compactVoiceText(latestUser.content || latestUser.body?.text || '', 700) : '',
     latestAssistant: latestAssistant ? compactVoiceText(latestAssistant.content || latestAssistant.body?.text || '', 700) : '',
-    time: buildVoiceTimeContext(),
+    time: currentTime,
+    currentTime,
     processEntries,
     recentEvents,
     observations: summarizeVoiceObservation(sid),
@@ -8700,6 +8678,11 @@ function getReusableVoiceContextPacket(sessionId: string, body: Record<string, a
       && packetAgeMs <= 10_000
       && packetMatchesRuntime
     ) {
+      const freshTime = buildVoiceTimeContext(voiceRequestTimeInput(body));
+      if (freshTime.exactLocalTimeAvailable === true || !provided.currentTime) {
+        provided.currentTime = freshTime;
+        provided.time = freshTime;
+      }
       return provided;
     }
   }
@@ -9020,14 +9003,41 @@ async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, a
   return raw;
 }
 
-function buildVoiceTimeContext(): Record<string, any> {
+function buildVoiceTimeContext(clientTime?: any): Record<string, any> {
+  const raw = clientTime && typeof clientTime === 'object' ? clientTime : {};
+  const localIso = String(raw.localIso || raw.local_iso || raw.nowIso || raw.now_iso || '').trim();
+  const parsedClientTime = localIso ? new Date(localIso) : null;
+  const hasValidClientTime = !!(parsedClientTime && Number.isFinite(parsedClientTime.getTime()));
+  const cleanTimezone = String(raw.timezone || raw.timeZone || raw.tz || '').trim();
+  const cleanDateLabel = compactVoiceText(raw.dateLabel || raw.date_label || '', 120);
+  const cleanTimeLabel = compactVoiceText(raw.timeLabel || raw.time_label || '', 80);
+  const offsetMinutes = Number(raw.utcOffsetMinutes ?? raw.utc_offset_minutes);
+
+  if (hasValidClientTime) {
+    return {
+      source: 'device',
+      exactLocalTimeAvailable: true,
+      nowIso: parsedClientTime!.toISOString(),
+      timezone: cleanTimezone || 'device-local',
+      utcOffsetMinutes: Number.isFinite(offsetMinutes) ? offsetMinutes : undefined,
+      dateLabel: cleanDateLabel || parsedClientTime!.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+      timeLabel: cleanTimeLabel || parsedClientTime!.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
+      capturedAt: Number.isFinite(Number(raw.capturedAt || raw.captured_at)) ? Number(raw.capturedAt || raw.captured_at) : undefined,
+      instruction: 'This came from the user device at Realtime voice bootstrap. You may answer local date/time questions from this value, while allowing for normal elapsed time since capture.',
+    };
+  }
+
   const now = new Date();
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'gateway-local';
   return {
+    source: 'gateway_fallback',
+    exactLocalTimeAvailable: false,
     nowIso: now.toISOString(),
     timezone,
     dateLabel: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
     timeLabel: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
+    fallbackResponse: 'I do not have your exact device-local time available. Please check your device clock for the precise time.',
+    instruction: 'This is gateway/server time, not verified user device time. Do not claim exact local time from it.',
   };
 }
 
@@ -9951,12 +9961,13 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_desktop_focus_window',
-        description: 'Focus one desktop app/window by partial title or process name. Use for live desktop UI control setup. Do not use for files, shell commands, installs, or durable system changes; hand those to Worker.',
+        description: 'Focus one desktop app/window by partial title or process name, then verify the active title/process/monitor and capture a screenshot preview by default. Use for live desktop UI control setup. Do not use for files, shell commands, installs, or durable system changes; hand those to Worker.',
         parameters: {
           type: 'object',
           required: ['name'],
           properties: {
             name: { type: 'string', description: 'Partial window title or process name to focus.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a verification screenshot after focus. Default true.' },
           },
           additionalProperties: false,
         },
@@ -10836,10 +10847,13 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
     if (name === 'voice_desktop_focus_window') {
       const windowName = String(args.name || '').trim();
       if (!windowName) return voiceToolResult(false, 'Window name is required.');
-      const result = await desktopFocusWindow(windowName);
-      const ok = !/^ERROR:/i.test(String(result || ''));
-      return voiceToolResult(ok, ok ? result : result, {
+      const verification = await desktopFocusWindowVerified(sessionId, windowName, {
+        includeScreenshot: args.include_screenshot !== false,
+      });
+      if (!verification.ok) return voiceToolResult(false, verification.message, { name: windowName });
+      return voiceToolResult(true, verification.verification.summary, {
         name: windowName,
+        verification: verification.verification,
       });
     }
     if (name === 'voice_desktop_launch_app') {
@@ -11427,12 +11441,12 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
 
     '- voice_send_screenshot: send a browser/desktop screenshot through the delivery router. Default target is origin; use Telegram/mobile only when the user names them or context clearly requires it.',
     '- Screenshot ownership: when screenshot voice tools are available, screenshot capture and screenshot sending stay in the voice layer. Do not dispatch/steer Worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser_screenshot, voice_desktop_screenshot, or voice_send_screenshot.',
-    '- Current time is injected. Do not call a tool just to know the time/date.',
+    '- Current time is injected. Do not call a tool just to know the time/date. If [CURRENT_TIME].exactLocalTimeAvailable is true and source is device, answer local time/date questions directly from timeLabel/dateLabel. If exactLocalTimeAvailable is false, do not claim exact user-local time; say the fallbackResponse and direct the user to their device clock.',
     '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer the matching voice_* tool. If the user asks to update live voice-agent behavior memory, use voice_agent_memory. For skills, prefer skill_list, skill_read, skill_resource_list, or skill_resource_read.',
     '- For a "test web search" request without a concrete query, run a tiny harmless search for "OpenAI Realtime API voice tools" and report that the smoke test worked.',
     '',
     '[CURRENT_TIME]',
-    JSON.stringify(buildVoiceTimeContext(), null, 2),
+    JSON.stringify(contextPacket.currentTime || contextPacket.time || buildVoiceTimeContext(), null, 2),
     '[/CURRENT_TIME]',
     '',
     contextBlock,
@@ -11823,17 +11837,37 @@ function buildContextWindowCurrentState(input: {
   };
 }
 
-function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voiceReply: string, action: string, eventId: string, processEntries: any[]): void {
-  const sid = String(sessionId || '').trim();
+function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voiceReply: string, action: string, eventId: string, processEntries: any[]): string {
+  const rawSid = String(sessionId || '').trim();
   const userText = compactVoiceText(transcript || '', 1200);
   const replyText = String(voiceReply || '').trim();
   const id = String(eventId || '').trim();
-  if (!sid || !userText || !replyText) return;
+  if (!rawSid || !userText || !replyText) return rawSid;
+  // A voice-first new chat on mobile can still be sitting on the throwaway
+  // 'mobile_default' draft slot when the realtime handoff posts here. The
+  // mobile drawer never lists 'mobile_default', so persisting a durable turn
+  // under it orphans the whole conversation (works live, vanishes on nav).
+  // Rotate to a real mobile_<id> session and register it as channel 'mobile'
+  // so it surfaces in the session list exactly like a text-first chat does.
+  let sid = rawSid;
+  if (rawSid === 'mobile_default') {
+    sid = `mobile_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`;
+    try {
+      // Register the real session as channel 'mobile' so the drawer lists it.
+      // Do not seed a title message here: the user turn added below becomes
+      // the first message and the drawer derives the title from history,
+      // which avoids a duplicate user bubble.
+      touchSession(sid, { channel: 'mobile' });
+      flushSession(sid);
+    } catch (registerErr: any) {
+      console.warn('[voice-agent] failed to register rotated mobile voice session:', registerErr?.message || registerErr);
+    }
+  }
   try {
     const session = getSession(sid);
     const history = Array.isArray(session.history) ? session.history : [];
     if (id && history.some((msg: any) => String(msg?.voiceInterruptionEventId || '') === id && String(msg?.content || '').trim() === replyText)) {
-      return;
+      return sid;
     }
     const groupId = `voice_workflow_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`;
     const now = Date.now();
@@ -11859,9 +11893,11 @@ function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voi
       workflowLabel: action === 'interrupt_worker' ? 'Abort response' : 'Interruption response',
       voiceInterruptionEventId: id || undefined,
     } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    flushSession(sid);
   } catch (err: any) {
     console.warn('[voice-agent] failed to persist visible voice turn:', err?.message || err);
   }
+  return sid;
 }
 
 function hasRecentVoiceWorkflowUserMessage(sessionId: string, message: string, maxAgeMs = 180000): boolean {
@@ -12670,11 +12706,19 @@ router.get('/api/mobile/commands/stop-targets', (_req, res) => {
 router.post('/api/mobile/commands/stop-now', (req, res) => {
   try {
     const sessionId = String(req.body?.sessionId || '').trim();
-    const target = listLiveRuntimes().find((runtime) =>
-      runtime.kind === 'main_chat'
-        && runtime.abortable
-        && (!sessionId || String(runtime.sessionId || '') === sessionId)
-    );
+    const runtimeId = String(req.body?.runtimeId || req.body?.id || '').trim();
+    const runtimeById = runtimeId ? getLiveRuntime(runtimeId) : null;
+    const target = runtimeById?.kind === 'main_chat'
+      && runtimeById.abortable
+      && (!sessionId || String(runtimeById.sessionId || '') === sessionId)
+      ? runtimeById
+      : listLiveRuntimes()
+        .filter((runtime) =>
+          runtime.kind === 'main_chat'
+            && runtime.abortable
+            && (!sessionId || String(runtime.sessionId || '') === sessionId)
+        )
+        .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
     if (!target) {
       res.json({ success: false, message: 'No active main chat turn is currently running for this session.' });
       return;
@@ -12682,7 +12726,7 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
     const result = abortLiveRuntime(target.id);
     res.json({
       success: result.ok,
-      message: result.ok ? 'Main chat abort requested.' : (result.error || 'Abort failed.'),
+      message: result.ok ? 'Main chat aborted.' : (result.error || 'Abort failed.'),
       target: summarizeMobileRuntime(result.runtime || target),
     });
   } catch (err: any) {
@@ -12705,7 +12749,7 @@ router.post('/api/mobile/commands/stop', (req, res) => {
     const result = abortLiveRuntime(id);
     res.json({
       success: result.ok,
-      message: result.ok ? 'Abort requested.' : (result.error || 'Abort failed.'),
+      message: result.ok ? 'Runtime aborted.' : (result.error || 'Abort failed.'),
       target: summarizeMobileRuntime(result.runtime || runtime),
     });
   } catch (err: any) {
@@ -13140,8 +13184,13 @@ router.post('/api/voice-agent/input', async (req, res) => {
       || action === 'steer_worker'
       || action === 'interrupt_worker'
     );
+    // resolvedSessionId may differ from the posted sessionId when a voice-first
+    // mobile chat was still on the 'mobile_default' draft slot and got rotated
+    // to a real mobile_<id> session during persistence. The client adopts this
+    // so its live conversation points at the durable, drawer-listed session.
+    let resolvedSessionId = sessionId;
     if (action === 'handoff_new_work' && voiceReply) {
-      persistVoiceAgentVisibleTurn(sessionId, transcript, voiceReply, action, eventId, voiceProcessEntries);
+      resolvedSessionId = persistVoiceAgentVisibleTurn(sessionId, transcript, voiceReply, action, eventId, voiceProcessEntries) || sessionId;
     }
     appendVoiceInterruptionLog(storedEvent);
     if (activeRuntime?.id) {
@@ -13168,7 +13217,9 @@ router.post('/api/voice-agent/input', async (req, res) => {
       broadcastWS({
         type: 'voice_interruption',
         isInterruption: true,
-        sessionId,
+        sessionId: resolvedSessionId,
+        originalSessionId: sessionId,
+        resolvedSessionId,
         eventId,
         intent: classification.intent,
         action,
@@ -13189,7 +13240,9 @@ router.post('/api/voice-agent/input', async (req, res) => {
       broadcastWS({
         type: 'voice_agent_turn',
         isInterruption: false,
-        sessionId,
+        sessionId: resolvedSessionId,
+        originalSessionId: sessionId,
+        resolvedSessionId,
         eventId,
         action,
         transcript,
@@ -13206,6 +13259,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
       success: true,
       eventId,
       action,
+      resolvedSessionId,
       steerApplied,
       steerEventId,
       runtimeId: activeRuntime?.id || '',
@@ -13435,7 +13489,10 @@ function buildRealtimeVoiceAgentInstructions(args: {
   voiceAgentMemory?: string;
   voiceRuntime?: string;
   wakePhrase?: string;
+  conversationTranscript?: string;
+  currentTime?: Record<string, any>;
 }): string {
+  const currentTime = args.currentTime || buildVoiceTimeContext();
   const lines = [
     'You are Prometheus speaking through the user\'s voice interface in OpenAI Realtime mode.',
     'You are the live conversational voice agent: small talk, status answers, fast voice_* tools, canonical read-only skill_* tools, and worker hand-offs all flow through you. You ARE Prometheus on voice — speak with that identity.',
@@ -13444,6 +13501,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '',
     'Response style: speak naturally and conversationally, as if on a phone call. Keep replies tight unless he wants depth. No bullet points or markdown — this is audio.',
     'Speak only normal words and numbers. Never vocalize punctuation marks, symbols, emoji, markdown, bullets, dashes, or standalone characters; if a candidate reply has no word, stay silent.',
+    'Time/date rule: use ## Current time only when exactLocalTimeAvailable is true or source is device. If it is gateway_fallback, say you do not have the exact device-local time and tell the user to check their device clock for the precise time.',
     '',
     args.voiceAgentMemory ? '## Voice agent memory' : '',
     args.voiceAgentMemory ? args.voiceAgentMemory : '',
@@ -13500,6 +13558,14 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '## Worker context (current state — read-only orientation)',
     args.contextBlock || '(no extended context available)',
   ];
+  if (args.conversationTranscript) {
+    lines.push(
+      '',
+      '## Ongoing conversation (the chat the user just opened — continue from here, do NOT restart)',
+      'This is the recent back-and-forth in this chat. When the user turns voice on mid-conversation, pick up exactly where this left off — reference what was already said, do not re-introduce yourself or ask what they need from scratch.',
+      args.conversationTranscript,
+    );
+  }
   if (args.voiceRuntime) {
     lines.push('', '## Voice runtime state', args.voiceRuntime);
   }
@@ -13507,7 +13573,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     lines.push('', `## Wake phrase: "${args.wakePhrase}"`, 'If quiet mode is active, stay silent until this phrase is heard.');
   }
   lines.push('', '## Worker context packet', JSON.stringify(args.contextPacket, null, 2));
-  lines.push('', '## Current time', JSON.stringify(buildVoiceTimeContext(), null, 2));
+  lines.push('', '## Current time', JSON.stringify(currentTime, null, 2));
   return clampRealtimeInstructions(lines.filter(Boolean).join('\n'));
 }
 
@@ -13525,6 +13591,8 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
     const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
+    const currentTime = buildVoiceTimeContext(body.deviceTime || body.device_time || body.clientTime || body.client_time);
+    contextPacket.currentTime = currentTime;
     const originalPrompt = String(body.originalUserPrompt || '').trim();
     let contextBlockResult: { contextBlock: string; elapsedMs?: number; cacheHit?: boolean };
     try {
@@ -13546,6 +13614,8 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
+      conversationTranscript: buildVoiceConversationTranscript(sessionId),
+      currentTime,
     });
     const tools = buildRealtimeVoiceAgentTools();
 
@@ -13891,6 +13961,8 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
     const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
     const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
+    const currentTime = buildVoiceTimeContext(body.deviceTime || body.device_time || body.clientTime || body.client_time);
+    contextPacket.currentTime = currentTime;
     const originalPrompt = String(body.originalUserPrompt || '').trim();
     let contextBlockResult: { contextBlock: string; elapsedMs?: number; cacheHit?: boolean };
     try {
@@ -13908,6 +13980,8 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
+      conversationTranscript: buildVoiceConversationTranscript(sessionId),
+      currentTime,
     });
     const tools = buildRealtimeVoiceAgentTools();
 
@@ -14446,6 +14520,10 @@ router.post('/api/chat', async (req, res) => {
       attachments: Array.isArray(attachments) ? attachments.map((a: any) => ({ name: a?.name, mimeType: a?.mimeType })) : [],
     },
   });
+  sendSSE('runtime_registered', {
+    runtimeId,
+    run: summarizeMobileRuntime(getLiveRuntime(runtimeId)),
+  });
   const rawSendSSE = sendSSE;
   const runtimeProcessEntries: Record<string, any>[] = [];
   let __firstContentLogged = false;
@@ -14638,6 +14716,7 @@ router.post('/api/sessions', (req, res) => {
       channel,
       title: typeof req.body?.title === 'string' ? req.body.title : undefined,
     });
+    flushSession(id);
     res.json({ success: true, session: { id: session.id, channel: session.channel, createdAt: session.createdAt, lastActiveAt: session.lastActiveAt } });
   } catch (err: any) {
     console.error('[/api/sessions POST] Error:', err);
@@ -14706,6 +14785,7 @@ router.post('/api/sessions/:id/history', (req, res) => {
     }
     const history = mergeHistoryWithExistingMessageMetadata(id, Array.isArray(req.body?.history) ? req.body.history : []);
     replaceHistory(id, history as any, { resetCompaction: req.body?.resetCompaction === true });
+    flushSession(id);
     res.json({ success: true });
   } catch (e: any) {
     console.error('[/api/sessions/:id/history POST] Error:', e);
@@ -14764,7 +14844,11 @@ router.get('/api/sessions/:id', (req, res) => {
       includeToolLog,
       perMessageProcessLimit: full ? 500 : 50,
     });
-    const responseProcessLog = sessionProcessLogFromHistory({ history: responseHistory }).slice(-processLimit);
+    const durableProcessLog = Array.isArray((session as any).processLog) ? (session as any).processLog : [];
+    const responseProcessLog = [
+      ...durableProcessLog,
+      ...sessionProcessLogFromHistory({ history: responseHistory }),
+    ].slice(-processLimit);
     
     res.json({
       session: {

@@ -1,9 +1,9 @@
 ---
 name: xlsx-writer
-description: Generate Excel spreadsheets using `xlsx` (SheetJS). Pure Node — works on Windows.
+description: Use this skill when the user asks to create, generate, export, or write Excel spreadsheets, XLSX workbooks, CSV-to-XLSX exports, spreadsheet reports, multi-sheet workbooks, summary sheets, data exports, or formatted workbook files. Triggers on phrases like create Excel, create spreadsheet, generate XLSX, export Excel, make workbook, spreadsheet report, save as XLSX, workbook with sheets, data export, and Excel report. Use it to produce usable SheetJS workbooks and tell the user the exact saved path.
 emoji: "🧩"
-version: 1.0.0
-triggers: create excel, create spreadsheet, generate xlsx, generate excel, export xlsx, export excel, make workbook, spreadsheet report, xls, xlsx, workbook
+version: 1.1.0
+triggers: create excel, create spreadsheet, generate xlsx, generate excel, export xlsx, export excel, make workbook, spreadsheet report, xls, xlsx, workbook, save as XLSX, Excel report, data export
 ---
 
 # XLSX Writer

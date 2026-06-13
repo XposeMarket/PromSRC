@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to create, update, package, repair, import, export, or improve a Prometheus skill, skill trigger set, skill description, bundled resources, examples, templates, schemas, or reusable workflow playbook. It ensures skills are discoverable and reusable.",
+  "triggers": [
+    "create skill",
+    "update skill",
+    "repair skill",
+    "skill triggers",
+    "skill description",
+    "skill metadata",
+    "skill bundle",
+    "package skill",
+    "import skill",
+    "export skill",
+    "reusable playbook",
+    "workflow skill",
+    "skill catalog",
+    "add a skill",
+    "improve this skill"
+  ],
+  "categories": [
+    "skills",
+    "meta",
+    "workflow"
+  ],
+  "requiredTools": [
+    "skill_list",
+    "skill_read",
+    "skill_create",
+    "skill_create_bundle",
+    "skill_update_metadata",
+    "skill_repair_metadata"
+  ],
+  "lifecycle": "active",
+  "name": "Skill Creator",
+  "id": "skill-creator"
+}

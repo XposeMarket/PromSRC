@@ -5,11 +5,13 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createHash } from 'crypto';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import { getConfig, getAgents, getAgentById } from '../../config/config';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
+import { scoreSkillMetadata, skillMatchesScope, buildMetadataManifest, splitCsv, type SkillMetadataAudit } from './capabilities/skills-executor';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
 import { executeWebFetch, executeShoppingSearchProducts } from '../../tools/web';
@@ -190,7 +192,7 @@ import {
   parseDesktopPointerMonitorArgs,
   resolveDesktopActionPoint,
   desktopFindWindow,
-  desktopFocusWindow,
+  desktopFocusWindowVerified,
   desktopClick,
   desktopDrag,
   desktopWait,
@@ -1240,6 +1242,23 @@ const GENERIC_WORKSPACE_MUTATION_TOOLS = new Set([
   'mkdir',
 ]);
 
+const SCOPED_WORKSPACE_FILE_MUTATION_TOOLS = new Set([
+  'create_file',
+  'write_file',
+  'append_file',
+  'replace_lines',
+  'insert_after',
+  'delete_lines',
+  'find_replace',
+  'delete_file',
+  'rename_file',
+  'copy_file',
+  'move_file',
+  'copy_directory',
+  'move_directory',
+  'mkdir',
+]);
+
 function resolveTaskForSession(sessionId: string) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
@@ -2257,11 +2276,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		    return enforceMutationScope(relPath, kind, toolName);
 		  }
 
-      if (GENERIC_WORKSPACE_MUTATION_TOOLS.has(name) && isDevSourceWriteApprovedSession()) {
+      if (GENERIC_WORKSPACE_MUTATION_TOOLS.has(name) && isDevSourceWriteApprovedSession() && !SCOPED_WORKSPACE_FILE_MUTATION_TOOLS.has(name)) {
         return {
           name,
           args,
-          result: `BLOCKED: ${name} is disabled in code_change proposal tasks. Use the src/web-ui-specific source tools against approved files only.`,
+          result: `BLOCKED: ${name} is disabled in code_change/dev-source edit sessions. Use approved source tools for src/web-ui changes, or scoped workspace file tools for approved self docs.`,
           error: true,
         };
       }
@@ -4995,6 +5014,153 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const gp_payload = { searched: gp_resolved.normalizedRel || '.', pattern: gp_pattern, match_count: gp_matches.length, matches: gp_matches };
         return { name, args, result: JSON.stringify(gp_payload, null, 2), error: false };
       }
+      case 'read_dev_sources': {
+        const files = Array.isArray(args.files) ? args.files : [];
+        if (!files.length) return { name, args, result: 'ERROR: files[] is required.', error: true };
+        const results: string[] = [];
+        let sawError = false;
+        const normalizeDevSourcePath = (entry: any): string => String(entry?.file || entry?.path || '').replace(/\\/g, '/').replace(/^\.\//, '');
+        for (let i = 0; i < files.length; i++) {
+          const entry = files[i] || {};
+          const requested = normalizeDevSourcePath(entry);
+          if (!requested) {
+            sawError = true;
+            results.push(`--- read_dev_sources[${i + 1}] ---\nERROR: file path required.`);
+            continue;
+          }
+          const isWebUi = requested.startsWith('web-ui/');
+          const sourceFile = isWebUi ? requested.slice('web-ui/'.length) : requested.replace(/^src\//, '');
+          const around = String(entry?.around || entry?.anchor || '');
+          let result: ToolResult;
+          let delegatedTool: string;
+          if (around) {
+            delegatedTool = isWebUi ? 'grep_webui_source' : 'grep_source';
+            const pattern = entry?.regex === true ? around : around.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            result = await executeTool(delegatedTool, {
+              pattern,
+              path: path.dirname(sourceFile) === '.' ? '' : path.dirname(sourceFile),
+              glob: path.basename(sourceFile),
+              context: entry?.context,
+              max_results: entry?.occurrence ? Math.max(1, Number(entry.occurrence)) : 20,
+            }, workspacePath, deps, sessionId);
+          } else {
+            delegatedTool = isWebUi ? 'read_webui_source' : 'read_source';
+            const readArgs: any = { file: sourceFile };
+            for (const key of ['start_line', 'num_lines', 'head', 'tail']) {
+              if (entry?.[key] !== undefined) readArgs[key] = entry[key];
+            }
+            result = await executeTool(delegatedTool, readArgs, workspacePath, deps, sessionId);
+          }
+          if (result.error) sawError = true;
+          results.push(`--- ${requested} via ${delegatedTool} ---\n${result.result}`);
+        }
+        return { name, args, result: results.join('\n\n'), error: sawError };
+      }
+
+      case 'apply_dev_source_patchset': {
+        const edits = Array.isArray(args.edits) ? args.edits : [];
+        if (!edits.length) return { name, args, result: 'ERROR: edits[] is required.', error: true };
+        const projectRoot = resolveProjectRootForSourceAccess();
+        const results: string[] = [];
+        const touched = new Set<string>();
+        const normalizeDevSourcePath = (entry: any): string => String(entry?.file || entry?.path || '').replace(/\\/g, '/').replace(/^\.\//, '');
+        const resolveDevSourceFile = (requested: string): { isWebUi: boolean; file: string; display: string; absPath: string } => {
+          const isWebUi = requested.startsWith('web-ui/');
+          const root = isWebUi ? path.join(projectRoot, 'web-ui') : path.join(projectRoot, 'src');
+          const file = isWebUi ? requested.slice('web-ui/'.length) : requested.replace(/^src\//, '');
+          const absPath = path.resolve(root, file);
+          if (!absPath.startsWith(root)) throw new Error(`Path escapes ${isWebUi ? 'web-ui/' : 'src/'}: ${requested}`);
+          return { isWebUi, file, display: `${isWebUi ? 'web-ui' : 'src'}/${file}`, absPath };
+        };
+        const delegatedNameFor = (isWebUi: boolean, base: string): string => isWebUi ? `${base}_webui_source` : `${base}_source`;
+        const readExistingContent = (target: { display: string; absPath: string }): string | null => {
+          if (!fs.existsSync(target.absPath)) return null;
+          const stat = fs.statSync(target.absPath);
+          if (!stat.isFile()) throw new Error(`"${target.display}" is not a file`);
+          return fs.readFileSync(target.absPath, 'utf-8');
+        };
+        const checkGuards = (edit: any, target: { display: string; absPath: string }): ToolResult | null => {
+          const content = readExistingContent(target);
+          if (edit.expected_hash) {
+            if (content === null) return { name, args, result: `ERROR: ${target.display} does not exist; cannot verify expected_hash.`, error: true };
+            const digest = createHash('sha256').update(content).digest('hex');
+            const expected = String(edit.expected_hash).trim().toLowerCase();
+            if (!digest.startsWith(expected)) {
+              return { name, args, result: `ERROR: ${target.display} expected_hash mismatch. Current sha256 starts ${digest.slice(0, Math.max(12, expected.length))}.`, error: true };
+            }
+          }
+          if (edit.expected_before) {
+            if (content === null || !content.includes(String(edit.expected_before))) {
+              return { name, args, result: `ERROR: ${target.display} expected_before text was not found.`, error: true };
+            }
+          }
+          return null;
+        };
+        for (let i = 0; i < edits.length; i++) {
+          const edit = edits[i] || {};
+          const requested = normalizeDevSourcePath(edit);
+          if (!requested) return { name, args, result: `ERROR: edits[${i}].file is required.`, error: true };
+          let target: { isWebUi: boolean; file: string; display: string; absPath: string };
+          try {
+            target = resolveDevSourceFile(requested);
+          } catch (err: any) {
+            return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+          }
+          const guarded = checkGuards(edit, target);
+          if (guarded) return guarded;
+          const op = String(edit.op || '').toLowerCase();
+          let delegatedTool = '';
+          let delegatedArgs: any = { file: target.file };
+          if (op === 'exact_replace' || op === 'find_replace' || op === 'delete_exact') {
+            delegatedTool = delegatedNameFor(target.isWebUi, 'find_replace');
+            delegatedArgs.find = String(edit.find || '');
+            delegatedArgs.replace = op === 'delete_exact' ? '' : String(edit.replace ?? edit.content ?? '');
+            delegatedArgs.replace_all = edit.replace_all === true;
+          } else if (op === 'line_replace' || op === 'replace_lines') {
+            delegatedTool = delegatedNameFor(target.isWebUi, 'replace_lines');
+            delegatedArgs.start_line = edit.start_line;
+            delegatedArgs.end_line = edit.end_line;
+            delegatedArgs.new_content = String(edit.new_content ?? edit.replace ?? edit.content ?? '');
+          } else if (op === 'insert_after_line' || op === 'insert_after') {
+            delegatedTool = delegatedNameFor(target.isWebUi, 'insert_after');
+            delegatedArgs.after_line = edit.after_line;
+            delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
+          } else if (op === 'insert_after_anchor') {
+            const content = readExistingContent(target);
+            const anchor = String(edit.anchor || edit.find || '');
+            if (content === null) return { name, args, result: `ERROR: ${target.display} does not exist.`, error: true };
+            if (!anchor) return { name, args, result: `ERROR: edits[${i}].anchor is required for insert_after_anchor.`, error: true };
+            const lines = content.split('\n');
+            const lineIndex = lines.findIndex((line) => line.includes(anchor));
+            if (lineIndex < 0) return { name, args, result: buildTextNotFoundRecovery(target.display, content, anchor, target.isWebUi ? 'read_webui_source' : 'read_source'), error: true };
+            delegatedTool = delegatedNameFor(target.isWebUi, 'insert_after');
+            delegatedArgs.after_line = lineIndex + 1;
+            delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
+          } else if (op === 'delete_lines') {
+            delegatedTool = delegatedNameFor(target.isWebUi, 'delete_lines');
+            delegatedArgs.start_line = edit.start_line;
+            delegatedArgs.end_line = edit.end_line;
+          } else if (op === 'write_file' || op === 'full_file_write' || op === 'create_file') {
+            delegatedTool = delegatedNameFor(target.isWebUi, 'write');
+            delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
+            delegatedArgs.overwrite = op !== 'create_file';
+          } else {
+            return { name, args, result: `ERROR: unsupported patchset op "${op}" at edits[${i}].`, error: true };
+          }
+          const result = await executeTool(delegatedTool, delegatedArgs, workspacePath, deps, sessionId);
+          results.push(`--- ${target.display} via ${delegatedTool} ---\n${result.result}`);
+          if (result.error) return { name, args, result: results.join('\n\n'), error: true };
+          touched.add(target.display);
+        }
+        const payload = {
+          ok: true,
+          edit_count: edits.length,
+          touched_files: Array.from(touched),
+          results,
+        };
+        return { name, args, result: JSON.stringify(payload, null, 2), error: false };
+      }
+
       // ── read_source: read a file from src/ only ───────────────────────────────
       case 'read_source': {
         const rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/');
@@ -10208,16 +10374,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           const prompt = String(args.task_prompt || args.prompt || '').trim();
           if (!prompt) return { name, args, result: 'background_spawn requires task_prompt', error: true };
-          const modelOverride = String(args.model_override || args.model || '').trim() || undefined;
-          const providerOverride = String(args.provider_override || args.provider || '').trim() || undefined;
           const status = backgroundSpawn({
             prompt,
             spawnerSessionId: sessionId,
             joinPolicy: args.join_policy || 'wait_all',
             timeoutMs: args.timeout_ms,
             tags: args.tags,
-            modelOverride,
-            providerOverride,
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
@@ -12197,8 +12359,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_focus_window': {
-        const result = await desktopFocusWindow(String(args.name || ''));
-        return { name, args, result, error: result.startsWith('ERROR') };
+        const verification = await desktopFocusWindowVerified(sessionId, String(args.name || ''), {
+          includeScreenshot: args.include_screenshot !== false,
+        });
+        if (!verification.ok) {
+          return { name, args, result: verification.message, error: true };
+        }
+        return {
+          name,
+          args,
+          result: verification.verification.summary,
+          data: verification.verification,
+          error: false,
+        };
       }
       case 'desktop_window_control': {
         const actionRaw = String(args.action || '').toLowerCase();
@@ -13404,6 +13577,114 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch (scErr: any) {
           return { name, args, result: `skill_create failed: ${scErr.message}`, error: true };
         }
+      }
+
+      case 'skill_audit_all': {
+        deps.skillsManager.scanSkills();
+        const scope = String(args.scope || 'all');
+        const onlyProblems = args.onlyProblems !== false && args.only_problems !== false;
+        const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
+        const all = deps.skillsManager.getAll().filter((s: any) => skillMatchesScope(s, scope));
+        const audits = all.map((s: any) => scoreSkillMetadata(s)).sort((a: SkillMetadataAudit, b: SkillMetadataAudit) => a.score - b.score);
+        const flagged = audits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
+        const list = onlyProblems ? flagged : audits;
+        const summary = {
+          scope,
+          totalScanned: all.length,
+          flagged: flagged.length,
+          threshold,
+          avgScore: audits.length ? Math.round(audits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / audits.length) : 100,
+          skills: list.map((a: SkillMetadataAudit) => ({ id: a.id, name: a.name, score: a.score, issues: a.issues })),
+        };
+        return { name, args, result: JSON.stringify(summary, null, 2), error: false };
+      }
+
+      case 'skill_update_metadata': {
+        const skillId = String(args.id || args.skill_id || '').trim();
+        if (!skillId) return { name, args, result: 'skill_update_metadata: id is required', error: true };
+        const skill = deps.skillsManager.get(skillId);
+        if (!skill) return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
+        const manifest = buildMetadataManifest(skill, args);
+        if (!manifest) {
+          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, categories, requiredTools, lifecycle, or name).`, error: true };
+        }
+        try {
+          const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {
+            changeType: args.changeType || args.change_type ? String(args.changeType || args.change_type) : 'metadata_update',
+            evidence: Array.isArray(args.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args.evidence ? [String(args.evidence)] : undefined),
+            appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
+            reason: args.reason ? String(args.reason) : undefined,
+          });
+          const after = scoreSkillMetadata(updated);
+          return {
+            name, args,
+            result: `Updated metadata for ${updated.name} (${updated.id}). Fields: ${Object.keys(manifest).join(', ')}. New quality score: ${after.score}${after.issues.length ? `, remaining issues: ${after.issues.join(', ')}` : ' (clean)'}.`,
+            error: false,
+          };
+        } catch (metaErr: any) {
+          return { name, args, result: `skill_update_metadata failed: ${metaErr.message}`, error: true };
+        }
+      }
+
+      case 'skill_repair_metadata': {
+        deps.skillsManager.scanSkills();
+        const mode = String(args.mode || 'preview').trim().toLowerCase();
+        const scope = String(args.scope || 'all');
+        const ids = splitCsv(args.ids).map((s) => s.toLowerCase());
+        const repairs = Array.isArray(args.repairs) ? args.repairs : [];
+        if (mode === 'apply') {
+          if (args.confirm !== true) {
+            return { name, args, result: 'skill_repair_metadata: apply mode requires confirm:true. Run mode:"preview" first to inspect the proposed patch set.', error: true };
+          }
+          if (!repairs.length) {
+            return { name, args, result: 'skill_repair_metadata: apply mode requires a repairs array of {id, description?, triggers?, categories?, requiredTools?, lifecycle?, name?} objects (typically the edited preview set).', error: true };
+          }
+          const applied: any[] = [];
+          const failed: any[] = [];
+          for (const r of repairs) {
+            const rid = String(r?.id || '').trim();
+            if (!rid) { failed.push({ id: rid, error: 'missing id' }); continue; }
+            const sk = deps.skillsManager.get(rid);
+            if (!sk) { failed.push({ id: rid, error: 'not found' }); continue; }
+            const manifest = buildMetadataManifest(sk, r);
+            if (!manifest) { failed.push({ id: rid, error: 'no changes' }); continue; }
+            try {
+              const updated = deps.skillsManager.writeManifestOverlay(rid, manifest, {
+                changeType: 'metadata_repair',
+                appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
+                reason: args.reason ? String(args.reason) : 'bulk metadata repair',
+              });
+              applied.push({ id: updated.id, fields: Object.keys(manifest), score: scoreSkillMetadata(updated).score });
+            } catch (e: any) {
+              failed.push({ id: rid, error: e.message });
+            }
+          }
+          return { name, args, result: JSON.stringify({ mode: 'apply', applied: applied.length, failed: failed.length, results: applied, errors: failed }, null, 2), error: false };
+        }
+        const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
+        const all = deps.skillsManager.getAll().filter((s: any) => {
+          if (ids.length) return ids.includes(String(s.id || '').toLowerCase());
+          return skillMatchesScope(s, scope);
+        });
+        const flagged = all
+          .map((s: any) => ({ skill: s, audit: scoreSkillMetadata(s) }))
+          .filter(({ audit }: { skill: any; audit: SkillMetadataAudit }) => audit.score < threshold || audit.issues.length > 0)
+          .sort((a: { skill: any; audit: SkillMetadataAudit }, b: { skill: any; audit: SkillMetadataAudit }) => a.audit.score - b.audit.score);
+        const template = flagged.map(({ audit }: { skill: any; audit: SkillMetadataAudit }) => ({
+          id: audit.id,
+          name: audit.name,
+          score: audit.score,
+          issues: audit.issues,
+          currentDescription: audit.description,
+          currentTriggers: audit.triggers,
+          description: '',
+          triggers: '',
+        }));
+        return {
+          name, args,
+          result: `${JSON.stringify({ mode: 'preview', scope, flagged: template.length, threshold, repairs: template }, null, 2)}\n\nTo apply: edit description/triggers in each repair entry, then call skill_repair_metadata({mode:"apply", confirm:true, repairs:[...]}).`,
+          error: false,
+        };
       }
 
       // â”€â”€ Piece 1: MCP Tool Dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -15716,6 +15997,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               verification: args?.verification,
               expectedWorkflow: args?.expected_workflow || args?.expectedWorkflow || args?.after_edit_workflow || args?.afterEditWorkflow,
               completionNoteTag: args?.completion_note_tag || args?.completionNoteTag,
+              allowedDirs: args?.allowed_dirs || args?.allowedDirs,
             });
           } catch (err: any) {
             return { name, args, result: `request_dev_source_edit error: ${err.message || err}`, error: true };
@@ -15723,12 +16005,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
           const existingGrant = getDevSourceEditGrant(sessionId);
           const alreadyAllowed = existingGrant
-            && scope.allowedFiles.every((file) => existingGrant.allowedFiles.includes(file));
+            && scope.allowedFiles.every((file) => existingGrant.allowedFiles.includes(file))
+            && scope.allowedDirs.every((dir) => (existingGrant.allowedDirs || []).includes(dir));
           if (alreadyAllowed) {
             return {
               name,
               args,
-              result: `Dev source edit scope is already approved for this session: ${scope.allowedFiles.join(', ')}`,
+              result: `Dev source edit scope is already approved for this session: ${scope.allowedFiles.join(', ')}; workspace docs: ${scope.allowedDirs.join(', ')}`,
               error: false,
             };
           }
@@ -15737,7 +16020,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const activeTask = resolveTaskForSession(sessionId);
           const activeTaskId = String(activeTask?.id || '').trim() || undefined;
           const approvalOrigin = inferApprovalOrigin(sessionId, activeTask, args);
-          const action = `Allow Prometheus dev source edits to: ${scope.allowedFiles.join(', ')}`;
+          const action = `Allow Prometheus dev source edits to: ${scope.allowedFiles.join(', ')}; workspace self docs: ${scope.allowedDirs.join(', ')}`;
           const approval = approvalQueue.create({
             sessionId,
             taskId: activeTaskId,
@@ -15748,6 +16031,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             toolArgs: {
               dev_edit_id: scope.devEditId,
               files: scope.allowedFiles,
+              allowed_dirs: scope.allowedDirs,
               reason: scope.reason,
               verification_command: scope.verificationCommand,
               verification_profile: scope.verificationProfile,
@@ -15764,6 +16048,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             devSourceEdit: {
               devEditId: scope.devEditId,
               allowedFiles: scope.allowedFiles,
+              allowedDirs: scope.allowedDirs,
               verificationCommand: scope.verificationCommand,
               verificationProfile: scope.verificationProfile,
               verificationProfiles: scope.verificationProfiles,
@@ -15888,13 +16173,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
             args,
             result:
               `Approved dev source edit scope for this session: ${scope.allowedFiles.join(', ')}.\n` +
+              `Approved workspace self-doc scope: ${scope.allowedDirs.join(', ')}.\n` +
               `Approved plan hash: ${scope.planHash || 'none'}; dev_edit_id: ${scope.devEditId}.\n` +
-              `Use source-specific tools only. When edits are complete, finalize through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Approved Prometheus dev source edits', 'apply_live', scope.devEditId)}. ` +
+              `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are complete, finalize through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Approved Prometheus dev source edits', 'apply_live', scope.devEditId)}. ` +
               `For a no-restart preflight, call the same tool with mode:"verify_only". After apply_live/reload succeeds, write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" to complete the dev edit plan.`,
             data: {
               devSourceEdit: {
                 devEditId: scope.devEditId,
                 allowedFiles: scope.allowedFiles,
+                allowedDirs: scope.allowedDirs,
                 plan: scope.plan,
                 planHash: scope.planHash,
                 verificationProfiles: scope.verificationProfiles,
@@ -15905,6 +16192,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               devSourceEdit: {
                 devEditId: scope.devEditId,
                 allowedFiles: scope.allowedFiles,
+                allowedDirs: scope.allowedDirs,
                 plan: scope.plan,
                 planHash: scope.planHash,
                 verificationProfiles: scope.verificationProfiles,
@@ -16010,6 +16298,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                     ? createDevSourceEditApprovalScope({
                         sessionId,
                         files: existing.devSourceEdit.allowedFiles,
+                        allowedDirs: (existing.devSourceEdit as any).allowedDirs,
                         verificationProfile: existing.devSourceEdit.verificationProfile,
                         verificationProfiles: (existing.devSourceEdit as any).verificationProfiles,
                         reason: existing.devSourceEdit.reason,
@@ -16045,6 +16334,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                     ? createDevSourceEditApprovalScope({
                         sessionId,
                         files: existing.devSourceEdit.allowedFiles,
+                        allowedDirs: (existing.devSourceEdit as any).allowedDirs,
                         verificationProfile: existing.devSourceEdit.verificationProfile,
                         verificationProfiles: (existing.devSourceEdit as any).verificationProfiles,
                         reason: existing.devSourceEdit.reason,

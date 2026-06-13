@@ -65,16 +65,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         try {
           const prompt = String(args.task_prompt || args.prompt || '').trim();
           if (!prompt) return { name, args, result: 'background_spawn requires task_prompt', error: true };
-          const modelOverride = String(args.model_override || args.model || '').trim() || undefined;
-          const providerOverride = String(args.provider_override || args.provider || '').trim() || undefined;
           const status = backgroundSpawn({
             prompt,
             spawnerSessionId: sessionId,
             joinPolicy: args.join_policy || 'wait_all',
             timeoutMs: args.timeout_ms,
             tags: args.tags,
-            modelOverride,
-            providerOverride,
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "x-larp-posting-guidelines",
+  "name": "X LARP Posting Guidelines",
+  "description": "Shared posting guidelines and safeguards for Prometheus X LARP accounts system. Ensures consistent voice, engagement rules, and detection safeguards across all persona accounts.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "x posting",
+    "larp guidelines",
+    "persona voice",
+    "engagement rules",
+    "detection safeguards"
+  ],
+  "categories": [
+    "social",
+    "x",
+    "guidelines",
+    "content-strategy"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "external_apps"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

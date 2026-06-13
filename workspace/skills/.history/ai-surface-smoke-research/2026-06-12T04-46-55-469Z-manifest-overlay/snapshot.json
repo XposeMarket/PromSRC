@@ -1,0 +1,12 @@
+{
+  "skillId": "ai-surface-smoke-research",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T04:46:55.474Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\ai-surface-smoke-research",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c8e9bbf16717e298"
+}

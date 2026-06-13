@@ -1,4 +1,4 @@
-import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=liquid-glass-v7';
+import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=liquid-glass-v20';
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
 
 const SECTIONS = [
@@ -559,10 +559,23 @@ async function renderAgents(content, page) {
   ]);
   const list = agents.agents || agents.items || [];
   const defs = defaults.defaults || {};
+  const visibleDefaultKeys = [
+    'main_chat',
+    'proposal_executor_high_risk',
+    'proposal_executor_low_risk',
+    'coordinator',
+    'manager',
+    'subagent_planner',
+    'subagent_orchestrator',
+    'subagent_researcher',
+    'subagent_analyst',
+    'subagent_builder',
+    'subagent_operator',
+  ];
   const selected = list.find(a => String(a.id) === String(page._pmSelectedAgentId)) || list.find(a => a.id === 'main') || list[0] || {};
   content.innerHTML = `
     ${card('Model Defaults', `
-      ${Object.entries(defs).slice(0, 12).map(([k, v]) => field(k.replace(/_/g, ' '), input(`pm-agent-def-${k}`, v || '', 'placeholder="Provider/model"'))).join('')}
+      ${visibleDefaultKeys.map((k) => field(k.replace(/_/g, ' '), input(`pm-agent-def-${k}`, defs[k] || '', 'placeholder="Provider/model"'))).join('')}
       <button class="pm-btn primary" id="pm-save-agent-defaults">${ICONS.check} Save defaults</button>
       <div id="pm-settings-live-status"></div>
     `, 'brain', 'pm-card-strong')}
@@ -587,7 +600,7 @@ async function renderAgents(content, page) {
   page.querySelector('#pm-save-agent-defaults')?.addEventListener('click', async () => {
     try {
       const next = {};
-      Object.keys(defs).forEach(k => { next[k] = val(page, `pm-agent-def-${k}`); });
+      visibleDefaultKeys.forEach(k => { next[k] = val(page, `pm-agent-def-${k}`); });
       await mobileGatewayFetch('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify(next) });
       setSectionStatus(page, 'Agent defaults saved.', 'ok');
     } catch (err) { setSectionStatus(page, err.message, 'error'); }

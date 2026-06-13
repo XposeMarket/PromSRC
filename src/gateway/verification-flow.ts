@@ -46,6 +46,7 @@ export interface ApprovalRecord {
   devSourceEdit?: {
     devEditId?: string;
     allowedFiles: string[];
+    allowedDirs?: string[];
     verificationCommand?: string;
     verificationProfile?: 'backend_build' | 'webui_sync_check' | 'full_build' | 'route_smoke' | 'desktop_ui_smoke' | 'mobile_ui_smoke' | 'none';
     verificationProfiles?: Array<'backend_build' | 'webui_sync_check' | 'full_build' | 'route_smoke' | 'desktop_ui_smoke' | 'mobile_ui_smoke' | 'none'>;
@@ -155,10 +156,19 @@ class ApprovalQueue {
     return path.join(dir, 'approvals.json');
   }
 
+  private retentionCutoffMs(): number {
+    return Date.now() - 24 * 60 * 60 * 1000;
+  }
+
+  private shouldRetainRecord(record: ApprovalRecord, cutoff = this.retentionCutoffMs()): boolean {
+    if (record.status === 'pending') return true;
+    const resolvedAt = new Date(record.resolvedAt || record.createdAt).getTime();
+    return Number.isFinite(resolvedAt) && resolvedAt >= cutoff;
+  }
+
   private persistDurableRecords(): void {
     try {
-      const records = [...this.records.values()]
-        .filter((record) => record.status === 'pending' || Date.now() - new Date(record.resolvedAt || record.createdAt).getTime() < 24 * 60 * 60 * 1000);
+      const records = [...this.records.values()].filter((record) => this.shouldRetainRecord(record));
       const p = this.storePath();
       const tmp = `${p}.tmp-${Date.now()}`;
       fs.writeFileSync(tmp, JSON.stringify({ approvals: records }, null, 2), 'utf-8');
@@ -174,6 +184,10 @@ class ApprovalQueue {
       if (!fs.existsSync(p)) return;
       const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
       const approvals = Array.isArray(parsed?.approvals) ? parsed.approvals : [];
+      const cutoff = this.retentionCutoffMs();
+      let restored = 0;
+      let pending = 0;
+      let pruned = 0;
       for (const raw of approvals) {
         if (!raw || typeof raw !== 'object') continue;
         const id = String(raw.id || '').trim();
@@ -181,7 +195,7 @@ class ApprovalQueue {
         const toolName = String(raw.toolName || '').trim();
         if (!id || !sessionId || !toolName) continue;
         const status = raw.status === 'approved' || raw.status === 'rejected' ? raw.status : 'pending';
-        this.records.set(id, {
+        const record = {
           ...raw,
           id,
           sessionId,
@@ -192,14 +206,25 @@ class ApprovalQueue {
           affectedSystems: Array.isArray(raw.affectedSystems) ? raw.affectedSystems.map(String) : [],
           createdAt: String(raw.createdAt || new Date().toISOString()),
           status,
-        } as ApprovalRecord);
+        } as ApprovalRecord;
+        if (!this.shouldRetainRecord(record, cutoff)) {
+          pruned += 1;
+          continue;
+        }
+        this.records.set(id, record);
+        restored += 1;
+        if (record.status === 'pending') pending += 1;
       }
-      if (approvals.length) console.log(`[ApprovalQueue] Restored ${this.records.size} durable approval(s)`);
+      if (approvals.length) {
+        const resolved = restored - pending;
+        const suffix = pruned ? `; pruned ${pruned} stale resolved approval(s)` : '';
+        console.log(`[ApprovalQueue] Restored ${pending} pending approval(s) and ${resolved} recent resolved approval(s)${suffix}`);
+      }
+      if (pruned) this.persistDurableRecords();
     } catch (err: any) {
       console.warn('[ApprovalQueue] Failed to restore approvals:', err?.message || err);
     }
   }
-
   create(partial: Omit<ApprovalRecord, 'id' | 'createdAt' | 'status'>): ApprovalRecord {
     const id = crypto.randomUUID();
     const record: ApprovalRecord = {

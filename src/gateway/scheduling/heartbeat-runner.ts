@@ -202,6 +202,10 @@ function isHeartbeatEffectivelyEmpty(raw: string): boolean {
   return true;
 }
 
+function isHeartbeatOkReply(raw: string): boolean {
+  return /^\s*(?:`{1,3}\s*)?heartbeat[\s_-]*ok(?:\s*`{1,3})?\s*[.!]?\s*$/i.test(String(raw || ''));
+}
+
 // ─── SubagentHeartbeatManager ─────────────────────────────────────────────────
 
 export class SubagentHeartbeatManager {
@@ -450,7 +454,8 @@ export class SubagentHeartbeatManager {
     const prompt = [
       `Read and follow this HEARTBEAT.md file: ${heartbeatPath}`,
       '',
-      'If there is no clearly actionable work in the file, reply with exactly HEARTBEAT_OK and nothing else.',
+      'If there is no clearly actionable work in the file, or if no action was taken, reply with exactly HEARTBEAT_OK and nothing else.',
+      'HEARTBEAT_OK is the silence token: it means no user/chat/sidebar/channel notification is needed.',
       'If there is actionable work, do it and report only the actionable result.',
       '',
       '--- HEARTBEAT.md ---',
@@ -491,7 +496,7 @@ export class SubagentHeartbeatManager {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Internal HEARTBEAT tick for agent "${entry.agentId}". Read ${heartbeatPath} and execute it. If nothing is actionable, reply exactly HEARTBEAT_OK.`,
+        `CONTEXT: Internal HEARTBEAT tick for agent "${entry.agentId}". Read ${heartbeatPath} and execute it. If nothing is actionable or no action was taken, reply exactly HEARTBEAT_OK.`,
         modelOverride,
         'heartbeat',
       );
@@ -501,7 +506,7 @@ export class SubagentHeartbeatManager {
       }
 
       const rawText = String(result?.text || '').trim();
-      const isOk = /^\s*HEARTBEAT_OK\s*$/i.test(rawText || 'HEARTBEAT_OK');
+      const isOk = isHeartbeatOkReply(rawText || 'HEARTBEAT_OK');
       entry.lastResult = isOk ? 'ok' : 'active';
 
       let finalText = rawText || 'HEARTBEAT_OK';

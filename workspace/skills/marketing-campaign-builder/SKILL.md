@@ -1,8 +1,9 @@
 ---
 name: marketing-campaign-builder
-description: # Marketing Campaign Builder Skill
+description: Use this skill when the user asks to build a marketing campaign, launch campaign, lead-generation campaign, nurture sequence, content calendar, ad copy set, campaign brief, messaging hierarchy, funnel plan, or performance dashboard. Triggers on phrases like build a campaign, marketing campaign, launch plan, lead gen campaign, email nurture, ad copy, campaign calendar, content calendar, funnel strategy, A/B test plan, and campaign assets. Use it to connect ICP, messaging, channels, creative assets, and metrics into one execution-ready campaign.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: build campaign, marketing campaign, launch plan, lead gen campaign, email nurture, ad copy, campaign calendar, content calendar, funnel strategy, A/B test plan, campaign assets, product launch campaign, paid ads, campaign brief
 ---
 
 # Marketing Campaign Builder Skill

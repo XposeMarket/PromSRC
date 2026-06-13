@@ -111,7 +111,8 @@ function ensureSubagentRuntimeFiles(agent: any, prompt: string): void {
       '## Run Follow-up',
       '- Review recent failed or blocked runs before repeating the same approach.',
       '- Keep notes about durable fixes, source paths, and user feedback.',
-      '- If nothing is actionable outside the scheduled run, reply with HEARTBEAT_OK.',
+      '- If no action was taken or nothing applies outside the scheduled run, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+      '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
     ].join('\n'),
   );
 

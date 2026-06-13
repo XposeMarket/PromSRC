@@ -1,3 +1,12 @@
+---
+name: approval-policy-designer
+description: Use this skill when designing, auditing, or changing Prometheus approval and confirmation gates for shell commands, filesystem mutation, source edits, browser final actions, desktop final actions, connector writes, deletes, payments, publishing, permission changes, or other risky side effects. Triggers on phrases like approval policy, confirmation gate, final action approval, command permissions, path permissions, tool deny policy, approval queue, require user confirmation, and policy engine. Use it to map risk classes to deterministic Prometheus approval behavior.
+emoji: "🛡️"
+version: 1.1.0
+triggers: approval policy, confirmation gate, final action approval, command permissions, path permissions, tool deny policy, approval queue, require user confirmation, policy engine, browser final action, desktop final action, connector write approval
+---
+
+
 # Approval Policy Designer
 
 Use this skill when adding or changing actions that may need user confirmation.

@@ -408,7 +408,8 @@ const PUBLIC_WORKSPACE_FILES: Record<string, string> = {
     '- Execute only clearly actionable maintenance or operations tasks.',
     '- Write important outputs to workspace files.',
     '- Do not send, post, purchase, publish, delete, or share externally unless clearly authorized.',
-    '- If nothing is actionable, reply with HEARTBEAT_OK.',
+    '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+    '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
   ].join('\n'),
   'Brain/proposals.md': [
     '# Brain Proposals',

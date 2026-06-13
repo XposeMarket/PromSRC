@@ -585,23 +585,44 @@ function gaugeClass(pct) {
   return 'ok';
 }
 
-function fmtReset(iso) {
+// Short relative hint, e.g. "in 3h", "in 12m", "in 6d".
+function fmtRelative(diffMs) {
+  if (diffMs <= 0) return 'soon';
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 48) {
+    const rem = mins % 60;
+    return rem ? `in ${hrs}h ${rem}m` : `in ${hrs}h`;
+  }
+  return `in ${Math.round(hrs / 24)}d`;
+}
+
+// Builds an exact reset string. Short windows (e.g. 5-hour) show a clock time;
+// multi-day windows (Weekly / Opus weekly) show date AND time. A relative hint
+// is appended so "Resets at 11:08 AM (in 3h)" reads at a glance.
+function fmtReset(iso, label) {
   if (!iso) return '';
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return '';
   const diff = t - Date.now();
-  if (diff <= 0) return 'resets soon';
-  const mins = Math.round(diff / 60000);
-  if (mins < 60) return `resets in ${mins}m`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 48) return `resets in ${hrs}h`;
-  const days = Math.round(hrs / 24);
-  return `resets in ${days}d`;
+  if (diff <= 0) return 'resets now';
+  const d = new Date(t);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const rel = fmtRelative(diff);
+
+  // Weekly/multi-day windows or anything more than ~24h out gets a date too.
+  const isLong = /week|day|opus/i.test(String(label || '')) || diff >= 24 * 3600 * 1000;
+  if (isLong) {
+    const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return `resets ${date}, ${time} (${rel})`;
+  }
+  return `resets at ${time} (${rel})`;
 }
 
 function renderUsageGauge(label, pct, resetIso) {
   const p = Math.max(0, Math.min(100, Number(pct) || 0));
-  const reset = fmtReset(resetIso);
+  const reset = fmtReset(resetIso, label);
   return `
     <div class="usage-gauge">
       <div class="usage-gauge-head">
@@ -620,7 +641,7 @@ export function renderProviderUsageCard(p) {
   const tokens = p.tokens || {};
   let body = '';
   if (windows.length) {
-    body = windows.map(w => renderUsageGauge(w.label, w.used_percent, w.reset_at)).join('');
+    body += windows.map(w => renderUsageGauge(w.label, w.used_percent, w.reset_at)).join('');
   } else if (p.budget && p.budget.limit_tokens > 0) {
     body = renderUsageGauge('Monthly budget', p.budget.used_percent, null)
       + `<div class="usage-gauge-reset">${compactNumber(p.budget.used_tokens)} / ${compactNumber(p.budget.limit_tokens)} tokens</div>`;

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to build a compact context pack, handoff, briefing, project summary, session continuity note, Codex prompt, subagent prompt, or background-agent instruction bundle. It turns scattered context into executable, self-contained instructions.",
+  "triggers": [
+    "context pack",
+    "handoff",
+    "continuity note",
+    "briefing",
+    "Codex prompt",
+    "subagent prompt",
+    "background agent prompt",
+    "summarize context",
+    "compact context",
+    "project brief",
+    "execution brief",
+    "agent handoff",
+    "self-contained prompt",
+    "task packet",
+    "context bundle"
+  ],
+  "categories": [
+    "writing",
+    "workflow",
+    "agents"
+  ],
+  "requiredTools": [
+    "memory_search",
+    "write_note"
+  ],
+  "lifecycle": "active",
+  "id": "context-pack-builder"
+}

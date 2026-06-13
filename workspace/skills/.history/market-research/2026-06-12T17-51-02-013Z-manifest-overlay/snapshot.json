@@ -1,0 +1,11 @@
+{
+  "skillId": "market-research",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:02.016Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\market-research",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "20c63fc0a4af81f3"
+}

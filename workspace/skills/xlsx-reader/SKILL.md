@@ -1,8 +1,9 @@
 ---
 name: xlsx-reader
-description: Read and analyze Excel spreadsheets using the `xlsx` (SheetJS) npm package. Pure Node — works on Windows with no Python.
+description: Use this skill when the user uploads or points to Excel, XLSX, XLS, spreadsheet, or CSV files and wants them read, summarized, searched, filtered, analyzed, previewed, or aggregated. Triggers on phrases like read this spreadsheet, analyze this Excel file, summarize XLSX, extract rows, filter spreadsheet, search Excel, CSV preview, spreadsheet totals, pull sheet names, and what is in this workbook. Use it to inspect sheets with SheetJS, show previews and aggregates, and avoid dumping huge tables.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: read spreadsheet, analyze Excel file, summarize XLSX, extract rows, filter spreadsheet, search Excel, CSV preview, spreadsheet totals, pull sheet names, what is in this workbook, read xlsx, read csv, Excel analysis, workbook preview, sheet summary
 ---
 
 # XLSX Reader

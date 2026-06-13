@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "voice-browser-desktop-smoke-test",
+  "name": "Voice Browser Desktop Smoke Test",
+  "description": "Repeat Raul's quick voice-driven Prometheus smoke test: open/search X for an AI-related topic, scroll it, focus Codex, then focus Claude, and only report after the tool-backed sequence completes.",
+  "version": "1.0.1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "do the test again",
+    "voice test again",
+    "run that test again",
+    "browser test",
+    "go look for things about ai then focus codex and claude",
+    "open x search and focus codex",
+    "open x search then focus claude",
+    "test browser and desktop focus",
+    "x search ai scroll codex claude",
+    "prometheus voice tool test",
+    "browser desktop smoke test",
+    "test x codex claude",
+    "repeat the x search test",
+    "interrupt me during the browser desktop test"
+  ],
+  "categories": [
+    "browser_automation",
+    "desktop_automation",
+    "voice_testing"
+  ],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "examples/2026-05-21-stop-steer-guardrail.md",
+      "type": "example",
+      "description": "2026-05-21 guardrail example for honoring stop/steer interruptions during the voice browser-desktop smoke test and avoiding stale completion after cancellation."
+    },
+    {
+      "path": "examples/2026-05-21-mobile-screenshot-updates.md",
+      "type": "example",
+      "description": "Raul's 2026-05-21 preference: send mobile/origin screenshots after visible focus/action steps during voice desktop smoke-test runs."
+    }
+  ]
+}

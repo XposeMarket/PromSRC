@@ -2,11 +2,35 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "approval-policy-designer",
   "name": "Approval Policy Designer",
-  "description": "Design and audit Prometheus confirmation gates for shell, files, browser, desktop, source edits, final actions, path access, and connector side effects.",
-  "version": "1.0.0",
+  "description": "Use this skill when designing, auditing, or changing Prometheus approval and confirmation gates for shell commands, filesystem mutation, source edits, browser final actions, desktop final actions, connector writes, deletes, payments, publishing, permission changes, or other risky side effects. Triggers on phrases like approval policy, confirmation gate, final action approval, command permissions, path permissions, tool deny policy, approval queue, require user confirmation, and policy engine. Use it to map risk classes to deterministic Prometheus approval behavior.",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
-  "triggers": ["approval policy", "confirmation gates", "should require approval", "policy design", "dangerous action"],
-  "categories": ["prometheus", "security", "approvals", "tools"],
-  "requiredTools": ["workspace_write", "integration_admin"],
-  "permissions": { "workspaceRead": true, "workspaceWrite": true }
+  "triggers": [
+    "approval policy",
+    "confirmation gate",
+    "final action approval",
+    "command permissions",
+    "path permissions",
+    "tool deny policy",
+    "approval queue",
+    "require user confirmation",
+    "policy engine",
+    "browser final action",
+    "desktop final action",
+    "connector write approval"
+  ],
+  "categories": [
+    "prometheus",
+    "security",
+    "approvals",
+    "tools"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "integration_admin"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  }
 }

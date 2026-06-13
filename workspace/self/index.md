@@ -43,6 +43,7 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 28, 28A, 28B | Bundled Skills, Hub/Frontend Views, Onboarding/Migration | [14-skills-and-frontend.md](14-skills-and-frontend.md) |
 | 29, 30, 31 | Data Paths, Sharp Edges, Maintenance Rule | [15-paths-and-sharp-edges.md](15-paths-and-sharp-edges.md) |
 | 32 | Prometheus Mobile App Maintenance Reference | [16-mobile-app.md](16-mobile-app.md) |
+| 32A | Mobile Liquid Glass UI Reference and Dev Slider Restore Notes | [24-mobile-liquid-glass.md](24-mobile-liquid-glass.md) |
 | 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
 | 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
 | 35 | Onboarding System, Replay, Dev Test, Migration Boundary | [19-onboarding-system.md](19-onboarding-system.md) |

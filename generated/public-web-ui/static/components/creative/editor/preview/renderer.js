@@ -147,10 +147,30 @@ function drawElement(ctx, el, timeMs, transform, options = {}) {
   const rot = (resolved.rotation || 0) * Math.PI / 180;
   const opacity = resolved.opacity ?? 1;
 
+  // 3D / perspective transform (affine approximation of CapCut tilt/roll/zoom)
+  const roll  = (Number(metaValue(el, 'roll', 0))  || 0) * Math.PI / 180;
+  const tiltX = (Number(metaValue(el, 'tiltX', 0)) || 0) * Math.PI / 180;
+  const tiltY = (Number(metaValue(el, 'tiltY', 0)) || 0) * Math.PI / 180;
+  const zoom  = Math.max(0.05, Number(metaValue(el, 'zoom', 1)) || 1);
+  const persp = Math.max(200, Number(metaValue(el, 'perspective', 1200)) || 1200);
+  const shearK = Math.max(0.1, Math.min(0.6, 480 / persp));
+
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
   ctx.translate(sx + sw / 2, sy + sh / 2);
-  if (rot) ctx.rotate(rot);
+  if (rot || roll) ctx.rotate(rot + roll);
+  if (zoom !== 1) ctx.scale(zoom, zoom);
+  if (tiltX || tiltY) {
+    // tiltY = spin about the vertical axis → narrow width + vertical shear
+    // tiltX = spin about the horizontal axis → narrow height + horizontal shear
+    ctx.transform(
+      Math.cos(tiltY),                 // scaleX
+      Math.sin(tiltY) * shearK,        // skewY
+      Math.sin(tiltX) * shearK,        // skewX
+      Math.cos(tiltX),                 // scaleY
+      0, 0,
+    );
+  }
   ctx.translate(-sw / 2, -sh / 2);
 
   const fxEl = effectView(el);
@@ -158,9 +178,11 @@ function drawElement(ctx, el, timeMs, transform, options = {}) {
   // Apply mask clip
   applyMask(ctx, fxEl, sw, sh);
 
-  // Apply CSS filters (blur, brightness, etc.)
-  const filter = buildFilter(fxEl);
-  if (filter !== 'none') ctx.filter = filter;
+  // Apply CSS filters (blur, brightness, etc.) + focus blur
+  let filter = buildFilter(fxEl);
+  const focusBlur = Number(metaValue(el, 'focusBlur', 0)) || 0;
+  if (focusBlur > 0) filter = (filter === 'none' ? '' : filter + ' ') + `blur(${focusBlur}px)`;
+  if (filter && filter !== 'none') ctx.filter = filter;
 
   // Apply pre-draw effects (shadow, glow)
   applyPreEffects(ctx, fxEl, sw, sh);

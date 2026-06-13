@@ -1,8 +1,9 @@
 ---
 name: Product Discovery
-description: Structured process for deciding what to build, validating it's worth building, and scoping it so the team can execute.
+description: Use this skill when the user asks what to build next, how to prioritize features, validate a feature, write a PRD, plan a roadmap, score backlog items, run discovery, define Jobs To Be Done, size an opportunity, or decide whether a product idea is worth building. Triggers on phrases like product discovery, feature prioritization, RICE scoring, ICE scoring, roadmap planning, PRD, user story, JTBD, should we build this, validate feature, opportunity sizing, and product strategy. Use it to move from opportunity to hypothesis, validation, prioritization, and executable spec.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: product discovery, feature prioritization, RICE scoring, ICE scoring, product roadmap, prioritize backlog, validate feature, opportunity sizing, user story, PRD, JTBD, jobs to be done, should we build this, product strategy, roadmap planning
 triggers: product discovery, feature prioritization, rice scoring, ice scoring, product roadmap, prioritize backlog, validate feature, opportunity sizing, user story, prd, product requirements, jtbd, jobs to be done, discovery sprint, product hypothesis, feature request, should we build, product strategy, roadmap planning, what to build next
 ---
 

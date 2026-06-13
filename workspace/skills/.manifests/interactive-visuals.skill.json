@@ -1,71 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "interactive-visuals",
-  "name": "Interactive Visuals Router",
-  "description": "Route visual-output requests to the right Prometheus visual skill: Chart.js charts, inline HTML widgets/dashboards, SVG architecture diagrams, or Mermaid flow/sequence/schema diagrams.",
-  "version": "1.0.0",
+  "description": "Use this skill when the user asks to present complex information visually, choose between chart/dashboard/diagram formats, make a report interactive, or turn analysis into a polished visual artifact. It routes to chart, HTML, SVG, or Mermaid approaches as appropriate.",
   "triggers": [
-    "visual",
-    "visuals",
-    "interactive visual",
-    "visualize this",
-    "visual summary",
-    "make this visual",
-    "show this visually",
-    "dashboard or chart",
-    "diagram or chart",
-    "turn this into a visual",
-    "which visual skill",
+    "interactive visuals",
+    "make it visual",
     "visual report",
-    "scorecard",
-    "kpi dashboard",
-    "comparison dashboard",
-    "visualize results",
-    "interactive report"
+    "visual dashboard",
+    "diagram this",
+    "chart this",
+    "interactive artifact",
+    "visual summary",
+    "report visualization",
+    "show this visually",
+    "data presentation",
+    "visual comparison",
+    "clickable report",
+    "rich output",
+    "polished interactive output"
   ],
   "categories": [
     "visualization",
-    "interactive-output",
-    "charts",
-    "diagrams",
-    "reports"
+    "reporting",
+    "router"
   ],
   "requiredTools": [
+    "skill_list",
     "skill_read"
   ],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": []
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [
-      "skill_read"
-    ],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [
-      "Read interactive-visuals to choose the right visual format.",
-      "Read the selected specialized skill: chart-visualizer, html-interactive, svg-diagrams, or mermaid-diagrams.",
-      "Produce the inline fenced visual block requested by the selected skill."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceWrite": false,
-    "externalSideEffects": false
-  },
-  "resources": [],
-  "status": "ready",
   "lifecycle": "active",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true
+  "id": "interactive-visuals"
 }

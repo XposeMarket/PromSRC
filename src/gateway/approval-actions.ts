@@ -120,6 +120,7 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
       const scope = createDevSourceEditApprovalScope({
         sessionId: approval.sessionId,
         files: dev.allowedFiles || approval.toolArgs?.files || [],
+        allowedDirs: dev.allowedDirs || approval.toolArgs?.allowed_dirs || approval.toolArgs?.allowedDirs,
         verificationCommand: dev.verificationCommand || approval.toolArgs?.verification_command,
         verificationProfile: dev.verificationProfile || approval.toolArgs?.verification_profile,
         verificationProfiles: dev.verificationProfiles || approval.toolArgs?.verification_profiles,
@@ -133,6 +134,7 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
         `The pending dev source edit approval "${approval.id}" was approved after a gateway restart.`,
         `Dev edit id: ${scope.devEditId}.`,
         `Approved files: ${scope.allowedFiles.join(', ')}.`,
+        `Approved workspace self-doc dirs: ${scope.allowedDirs.join(', ')}.`,
         'Continue the interrupted dev-edit plan from the gateway checkpoint and process log already saved in this chat.',
         `Do not recreate the approval. Proceed as if await_dev_source_edit_approval(approval_id:"${approval.id}") just returned approved.`,
         'Reread changed areas if needed, apply the scoped edits, run approved verification, then finalize with prom_apply_dev_changes and the completion note.',

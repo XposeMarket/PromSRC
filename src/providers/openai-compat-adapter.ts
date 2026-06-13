@@ -47,6 +47,18 @@ function providerToolLimit(providerId: string): number | null {
   return null;
 }
 
+function getKnownProviderModelInfo(providerId: string, modelName: string): Partial<ModelInfo> {
+  const id = String(providerId || '').trim().toLowerCase();
+  const name = String(modelName || '').trim();
+  if (id === 'xai') {
+    if (name === 'grok-build-0.1') return { contextWindowTokens: 256_000, tokenizer: 'openai' };
+    if (/^grok-4\.3$/i.test(name) || /^grok-4\.20-/i.test(name)) {
+      return { contextWindowTokens: 1_000_000, tokenizer: 'openai' };
+    }
+  }
+  return {};
+}
+
 function capProviderTools(providerId: string, tools?: any[]): any[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   const limit = providerToolLimit(providerId);
@@ -670,13 +682,21 @@ export class OpenAICompatAdapter implements LLMProvider {
 	  async listModels(): Promise<ModelInfo[]> {
 	    try {
 	      const data = await this.get(this.config.modelsPath || '/v1/models');
-	      return (data.data || []).map((m: any) => ({
+	      const models: ModelInfo[] = (data.data || []).map((m: any) => ({
 	        name: m.id,
 	        contextWindowTokens: Number(m.context_window || m.contextWindowTokens || m.context_length || m.max_context_length) || undefined,
 	        maxOutputTokens: Number(m.max_output_tokens || m.maxOutputTokens || m.output_token_limit) || undefined,
 	      }));
+        if (this.id === 'xai' && this.config.staticModels?.length) {
+          const byName = new Map(models.map((model) => [model.name, model]));
+          return this.config.staticModels.map((name): ModelInfo => ({
+            ...(byName.get(name) || ({ name })),
+            ...getKnownProviderModelInfo(this.id, name),
+          }));
+        }
+        return models;
 	    } catch {
-	      return (this.config.staticModels || []).map((name) => ({ name }));
+	      return (this.config.staticModels || []).map((name) => ({ name, ...getKnownProviderModelInfo(this.id, name) }));
 	    }
 	  }
 

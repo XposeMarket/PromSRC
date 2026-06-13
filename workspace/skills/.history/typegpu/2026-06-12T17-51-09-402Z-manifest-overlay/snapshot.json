@@ -1,0 +1,11 @@
+{
+  "skillId": "typegpu",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:09.405Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\typegpu",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "b978d5031ae76322"
+}

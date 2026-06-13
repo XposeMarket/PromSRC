@@ -1,0 +1,12 @@
+{
+  "skillId": "credential-scope-auditor",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:12.529Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\credential-scope-auditor",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "92a52de271640a94"
+}

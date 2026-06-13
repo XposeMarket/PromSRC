@@ -1,0 +1,11 @@
+{
+  "skillId": "social-intel",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:03.689Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\social-intel",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "a7369242e61b9589"
+}

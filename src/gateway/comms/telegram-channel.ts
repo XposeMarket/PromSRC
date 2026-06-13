@@ -2971,6 +2971,7 @@ export class TelegramChannel {
       approvalKind?: string;
       devSourceEdit?: {
         allowedFiles?: string[];
+        allowedDirs?: string[];
         verificationCommand?: string;
         verificationProfile?: string;
         plan?: {
@@ -2999,6 +3000,7 @@ export class TelegramChannel {
 	      ? record.affectedSystems.join(', ')
 	      : 'shell';
     const devFiles = Array.isArray(record.devSourceEdit?.allowedFiles) ? record.devSourceEdit.allowedFiles : [];
+    const devDirs = Array.isArray(record.devSourceEdit?.allowedDirs) ? record.devSourceEdit.allowedDirs : [];
     const devPlan = record.devSourceEdit?.plan;
     const devEvidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
     const devSteps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
@@ -3023,6 +3025,7 @@ export class TelegramChannel {
       isDevSource && devSteps.length ? `<b>Plan:</b>\n${devSteps.slice(0, 6).map((step, idx) => `${idx + 1}. ${this.tgEscape(step).slice(0, 260)}`).join('\n')}` : '',
       isDevSource && devExpectedWorkflow.length ? `<b>Expected after edits:</b>\n${devExpectedWorkflow.slice(0, 5).map((step, idx) => `${idx + 1}. ${this.tgEscape(step).slice(0, 260)}`).join('\n')}` : '',
       isDevSource && devFiles.length ? `<b>Files:</b>\n${devFiles.map((file) => `• <code>${this.tgEscape(file)}</code>`).join('\n')}` : '',
+      isDevSource && devDirs.length ? `<b>Workspace docs:</b>\n${devDirs.map((dir) => `• <code>${this.tgEscape(dir)}</code>`).join('\n')}` : '',
       isDevSource && record.devSourceEdit?.verificationProfile ? `<b>Verify profile:</b> <code>${this.tgEscape(record.devSourceEdit.verificationProfile)}</code>` : '',
       isDevSource && record.devSourceEdit?.verificationCommand ? `<b>Verify:</b> <code>${this.tgEscape(record.devSourceEdit.verificationCommand)}</code>` : '',
       isFinalAction && record.finalAction?.targetLabel ? `<b>Target:</b> ${this.tgEscape(record.finalAction.targetLabel)}` : '',
@@ -3780,6 +3783,7 @@ export class TelegramChannel {
             const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
             const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
             const devFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+            const devDirs = Array.isArray((approval.devSourceEdit as any)?.allowedDirs) ? (approval.devSourceEdit as any).allowedDirs : [];
 		        const detail = [
 		          `${statusEmoji[approval.status] || '❓'} <b>${isDevSource ? 'Dev Source Edit Approval' : (isFinalAction ? 'Final Action Approval' : 'Command Approval')}</b>`,
 		          ``,
@@ -3791,6 +3795,7 @@ export class TelegramChannel {
 		          `<b>Reason:</b> ${this.tgEscape(approval.reason || approval.action || '')}`,
 		          ``,
               isDevSource && devFiles.length ? `<b>Files:</b>\n${devFiles.map((file: string) => `• <code>${this.tgEscape(file)}</code>`).join('\n')}` : '',
+              isDevSource && devDirs.length ? `<b>Workspace docs:</b>\n${devDirs.map((dir: string) => `• <code>${this.tgEscape(dir)}</code>`).join('\n')}` : '',
               isDevSource && approval.devSourceEdit?.verificationProfile ? `<b>Verify profile:</b> <code>${this.tgEscape(approval.devSourceEdit.verificationProfile)}</code>` : '',
               isDevSource && approval.devSourceEdit?.verificationCommand ? `<b>Verify:</b> <code>${this.tgEscape(approval.devSourceEdit.verificationCommand)}</code>` : '',
               isFinalAction && approval.finalAction?.targetLabel ? `<b>Target:</b> ${this.tgEscape(approval.finalAction.targetLabel)}` : '',
@@ -6842,6 +6847,7 @@ export class TelegramChannel {
 	        const a = approvals[0];
           const isDevSource = a.approvalKind === 'dev_source_edit' || a.toolName === 'request_dev_source_edit';
           const isFinalAction = a.approvalKind === 'final_action' || a.toolName === 'request_final_action_approval';
+          const devDirs = Array.isArray((a.devSourceEdit as any)?.allowedDirs) ? (a.devSourceEdit as any).allowedDirs : [];
 	        const textBody = [
 		          `⏳ <b>${isDevSource ? 'Dev Source Edit Approval' : (isFinalAction ? 'Final Action Approval' : 'Command Approval')}</b>`,
 		          ``,
@@ -6852,6 +6858,7 @@ export class TelegramChannel {
 		          `<b>Reason:</b> ${this.tgEscape(a.reason || a.action || '')}`,
 		          ``,
               isDevSource && Array.isArray(a.devSourceEdit?.allowedFiles) ? `<b>Files:</b>\n${a.devSourceEdit.allowedFiles.map((file: string) => `• <code>${this.tgEscape(file)}</code>`).join('\n')}` : '',
+              isDevSource && devDirs.length ? `<b>Workspace docs:</b>\n${devDirs.map((dir: string) => `• <code>${this.tgEscape(dir)}</code>`).join('\n')}` : '',
               isDevSource && a.devSourceEdit?.verificationProfile ? `<b>Verify profile:</b> <code>${this.tgEscape(a.devSourceEdit.verificationProfile)}</code>` : '',
               isFinalAction && a.finalAction?.targetLabel ? `<b>Target:</b> ${this.tgEscape(a.finalAction.targetLabel)}` : '',
               !isDevSource && !isFinalAction ? `<code>${this.tgEscape(String(a.toolArgs?.command || '').slice(0, 1200))}</code>` : '',

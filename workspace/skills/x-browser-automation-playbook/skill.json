@@ -70,6 +70,16 @@
     {
       "path": "notes/x-media-transcription-workflow-2026-06-07.md",
       "type": "doc"
+    },
+    {
+      "path": "references/workflows/x-browser-automation-playbook-2026-06-12.md",
+      "type": "doc",
+      "description": "Add workflow recipe to x-browser-automation-playbook"
+    },
+    {
+      "path": "references/workflows/x-browser-automation-playbook-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to x-browser-automation-playbook"
     }
   ]
 }

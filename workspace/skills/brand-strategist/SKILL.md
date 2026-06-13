@@ -1,8 +1,9 @@
 ---
 name: brand-strategist
-description: Brand Strategist Skill
+description: Use this skill when the user asks for brand strategy, positioning, messaging, naming, brand voice, differentiation, brand story, or a full brand brief. Triggers on phrases like brand strategy, positioning statement, messaging hierarchy, brand voice, brand identity, rename this, naming ideas, differentiate us, brand brief, mission vision, what should our brand stand for, and make our brand clearer. Use it for startups, agencies, products, client brands, rebrands, and Prometheus/Xpose Market positioning work.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: brand strategy, positioning statement, messaging hierarchy, brand voice, brand identity, brand brief, naming ideas, rename this, differentiate us, brand story, mission and vision, what should our brand stand for, make our brand clearer, rebrand, brand foundation
 ---
 
 # Brand Strategist Skill

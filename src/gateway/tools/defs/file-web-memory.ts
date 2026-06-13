@@ -1424,17 +1424,17 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'generate_image',
-        description: 'Generate a new raster image from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. Use this for one-shot image generation, including brand kits, posters, thumbnails, concept art, and requests that reference uploaded files. Saves to generated/images by default.',
+        description: 'Generate one or more raster images from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. For separate options/variations, set count > 1 and ask for separate standalone images, not a collage. Use count=1 only when the user wants one image or explicitly wants a single collage/grid/contact sheet. Saves to generated/images by default.',
         parameters: {
           type: 'object', required: ['prompt'],
           properties: {
-            prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
+            prompt: { type: 'string', description: 'Text prompt describing the image(s) to generate. For count > 1, say each output must be a separate standalone image and must not be a collage, grid, contact sheet, split-screen, or multi-panel image.' },
             reference_images: { type: 'array', items: { type: 'string' }, maxItems: 16, description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs. These are sent as actual image inputs for supported reference/edit generation.' },
             aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired image aspect ratio' },
-            count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many images to generate at once' },
+            count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many separate image outputs to generate at once. Use values greater than 1 for options, variations, sets, or several standalone images; do not use count > 1 for a single collage/grid image.' },
             provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Optional image provider override. openai may use either direct OpenAI API credentials or saved OpenAI OAuth/Codex auth; use xai for Grok Imagine.' },
             model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
-            output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/images' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative parent output directory. Each generation run is saved in a new child folder. Default: generated/images' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
           },
         },

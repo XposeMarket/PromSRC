@@ -87,6 +87,16 @@
     {
       "path": "notes/audio-transcription-workflow-2026-06-07.md",
       "type": "doc"
+    },
+    {
+      "path": "references/workflows/browser-automation-playbook-2026-06-12.md",
+      "type": "doc",
+      "description": "Add workflow recipe to browser-automation-playbook"
+    },
+    {
+      "path": "references/workflows/browser-automation-playbook-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to browser-automation-playbook"
     }
   ]
 }

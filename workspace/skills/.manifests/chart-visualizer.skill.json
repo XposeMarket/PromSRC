@@ -1,53 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "Chart Visualizer",
-  "description": "Render live Chart.js charts directly in chat using fenced chart blocks for bar, line, pie/doughnut, scatter, radar, bubble, comparison, trend, and metrics visualizations.",
-  "version": "1.0.0",
+  "description": "Use this skill when the user asks to visualize data as charts, graphs, dashboards, KPI cards, trends, comparisons, or numeric summaries. It guides selecting the right chart type and rendering polished Chart.js-style visuals with labels, axes, and readable presentation.",
   "triggers": [
     "chart",
     "graph",
-    "plot",
-    "bar chart",
-    "line chart",
-    "pie chart",
-    "doughnut chart",
-    "scatter plot",
-    "radar chart",
-    "bubble chart",
     "visualize data",
-    "chart this data",
-    "plot this data",
-    "trend over time",
-    "compare metrics",
-    "metrics chart",
     "data visualization",
-    "show me a graph"
+    "KPI chart",
+    "line chart",
+    "bar chart",
+    "pie chart",
+    "trend chart",
+    "dashboard chart",
+    "compare numbers",
+    "plot this",
+    "chart visualizer",
+    "make a chart",
+    "show data visually"
   ],
   "categories": [
     "visualization",
-    "charts",
-    "data-analysis",
-    "interactive-output"
+    "data",
+    "reporting"
   ],
   "requiredTools": [
-    "skill_read"
+    "show_chart",
+    "creative_mode"
   ],
-  "toolBinding": {
-    "requiredTools": [
-      "skill_read"
-    ],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [
-      "Read chart-visualizer.",
-      "Choose the correct Chart.js chart type.",
-      "Output one fenced chart block containing only the Chart.js config object."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceWrite": false,
-    "externalSideEffects": false
-  },
+  "lifecycle": "active",
   "id": "chart-visualizer"
 }

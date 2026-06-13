@@ -25,6 +25,7 @@ import { createSubtitlesPanel } from './subtitles/panel.js';
 import { createTextPanel } from './panels/text-panel.js';
 import { createShapesPanel } from './panels/shapes-panel.js';
 import { createEffectsPanel } from './panels/effects-panel.js';
+import { createFiltersPanel } from './panels/filters-panel.js';
 
 // ── Feature flag ─────────────────────────────────────────────────────────────
 // Server config (creative_editor.enabled) wins; localStorage is dev override.
@@ -112,6 +113,7 @@ export function createCreativeEditor({ root, scene, api }) {
   let _textPanel    = null;
   let _shapesPanel  = null;
   let _effectsPanel = null;
+  let _filtersPanel = null;
 
   function replaceScene(nextScene) {
     const target = getScene();
@@ -187,6 +189,10 @@ export function createCreativeEditor({ root, scene, api }) {
 
     _effectsPanel = createEffectsPanel({
       container: p.effects, store, getScene, applyOps: applyEditorOps,
+    });
+
+    _filtersPanel = createFiltersPanel({
+      container: p.filters, store, getScene, applyOps: applyEditorOps,
     });
 
     _subsPanel = createSubtitlesPanel({
@@ -397,6 +403,7 @@ export function createCreativeEditor({ root, scene, api }) {
     if (_graphEditor)  { _graphEditor.dispose();  _graphEditor  = null; }
     if (_subsPanel)    { _subsPanel.dispose();    _subsPanel    = null; }
     if (_effectsPanel) { _effectsPanel.dispose(); _effectsPanel = null; }
+    if (_filtersPanel) { _filtersPanel.dispose(); _filtersPanel = null; }
     if (_textPanel)    { _textPanel.dispose();    _textPanel    = null; }
     if (_shapesPanel)  { _shapesPanel.dispose();  _shapesPanel  = null; }
     if (_exportDialog) { _exportDialog.dispose(); _exportDialog = null; }

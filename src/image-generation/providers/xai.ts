@@ -259,14 +259,19 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
         }
 
         if (!imageBytes || imageBytes.length === 0) continue;
-        images.push(await persistGeneratedImage({
+        const persisted = await persistGeneratedImage({
           bytes: imageBytes,
           mimeType,
           provider: this.id,
           prompt,
           outputDir: request.output_dir,
+          outputRunDir: request.output_run_dir,
           saveToWorkspace: request.save_to_workspace,
-        }));
+        });
+        images.push(persisted);
+        try {
+          await request.on_image_persisted?.(persisted);
+        } catch {}
       }
 
       if (!images.length) {

@@ -1,27 +1,28 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "Prometheus X Growth Operator",
-  "description": "Operating playbook for running and promoting the Prometheus X/Twitter account with taste, consistency, safe autonomy, and research-backed content strategy. Includes competitor analysis, community signal mining, viral content research, and transcription-powered insights for authentic building-in-public storytelling and differentiated positioning.",
-  "version": "1.1.0",
+  "description": "Use this skill when running Prometheus X/Twitter growth work: drafting posts, building approval packets, researching AI-agent conversations, finding reply opportunities, analyzing competitor/community signals, or operating an approved Prometheus social schedule with strict autonomy and truth/safety boundaries.",
   "triggers": [
-    "run the Prometheus Twitter page",
-    "promote Prometheus on X",
-    "create a Prometheus social operator",
-    "manage the Prometheus X account",
-    "draft Prometheus tweets",
-    "build Prometheus audience",
-    "social media subagent",
-    "X growth agent",
-    "Twitter growth agent",
-    "daily X posting",
-    "reply to AI builders on X",
-    "market Prometheus publicly",
-    "competitor video analysis",
-    "AI community research",
-    "transcribe competitor content",
-    "x growth research",
-    "prometheus positioning"
+    "Prometheus X growth",
+    "X approval packet",
+    "Twitter growth",
+    "draft Prometheus posts",
+    "find X reply opportunities",
+    "AI agent social research",
+    "building in public posts",
+    "Prometheus social schedule",
+    "X content strategy",
+    "competitor signal mining",
+    "community signal mining",
+    "Prometheus product tweets",
+    "@PrometheusAI_x"
+  ],
+  "categories": [
+    "social",
+    "marketing",
+    "growth",
+    "prometheus",
+    "x-twitter"
   ],
   "requiredTools": [
     "browser_automation",
@@ -30,6 +31,6 @@
     "media_assets",
     "creative_mode"
   ],
-  "bestFor": "Prometheus X/Twitter account growth, competitor analysis via video/audio transcription, AI community signal mining, research-backed content creation, and building authentic building-in-public presence",
+  "lifecycle": "active",
   "id": "prometheus-x-growth-operator"
 }

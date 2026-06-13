@@ -1,0 +1,11 @@
+{
+  "skillId": "mermaid-diagrams",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:21.287Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\mermaid-diagrams",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "de20a14962c0eb9e"
+}

@@ -1,67 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "hyperframes-media",
-  "description": "Asset preprocessing for HyperFrames compositions — text-to-speech narration (Kokoro), audio/video transcription (Whisper), captions, voiceover assets, avatar-overlay background removal, and standalone HyperFrames media prep.",
-  "version": "1.0.0",
+  "description": "Use this skill when the user asks to import, prepare, analyze, transcode, place, time, or verify media assets for HyperFrames or Creative Video, including screenshots, logos, videos, audio, captions, stills, and UI footage. It emphasizes asset fidelity and render QA.",
   "triggers": [
-    "hyperframes-media",
-    "hyperframes audio",
-    "hyperframes captions",
-    "hyperframes avatar",
-    "hyperframes avatars",
-    "hyperframes tts",
-    "hyperframes transcribe",
-    "hyperframes voiceover",
-    "remove background avatar",
-    "tts captions",
-    "audio captions avatar"
+    "HyperFrames media",
+    "video asset",
+    "media asset",
+    "import media",
+    "transcode video",
+    "place logo",
+    "add screenshot",
+    "UI footage",
+    "audio timing",
+    "caption timing",
+    "media QA",
+    "analyze image",
+    "prepare asset",
+    "creative video media",
+    "verify render"
   ],
   "categories": [
-    "video",
-    "hyperframes",
+    "creative",
     "media",
-    "imported"
+    "video"
   ],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "shell"
-    ]
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": true,
-    "browser": false,
-    "desktop": false,
-    "externalSideEffects": false
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [
-      "workspace_write",
-      "media_quality",
-      "creative_mode"
-    ],
-    "defaultWorkflow": [
-      "Use Creative audio tools first when working inside a Prometheus Creative project.",
-      "Use HyperFrames CLI media commands for standalone/offline HyperFrames asset preprocessing.",
-      "For avatar workflows, generate/source avatar video externally, then use HyperFrames/Creative to compose muted video plus separate audio/captions."
-    ],
-    "canSpawnSubagents": false
-  },
-  "resources": [],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium",
+  "requiredTools": [
+    "media_assets",
+    "media_quality",
+    "creative_mode"
+  ],
+  "lifecycle": "active",
+  "name": "HyperFrames Media",
   "id": "hyperframes-media"
 }

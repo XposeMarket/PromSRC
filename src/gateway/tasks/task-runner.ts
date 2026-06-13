@@ -412,6 +412,7 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   spawnerSessionId?: string;
   abortSignal?: { aborted: boolean };
   promptPreview?: string;
+  fileChanges?: any;
 }
 
 const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
@@ -492,17 +493,17 @@ function resolveBackgroundAgentModelRouting(): { providerId?: string; model?: st
   try {
     const cfg = getConfig().getConfig() as any;
     const defaults = cfg?.agent_model_defaults || {};
-    const ref = String(defaults.background_agent || defaults.background_task || '').trim();
+    const ref = String(defaults.main_chat || '').trim();
     if (ref) {
       const parsed = parseProviderModelRef(ref);
       if (parsed) {
         return {
           providerId: parsed.providerId,
           model: parsed.model,
-          source: defaults.background_agent ? 'agent_model_defaults.background_agent' : 'agent_model_defaults.background_task',
+          source: 'agent_model_defaults.main_chat',
         };
       }
-      return { model: ref, source: defaults.background_agent ? 'agent_model_defaults.background_agent' : 'agent_model_defaults.background_task' };
+      return { model: ref, source: 'agent_model_defaults.main_chat' };
     }
 
     const activeProvider = String(cfg?.llm?.provider || '').trim();
@@ -581,13 +582,9 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         spawnerSessionId,
       });
       const modelRouting = resolveBackgroundAgentModelRouting();
-      const providerOverride = String(record.providerId || '').trim();
-      const modelOverride = String(record.model || '').trim();
-      record.providerId = providerOverride || modelRouting.providerId;
-      record.model = modelOverride || modelRouting.model;
-      record.modelSource = (providerOverride || modelOverride)
-        ? (record.modelSource || 'background_spawn_override')
-        : modelRouting.source;
+      record.providerId = modelRouting.providerId;
+      record.model = modelRouting.model;
+      record.modelSource = modelRouting.source;
       const toolCallLog: string[] = [];
 
       if (spawnerSessionId) {
@@ -641,6 +638,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           undefined,
           record.providerId,
         );
+        record.fileChanges = (chatResult as any)?.fileChanges || undefined;
         // handleChat returns a ChatResult object — extract .text, not the whole object
         const finalText = String((chatResult as any)?.text ?? chatResult ?? '').trim();
         if (abortSignal.aborted) {
@@ -648,7 +646,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.state = 'failed';
           record.completedAt = Date.now();
           if (spawnerSessionId) {
-            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
           }
           finishLiveRuntime(runtimeId);
           return;
@@ -663,7 +661,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         console.log(`[Background Agent] ${record.id} completed`);
 
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'completed', result: record.result, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'completed', result: record.result, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
         }
       } catch (err: any) {
         record.error = String(err?.message || err || 'Background execution failed');
@@ -671,7 +669,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.completedAt = Date.now();
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
         }
       }
       finishLiveRuntime(runtimeId);
@@ -729,11 +727,6 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
-  const explicitProviderOverride = String(input?.providerOverride || '').trim();
-  const explicitModelOverride = String(input?.modelOverride || '').trim();
-  if (explicitProviderOverride) record.providerId = explicitProviderOverride;
-  if (explicitModelOverride) record.model = explicitModelOverride;
-  if (explicitProviderOverride || explicitModelOverride) record.modelSource = 'background_spawn_override';
   record.promise = startBackgroundExecution(record, prompt);
   _ephemeralBackgroundRuns.set(id, record);
   console.log(`[Background Agent] spawned ${id} (policy=${joinPolicy}, timeoutMs=${timeoutMs})`);

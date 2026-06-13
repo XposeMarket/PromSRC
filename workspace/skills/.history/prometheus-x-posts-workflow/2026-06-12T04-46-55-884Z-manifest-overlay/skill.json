@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-x-posts-workflow",
+  "name": "Prometheus X Posts Workflow",
+  "description": "Reusable scheduled workflow for autonomous X/Twitter posting. Reads the exact schedule-memory.md file with read_file (never memory_read), generates fresh non-duplicative tweets, attempts posting on the prometheus profile, saves records with write_note if blocked, closes browser after use, and keeps tweets consistent across runs.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "x post",
+    "tweet",
+    "autonomous x posting",
+    "scheduled posting",
+    "prometheus x posts"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "SKILL.md",
+      "type": "doc"
+    },
+    {
+      "path": "references/workflows/prometheus-x-posts-workflow-2026-06-09.md",
+      "type": "doc",
+      "description": "Add workflow recipe to prometheus-x-posts-workflow"
+    }
+  ]
+}

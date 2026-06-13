@@ -22,7 +22,7 @@ export function getCisSystemTools(): any[] {
     ['mcp_server_tools', 'mcp_server_tools - dynamic tools exposed by connected MCP servers (shown as mcp__server__tool). Use only for trusted servers.'],
     ['composite_tools', 'composite_tools - saved multi-step composite tools plus create/get/edit/delete/list composite management tools.'],
     ['creative_mode', 'creative_mode - normal main-chat creative editor tools and workspace selectors.'],
-    ['skills', 'skills - skill authoring, packaging, and maintenance (skill_create, bundles, import/export, manifest/resource writes, skill_inspect). Read-only skill_list/skill_read/skill_resource_list/skill_resource_read are core.'],
+    ['skills', 'skills - skill authoring, packaging, and maintenance (skill_create, bundles, import/export, manifest/resource writes, skill_inspect) plus fleet metadata ops (skill_audit_all, skill_update_metadata, skill_repair_metadata). Read-only skill_list/skill_read/skill_resource_list/skill_resource_read are core.'],
     ['model_management', 'model_management - agent fleet model administration and templates (get/set_agent_model, *_agent_model_template). switch_model and set_current_model are core.'],
     ['business', 'business - business entity lifecycle administration (list/read/write_entity, append_entity_event). business_context_mode is core.'],
   ];
@@ -500,8 +500,8 @@ export function getCisSystemTools(): any[] {
         description:
           'Safely update live model routing in .prometheus/config.json without raw file writes. ' +
           'Use agent_type to update an allowlisted agent_model_defaults key, or agent_id to update a specific configured agent override. ' +
-          'Critical outage use: when proposals/background work are blocked by a provider quota event, set proposal_executor_low_risk, background_agent, coordinator, or subagent_* defaults to a working provider/model such as openai_codex/gpt-5.5. ' +
-          'Changes are persisted through the Settings API and take effect for new proposal executions, background agents, subagents, and model switches.',
+          'Critical outage use: when proposals/background work are blocked by a provider quota event, set proposal_executor_low_risk, coordinator, or subagent_* defaults to a working provider/model such as openai_codex/gpt-5.5. ' +
+          'Changes are persisted through the Settings API and take effect for new proposal executions, scheduled background tasks, subagents, and model switches. background_spawn agents always use the same route as the main agent.',
         parameters: {
           type: 'object',
           required: ['model'],
@@ -531,7 +531,6 @@ export function getCisSystemTools(): any[] {
                 'switch_model_medium',
                 'coordinator',
                 'background_task',
-                'background_agent',
               ],
               description: 'Allowlisted default route to update in agent_model_defaults.',
             },
@@ -754,7 +753,7 @@ export function getCisSystemTools(): any[] {
         description:
           'Dev-only fast approval request for Prometheus to edit specific src/ or web-ui/ files in the current chat without creating a full proposal. ' +
           'Use only when the user has asked for an immediate source fix and the exact affected files are known. Public builds disable this tool completely. ' +
-          'Approval unlocks only the listed files for this session; it never grants global or always-on source write access. ' +
+          'Approval unlocks only the listed files plus the built-in workspace self-doc dirs for this session; it never grants global or always-on source write access. ' +
           'Include a grounded plan with user request, evidence from inspected files, current state, fix, execution steps, expected post-edit workflow, and verification.',
         parameters: {
           type: 'object',
@@ -1446,6 +1445,79 @@ export function getCisSystemTools(): any[] {
             description: { type: 'string', description: 'One-sentence summary of what this skill does' },
             instructions: { type: 'string', description: 'Full markdown instructions for using this skill - be thorough, as this is what you will read with skill_read when relevant' },
             triggers: { type: 'string', description: 'Comma-separated keywords used as discovery metadata, e.g. "python,debug,traceback"' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_audit_all',
+        description:
+          'Fleet-level skill metadata audit. Scans every installed skill and scores discovery metadata quality (description and triggers), flagging issues like missing/placeholder/short descriptions, missing or too-few triggers, duplicate triggers, missing usage guidance, and manifest validation errors. Read-only. Use this first when asked to review or clean up skill triggers/descriptions across the library.',
+        parameters: {
+          type: 'object',
+          properties: {
+            scope: { type: 'string', description: 'Filter scope: "all" (default), "prometheus-related", or a substring matched against id/name/description/categories.' },
+            onlyProblems: { type: 'boolean', description: 'Return only flagged skills. Default true. Set false to return every skill with its score.' },
+            threshold: { type: 'number', description: 'Score below which a skill is flagged. Default 80.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_update_metadata',
+        description:
+          'Update one skill\'s discovery metadata (description, triggers, categories, requiredTools, lifecycle, name) via a non-destructive Prometheus manifest overlay. Snapshots and a change-ledger entry are recorded automatically; the original SKILL.md/downloaded folder is not modified. Returns the new quality score. Prefer this over hand-editing SKILL.md frontmatter for metadata fixes.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', description: 'Skill ID from skill_list.' },
+            description: { type: 'string', description: 'New description. Should start with "Use this skill when..." and include concrete trigger phrasing.' },
+            triggers: { type: 'string', description: 'Comma-separated trigger phrases (or a JSON array). Aim for 5+ specific phrases.' },
+            categories: { type: 'string', description: 'Comma-separated categories.' },
+            requiredTools: { type: 'string', description: 'Comma-separated required tool/category names.' },
+            lifecycle: { type: 'string', description: 'Lifecycle state: draft, active, experimental, deprecated, archived.' },
+            name: { type: 'string', description: 'New human-readable name.' },
+            reason: { type: 'string', description: 'Optional short rationale for the change ledger.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_repair_metadata',
+        description:
+          'Bulk skill metadata repair. mode:"preview" (default) audits the fleet and returns an editable repair template (current vs blank description/triggers per flagged skill). mode:"apply" requires confirm:true and a repairs array of {id, description?, triggers?, categories?, requiredTools?, lifecycle?, name?} objects and writes each via manifest overlay. This is the one-pass workflow for cleaning triggers/descriptions across many skills.',
+        parameters: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['preview', 'apply'], description: 'preview (default) returns the editable repair set; apply writes the provided repairs.' },
+            scope: { type: 'string', description: 'Preview scope: "all" (default), "prometheus-related", or a substring.' },
+            ids: { type: 'string', description: 'Optional comma-separated skill IDs to restrict the preview set.' },
+            threshold: { type: 'number', description: 'Preview flag threshold. Default 80.' },
+            confirm: { type: 'boolean', description: 'Required true for mode:"apply".' },
+            repairs: {
+              type: 'array',
+              description: 'For apply mode: edited repair entries. Each needs an id plus at least one metadata field to change.',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  description: { type: 'string' },
+                  triggers: { type: 'string' },
+                  categories: { type: 'string' },
+                  requiredTools: { type: 'string' },
+                  lifecycle: { type: 'string' },
+                  name: { type: 'string' },
+                },
+              },
+            },
+            reason: { type: 'string', description: 'Optional rationale for the change ledger.' },
           },
         },
       },

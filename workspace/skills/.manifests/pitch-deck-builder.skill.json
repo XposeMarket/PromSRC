@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to create, improve, critique, or outline a pitch deck, investor deck, sales deck, fundraising narrative, demo-day presentation, or company story. It helps structure slides, sharpen positioning, define investor logic, and produce deck-ready copy.",
+  "triggers": [
+    "pitch deck",
+    "investor deck",
+    "fundraising deck",
+    "sales deck",
+    "deck outline",
+    "improve my deck",
+    "critique this deck",
+    "demo day deck",
+    "startup presentation",
+    "seed deck",
+    "company story",
+    "slide narrative",
+    "fundraising narrative",
+    "make a deck",
+    "pitch presentation"
+  ],
+  "categories": [
+    "business",
+    "writing",
+    "presentation"
+  ],
+  "lifecycle": "active",
+  "name": "Pitch Deck Builder",
+  "id": "pitch-deck-builder"
+}

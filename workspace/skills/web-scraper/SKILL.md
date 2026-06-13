@@ -1,9 +1,9 @@
 ---
 name: Web Scraper
-description: Extract structured data from websites using Prometheus-native tools (browser_extract_structured, browser_scroll_collect) or Python scripts (Playwright, BeautifulSoup). Use for data extraction, text collection, crawling, and handling JavaScript-rendered content.
+description: Use this skill when the user asks to scrape, crawl, extract structured data, collect text, parse HTML, harvest listings, fetch page content, automate browser extraction, handle JavaScript-rendered content, intercept APIs, or build a scraper. Triggers on phrases like scrape this site, crawl pages, extract from website, get data from site, parse HTML, harvest data, extract structured, browser_extract_structured, browser_scroll_collect, Playwright scraper, and collect page text. Use Prometheus-native extraction tools first, then code only when needed, with polite crawling and persistence.
 emoji: 🕷️
-version: 1.2.0
-triggers: scrape, crawl, extract from website, browse page, get data from site, parse HTML, playwright, puppeteer, spider, web extraction, screenshot, automate browser, fetch page content, harvest data, extract structured, browser_extract_structured
+version: 1.3.0
+triggers: scrape, crawl, extract from website, browse page, get data from site, parse HTML, playwright, puppeteer, spider, web extraction, screenshot, automate browser, fetch page content, harvest data, extract structured, browser_extract_structured, browser_scroll_collect
 ---
 
 

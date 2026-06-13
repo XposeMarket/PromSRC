@@ -1,0 +1,12 @@
+{
+  "skillId": "web-researcher",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:27.004Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\web-researcher",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "68a377f7cfd0dcfa"
+}

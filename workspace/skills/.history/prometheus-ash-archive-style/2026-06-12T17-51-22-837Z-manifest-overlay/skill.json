@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-ash-archive-style",
+  "name": "Prometheus Ash & Archive Style",
+  "description": "Prometheus house-style playbook for using archival, industrial, dossier, mythic-operational visual language in promos, HyperFrames videos, UI art direction, and brand surfaces.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "prometheus style",
+    "ash archive",
+    "Prometheus brand style",
+    "Prometheus promo video",
+    "Prometheus HyperFrames style",
+    "living dossier",
+    "stolen fire OS",
+    "mythic operational",
+    "archival control room",
+    "Prometheus art direction"
+  ],
+  "categories": [
+    "creative",
+    "brand",
+    "video",
+    "hyperframes",
+    "motion-design",
+    "prometheus"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "media_quality"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  },
+  "resources": [
+    {
+      "path": "references/polsia-reference-analysis.md",
+      "type": "reference",
+      "description": "Style extraction from the Polsia/Bencera reference video and how to adapt it for Prometheus without copying it."
+    },
+    {
+      "path": "palettes/ash-archive.md",
+      "type": "reference",
+      "description": "Canonical Ash & Archive palette tokens for Prometheus creative work."
+    },
+    {
+      "path": "templates/hyperframes-brief.md",
+      "type": "template",
+      "description": "Pre-authoring brief for Ash & Archive HyperFrames videos."
+    },
+    {
+      "path": "references/mythic-editorial-launch-visuals-2026-06-04.md",
+      "type": "reference",
+      "description": "Campaign-specific mythic editorial Prometheus launch visual direction from Raul’s 2026-06-04 release-thread session."
+    }
+  ]
+}

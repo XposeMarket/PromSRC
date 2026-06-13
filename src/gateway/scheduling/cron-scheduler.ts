@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setWorkspace } from '../session';
+import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
@@ -225,8 +225,9 @@ function buildScheduleAttachmentsContext(job: CronJob): string {
 }
 
 // Continuity: capture messages exchanged in this job's stable thread (auto_<id>)
-// AFTER the previous run, so user replies like "next time do X" reach the next
-// run. The run executes in an isolated session, so we inline these explicitly.
+// AFTER the previous run, so the prior completion response and user replies like
+// "next time do X" reach the next run. The run executes in an isolated session,
+// so we inline these explicitly.
 function buildInterRunContext(job: CronJob): string {
   try {
     if (!job.lastRun) return '';
@@ -236,18 +237,25 @@ function buildInterRunContext(job: CronJob): string {
     const since = history.filter((m: any) => {
       const ts = Number(m?.timestamp || 0);
       if (!ts || ts <= lastRunMs) return false;
-      if (m?.channel === 'system') return false; // skip the automated run mirror messages
       const text = String(m?.content || '').trim();
       if (!text || /^\[Automated Task:/i.test(text)) return false;
-      return m?.role === 'user' || m?.role === 'assistant';
+      const role = String(m?.role || '').toLowerCase();
+      const isUser = role === 'user';
+      const isAssistant = role === 'assistant' || role === 'ai' || role === 'agent';
+      if (m?.channel === 'system') {
+        // Keep the scheduled run's final assistant response, but not the mirrored
+        // automated user prompt.
+        return isAssistant;
+      }
+      return isUser || isAssistant;
     });
     if (!since.length) return '';
     const lines = since.slice(-12).map((m: any) => {
-      const who = m.role === 'user' ? 'User' : 'You (prior run)';
+      const who = String(m.role || '').toLowerCase() === 'user' ? 'User' : 'You (prior run)';
       return `${who}: ${String(m.content).replace(/\s+/g, ' ').trim().slice(0, 600)}`;
     });
     return [
-      "[SINCE LAST RUN] Messages exchanged in this job's thread since your previous run. Treat any user messages here as updated instructions or feedback for THIS run, and follow them:",
+      "[SINCE LAST RUN] Messages exchanged in this job's thread since your previous run, including your prior completion response and any user follow-up. Treat user messages here as updated instructions or feedback for THIS run, and follow them:",
       ...lines,
     ].join('\n');
   } catch {
@@ -1502,6 +1510,7 @@ export class CronScheduler {
             };
 
             try {
+              setActivatedToolCategories(chatSessionId, []);
               const requiredReads = extractPromptRequiredWorkspaceReads(effectivePrompt);
               if (requiredReads.length) {
                 const workspaceRoot = getConfig().getWorkspacePath();
@@ -1530,7 +1539,7 @@ export class CronScheduler {
                   runId,
                 ),
                 modelOverride || String((agentDef as any)?.model || '').trim() || undefined,
-                'interactive'
+                'cron'
               );
               resultText = abortSignal.aborted
                 ? 'ERROR: Run aborted by operator.'
@@ -1727,6 +1736,7 @@ export class CronScheduler {
         });
 
         try {
+        setActivatedToolCategories(targetSessionId, []);
         const requiredReads = extractPromptRequiredWorkspaceReads(effectivePrompt);
         if (requiredReads.length) {
           const workspaceRoot = getConfig().getWorkspacePath();

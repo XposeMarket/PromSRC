@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to inspect, edit, validate, repair, or refactor JSON, YAML, TOML, env files, config files, manifests, package metadata, schedule configs, connector settings, or structured data files. It emphasizes parsing and preserving valid structure.",
+  "triggers": [
+    "JSON edit",
+    "config surgery",
+    "edit config",
+    "fix JSON",
+    "YAML edit",
+    "TOML edit",
+    "manifest edit",
+    "package.json",
+    "env file",
+    "validate config",
+    "repair config",
+    "structured data",
+    "config file",
+    "schedule config",
+    "metadata JSON"
+  ],
+  "categories": [
+    "files",
+    "config",
+    "engineering"
+  ],
+  "requiredTools": [
+    "file_stats",
+    "read_file",
+    "grep_file",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "id": "json-and-config-surgery"
+}

@@ -86,6 +86,8 @@ const MUTATION_TOOL_NAMES = new Set([
   'skill_manifest_write',
   'skill_resource_write',
   'skill_resource_delete',
+  'skill_update_metadata',
+  'skill_repair_metadata',
   'write_proposal',
   'memory_write',
 ]);
@@ -96,6 +98,9 @@ const SKILL_TOOL_NAMES = new Set([
   'skill_inspect',
   'skill_resource_list',
   'skill_resource_read',
+  'skill_audit_all',
+  'skill_update_metadata',
+  'skill_repair_metadata',
   'skill_manifest_write',
   'skill_resource_write',
   'skill_resource_delete',

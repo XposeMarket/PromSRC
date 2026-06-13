@@ -1,8 +1,8 @@
 ---
 name: DOCX Writer
-description: Create professional Word documents (.docx files) — reports, proposals, contracts, memos, SOPs, templates. Uses the docx npm package (pure Node). Produces properly formatted documents with headings, tables, lists, headers/footers, and page numbers. DEPENDENCY CHECK: before first use verify docx is installed: node -e "require('docx')" from D:\Prometheus. If it fails run workspace/doc-skills-setup.js. Triggers on: create word doc, write a proposal, generate .docx, make a report, write a contract, SOP document, memo, letter, create a template, export as word.
+description: Use this skill when the user asks to create, generate, export, or write Word documents such as .docx reports, proposals, contracts, SOPs, memos, letters, templates, formatted business documents, or documents with headings/tables/lists/headers/footers. Triggers on phrases like create Word doc, generate DOCX, export as Word, write proposal, make report, write contract, SOP document, memo, letter, create template, and formatted document. Use it to produce professional editable DOCX files with the docx npm package and safe formatting rules.
 emoji: "📝"
-version: 1.0.0
+version: 1.1.0
 triggers: create word doc, write proposal, generate docx, make report, write contract, SOP, memo, letter, create template, export word, word document, professional document, business document, formatted document, report with tables
 ---
 

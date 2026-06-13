@@ -115,6 +115,7 @@ function isInternalRestartHistoryMessage(msg: ChatMessage): boolean {
   if (/^Before continuing:\s+summarize the conversation so far/i.test(text)) return true;
   if (/^\[BACKGROUND_TASK_RESULT\b/i.test(text)) return true;
   if (/^\[Interrupted by gateway restart\]/i.test(text)) return true;
+  if (/^\[Hot restart checkpoint: planned by this chat\]/i.test(text)) return true;
   if (/^Restart Context Packet\b/i.test(text)) return true;
   return false;
 }
@@ -192,6 +193,7 @@ function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: s
       `Required next tool call: write_note({"tag":"${tag}","dev_edit_id":"${devEdit.id}","content":"<brief summary of files changed, verification, and live status>"}).`,
       'This note completes the declared dev-edit plan. After the note succeeds, respond to the user with the usual concise edit summary.',
       'Do not redo the source edits unless the context shows apply_live failed.',
+      'If the recovery summary shows the main chat was interrupted at gateway_restart or a dev/apply tool, treat that checkpoint as the expected restart boundary from this same chat. Do not describe it as an unexpected interruption and do not ask whether to resume solely because of that checkpoint.',
       lastUserRequest
         ? `Refer to the user's latest request naturally: "${lastUserRequest}".`
         : 'If no prior request is clear, say the approved dev edit was applied and the gateway is back.',
@@ -208,7 +210,8 @@ function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: s
     'Use the restart context, runtime recovery summary, recent conversation, and recent tool observations as factual memory.',
     'Pay special attention to the latest assistant reply before the restart. The restart message should continue after that reply, not restate only the latest user request.',
     'Confirm the restart succeeded, state what was just completed when the context shows it, and give the next verification/action for the user.',
-    'If the main chat was interrupted mid-flow, explicitly acknowledge the checkpoint and ask whether the user wants you to continue from there.',
+    'If the recovery summary marks a planned restart boundary from gateway_restart or a dev/apply tool, that means Prometheus itself triggered the restart from this chat. Treat it as successful application/restart context, not as an unexpected interruption, and do not ask to resume solely because of that checkpoint.',
+    'For any other main-chat interruption that was not a planned restart/apply boundary, explicitly acknowledge the checkpoint and ask whether the user wants you to continue from there.',
     'If any background task, subagent, team run, scheduled task, heartbeat, or brain run was paused/interrupted, mention it briefly and ask whether the user wants it resumed. Include a short identifier when useful.',
     lastUserRequest
       ? `If the work is still in flight, refer to the user's latest request naturally: "${lastUserRequest}".`
@@ -291,6 +294,7 @@ function buildHotRestartFallbackMessage(lastUserRequest: string, lastAssistantRe
 function appendRecoverySummaryToHotRestartMessage(text: string, recoverySummary: string): string {
   const summary = String(recoverySummary || '').trim();
   if (!summary || summary.startsWith('(No interrupted runtime records')) return text;
+  if (/planned restart boundary|expected hot-restart boundary|self-triggered from this chat/i.test(summary)) return text;
   if (/interrupted|paused|checkpoint|resume/i.test(text)) return text;
   return [
     text,
@@ -339,10 +343,18 @@ function buildTargetRecoverySummary(
   const otherChatCount = allChatRecoveries.filter((recovery) => recovery.sessionId !== sessionId).length;
   const lines: string[] = [];
   if (sessionRecovery) {
-    lines.push(
-      `This chat session (${sessionRecovery.sessionId}) was interrupted during the restart:`,
-      sessionRecovery.summary,
-    );
+    if (sessionRecovery.plannedRestartTool) {
+      lines.push(
+        `This chat session (${sessionRecovery.sessionId}) reached an expected hot-restart boundary triggered by ${sessionRecovery.plannedRestartTool}:`,
+        sessionRecovery.summary,
+        'This is evidence that the restart/apply tool was self-triggered from this chat. Do not present it as an unexpected interruption or ask to resume solely because of this main-chat checkpoint.',
+      );
+    } else {
+      lines.push(
+        `This chat session (${sessionRecovery.sessionId}) was interrupted during the restart:`,
+        sessionRecovery.summary,
+      );
+    }
   } else {
     lines.push(
       `This chat session (${sessionId}) does not have an interrupted main-chat runtime in this restart window.`,
@@ -383,7 +395,7 @@ function telegramTargetForRestartSession(
   return { enabled: false };
 }
 
-function buildHotRestartTargets(restartCtx: RestartContext, fallbackSessionId: string): HotRestartTarget[] {
+function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] {
   const restartWindowStart = Math.max(0, Number(restartCtx.timestamp || 0) - 30_000);
   const recoveries = listHotRestartMainChatRecoveries(30 * 60_000, restartWindowStart);
   const bySession = new Map<string, HotRestartMainChatRecovery>();
@@ -410,15 +422,6 @@ function buildHotRestartTargets(restartCtx: RestartContext, fallbackSessionId: s
     });
   }
 
-  if (targets.size === 0 && (restartCtx.devEditContinuation || previousSessionId)) {
-    const targetSessionId = previousSessionId || (restartCtx.originChannel === 'mobile' ? 'mobile_default' : fallbackSessionId);
-    targets.set(targetSessionId, {
-      sessionId: targetSessionId,
-      recoverySummary: buildTargetRecoverySummary(targetSessionId, undefined, recoveries),
-      telegram: telegramTargetForRestartSession(restartCtx, targetSessionId, undefined),
-    });
-  }
-
   return Array.from(targets.values());
 }
 
@@ -432,7 +435,7 @@ export async function runBootMd(
     clearRestartContext();
 
     const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
-    const targets = buildHotRestartTargets(restartCtx, sessionMeta.id);
+    const targets = buildHotRestartTargets(restartCtx);
     const results = await Promise.all(targets.map(async (target, index) => {
       const { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog } = getRecentConversationForRestart(target.sessionId);
       const internalSessionId = `${sessionMeta.id}_${sanitizeIdPart(target.sessionId)}_${index}`;

@@ -1,8 +1,9 @@
 ---
 name: error-budget-tracker
-description: Log failures consistently. Surface patterns. Know when things are getting worse before the user does.
+description: Use this skill when the user asks to log failures, track tool errors, summarize recent failures, monitor reliability, inspect unresolved errors, or build an error budget/report for Prometheus workflows. Triggers on phrases like log this error, error budget, failure report, what keeps failing, track tool failures, unresolved errors, reliability report, repeated timeouts, rate limit pattern, and summarize error logs. Use it to write structured JSONL failures, summarize patterns, and surface reliability risks without leaking sensitive data.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: log this error, error budget, failure report, what keeps failing, track tool failures, unresolved errors, reliability report, repeated timeouts, rate limit pattern, summarize error logs, error summary, failure pattern, tool error log, reliability tracking
 ---
 
 # Error Budget Tracker

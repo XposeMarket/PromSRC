@@ -1,90 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "hyperframes",
-  "name": "HyperFrames",
-  "description": "Create video compositions, animations, title cards, overlays, captions, voiceovers, audio-reactive visuals, and scene transitions in HyperFrames HTML. Prometheus should use frame.md-first video direction, catalog-first captions/components, and CLI inspect/export-verification gates for serious HyperFrames work.",
-  "version": "1.1.0",
+  "description": "Use this skill when the user asks for HyperFrames video work, editable creative video, promo clips, launch videos, app demos, motion graphics, scene timelines, captions, transitions, or professional video exports inside Prometheus Creative Mode. It prioritizes catalog-first, QA-driven editable video.",
   "triggers": [
-    "hyperframes",
-    "hyperframes video",
+    "HyperFrames",
+    "creative video",
     "promo video",
     "launch video",
-    "voice mode video",
-    "avoid ai tells",
-    "frame.md",
-    "design.md video",
-    "caption registry",
-    "hyperframes inspect",
-    "old school style video"
+    "app demo video",
+    "motion graphics",
+    "scene timeline",
+    "video export",
+    "editable video",
+    "HyperFrames clip",
+    "professional animation",
+    "captions",
+    "transitions",
+    "video QA",
+    "landscape promo"
   ],
   "categories": [
     "creative",
     "video",
-    "hyperframes",
-    "motion",
-    "captions"
+    "hyperframes"
   ],
   "requiredTools": [
-    "workspace_write",
-    "media_quality",
-    "creative_mode"
+    "creative_mode",
+    "media_quality"
   ],
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": true,
-    "shell": true
-  },
-  "resources": [
-    {
-      "path": "references/frame-md-production-workflow.md",
-      "type": "reference",
-      "description": "Frame.md-first workflow and template guidance."
-    },
-    {
-      "path": "templates/frame.md",
-      "type": "template",
-      "description": "Reusable frame.md project template."
-    },
-    {
-      "path": "references/caption-registry-workflow-2026-06-04.md",
-      "type": "reference",
-      "description": "Catalog-first caption workflow and routing."
-    },
-    {
-      "path": "references/frame-md-current-research-2026-06-04.md",
-      "type": "reference",
-      "description": "Research summary on frame.md, inspect, captions, audio, Studio."
-    },
-    {
-      "path": "references/avoid-ai-video-tells.md",
-      "type": "reference",
-      "description": "Prometheus/Raul taste guardrails for avoiding generic AI video tells."
-    },
-    {
-      "path": "references/captions.md",
-      "type": "reference",
-      "description": "Caption timing, overflow, and hard-kill rules."
-    },
-    {
-      "path": "references/audio-reactive.md",
-      "type": "reference",
-      "description": "Deterministic audio-reactive animation rules."
-    },
-    {
-      "path": "references/video-composition.md",
-      "type": "reference",
-      "description": "Video composition and frame layout guidance."
-    },
-    {
-      "path": "references/beat-direction.md",
-      "type": "reference",
-      "description": "Beat/rhythm planning for multi-scene HyperFrames."
-    },
-    {
-      "path": "references/typography.md",
-      "type": "reference",
-      "description": "Typography and text readability guidance."
-    }
-  ]
+  "lifecycle": "active",
+  "id": "hyperframes"
 }

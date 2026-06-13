@@ -1,8 +1,9 @@
 ---
 name: api-integration
-description: A practical reference for calling REST APIs reliably. Don't write API code from memory — use this.
+description: Use this skill when the user asks to call, consume, connect to, debug, or write code for REST APIs, HTTP endpoints, authentication, API keys, bearer tokens, OAuth client credentials, pagination, rate limits, retries, response parsing, or integration scripts. Triggers on phrases like call this API, REST integration, API request, bearer token, API key auth, OAuth token, paginate API, handle 429, parse response JSON, and connect to endpoint. Use it to build reliable API calls with secret-safe auth, error handling, retries, pagination, and clear response-shape checks.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: call API, REST integration, API request, bearer token, API key auth, OAuth token, paginate API, handle 429, parse response JSON, connect endpoint, HTTP request, API error handling, integration script, consume API, API pagination
 ---
 
 # API Integration

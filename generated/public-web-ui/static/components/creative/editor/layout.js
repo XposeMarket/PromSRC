@@ -18,10 +18,10 @@ const MAX_RIGHT_W    = 560;
 const MIN_TIMELINE_H = 120;
 const MAX_TIMELINE_H = 500;
 
-const LEFT_TABS  = ['media', 'audio', 'text', 'shapes', 'effects', 'captions'];
+const LEFT_TABS  = ['media', 'audio', 'text', 'shapes', 'effects', 'filters', 'captions'];
 const RIGHT_TABS = ['properties', 'keyframes'];
 
-const LEFT_TAB_LABELS  = { media:'Media', audio:'Audio', text:'Text', shapes:'Shapes', effects:'Effects', captions:'Captions' };
+const LEFT_TAB_LABELS  = { media:'Media', audio:'Audio', text:'Text', shapes:'Shapes', effects:'Effects', filters:'Filters', captions:'Captions' };
 const RIGHT_TAB_LABELS = { properties:'Properties', keyframes:'Keyframes' };
 
 function loadSizes() {
@@ -173,6 +173,7 @@ export function createEditorLayout(container) {
       text:       root.querySelector('#ce-panel-text'),
       shapes:     root.querySelector('#ce-panel-shapes'),
       effects:    root.querySelector('#ce-panel-effects'),
+      filters:    root.querySelector('#ce-panel-filters'),
       captions:   root.querySelector('#ce-panel-captions'),
       // Right tabs
       properties: root.querySelector('#ce-panel-properties'),

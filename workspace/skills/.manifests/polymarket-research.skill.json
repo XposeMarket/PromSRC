@@ -1,46 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks about prediction markets, Polymarket odds, market probabilities, event odds, election odds, sports odds, crypto prediction markets, or what traders think will happen. It combines live market cards with source-grounded context.",
   "triggers": [
-    "polymarket",
-    "poly market",
+    "Polymarket",
     "prediction market",
-    "prediction markets",
-    "betting odds",
-    "event probabilities",
     "market odds",
-    "market prices",
-    "orderbook",
-    "price history",
+    "probability market",
+    "election odds",
+    "event odds",
+    "betting odds",
     "what are the odds",
-    "polymarket edge scanner",
-    "edge scanner",
-    "polymarket trading system",
-    "prediction market dashboard",
-    "market watchlist",
-    "market movement monitoring"
+    "crypto odds",
+    "sports market",
+    "prediction market research",
+    "market probability",
+    "traders think",
+    "Polymarket research",
+    "show prediction market"
   ],
   "categories": [
+    "markets",
     "research",
-    "market-data",
-    "prediction-markets",
-    "trading"
+    "prediction"
   ],
-  "toolBinding": {
-    "requiredTools": [
-      "web",
-      "workspace_write"
-    ],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "network": true,
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "externalSideEffects": false,
-    "notes": "Read-only public API access. No trading, wallet auth, order placement, or financial advice. Trading-system requests should be framed as read-only scanning, research, watchlists, dashboards, alerts, journaling, and approval-gated decision support only."
-  },
+  "requiredTools": [
+    "show_prediction_market",
+    "web_search"
+  ],
+  "lifecycle": "active",
   "id": "polymarket-research"
 }

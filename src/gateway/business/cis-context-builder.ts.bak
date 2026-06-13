@@ -1,7 +1,0 @@
-export function buildCisContextBlock(
-  _workspacePath: string,
-  _messageText: string,
-  _opts?: { force?: boolean },
-): string {
-  return '';
-}

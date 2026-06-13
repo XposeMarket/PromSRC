@@ -1,8 +1,8 @@
 ---
 name: X Post Fetch
-description: Use this skill when the user gives an X/Twitter status URL and wants the post or thread fetched. For X URLs, `web_fetch` is the default and complete path — use it directly and answer from the returned X-aware payload. Triggers on requests like: webfetch this X URL, fetch this tweet, read this X post, pull this thread, get this tweet, or inspect this X status link. Best for X URL retrieval, thread parsing, and direct reporting from the `web_fetch` result without extra retrieval steps.
+description: Use this skill when the user gives an X/Twitter status URL and wants the post or thread fetched, read, inspected, or summarized without interaction. For X URLs, `web_fetch` is the default and complete path; answer from the returned X-aware payload. Triggers on phrases like webfetch this X URL, fetch this tweet, read this X post, pull this thread, get this tweet, inspect this X status link, X status URL, and tweet fetch. Do not use it for posting, liking, replying, or browser feed interaction.
 emoji: "🧩"
-version: 2.0.0
+version: 2.1.0
 triggers: webfetch this x url, web fetch this x url, fetch this x post, fetch this tweet, read this tweet, read this x post, pull this x thread, get this tweet, get this x post, inspect this x link, x status url, x url fetch, tweet fetch
 ---
 

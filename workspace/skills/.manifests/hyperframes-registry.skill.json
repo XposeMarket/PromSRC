@@ -1,64 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "hyperframes-registry",
-  "name": "HyperFrames Registry",
-  "description": "Install and wire HyperFrames registry blocks/components. Prometheus should use catalog-first routing for captions, transitions, social UI, maps/charts, code snippets, VFX, device/app showcases, and logo outros before hand-authoring lookalikes.",
-  "version": "1.1.0",
+  "description": "Use this skill when the user asks to inspect, search, use, debug, or update the HyperFrames registry, component registry, template registry, clip registry, or catalog metadata. It helps map registry entries to usable Creative Video components and verify actual render output.",
   "triggers": [
-    "hyperframes registry",
-    "hyperframes catalog",
-    "hyperframes add",
-    "caption component",
-    "caption-style",
-    "hyperframes component",
-    "hyperframes block"
+    "HyperFrames registry",
+    "component registry",
+    "template registry",
+    "clip registry",
+    "registry metadata",
+    "search registry",
+    "inspect registry",
+    "update registry",
+    "registry component",
+    "video catalog registry",
+    "HyperFrames template",
+    "catalog metadata",
+    "registry debug",
+    "registry entry",
+    "use registry clip"
   ],
   "categories": [
     "creative",
     "video",
-    "hyperframes",
-    "catalog",
     "registry"
   ],
   "requiredTools": [
+    "creative_mode",
     "workspace_write"
   ],
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": true,
-    "shell": true
-  },
-  "resources": [
-    {
-      "path": "references/current-catalog-snapshot-2026-06-04.md",
-      "type": "reference",
-      "description": "Fetched 2026-06-04 registry snapshot with category routing."
-    },
-    {
-      "path": "references/discovery.md",
-      "type": "reference",
-      "description": "Registry discovery workflow."
-    },
-    {
-      "path": "references/wiring-blocks.md",
-      "type": "reference",
-      "description": "How to wire block sub-compositions."
-    },
-    {
-      "path": "references/wiring-components.md",
-      "type": "reference",
-      "description": "How to wire snippet components."
-    },
-    {
-      "path": "examples/add-block.md",
-      "type": "example",
-      "description": "Block install example."
-    },
-    {
-      "path": "examples/add-component.md",
-      "type": "example",
-      "description": "Component install example."
-    }
-  ]
+  "lifecycle": "active",
+  "id": "hyperframes-registry"
 }

@@ -2,6 +2,17 @@ export const VALID_IMAGE_ASPECT_RATIOS = ['landscape', 'square', 'portrait'] as 
 
 export type ImageAspectRatio = typeof VALID_IMAGE_ASPECT_RATIOS[number];
 
+export interface GeneratedImageAsset {
+  path: string;
+  rel_path?: string;
+  cache_path?: string;
+  mime_type: string;
+  file_name: string;
+  bytes: number;
+}
+
+export type ImagePersistedCallback = (image: GeneratedImageAsset) => void | Promise<void>;
+
 export interface ImageGenerationRequest {
   prompt: string;
   reference_images?: string[];
@@ -11,6 +22,7 @@ export interface ImageGenerationRequest {
   model?: string;
   output_dir?: string;
   save_to_workspace?: boolean;
+  on_image_persisted?: ImagePersistedCallback;
 }
 
 export interface ImageGenerationResolvedRequest {
@@ -20,16 +32,9 @@ export interface ImageGenerationResolvedRequest {
   count: number;
   model?: string;
   output_dir?: string;
+  output_run_dir?: string;
   save_to_workspace: boolean;
-}
-
-export interface GeneratedImageAsset {
-  path: string;
-  rel_path?: string;
-  cache_path?: string;
-  mime_type: string;
-  file_name: string;
-  bytes: number;
+  on_image_persisted?: ImagePersistedCallback;
 }
 
 export interface ImageGenerationSuccess {

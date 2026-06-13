@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to search Craigslist or similar local marketplaces for cars, trucks, project vehicles, used vehicles, deal candidates, price comparisons, or listing shortlists. It supports filtering, listing evidence capture, scam checks, and practical buyer recommendations.",
+  "triggers": [
+    "craigslist car search",
+    "Craigslist cars",
+    "used car search",
+    "find a car on Craigslist",
+    "local car listings",
+    "project car search",
+    "cheap trucks",
+    "vehicle deal search",
+    "marketplace car search",
+    "used truck listings",
+    "car listing shortlist",
+    "car price comparison",
+    "Craigslist vehicle",
+    "find me a used car"
+  ],
+  "categories": [
+    "shopping",
+    "vehicles",
+    "local-research"
+  ],
+  "requiredTools": [
+    "web_search",
+    "browser_automation"
+  ],
+  "lifecycle": "active",
+  "id": "craigslist-car-search"
+}

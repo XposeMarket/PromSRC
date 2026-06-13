@@ -1,8 +1,9 @@
 ---
 name: subagent-system-prompt-design
-description: # Subagent System Prompt Design Guide
+description: Use this skill when designing, reviewing, or improving Prometheus subagent system prompts, role prompts, persona instructions, agent operating rules, delegated-agent behavior, team-member prompts, or prompt mutations. Triggers on phrases like subagent prompt, system prompt design, agent instructions, improve this agent, role prompt, team agent prompt, prompt mutation, subagent behavior, agent persona, and make this agent better. Use it to write concrete, bounded, tool-aware prompts with mission, scope, guardrails, output standards, and failure behavior.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: subagent prompt, system prompt design, agent instructions, improve this agent, role prompt, team agent prompt, prompt mutation, subagent behavior, agent persona, make this agent better, agent operating rules, delegated agent, prompt review, agent prompt design
 ---
 
 # Subagent System Prompt Design Guide

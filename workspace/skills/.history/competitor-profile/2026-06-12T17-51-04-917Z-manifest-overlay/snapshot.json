@@ -1,0 +1,11 @@
+{
+  "skillId": "competitor-profile",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:04.920Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\competitor-profile",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "5a7a85d2850d86b2"
+}

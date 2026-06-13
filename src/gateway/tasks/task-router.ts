@@ -79,6 +79,27 @@ function isRecoveryBlockedTask(task: TaskRecord | null | undefined): boolean {
   return task.status !== 'paused' || task.pauseReason !== 'user_pause';
 }
 
+function buildPreviousFailureResumeMessage(task: TaskRecord, action: 'resume' | 'rerun', note?: string): any | null {
+  if (task.status !== 'failed') return null;
+  const latestError = [...(task.journal || [])].reverse()
+    .find((entry) => entry.type === 'error' || /failed|error/i.test(String(entry.content || '')));
+  const summary = String(task.finalSummary || latestError?.content || task.pauseAnalysis?.message || '').trim();
+  const detail = String(latestError?.detail || '').trim();
+  return {
+    role: 'user',
+    content: [
+      `[PREVIOUS TASK FAILURE]`,
+      `This task is being ${action === 'rerun' ? 'rerun from the start' : 'resumed'} after a failed assigned job.`,
+      summary ? `Failure summary: ${summary.slice(0, 1200)}` : '',
+      detail ? `Failure detail: ${detail.slice(0, 1800)}` : '',
+      note ? `User follow-up for this run: ${note.slice(0, 1200)}` : '',
+      `Use this failure context for this run, then continue from the current task state and verify whether it fails again or completes.`,
+      `[/PREVIOUS TASK FAILURE]`,
+    ].filter(Boolean).join('\n'),
+    timestamp: Date.now(),
+  };
+}
+
 function findRecoveryTaskForReplySession(sessionId: string, statuses?: TaskStatus[]): TaskRecord | null {
   const blocked = listTasks({ status: statuses || RECOVERY_BLOCKED_STATUSES })
     .filter((task) => isRecoveryBlockedTask(task))
@@ -673,6 +694,19 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       if (task.status === 'complete') {
         return { success: false, action, code: 'already_complete', message: `Task "${task.title}" is complete. Use rerun to restart.` };
       }
+      const previousFailureMessage = buildPreviousFailureResumeMessage(task, 'resume', note);
+      if (previousFailureMessage) {
+        const resumeMessages = Array.isArray(task.resumeContext?.messages) ? task.resumeContext.messages : [];
+        task.resumeContext = {
+          ...(task.resumeContext || {
+            messages: [],
+            browserSessionActive: false,
+            round: 0,
+            orchestrationLog: [],
+          }),
+          messages: [...resumeMessages, previousFailureMessage].slice(-80),
+        };
+      }
       updateTaskStatus(task.id, 'queued');
       appendJournal(task.id, { type: 'resume', content: `task_control resume${note ? `: ${note.slice(0, 220)}` : ''}` });
       // Reset self-heal counter so the user's manual intervention gives a fresh start
@@ -680,7 +714,8 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       task.resynthAttempts = 0;
       saveTask(task);
       if (note) {
-        const resumeMessages = Array.isArray(task.resumeContext?.messages) ? task.resumeContext.messages : [];
+        const refreshedTaskForNote = loadTask(task.id) || task;
+        const resumeMessages = Array.isArray(refreshedTaskForNote.resumeContext?.messages) ? refreshedTaskForNote.resumeContext.messages : [];
         updateResumeContext(task.id, {
           messages: [
             ...resumeMessages,
@@ -699,6 +734,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     }
 
     // rerun
+    const previousFailureMessage = buildPreviousFailureResumeMessage(task, 'rerun', note);
     task.status = 'queued';
     task.pauseReason = undefined;
     task.currentStepIndex = 0;
@@ -728,6 +764,9 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       orchestrationLog: [],
       fileOpState: undefined,
     };
+    if (previousFailureMessage) {
+      task.resumeContext.messages = [previousFailureMessage];
+    }
     saveTask(task);
     appendJournal(task.id, { type: 'status_push', content: `task_control rerun${note ? `: ${note.slice(0, 220)}` : ''}` });
     launchBackgroundTaskRunner(task.id);
@@ -843,11 +882,12 @@ export async function handleTaskRecoveryMessage(
   }
 
   const explicitRerunRequested = /\b(rerun|re-run|restart|start again|from scratch)\b/i.test(message);
-  const resumeRequestedBroad =
-    isResumeIntent(message) ||
+  const broadAffirmation =
     /\b(retry|try again)\b/i.test(message) ||
     /^\s*(proceed|go ahead|ok|okay|continue|yes|yep|sure|do it|keep going|sounds good|ready|do that)\.?\s*$/i.test(message) ||
     /\b(go ahead|continue|resume|proceed|apply|do that|use that plan)\b/i.test(message);
+  const allowBroadRecoveryApproval = source === 'task_panel';
+  const resumeRequestedBroad = isResumeIntent(message) || (allowBroadRecoveryApproval && broadAffirmation);
 
   if (explicitRerunRequested || resumeRequestedBroad) {
     const approvedAction: 'resume' | 'rerun' = explicitRerunRequested ? 'rerun' : 'resume';
@@ -1034,12 +1074,10 @@ export async function tryHandleBlockedTaskFollowup(sessionId: string, rawMessage
   const cancelRequested = isCancelIntent(message);
   const rerunRequested = isRerunIntent(message);
 
-  // Broad resume detection: standard resume verbs OR short affirmations that only
-  // make sense as "yes, continue" replies when a blocked task already exists.
-  const resumeRequestedBroad =
-    isResumeIntent(message) ||
-    /^\s*(proceed|go ahead|ok|okay|continue|yes|yep|sure|do it|keep going|try again|move on|sounds good|ready|done|fixed|logged in|i logged in|it('s| is) fixed|all good)\.?\s*$/i.test(message) ||
-    /\b(logged in|fixed it|done now|all set|ready now|proceed|go ahead)\.?$/i.test(message);
+  // Main-chat followups should not auto-resume paused/failed tasks from broad
+  // acknowledgements. Let the model see/ask about the task unless the user
+  // explicitly asks to resume/rerun/cancel.
+  const resumeRequestedBroad = isResumeIntent(message);
 
   if (!resumeRequestedBroad && !cancelRequested && !rerunRequested) return null;
 

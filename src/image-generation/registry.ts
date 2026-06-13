@@ -8,6 +8,7 @@ import type {
   ImageGenerationResult,
 } from './types.js';
 import {
+  buildImageGenerationRunOutputDir,
   buildImageGenerationError,
   getImageGenerationConfig,
   normalizeImageAspectRatio,
@@ -101,6 +102,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       if (!provider) continue;
       sawKnownProvider = true;
       if (await provider.isAvailable()) {
+        const outputRunDir = buildImageGenerationRunOutputDir({ outputDir, provider: provider.id, prompt });
         return provider.generate({
           prompt,
           aspect_ratio: aspectRatio,
@@ -108,7 +110,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
           count,
           model: request.model,
           output_dir: outputDir,
+          output_run_dir: outputRunDir,
           save_to_workspace: saveToWorkspace,
+          on_image_persisted: request.on_image_persisted,
         });
       }
     }
@@ -129,6 +133,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     const provider = PROVIDERS_BY_ID.get(candidateId);
     if (!provider) continue;
     if (await provider.isAvailable()) {
+      const outputRunDir = buildImageGenerationRunOutputDir({ outputDir, provider: provider.id, prompt });
       return provider.generate({
         prompt,
         aspect_ratio: aspectRatio,
@@ -136,7 +141,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
         count,
         model: request.model,
         output_dir: outputDir,
+        output_run_dir: outputRunDir,
         save_to_workspace: saveToWorkspace,
+        on_image_persisted: request.on_image_persisted,
       });
     }
   }

@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Whisker & Hearth Cat Adoption Center</title>
+  <meta name="description" content="A warm, modern landing page for a fictional cat adoption center helping neighbors meet their new best friend." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: 'Nunito', system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(255, 188, 122, 0.35), transparent 34rem),
+        radial-gradient(circle at 90% 15%, rgba(131, 84, 59, 0.15), transparent 28rem),
+        #fff9f0;
+      color: #2b1810;
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    img, svg { max-width: 100%; display: block; }
+    a { color: inherit; text-decoration: none; }
+
+    :root {
+      --cream: #fff9f0;
+      --cream-2: #f7ead9;
+      --latte: #e9c7a2;
+      --clay: #c76f43;
+      --cocoa: #6f3d25;
+      --ink: #2b1810;
+      --muted: #806652;
+      --white: #fffdf8;
+      --sage: #7f9b72;
+      --shadow: 0 24px 70px rgba(91, 48, 25, 0.16);
+      --radius-xl: 34px;
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      --container: 1180px;
+      --text-sm: clamp(0.88rem, 0.84rem + 0.2vw, 0.98rem);
+      --text-base: clamp(1rem, 0.96rem + 0.25vw, 1.1rem);
+      --text-lg: clamp(1.15rem, 1.05rem + 0.55vw, 1.45rem);
+      --text-xl: clamp(1.45rem, 1.25rem + 1vw, 2rem);
+      --text-hero: clamp(3.05rem, 2.1rem + 5.6vw, 6.9rem);
+    }
+
+    .container {
+      width: min(var(--container), calc(100% - 36px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(18px);
+      background: rgba(255, 249, 240, 0.74);
+      border-bottom: 1px solid rgba(111, 61, 37, 0.09);
+    }
+
+    .nav {
+      height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      font-size: 1.15rem;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: linear-gradient(145deg, var(--clay), #f4aa5d);
+      color: white;
+      box-shadow: 0 12px 28px rgba(199, 111, 67, 0.28);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      font-size: var(--text-sm);
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 48px;
+      padding: 13px 22px;
+      border-radius: 999px;
+      font-weight: 900;
+      transition: transform .22s ease, box-shadow .22s ease, background .22s ease;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      color: #fffdf8;
+      background: linear-gradient(135deg, var(--cocoa), var(--clay));
+      box-shadow: 0 16px 34px rgba(199, 111, 67, 0.28);
+    }
+
+    .btn-secondary {
+      color: var(--cocoa);
+      background: rgba(255, 255, 255, 0.72);
+      border-color: rgba(111, 61, 37, 0.13);
+    }
+
+    .btn:hover { transform: translateY(-2px); }
+    .btn-primary:hover { box-shadow: 0 22px 46px rgba(199, 111, 67, 0.34); }
+    .btn-secondary:hover { background: var(--white); box-shadow: 0 12px 30px rgba(91, 48, 25, 0.08); }
+
+    .hero {
+      position: relative;
+      padding: clamp(64px, 9vw, 112px) 0 clamp(58px, 7vw, 90px);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(300px, 0.72fr);
+      gap: clamp(36px, 7vw, 88px);
+      align-items: center;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 13px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid rgba(111, 61, 37, 0.1);
+      color: var(--cocoa);
+      font-size: 0.78rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      margin-bottom: 22px;
+    }
+
+    h1, h2, h3 { font-family: 'Fraunces', Georgia, serif; line-height: 1.02; letter-spacing: -0.045em; }
+    h1 { font-size: var(--text-hero); max-width: 850px; }
+    h2 { font-size: clamp(2.25rem, 1.55rem + 3vw, 4.8rem); }
+    h3 { font-size: 1.45rem; }
+
+    .accent { color: var(--clay); }
+    .hero-copy {
+      margin-top: 24px;
+      max-width: 660px;
+      color: var(--muted);
+      font-size: var(--text-lg);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 34px;
+    }
+
+    .hero-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      margin-top: 42px;
+    }
+
+    .stat {
+      padding: 18px 22px;
+      min-width: 142px;
+      background: rgba(255, 255, 255, 0.62);
+      border: 1px solid rgba(111, 61, 37, 0.09);
+      border-radius: 20px;
+      box-shadow: 0 10px 30px rgba(91, 48, 25, 0.07);
+    }
+    .stat strong { display: block; font-size: 1.45rem; color: var(--cocoa); }
+    .stat span { color: var(--muted); font-weight: 800; font-size: .9rem; }
+
+    .hero-card {
+      position: relative;
+      min-height: 560px;
+      border-radius: var(--radius-xl);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.28), rgba(255,255,255,0.08)),
+        linear-gradient(145deg, #f9ddbd, #c98255 48%, #56311f);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      padding: 28px;
+      isolation: isolate;
+    }
+
+    .hero-card::before {
+      content: '';
+      position: absolute;
+      inset: 24px;
+      border: 1px solid rgba(255,255,255,.38);
+      border-radius: 28px;
+      z-index: -1;
+    }
+
+    .cat-portrait {
+      position: absolute;
+      left: 50%;
+      bottom: 84px;
+      transform: translateX(-50%);
+      width: min(330px, 76%);
+      aspect-ratio: 1;
+      border-radius: 46% 54% 52% 48%;
+      background:
+        radial-gradient(circle at 45% 36%, #fff 0 7%, transparent 7.5%),
+        radial-gradient(circle at 61% 36%, #fff 0 7%, transparent 7.5%),
+        radial-gradient(circle at 47% 36%, #23120d 0 3%, transparent 3.4%),
+        radial-gradient(circle at 63% 36%, #23120d 0 3%, transparent 3.4%),
+        radial-gradient(circle at 54% 47%, #f4a0a5 0 4%, transparent 4.4%),
+        linear-gradient(135deg, #332017, #9a5d3b 45%, #f1bd85);
+      box-shadow: inset 0 -24px 44px rgba(41, 23, 16, .22), 0 26px 60px rgba(44, 24, 14, .28);
+    }
+    .cat-portrait::before,
+    .cat-portrait::after {
+      content: '';
+      position: absolute;
+      top: -34px;
+      width: 96px;
+      height: 110px;
+      background: #7b462e;
+      clip-path: polygon(50% 0, 0 100%, 100% 100%);
+      z-index: -1;
+    }
+    .cat-portrait::before { left: 36px; transform: rotate(-18deg); }
+    .cat-portrait::after { right: 36px; transform: rotate(18deg); }
+
+    .floating-note {
+      position: absolute;
+      background: rgba(255,253,248,.9);
+      border: 1px solid rgba(255,255,255,.62);
+      border-radius: 20px;
+      padding: 16px 18px;
+      box-shadow: 0 20px 40px rgba(70, 38, 22, .18);
+      color: var(--cocoa);
+      font-weight: 900;
+    }
+    .note-one { top: 40px; left: 34px; }
+    .note-two { right: 28px; bottom: 34px; max-width: 210px; }
+    .floating-note span { display: block; color: var(--muted); font-weight: 700; font-size: .88rem; margin-top: 3px; }
+
+    section { padding: clamp(58px, 8vw, 112px) 0; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 30px;
+      margin-bottom: 34px;
+    }
+    .section-head p { color: var(--muted); max-width: 520px; font-size: var(--text-lg); }
+
+    .cat-grid, .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 22px;
+    }
+
+    .cat-card, .step-card {
+      background: rgba(255, 253, 248, 0.82);
+      border: 1px solid rgba(111, 61, 37, 0.1);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 18px 54px rgba(91, 48, 25, 0.08);
+      overflow: hidden;
+    }
+
+    .cat-card { transition: transform .24s ease, box-shadow .24s ease; }
+    .cat-card:hover { transform: translateY(-7px); box-shadow: var(--shadow); }
+
+    .cat-art {
+      height: 230px;
+      display: grid;
+      place-items: center;
+      font-size: 4.4rem;
+      background: var(--cat-bg);
+      position: relative;
+      overflow: hidden;
+    }
+    .cat-art::after {
+      content: '';
+      position: absolute;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.28);
+      right: -42px;
+      top: -42px;
+    }
+
+    .cat-body { padding: 24px; }
+    .tag {
+      display: inline-flex;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(199, 111, 67, .1);
+      color: var(--clay);
+      font-size: .78rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 14px;
+    }
+    .cat-body p, .step-card p { color: var(--muted); margin-top: 10px; }
+
+    .steps { background: linear-gradient(180deg, transparent, rgba(233, 199, 162, .3), transparent); }
+    .step-card { padding: 28px; position: relative; }
+    .step-number {
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      background: var(--ink);
+      color: var(--cream);
+      font-weight: 900;
+      margin-bottom: 22px;
+      box-shadow: 0 14px 28px rgba(43, 24, 16, .18);
+    }
+
+    .support-strip {
+      padding: 0 0 clamp(58px, 8vw, 112px);
+    }
+    .support-card {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 28px;
+      align-items: center;
+      padding: clamp(28px, 5vw, 58px);
+      border-radius: var(--radius-xl);
+      background:
+        linear-gradient(135deg, rgba(43, 24, 16, .92), rgba(111, 61, 37, .88)),
+        radial-gradient(circle at 100% 0%, rgba(244, 170, 93, .52), transparent 24rem);
+      color: var(--cream);
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+    .support-card::after {
+      content: '♡';
+      position: absolute;
+      right: 34px;
+      top: -36px;
+      font-size: 12rem;
+      opacity: .08;
+      font-family: Georgia, serif;
+    }
+    .support-card p { color: rgba(255,249,240,.76); max-width: 690px; margin-top: 14px; font-size: var(--text-lg); }
+    .support-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+    .support-actions .btn-secondary { background: rgba(255,255,255,.12); color: var(--cream); border-color: rgba(255,255,255,.18); }
+
+    footer {
+      padding: 44px 0;
+      background: #2b1810;
+      color: var(--cream);
+    }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr .8fr;
+      gap: 34px;
+      align-items: start;
+    }
+    footer p, footer a { color: rgba(255,249,240,.72); }
+    footer h3 { font-size: 1.05rem; margin-bottom: 12px; letter-spacing: 0; }
+    .footer-links { list-style: none; display: grid; gap: 8px; }
+    .fineprint {
+      margin-top: 34px;
+      padding-top: 22px;
+      border-top: 1px solid rgba(255,255,255,.1);
+      color: rgba(255,249,240,.55);
+      font-size: .92rem;
+    }
+
+    @media (max-width: 880px) {
+      .nav { height: auto; padding: 16px 0; align-items: flex-start; }
+      .nav-links { display: none; }
+      .hero-grid, .support-card, .footer-grid { grid-template-columns: 1fr; }
+      .hero-card { min-height: 480px; }
+      .cat-grid, .steps-grid { grid-template-columns: 1fr; }
+      .section-head { display: block; }
+      .section-head p { margin-top: 16px; }
+      .support-actions { justify-content: flex-start; }
+    }
+
+    @media (max-width: 520px) {
+      .container { width: min(100% - 26px, var(--container)); }
+      .hero { padding-top: 40px; }
+      .hero-actions, .hero-stats { width: 100%; }
+      .btn, .stat { width: 100%; }
+      .hero-card { min-height: 420px; padding: 18px; }
+      .floating-note { font-size: .9rem; }
+      .note-one { left: 16px; top: 20px; }
+      .note-two { right: 16px; bottom: 18px; }
+      .cat-portrait { bottom: 78px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <nav class="container nav" aria-label="Primary navigation">
+      <a href="#top" class="brand" aria-label="Whisker and Hearth home">
+        <span class="brand-mark">🐾</span>
+        <span>Whisker & Hearth</span>
+      </a>
+      <div class="nav-links" aria-label="Page sections">
+        <a href="#cats">Meet the cats</a>
+        <a href="#process">Adoption steps</a>
+        <a href="#support">Support us</a>
+      </div>
+      <a class="btn btn-primary" href="#cats">Adopt today</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="container hero-grid">
+        <div>
+          <p class="eyebrow">Open hearts. Warm windowsills.</p>
+          <h1 id="hero-title">Find the cat who already feels like <span class="accent">home.</span></h1>
+          <p class="hero-copy">Whisker & Hearth is a cozy neighborhood adoption center pairing rescued cats with patient, loving families. Browse personalities, book a visit, and leave with a new little shadow.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#cats">Meet adoptable cats →</a>
+            <a class="btn btn-secondary" href="#process">How adoption works</a>
+          </div>
+          <div class="hero-stats" aria-label="Adoption center highlights">
+            <div class="stat"><strong>312</strong><span>cats rehomed</span></div>
+            <div class="stat"><strong>48hr</strong><span>match support</span></div>
+            <div class="stat"><strong>100%</strong><span>cozy-first care</span></div>
+          </div>
+        </div>
+        <div class="hero-card" aria-label="Illustration of a cozy adoptable cat">
+          <div class="floating-note note-one">Today’s mood <span>sunbeam certified</span></div>
+          <div class="cat-portrait" role="img" aria-label="A warm illustrated cat face"></div>
+          <div class="floating-note note-two">Next cuddle appointment: <span>whenever you sit down</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="cats" aria-labelledby="cats-title">
+      <div class="container">
+        <div class="section-head">
+          <h2 id="cats-title">Featured cats</h2>
+          <p>Every cat has a story. These three are ready for quiet mornings, ridiculous zoomies, and the sacred duty of judging your laptop.</p>
+        </div>
+        <div class="cat-grid">
+          <article class="cat-card">
+            <div class="cat-art" style="--cat-bg: linear-gradient(135deg, #ffe2bd, #f7a66c);" aria-hidden="true">🐈</div>
+            <div class="cat-body">
+              <span class="tag">Gentle lap expert</span>
+              <h3>Marmalade</h3>
+              <p>A soft orange gentleman who prefers slow blinks, warm blankets, and anyone willing to become furniture for an hour.</p>
+            </div>
+          </article>
+          <article class="cat-card">
+            <div class="cat-art" style="--cat-bg: linear-gradient(135deg, #d8e7c7, #7f9b72);" aria-hidden="true">🐱</div>
+            <div class="cat-body">
+              <span class="tag">Curious tiny shadow</span>
+              <h3>Pip</h3>
+              <p>A bright-eyed explorer with kitten energy, dramatic hallway sprints, and an advanced degree in cardboard box inspection.</p>
+            </div>
+          </article>
+          <article class="cat-card">
+            <div class="cat-art" style="--cat-bg: linear-gradient(135deg, #f2d9cc, #9d6b55);" aria-hidden="true">😺</div>
+            <div class="cat-body">
+              <span class="tag">Queen of windows</span>
+              <h3>Clover</h3>
+              <p>Elegant, calm, and observant. Clover loves sunny ledges, respectful company, and being admired exactly the correct amount.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="process" class="steps" aria-labelledby="process-title">
+      <div class="container">
+        <div class="section-head">
+          <h2 id="process-title">A simple path to adoption</h2>
+          <p>We keep the process thoughtful, humane, and low-stress for both cats and humans.</p>
+        </div>
+        <div class="steps-grid">
+          <article class="step-card">
+            <div class="step-number">1</div>
+            <h3>Tell us your rhythm</h3>
+            <p>Share your home setup, schedule, other pets, and what kind of companion would thrive with you.</p>
+          </article>
+          <article class="step-card">
+            <div class="step-number">2</div>
+            <h3>Meet your matches</h3>
+            <p>Visit our calm cat rooms, spend real time together, and let the connection happen naturally.</p>
+          </article>
+          <article class="step-card">
+            <div class="step-number">3</div>
+            <h3>Bring home support</h3>
+            <p>Go home with transition tips, starter resources, and follow-up care from our adoption team.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="support" class="support-strip" aria-labelledby="support-title">
+      <div class="container">
+        <div class="support-card">
+          <div>
+            <h2 id="support-title">Not adopting today? You can still change a life.</h2>
+            <p>Donations fund vet care, food, enrichment, and emergency rescues. Volunteers help socialize shy cats, refresh rooms, photograph adoptables, and keep the whole place humming.</p>
+          </div>
+          <div class="support-actions">
+            <a class="btn btn-primary" href="mailto:hello@whiskerhearth.example?subject=Donation%20Interest">Donate now</a>
+            <a class="btn btn-secondary" href="mailto:hello@whiskerhearth.example?subject=Volunteer%20Interest">Volunteer</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <a href="#top" class="brand"><span class="brand-mark">🐾</span><span>Whisker & Hearth</span></a>
+          <p style="margin-top: 14px; max-width: 430px;">A fictional cat adoption center built around warm matches, patient care, and very serious biscuit-making.</p>
+        </div>
+        <div>
+          <h3>Visit</h3>
+          <ul class="footer-links">
+            <li><a href="#cats">Adoptable cats</a></li>
+            <li><a href="#process">Adoption process</a></li>
+            <li><a href="#support">Donate or volunteer</a></li>
+          </ul>
+        </div>
+        <div>
+          <h3>Hours</h3>
+          <p>Wed–Sun · 10am–6pm<br>Quiet visits by appointment.</p>
+        </div>
+      </div>
+      <p class="fineprint">© 2026 Whisker & Hearth Cat Adoption Center. Fictional demo landing page.</p>
+    </div>
+  </footer>
+</body>
+</html>

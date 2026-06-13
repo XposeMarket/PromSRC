@@ -1,6 +1,34 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "triggers": "scheduled job, schedule job, cron job, scheduler, subagent schedule, remove subagent, update scheduled job, job schedule, automation schedule, scheduled jobs, schedule owner, heartbeat schedule, stuck scheduled job, run scheduled job, pause schedule, resume schedule, delete scheduled job, scheduler operations, schedule management",
+  "description": "Use this skill when the user asks to create, update, inspect, pause, resume, delete, run, debug, or verify scheduled jobs, recurring automations, timers, cron jobs, agent-owned schedules, or delivery schedules. It emphasizes self-contained prompts and outbound verification.",
+  "triggers": [
+    "scheduled job",
+    "schedule automation",
+    "recurring job",
+    "cron job",
+    "timer",
+    "create schedule",
+    "update schedule",
+    "pause schedule",
+    "resume schedule",
+    "delete schedule",
+    "run job now",
+    "schedule status",
+    "scheduled task",
+    "recurring automation",
+    "verify scheduled output"
+  ],
+  "categories": [
+    "automation",
+    "scheduler",
+    "tasks"
+  ],
+  "requiredTools": [
+    "schedule_job",
+    "automation_dashboard",
+    "automations"
+  ],
+  "lifecycle": "active",
   "id": "scheduler-operations-playbook"
 }

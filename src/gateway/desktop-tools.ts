@@ -111,6 +111,22 @@ export interface DesktopAdvisorPacket {
   actionVersion?: number;
 }
 
+export interface DesktopFocusWindowVerification {
+  requestedName: string;
+  focused: boolean;
+  requestedAppActive: boolean;
+  matchedWindow: DesktopWindowInfo;
+  activeWindow: DesktopWindowInfo | null;
+  monitor?: DesktopMonitorInfo;
+  screenshotId?: string;
+  screenshotPath?: string;
+  thumbnailPath?: string;
+  screenshotWidth?: number;
+  screenshotHeight?: number;
+  summary: string;
+  screenshotObservation?: string;
+}
+
 /** Options for `desktop_screenshot` / `desktopScreenshot` */
 export interface DesktopScreenshotOptions {
   /** Omit or `all` = full virtual screen; `primary` = main display only; number = 0-based monitor index */
@@ -2265,6 +2281,122 @@ export async function desktopFocusWindow(name: string): Promise<string> {
   }
   markDesktopStateChanged();
   return `Focused window: "${target.title}" (${target.processName}).`;
+}
+
+async function writeDesktopFocusThumbnail(packet: DesktopAdvisorPacket): Promise<{ screenshotPath: string; thumbnailPath?: string } | null> {
+  const ext = packet.screenshotMime === 'image/jpeg' ? 'jpg' : 'png';
+  const basePath = path.join(os.tmpdir(), `prometheus-focus-${packet.screenshotId}.${ext}`);
+  const buffer = Buffer.from(packet.screenshotBase64, 'base64');
+  fs.writeFileSync(basePath, buffer);
+
+  try {
+    const image = await Jimp.read(buffer);
+    image.scaleToFit(480, 320);
+    const thumbnailPath = path.join(os.tmpdir(), `prometheus-focus-${packet.screenshotId}-thumb.${ext}`);
+    await image.writeAsync(thumbnailPath);
+    return { screenshotPath: basePath, thumbnailPath };
+  } catch {
+    return { screenshotPath: basePath };
+  }
+}
+
+function desktopWindowMatchesQuery(windowInfo: DesktopWindowInfo | null | undefined, query: string): boolean {
+  const q = String(query || '').trim().toLowerCase();
+  if (!windowInfo || !q) return false;
+  return (
+    String(windowInfo.title || '').toLowerCase().includes(q) ||
+    String(windowInfo.processName || '').toLowerCase().includes(q) ||
+    String(windowInfo.appDisplayName || '').toLowerCase().includes(q)
+  );
+}
+
+export async function desktopFocusWindowVerified(
+  sessionId: string,
+  name: string,
+  options?: { includeScreenshot?: boolean },
+): Promise<{ ok: true; verification: DesktopFocusWindowVerification } | { ok: false; message: string }> {
+  ensureWindows();
+  const query = String(name || '').trim();
+  if (!query) return { ok: false, message: 'ERROR: name is required.' };
+
+  const before = await listWindowsInternal();
+  const matches = findWindowsByName(before, query);
+  if (matches.length === 0) {
+    return { ok: false, message: `ERROR: No window matching "${query}" found.` };
+  }
+
+  const target = matches[0];
+  const focused = await focusWindowHandle(target.handle);
+  if (!focused) {
+    return { ok: false, message: `ERROR: Failed to focus "${target.title}" (${target.processName}).` };
+  }
+
+  markDesktopStateChanged();
+
+  let after = await gatherDesktopContextInternal();
+  let activeWindow = after.activeWindow;
+
+  let screenshotId: string | undefined;
+  let screenshotPath: string | undefined;
+  let thumbnailPath: string | undefined;
+  let screenshotWidth: number | undefined;
+  let screenshotHeight: number | undefined;
+  let screenshotObservation: string | undefined;
+
+  if (options?.includeScreenshot !== false) {
+    screenshotObservation = await desktopWindowScreenshot(sessionId, {
+      handle: Number(activeWindow?.handle || target.handle),
+      focus_first: false,
+      padding: 8,
+    }).catch((e: any) => `ERROR: ${e?.message || e}`);
+    const packet = getDesktopAdvisorPacket(sessionId);
+    if (packet?.screenshotBase64) {
+      screenshotId = packet.screenshotId;
+      screenshotWidth = packet.width;
+      screenshotHeight = packet.height;
+      activeWindow = packet.activeWindow || activeWindow;
+      after = await gatherDesktopContextInternal().catch(() => after);
+      const saved = await writeDesktopFocusThumbnail(packet).catch(() => null);
+      screenshotPath = saved?.screenshotPath;
+      thumbnailPath = saved?.thumbnailPath;
+    }
+  }
+
+  const finalActive = activeWindow || after.activeWindow;
+  const requestedAppActive =
+    sameDesktopWindowHandle(finalActive, target) ||
+    desktopWindowMatchesQuery(finalActive, query);
+  const activeMonitorIndex = Number(finalActive?.monitorIndex);
+  const monitor =
+    Number.isFinite(activeMonitorIndex) && activeMonitorIndex >= 0
+      ? after.monitors.find((m) => m.index === Math.floor(activeMonitorIndex))
+      : undefined;
+  const summary = [
+    `Focused window: "${target.title}" (${target.processName}).`,
+    `Active afterward: ${shortWindowLabel(finalActive)}.`,
+    `Requested app active: ${requestedAppActive ? 'yes' : 'no'}.`,
+    monitor ? `Monitor: ${monitor.index} (${monitor.width}x${monitor.height} at ${monitor.left},${monitor.top}${monitor.primary ? ', primary' : ''}).` : 'Monitor: unknown.',
+    screenshotId ? `Screenshot: ${screenshotId}${thumbnailPath ? ` thumbnail=${thumbnailPath}` : screenshotPath ? ` path=${screenshotPath}` : ''}.` : '',
+  ].filter(Boolean).join('\n');
+
+  return {
+    ok: true,
+    verification: {
+      requestedName: query,
+      focused,
+      requestedAppActive,
+      matchedWindow: target,
+      activeWindow: finalActive,
+      monitor,
+      screenshotId,
+      screenshotPath,
+      thumbnailPath,
+      screenshotWidth,
+      screenshotHeight,
+      summary,
+      screenshotObservation,
+    },
+  };
 }
 
 export async function desktopWindowControl(
@@ -4655,13 +4787,16 @@ export function getDesktopToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'desktop_focus_window',
-        description: 'Bring a matching window to foreground/focus.',
+        description:
+          'Bring a matching window to foreground/focus and verify the active window afterward. Returns focused title, process, monitor, requested-app-active boolean, and screenshot_id/path when capture is enabled.',
         parameters: {
           type: 'object',
           required: ['name'],
           properties: {
             name: { type: 'string', description: 'Partial window title or process name to focus' },
+            include_screenshot: { type: 'boolean', description: 'Capture a verification screenshot after focus (default true)' },
           },
+          additionalProperties: false,
         },
       },
     },

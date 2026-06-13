@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "gsap",
+  "name": "gsap",
+  "description": "GSAP animation reference for HyperFrames. Covers gsap.to(), from(), fromTo(), easing, stagger, defaults, timelines (gsap.timeline(), position parameter, labels, nesting, playback), and performance (transforms, will-change, quickTo). Use when writing GSAP animations in HyperFrames compositions.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "gsap"
+  ],
+  "categories": [
+    "generic",
+    "imported"
+  ],
+  "requiredTools": [],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": false,
+    "desktop": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "examples/hyperframes-transition-slab-reset-2026-05-21.md",
+      "type": "example",
+      "description": "Observed HyperFrames/GSAP transition-slab overlay failure and reset pattern from the 2026-05-21 promo repair."
+    }
+  ]
+}

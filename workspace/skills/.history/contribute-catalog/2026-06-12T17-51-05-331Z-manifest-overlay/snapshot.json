@@ -1,0 +1,11 @@
+{
+  "skillId": "contribute-catalog",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:05.334Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\contribute-catalog",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "ee0fd17bddd759f2"
+}

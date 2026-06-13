@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to inspect, convert, compress, resize, crop, transcode, analyze, extract frames/audio, or prepare local media files such as images, videos, audio, screenshots, GIFs, or thumbnails. It emphasizes safe local file handling and quality checks.",
+  "triggers": [
+    "local media",
+    "convert image",
+    "resize image",
+    "compress video",
+    "transcode video",
+    "extract frames",
+    "extract audio",
+    "analyze media",
+    "prepare thumbnail",
+    "crop image",
+    "GIF conversion",
+    "video file",
+    "audio file",
+    "media utility",
+    "local file media"
+  ],
+  "categories": [
+    "media",
+    "files",
+    "utilities"
+  ],
+  "requiredTools": [
+    "media_assets",
+    "media_quality",
+    "analyze_video"
+  ],
+  "lifecycle": "active",
+  "id": "local-media-utilities"
+}

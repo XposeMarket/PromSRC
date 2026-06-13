@@ -1,54 +1,32 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "animejs",
-  "name": "animejs",
-  "description": "Anime.js adapter patterns for HyperFrames. Use when writing Anime.js animations or timelines inside HyperFrames compositions, registering animations on window.__hfAnime, making Anime.js seek-driven and deterministic, or translating Anime.js examples into render-safe HyperFrames HTML.",
-  "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to animate web UI, SVG, DOM elements, timelines, motion sequences, or creative effects using Anime.js. It helps map animation requirements into lightweight Anime.js timelines, easing, staggering, and export-safe motion patterns.",
   "triggers": [
-    "animejs"
+    "animejs",
+    "Anime.js",
+    "anime timeline",
+    "anime animation",
+    "JavaScript animation",
+    "SVG animation with anime",
+    "stagger animation",
+    "DOM animation",
+    "web animation timeline",
+    "animate UI with anime",
+    "motion sequence",
+    "easing animation",
+    "creative web animation"
   ],
   "categories": [
-    "generic",
-    "imported"
+    "creative",
+    "animation",
+    "web-ui"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "shell",
-      "desktop",
-      "externalSideEffects"
-    ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": true,
-    "browser": false,
-    "desktop": true,
-    "externalSideEffects": true
-  },
-  "resources": [],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium"
+  "requiredTools": [
+    "creative_mode",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "Anime.js",
+  "id": "animejs"
 }

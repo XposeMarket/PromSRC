@@ -1,54 +1,32 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "HTML Interactive Widgets",
-  "description": "Build live inline HTML widgets, dashboards, calculators, filterable tables, KPI scorecards, steppers, sliders, and interactive reports directly in chat using fenced html blocks.",
-  "version": "1.0.0",
+  "description": "Use this skill when the user asks for an interactive dashboard, live HTML widget, rich report, scorecard, visual comparison, filterable table, clickable prototype, or polished chat-embedded HTML artifact. It guides self-contained HTML/CSS/JS output that renders cleanly in chat.",
   "triggers": [
     "interactive dashboard",
-    "html widget",
-    "interactive widget",
-    "live dashboard",
-    "filterable table",
-    "sortable table",
-    "kpi cards",
+    "HTML widget",
+    "live report",
     "scorecard",
-    "calculator",
-    "slider",
-    "step-through",
-    "interactive report",
-    "dashboard with filters",
-    "build an interactive",
-    "make it clickable",
-    "what-if calculator",
-    "scenario explorer",
-    "inline html"
+    "filterable table",
+    "clickable prototype",
+    "interactive visual",
+    "dashboard report",
+    "HTML interactive",
+    "rich report",
+    "visual analysis",
+    "embedded iframe",
+    "KPI cards",
+    "interactive comparison",
+    "make it visual"
   ],
   "categories": [
     "visualization",
-    "interactive-output",
-    "dashboards",
     "html",
-    "reports"
+    "reporting"
   ],
   "requiredTools": [
-    "skill_read"
+    "creative_mode"
   ],
-  "toolBinding": {
-    "requiredTools": [
-      "skill_read"
-    ],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [
-      "Read html-interactive.",
-      "Output one inline fenced html block only.",
-      "Keep the outer wrapper transparent and scripts self-contained."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceWrite": false,
-    "externalSideEffects": false
-  },
+  "lifecycle": "active",
   "id": "html-interactive"
 }

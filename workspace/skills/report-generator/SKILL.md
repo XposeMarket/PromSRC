@@ -1,8 +1,9 @@
 ---
 name: report-generator
-description: Turn any structured data or completed task output into a clean, readable report. Choose format based on destination.
+description: Use this skill when the user asks to turn task output, research, data, errors, weekly activity, audit findings, or structured results into a clean report. Triggers on phrases like generate a report, write report, summarize results, create markdown report, HTML report, status report, research report, data report, error report, weekly summary, and package these findings. Use it to choose the right report format, lead with summary, show metrics, findings, issues, and next steps.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: generate report, write report, summarize results, create markdown report, HTML report, status report, research report, data report, error report, weekly summary, package findings, task report, executive summary, clean report
 ---
 
 # Report Generator

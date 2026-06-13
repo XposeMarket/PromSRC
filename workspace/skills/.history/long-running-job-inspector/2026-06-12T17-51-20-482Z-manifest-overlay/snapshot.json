@@ -1,0 +1,12 @@
+{
+  "skillId": "long-running-job-inspector",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:20.485Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\long-running-job-inspector",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "92ade988b7eebe2b"
+}

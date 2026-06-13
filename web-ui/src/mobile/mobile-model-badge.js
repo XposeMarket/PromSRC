@@ -37,7 +37,7 @@ const BUILTIN_STATIC_MODELS = {
   anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
-  xai: ['grok-4.20-reasoning', 'grok-4-1-fast-reasoning'],
+  xai: ['grok-build-0.1', 'grok-4.3', 'grok-4.20-multi-agent-0309', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning'],
 };
 
 // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
@@ -186,16 +186,38 @@ function _activeModel(llm) {
   return { provider, model };
 }
 
+function _modelDetail(detail = {}) {
+  const modelRef = String(detail?.modelRef || '').trim();
+  const slashIdx = modelRef.indexOf('/');
+  const provider = String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim();
+  const model = String(detail?.model || (slashIdx > 0 ? modelRef.slice(slashIdx + 1) : modelRef) || '').trim();
+  return { provider, model };
+}
+
+function _setBadgeLabel(label) {
+  const safe = String(label || '').trim() || 'Online';
+  window.__pmModelBadgeLabel = safe;
+  document.querySelectorAll('.pm-model-badge .pm-model-badge-label').forEach((el) => {
+    el.textContent = safe;
+  });
+  return safe;
+}
+
 // ── Badge label refresh ──────────────────────────────────────────────────────
-export async function refreshMobileModelBadge(force = false) {
+export async function refreshMobileModelBadge(force = false, modelChangeDetail = null) {
+  const eventModel = _modelDetail(modelChangeDetail || {});
+  if (eventModel.model || eventModel.provider) {
+    const label = _setBadgeLabel(prettifyModelName(eventModel.model, eventModel.provider));
+    // switch_model is turn-scoped and does not mutate /api/settings/provider, so
+    // keep the streamed active-model label instead of overwriting it from config.
+    if (String(modelChangeDetail?.sourceEventType || '') === 'model_switched') {
+      _llmCache = null;
+      return label;
+    }
+  }
   const llm = await _loadLlm(force);
   const { provider, model } = _activeModel(llm);
-  const label = prettifyModelName(model, provider);
-  window.__pmModelBadgeLabel = label;
-  document.querySelectorAll('.pm-model-badge .pm-model-badge-label').forEach((el) => {
-    el.textContent = label;
-  });
-  return label;
+  return _setBadgeLabel(prettifyModelName(model, provider));
 }
 
 // Seed text used by renderMobileHeader so the badge isn't empty on first paint.
@@ -481,7 +503,10 @@ export function initMobileModelBadge() {
 
   // Keep the label fresh on navigation and when the model changes elsewhere.
   window.addEventListener('hashchange', () => { refreshMobileModelBadge(false).catch(() => {}); });
-  window.addEventListener('pm-model-changed', () => { refreshMobileModelBadge(true).catch(() => {}); });
+  window.addEventListener('pm-model-changed', (event) => {
+    const detail = event?.detail || {};
+    refreshMobileModelBadge(true, detail).catch(() => {});
+  });
 
   refreshMobileModelBadge(true).catch(() => {});
 }

@@ -798,7 +798,7 @@ function renderChatContextPlanUsage() {
     html += windows.map((w) => {
       const pct = Math.max(0, Math.min(100, Number(w.used_percent) || 0));
       const left = (100 - pct).toFixed(0);
-      const reset = ccwFmtReset(w.resets_at);
+      const reset = ccwFmtReset(w.reset_at || w.resets_at);
       return `
         <div class="ccw-plan-gauge">
           <div class="ccw-plan-gauge-head">
@@ -808,8 +808,8 @@ function renderChatContextPlanUsage() {
           <div class="ccw-plan-gauge-track"><div class="ccw-plan-gauge-fill ${ccwUsageGaugeClass(pct)}" style="width:${pct}%"></div></div>
         </div>`;
     }).join('');
-  } else {
-    // No live limit windows (e.g. xAI/Grok) — show tracked token totals instead.
+  }
+  if (!windows.length) {
     const tokens = prov.tokens || {};
     const total = Number(tokens.total || 0);
     const calls = Number(tokens.calls || 0);
@@ -890,6 +890,7 @@ function makeEmptyStreamState() {
     lastHeartbeat: { state: 'idle', level: '', current_step: '-', retry_count: 0, format_violation_count: 0, message: '' },
     lastHeartbeatLogSignature: '',
     currentTurnStartIndex: -1,
+    currentTurnProcessOpen: false,
     turnStartedAt: 0,
     activeModelBadge: null,
     pendingApprovals: [],
@@ -928,6 +929,7 @@ function applyStreamStateToWindow(id) {
   window.lastHeartbeat = st.lastHeartbeat || { state: 'idle', level: '', current_step: '-', retry_count: 0, format_violation_count: 0, message: '' };
   window.lastHeartbeatLogSignature = st.lastHeartbeatLogSignature || '';
   window.currentTurnStartIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
+  window.currentTurnProcessOpen = !!st.currentTurnProcessOpen;
   window.activeModelBadge = st.activeModelBadge || null;
   window.pendingApprovals = Array.isArray(st.pendingApprovals) ? st.pendingApprovals : [];
 }
@@ -5190,6 +5192,36 @@ async function steerQueuedPrompt(index) {
   }
 }
 
+function isActiveMainGoalRunning(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const sess = sid ? getChatSessionById(sid) : null;
+  return !!(sess?.mainChatGoal && String(sess.mainChatGoal.status || '') === 'active' && isSessionThinking(sid));
+}
+
+async function steerActiveGoalRunFromComposer(message) {
+  const sessionId = String(window.activeChatSessionId || '').trim();
+  const text = String(message || '').trim();
+  if (!sessionId || !text) return false;
+  try {
+    const data = await api('/api/chat/steer', {
+      method: 'POST',
+      body: {
+        sessionId,
+        message: text,
+        source: 'web_goal_composer',
+      },
+      timeoutMs: 15000,
+    });
+    appendChatSteerWorkflowSplit(sessionId, text, data);
+    showToast('Steer sent', 'Prometheus will fold it into the active goal run.', 'success', 1800);
+    return true;
+  } catch (err) {
+    addSessionProcessEntry(sessionId, 'error', `Goal steer failed: ${String(err?.message || err)}`, { actor: 'Chat Steer' });
+    showToast('Steer failed', String(err?.message || err), 'error');
+    return false;
+  }
+}
+
 function clearQueuedPrompts() {
   const queue = getActiveQueuedPrompts();
   if (!queue.length) return;
@@ -5987,7 +6019,7 @@ function renderUserEditComposer(msg, originalIndex) {
 }
 
 function isInternalChatSession(session) {
-  return /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_)/i.test(String(session?.id || ''));
+  return /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i.test(String(session?.id || ''));
 }
 
 function isInternalChatMessage(msg) {
@@ -6145,7 +6177,7 @@ function mergeServerSessionSummaries(summaries) {
 
 // Fetch a single session's full history from the server and populate the stub.
 async function _loadSessionFromServer(id, options = {}) {
-  if (/^(brain_thought_|brain_dream_|brain_dream_cleanup_)/i.test(String(id || ''))) return;
+  if (/^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i.test(String(id || ''))) return;
   const sess = window.chatSessions.find(s => s.id === id);
   const force = options.force === true;
   if (!sess || (!force && !sess._needsServerLoad)) return;
@@ -6258,10 +6290,12 @@ function getActiveMainChatGoal() {
 function renderMainGoalStrip() {
   const strip = document.getElementById('main-goal-strip');
   if (!strip) return;
+  const chatView = document.getElementById('chat-view');
   const goal = getActiveMainChatGoal();
   if (!goal || goal.status === 'cleared') {
     strip.style.display = 'none';
     strip.innerHTML = '';
+    chatView?.classList.remove('has-main-goal');
     return;
   }
   const status = String(goal.status || 'active');
@@ -6279,6 +6313,7 @@ function renderMainGoalStrip() {
   ].filter(Boolean).join(' · ');
   strip.style.display = 'flex';
   strip.setAttribute('data-status', status);
+  chatView?.classList.add('has-main-goal');
   strip.innerHTML = `
     <div class="main-goal-main">
       <div class="main-goal-kicker">Main chat goal · ${escHtml(status)}</div>
@@ -6357,6 +6392,13 @@ function syncActiveChat() {
   window.runtimeProgressState = sess && sess.progressState
     ? { source: String(sess.progressState.source || 'none'), activeIndex: Number(sess.progressState.activeIndex || -1), items: Array.isArray(sess.progressState.items) ? sess.progressState.items : [] }
     : { source: 'none', activeIndex: -1, items: [] };
+  if (sess?.activeRun === true && !window._sessionThinking?.[sess.id]) {
+    window._sessionThinking[sess.id] = true;
+    const st = getSessionStreamState(sess.id) || resetSessionStreamState(sess.id);
+    st.currentTurnStartIndex = inferCurrentTurnProcessStartIndex(sess);
+    st.turnStartedAt = Number(st.turnStartedAt || getSessionLastMessageAt(sess) || Date.now());
+    catchUpMainChatStream(sess.id).catch(() => {});
+  }
   if (sess) {
     if (window._sessionThinking && window._sessionThinking[sess.id]) {
       applyStreamStateToWindow(sess.id);
@@ -8104,6 +8146,155 @@ function featherAlphaEdges(data, bgMask, w, h) {
   }
 }
 
+function getGeneratedImageRowsForMessage(messageIndex) {
+  const msgIndex = Number(messageIndex);
+  if (!Number.isInteger(msgIndex) || msgIndex < 0) return [];
+  const msg = window.chatHistory?.[msgIndex];
+  return Array.isArray(msg?.generatedImages)
+    ? msg.generatedImages.map((image) => normalizeGeneratedImageEntry(image)).filter(Boolean)
+    : [];
+}
+
+function getSelectedGeneratedImageForMessage(messageIndex, imageIndex = null) {
+  const rows = getGeneratedImageRowsForMessage(messageIndex);
+  if (!rows.length) return { rows, selected: null, selectedIndex: 0 };
+  const msg = window.chatHistory?.[Number(messageIndex)];
+  const requestedIndex = Number(imageIndex);
+  const savedIndex = Number(msg?.generatedImageSelectedIndex || 0);
+  const rawIndex = Number.isInteger(requestedIndex) && requestedIndex >= 0 ? requestedIndex : savedIndex;
+  const selectedIndex = Math.max(0, Math.min(rows.length - 1, Number.isInteger(rawIndex) ? rawIndex : 0));
+  return { rows, selected: rows[selectedIndex], selectedIndex };
+}
+
+async function copyGeneratedImageSetToClipboard(messageIndex, imageIndex = null, all = false) {
+  const { rows, selected } = getSelectedGeneratedImageForMessage(messageIndex, imageIndex);
+  const targets = all ? rows : (selected ? [selected] : []);
+  if (!targets.length) return;
+  try {
+    if (!navigator.clipboard?.write || typeof window.ClipboardItem === 'undefined') {
+      throw new Error('Image clipboard copy is not supported in this browser.');
+    }
+    const items = [];
+    for (const image of targets) {
+      const previewPath = normalizeCanvasPath(image.previewPath || '');
+      if (!previewPath) continue;
+      const response = await fetch(`/api/canvas/inline?path=${encodeURIComponent(previewPath)}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const mimeType = blob.type || image.mimeType || 'image/png';
+      items.push(new window.ClipboardItem({ [mimeType]: blob }));
+    }
+    if (!items.length) return;
+    await navigator.clipboard.write(items);
+    showToast(all && items.length > 1 ? 'Images copied' : 'Image copied', all && items.length > 1 ? `${items.length} images copied to clipboard.` : (targets[0]?.fileName || ''), 'success');
+  } catch (err) {
+    showToast('Image copy failed', String(err?.message || err || 'Unknown clipboard error.'), 'error');
+  }
+}
+
+async function saveGeneratedImageSet(messageIndex, imageIndex = null, all = false) {
+  const { rows, selected } = getSelectedGeneratedImageForMessage(messageIndex, imageIndex);
+  const targets = all ? rows : (selected ? [selected] : []);
+  for (const image of targets) {
+    await saveGeneratedImageFile(image.previewPath, image.fileName);
+  }
+}
+
+function closeGeneratedImageQuickModal() {
+  document.getElementById('assistant-image-quick-modal')?.remove();
+  document.removeEventListener('keydown', handleGeneratedImageModalEscape);
+}
+
+function handleGeneratedImageModalEscape(evt) {
+  if (evt.key === 'Escape') closeGeneratedImageQuickModal();
+}
+
+function openGeneratedImageSaveCopyModal(messageIndex, imageIndex = null) {
+  closeGeneratedImageQuickModal();
+  const { rows, selected, selectedIndex } = getSelectedGeneratedImageForMessage(messageIndex, imageIndex);
+  if (!selected) return;
+  const multi = rows.length > 1;
+  const modal = document.createElement('div');
+  modal.id = 'assistant-image-quick-modal';
+  modal.className = 'assistant-image-modal assistant-image-modal--quick';
+  modal.innerHTML = `
+    <div class="assistant-image-modal-backdrop" data-assistant-image-close="1"></div>
+    <div class="assistant-image-quick-panel" role="dialog" aria-modal="true" aria-label="Save or copy generated image">
+      <button class="assistant-image-modal-close" type="button" data-assistant-image-close="1" aria-label="Close">×</button>
+      <strong>Save or copy image</strong>
+      <span>${escHtml(multi ? `Image ${selectedIndex + 1} of ${rows.length}` : selected.fileName)}</span>
+      <div class="assistant-image-quick-actions">
+        <button type="button" onclick="saveGeneratedImageSet(${Number(messageIndex)}, ${selectedIndex}, false); closeGeneratedImageQuickModal();">Save current</button>
+        <button type="button" onclick="copyGeneratedImageSetToClipboard(${Number(messageIndex)}, ${selectedIndex}, false); closeGeneratedImageQuickModal();">Copy current</button>
+        ${multi ? `<button type="button" onclick="saveGeneratedImageSet(${Number(messageIndex)}, ${selectedIndex}, true); closeGeneratedImageQuickModal();">Save all ${rows.length}</button>
+        <button type="button" onclick="copyGeneratedImageSetToClipboard(${Number(messageIndex)}, ${selectedIndex}, true); closeGeneratedImageQuickModal();">Copy all ${rows.length}</button>` : ''}
+      </div>
+    </div>`;
+  modal.addEventListener('click', (evt) => {
+    if (evt.target?.closest?.('[data-assistant-image-close]')) closeGeneratedImageQuickModal();
+  });
+  document.body.appendChild(modal);
+  document.addEventListener('keydown', handleGeneratedImageModalEscape);
+}
+
+function openGeneratedImagePreviewModal(messageIndex, imageIndex = null) {
+  closeGeneratedImageQuickModal();
+  const { rows, selected, selectedIndex } = getSelectedGeneratedImageForMessage(messageIndex, imageIndex);
+  if (!selected) return;
+  const previewPath = selected.previewPath;
+  const openPath = selected.absPath || selected.relPath || selected.previewPath;
+  const copyPath = selected.absPath || selected.relPath || selected.previewPath;
+  const promptPreview = selected.revisedPrompt || selected.prompt || '';
+  const thumbsHtml = rows.length > 1
+    ? `<div class="assistant-image-modal-thumbs" aria-label="Generated image set">
+        ${rows.map((image, idx) => `
+          <button
+            type="button"
+            class="${idx === selectedIndex ? 'active' : ''}"
+            title="Show image ${idx + 1}"
+            aria-label="Show image ${idx + 1}"
+            onclick="openGeneratedImagePreviewModal(${Number(messageIndex)}, ${idx})"
+          >
+            <img src="${escHtml(getGeneratedImageInlineSrc(image))}" alt="${escHtml(image.fileName || `Generated image ${idx + 1}`)}" loading="lazy" decoding="async">
+            <span>${idx + 1}</span>
+          </button>
+        `).join('')}
+      </div>`
+    : '';
+  const modal = document.createElement('div');
+  modal.id = 'assistant-image-quick-modal';
+  modal.className = 'assistant-image-modal assistant-image-modal--preview';
+  modal.innerHTML = `
+    <div class="assistant-image-modal-backdrop" data-assistant-image-close="1"></div>
+    <div class="assistant-image-preview-panel" role="dialog" aria-modal="true" aria-label="Generated image preview">
+      <button class="assistant-image-modal-close" type="button" data-assistant-image-close="1" aria-label="Close">×</button>
+      <div class="assistant-image-modal-body">
+        <div class="assistant-image-modal-stage">
+          <img src="${escHtml(getGeneratedImageInlineSrc(selected))}" alt="${escHtml(selected.fileName || 'Generated image')}" loading="eager" decoding="async">
+        </div>
+        ${thumbsHtml}
+      </div>
+      <div class="assistant-image-modal-footer">
+        <div class="assistant-image-modal-meta">
+          <strong>${escHtml(selected.fileName || 'Generated image')}</strong>
+          <span>${rows.length > 1 ? escHtml(`Image ${selectedIndex + 1} of ${rows.length}`) : 'Generated image'}</span>
+        </div>
+        <div class="assistant-image-modal-actions">
+          <button type="button" onclick="closeGeneratedImageQuickModal(); openGeneratedImageInCanvas(${encodeInlineJsString(openPath)}, ${encodeInlineJsString(selected.fileName)});">Open in Canvas</button>
+          <button type="button" onclick="closeGeneratedImageQuickModal(); canvasExtractLayersFromSource(${encodeInlineJsString(openPath)}, ${encodeInlineJsString(promptPreview)});" ${creativeLayerExtractionBusy ? 'disabled' : ''}>Extract Layers</button>
+          <button type="button" onclick="copyGeneratedImageToClipboard(${encodeInlineJsString(previewPath)}, ${encodeInlineJsString(selected.fileName)});">Copy Image</button>
+          <button type="button" onclick="copyGeneratedImagePath(${encodeInlineJsString(copyPath)});">Copy Path</button>
+          <button type="button" onclick="saveGeneratedImageFile(${encodeInlineJsString(previewPath)}, ${encodeInlineJsString(selected.fileName)});">Save</button>
+        </div>
+      </div>
+    </div>`;
+  modal.addEventListener('click', (evt) => {
+    if (evt.target?.closest?.('[data-assistant-image-close]')) closeGeneratedImageQuickModal();
+  });
+  document.body.appendChild(modal);
+  document.addEventListener('keydown', handleGeneratedImageModalEscape);
+}
+
 async function saveGeneratedImageFile(diskPath, filename = 'generated-image.png') {
   const previewPath = normalizeCanvasPath(diskPath || '');
   if (!previewPath) return;
@@ -8978,21 +9169,10 @@ function renderAssistantGeneratedImages(message, messageIndex) {
   if (!selected) return '';
 
   const previewPath = selected.previewPath;
-  const openPath = selected.absPath || selected.relPath || selected.previewPath;
   const copyPath = selected.absPath || selected.relPath || selected.previewPath;
   const inlineSrc = getGeneratedImageInlineSrc(selected);
-  const previewPathArg = encodeInlineJsString(previewPath);
-  const openPathArg = encodeInlineJsString(openPath);
   const copyPathArg = encodeInlineJsString(copyPath);
-  const fileNameArg = encodeInlineJsString(selected.fileName);
   const promptPreview = selected.revisedPrompt || selected.prompt;
-  const promptArg = encodeInlineJsString(promptPreview || '');
-  const metaParts = [
-    rows.length > 1 ? `${rows.length} images` : '',
-    selected.relPath ? 'Saved to workspace' : 'Saved image',
-    formatGeneratedImageSize(selected.bytes),
-  ].filter(Boolean);
-  const titleText = rows.length > 1 ? 'Generated images' : 'Generated image';
   const thumbsHtml = rows.length > 1
     ? `
       <div class="assistant-image-thumb-rail">
@@ -9007,7 +9187,7 @@ function renderAssistantGeneratedImages(message, messageIndex) {
               aria-label="Show image ${idx + 1}"
               onclick="setGeneratedImagePreview(${Number(messageIndex)}, ${idx})"
             >
-              <img src="${escHtml(thumbSrc)}" alt="${escHtml(image.fileName || `Generated image ${idx + 1}`)}" loading="lazy">
+              <img src="${escHtml(thumbSrc)}" alt="${escHtml(image.fileName || `Generated image ${idx + 1}`)}" loading="eager" decoding="async">
             </button>`;
         }).join('')}
       </div>`
@@ -9015,30 +9195,22 @@ function renderAssistantGeneratedImages(message, messageIndex) {
 
   return `
     <div class="assistant-image-gallery">
-      <div class="assistant-image-card${rows.length > 1 ? ' assistant-image-card--multi' : ''}">
-        <div class="assistant-image-stage${rows.length > 1 ? ' assistant-image-stage--multi' : ''}">
-          <button class="assistant-image-preview" type="button" title="Open in Canvas" aria-label="Open image in canvas" onclick="openGeneratedImageInCanvas(${openPathArg}, ${fileNameArg})">
-            <img src="${escHtml(inlineSrc)}" alt="${escHtml(promptPreview || selected.fileName || titleText)}" loading="lazy">
+      <div class="assistant-image-card${rows.length > 1 ? ' assistant-image-card--multi' : ''}" data-count="${rows.length}">
+        <div class="assistant-image-stage">
+          <button class="assistant-image-preview assistant-image-preview--selectable" type="button" title="Preview generated image" aria-label="Preview generated image" onclick="openGeneratedImagePreviewModal(${Number(messageIndex)}, ${selectedIndex})">
+            <img src="${escHtml(inlineSrc)}" alt="${escHtml(promptPreview || selected.fileName || 'Generated image')}" loading="eager" decoding="async" fetchpriority="high">
           </button>
           ${thumbsHtml}
         </div>
         <div class="assistant-image-footer">
-          <div class="assistant-image-meta">
-            <div class="assistant-image-name">${escHtml(titleText)}</div>
-            ${metaParts.length ? `<div class="assistant-image-subtitle">${escHtml(metaParts.join(' | '))}</div>` : ''}
-          </div>
           <div class="assistant-image-actions">
-            <button class="assistant-image-btn assistant-image-btn--primary" type="button" title="Extract editable layers" aria-label="Extract editable layers" onclick="canvasOpenExtractLayersDialog(${openPathArg}, ${promptArg})" ${creativeLayerExtractionBusy ? 'disabled' : ''}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
-            </button>
-            <button class="assistant-image-btn" type="button" title="Copy image to clipboard" aria-label="Copy image to clipboard" onclick="copyGeneratedImageToClipboard(${previewPathArg}, ${fileNameArg})">
+            <button class="assistant-image-btn assistant-image-action-text assistant-image-btn--primary" type="button" title="Save or copy image" aria-label="Save or copy image" onclick="openGeneratedImageSaveCopyModal(${Number(messageIndex)}, ${selectedIndex})">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>Save/copy image</span>
             </button>
-            <button class="assistant-image-btn" type="button" title="Copy saved file path" aria-label="Copy saved file path" onclick="copyGeneratedImagePath(${copyPathArg})">
+            <button class="assistant-image-btn assistant-image-action-text" type="button" title="Copy saved file path" aria-label="Copy saved file path" onclick="copyGeneratedImagePath(${copyPathArg})">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3.54-3.54a5 5 0 0 0-7.07-7.07L11 4"/><path d="M14 11a5 5 0 0 0-7.07 0L3.39 14.54a5 5 0 1 0 7.07 7.07L13 19"/></svg>
-            </button>
-            <button class="assistant-image-btn assistant-image-btn--primary" type="button" title="Save image to a location you choose" aria-label="Save image to a location you choose" onclick="saveGeneratedImageFile(${previewPathArg}, ${fileNameArg})">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Copy file path</span>
             </button>
           </div>
         </div>
@@ -9946,6 +10118,20 @@ function normalizeFileChangesPayload(fileChanges) {
   };
 }
 
+function normalizeFileChangeGroups(fileChanges) {
+  const groups = Array.isArray(fileChanges?.groups) ? fileChanges.groups : [];
+  if (!groups.length) return [];
+  return groups.map((group, index) => {
+    const data = normalizeFileChangesPayload(group?.fileChanges || group);
+    if (!data) return null;
+    return {
+      id: String(group?.id || group?.source || `group_${index + 1}`),
+      label: String(group?.label || (index === 0 ? 'Main agent edits' : 'Background agent edits')).trim(),
+      data,
+    };
+  }).filter(Boolean);
+}
+
 function renderFileChangeRow(file) {
   const canOpen = file.path && file.status !== 'deleted';
   const pathArg = encodeInlineJsString(file.path);
@@ -9968,17 +10154,17 @@ function renderFileChangeRow(file) {
   `;
 }
 
-function renderFileChanges(fileChanges) {
-  const data = normalizeFileChangesPayload(fileChanges);
+function renderFileChangesGroup(data, options = {}) {
   if (!data) return '';
   const files = data.files;
   const visible = files.slice(0, 3);
   const rest = files.slice(3);
   const fileWord = data.summary.fileCount === 1 ? 'file' : 'files';
+  const label = String(options.label || '').trim();
   return `
     <div class="file-changes-card">
       <div class="file-changes-head">
-        <strong>${data.summary.fileCount} ${fileWord} changed</strong>
+        <strong>${label ? `${escHtml(label)} - ` : ''}${data.summary.fileCount} ${fileWord} changed</strong>
         <span class="file-changes-total"><span class="ins">+${data.summary.insertions}</span><span class="del">-${data.summary.deletions}</span></span>
       </div>
       <div class="file-change-list">
@@ -9992,6 +10178,14 @@ function renderFileChanges(fileChanges) {
       </div>
     </div>
   `;
+}
+
+function renderFileChanges(fileChanges) {
+  const groups = normalizeFileChangeGroups(fileChanges);
+  if (groups.length) {
+    return `<div class="file-changes-grouped">${groups.map((group) => renderFileChangesGroup(group.data, { label: group.label })).join('')}</div>`;
+  }
+  return renderFileChangesGroup(normalizeFileChangesPayload(fileChanges));
 }
 
 async function openInFileLocation(targetPath) {
@@ -10118,6 +10312,35 @@ function mergeLiveTraceProcessEntries(traceEntries, processEntries) {
   const liveProcessEntries = liveTraceEntriesToProcessEntries(traceEntries, base);
   return liveProcessEntries.length ? [...liveProcessEntries, ...base] : base;
 }
+
+function isGenerateImagePendingFromEntries(...entryGroups) {
+  const text = entryGroups
+    .flatMap((entries) => Array.isArray(entries) ? entries : [])
+    .map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase())
+    .join('\n');
+  return /\b(generate_image|generating image|image generation|i am generating the image)\b/.test(text)
+    && !/\b(generate_image complete|generated image|generated images|failed|error)\b/.test(text);
+}
+
+function renderGeneratedImageLoadingCard() {
+  return `
+    <div class="assistant-image-gallery assistant-image-gallery--pending" aria-live="polite">
+      <div class="assistant-image-card assistant-image-card--pending">
+        <div class="assistant-image-pending-preview">
+          <div class="assistant-image-pending-grid" aria-hidden="true"></div>
+          <div class="assistant-image-pending-scan" aria-hidden="true"></div>
+        </div>
+        <div class="assistant-image-footer assistant-image-footer--pending">
+          <div class="assistant-image-meta">
+            <div class="assistant-image-name">Generating image</div>
+            <div class="assistant-image-subtitle">Building the preview. GPT image jobs can take about 60-120 seconds depending on model, references, and count.</div>
+          </div>
+          <div class="assistant-image-pending-spinner" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
 
 function normalizeEmptyChatBrainCard(card) {
   if (!card || typeof card !== 'object') return null;
@@ -10267,25 +10490,27 @@ function renderSessionThinkingHtml(sessionId) {
     : '';
   const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || []);
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
+  const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !answerStarted && !!liveTraceHtml;
-  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml;
+  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
   const currentProcessOpen = !!st.currentTurnProcessOpen;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
   const currentTurnEntries = mergeLiveTraceProcessEntries(st.liveTraceEntries, rawCurrentTurnEntries);
   const currentProcessHtml = currentProcessOpen ? formatProcessLines(currentTurnEntries) : '';
+  const pendingImageHtml = isGenerateImagePendingFromEntries(st.liveTraceEntries, currentTurnEntries) ? renderGeneratedImageLoadingCard() : '';
   const activeModelBadgeHtml = st.activeModelBadge
     ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span>`
     : '';
-  const processActionHtml = !thinkingOnly ? `
+  const processActionHtml = !(thinkingOnly && !pendingImageHtml) ? `
     <div class="msg-actions live-msg-actions">
       <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
     </div>
   ` : '';
-  const processPanelHtml = !thinkingOnly
+  const processPanelHtml = !(thinkingOnly && !pendingImageHtml)
     ? `<div id="current-turn-process" style="display:${currentProcessOpen ? 'block' : 'none'};margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">${currentProcessHtml}</div>`
     : '';
   return `
@@ -10297,12 +10522,14 @@ function renderSessionThinkingHtml(sessionId) {
             ${renderAssistantWorkTimer(null, { active: true, startedAt: Number(st.turnStartedAt || 0) })}
             ${!thinkingOnly ? `<div class="msg-role">Prom${activeModelBadgeHtml}</div>` : ''}
             ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
+            ${pendingImageHtml}
             ${showAnswerText
               ? `<div id="streaming-text-content">${renderAssistantContent(st.streamingAIText)}</div>`
-              : (showLiveTrace || progressHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)
+              : (showLiveTrace || progressHtml || pendingImageHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)
             }
             ${liveApprovalsHtml}
             ${processPanelHtml}
+            ${inlinePlanHtml}
           </div>
           ${processActionHtml}
         </div>
@@ -10502,6 +10729,39 @@ function restoreApprovalProcessState(map) {
   } catch {}
 }
 
+function captureApprovalDetailsState() {
+  const out = {};
+  try {
+    document.querySelectorAll('.chat-approval-card[data-approval-id]').forEach((card) => {
+      const approvalId = String(card.getAttribute('data-approval-id') || '').trim();
+      if (!approvalId) return;
+      card.querySelectorAll('details.chat-approval-technical').forEach((details) => {
+        const label = String(details.querySelector('summary')?.textContent || '').trim();
+        if (!label) return;
+        out[`${approvalId}::${label}`] = details.open === true;
+      });
+    });
+  } catch {}
+  return out;
+}
+
+function restoreApprovalDetailsState(map) {
+  if (!map) return;
+  try {
+    document.querySelectorAll('.chat-approval-card[data-approval-id]').forEach((card) => {
+      const approvalId = String(card.getAttribute('data-approval-id') || '').trim();
+      if (!approvalId) return;
+      card.querySelectorAll('details.chat-approval-technical').forEach((details) => {
+        const label = String(details.querySelector('summary')?.textContent || '').trim();
+        const key = `${approvalId}::${label}`;
+        if (!Object.prototype.hasOwnProperty.call(map, key)) return;
+        if (map[key]) details.setAttribute('open', '');
+        else details.removeAttribute('open');
+      });
+    });
+  } catch {}
+}
+
 function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
@@ -10510,9 +10770,11 @@ function renderChatMessages() {
   const _panelScroll = captureProcessPanelScroll();
   const _questionDraft = captureQuestionDraftState();
   const _approvalProcessState = captureApprovalProcessState();
+  const _approvalDetailsState = captureApprovalDetailsState();
   const _mainScrollTop = container ? container.scrollTop : 0;
   syncAssistantWorkTimer();
   updateSideChatChrome();
+  renderBackgroundSpawnDock();
 
   const visibleHistory = collapseDuplicateAssistantMessageEntries((window.chatHistory || [])
     .map((msg, originalIndex) => ({ msg, originalIndex })))
@@ -10558,6 +10820,7 @@ function renderChatMessages() {
     }
     restoreProcessPanelScroll(_panelScroll);
     restoreQuestionDraftState(_questionDraft);
+    restoreApprovalDetailsState(_approvalDetailsState);
     restoreApprovalProcessState(_approvalProcessState);
     return;
   }
@@ -10570,6 +10833,7 @@ function renderChatMessages() {
   else container.scrollTop = _mainScrollTop;
   restoreProcessPanelScroll(_panelScroll);
   restoreQuestionDraftState(_questionDraft);
+  restoreApprovalDetailsState(_approvalDetailsState);
   restoreApprovalProcessState(_approvalProcessState);
 }
 
@@ -11537,10 +11801,20 @@ function toggleCurrentProcess() {
   const panel = document.getElementById('current-turn-process');
   if (!panel) return;
   const open = panel.style.display !== 'none';
-  window.currentTurnProcessOpen = !open;
+  const nextOpen = !open;
+  const sid = window.activeChatSessionId || window.streamingSessionId || '';
+  const st = getSessionStreamState(sid);
+  if (st) st.currentTurnProcessOpen = nextOpen;
+  window.currentTurnProcessOpen = nextOpen;
   panel.style.display = open ? 'none' : 'block';
-  if (!open) {
-    const turnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
+  if (nextOpen) {
+    const sess = getChatSessionById(sid);
+    const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex))
+      ? Number(st.currentTurnStartIndex)
+      : (Number.isFinite(Number(window.currentTurnStartIndex)) ? Number(window.currentTurnStartIndex) : -1);
+    const processLog = Array.isArray(sess?.processLog) ? sess.processLog : window.processLogEntries;
+    const liveTrace = Array.isArray(st?.liveTraceEntries) ? st.liveTraceEntries : [];
+    const turnEntries = startIndex >= 0 ? mergeLiveTraceProcessEntries(liveTrace, processLog.slice(startIndex)) : mergeLiveTraceProcessEntries(liveTrace, []);
     panel.innerHTML = formatProcessLines(turnEntries);
   }
 }
@@ -11612,6 +11886,39 @@ function renderChecklistItemsHTML(items, options = {}) {
       </div>
     `;
   }).join('');
+}
+
+function getRuntimePlanItems(progressState) {
+  return Array.isArray(progressState?.items)
+    ? progressState.items.filter((item) => item && String(item.text || '').trim())
+    : [];
+}
+
+function renderInlineRuntimePlanHtml(progressState) {
+  const items = getRuntimePlanItems(progressState);
+  if (!items.length) return '';
+  const activeIndex = Number(progressState?.activeIndex ?? -1);
+  const hasActive = items.some((item) => normalizeProgressStatus(item?.status) === 'in_progress')
+    || (activeIndex >= 0 && activeIndex < items.length);
+  const completedCount = items.filter((item) => {
+    const status = normalizeProgressStatus(item?.status);
+    return status === 'done' || status === 'skipped';
+  }).length;
+  const title = hasActive
+    ? 'Plan in progress'
+    : (completedCount === items.length ? 'Plan complete' : 'Plan');
+  const meta = `${completedCount}/${items.length}`;
+  return `
+    <div class="inline-runtime-plan" aria-live="polite">
+      <div class="inline-runtime-plan-head">
+        <span>${escHtml(title)}</span>
+        <span>${escHtml(meta)}</span>
+      </div>
+      <div class="inline-runtime-plan-list">
+        ${renderChecklistItemsHTML(items, { maxText: 160 })}
+      </div>
+    </div>
+  `;
 }
 
 function getTaskProgressItems(task) {
@@ -11951,6 +12258,41 @@ function skillTriggerMatchesText(trigger, rawText, words) {
   });
 }
 
+function getSkillTriggerCandidates(skill) {
+  const candidates = [];
+  const addValue = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(addValue);
+      return;
+    }
+    const text = String(value || '').trim();
+    if (text) candidates.push(text);
+  };
+  addValue(skill?.triggers);
+  addValue(skill?.trigger);
+  addValue(skill?.keywords);
+  addValue(skill?.aliases);
+  addValue(skill?.manifest?.triggers);
+  addValue(skill?.manifest?.trigger);
+  addValue(skill?.manifest?.keywords);
+  addValue(skill?.manifest?.aliases);
+  addValue(skill?.metadata?.triggers);
+  addValue(skill?.metadata?.trigger);
+  addValue(skill?.metadata?.keywords);
+  addValue(skill?.metadata?.aliases);
+  if (!candidates.length) {
+    addValue(skill?.name);
+    addValue(skill?.id);
+  }
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = normalizeSkillMatchText(candidate);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function getInstalledSkillCache() {
   return Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [];
 }
@@ -11976,8 +12318,7 @@ function getComposerSkillMatches(value) {
   const words = text.split(/\W+/).filter((word) => word.length > 2);
   if (!text.trim()) return [];
   return getInstalledSkillCache()
-    .filter((skill) => Array.isArray(skill?.triggers) && skill.triggers.length)
-    .filter((skill) => skill.triggers.some((trigger) => skillTriggerMatchesText(trigger, text, words)))
+    .filter((skill) => getSkillTriggerCandidates(skill).some((trigger) => skillTriggerMatchesText(trigger, text, words)))
     .slice(0, 8);
 }
 
@@ -12387,6 +12728,15 @@ async function sendChat(queuedMessage = null, options = {}) {
   }
   const sessionQueue = getSessionQueuedPrompts(thisSessionId);
   if (isSessionThinking(thisSessionId)) {
+    if (!queuedTurn && isActiveMainGoalRunning(thisSessionId) && !pendingChatFiles.length) {
+      const steered = await steerActiveGoalRunFromComposer(message);
+      if (steered) {
+        clearChatComposerAfterSend(input);
+        releaseChatSendLock(sendLock);
+        forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+        return;
+      }
+    }
     if (!queuedTurn && realtimeVoicePendingInterruptContext) {
       const handled = await handleRealtimeVoiceInterruptionOnly(message);
       if (handled) {
@@ -12427,6 +12777,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   }
   streamState = resetSessionStreamState(thisSessionId);
   streamState.turnStartedAt = Date.now();
+  clearBackgroundSpawnDockForSession(thisSessionId);
 
   // Show the user's message immediately, then do attachment work before the API call.
   let fileContextNote = '';
@@ -13158,6 +13509,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              renderProgressPanel();
 	            }
 	            persistSession(thisSessionId);
+	            scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
 	            break;
 	          }
 
@@ -13451,7 +13803,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        role: 'ai',
 	        content: finalReply,
 	        artifacts: finalArtifacts,
-	        fileChanges: finalFileChanges || undefined,
+	        fileChanges: mergeFileChangesWithBackground(finalFileChanges, thisSessionId) || undefined,
 	        productCarousel: finalProductCarousel || undefined,
 	        richArtifacts: (Array.isArray(finalRichArtifacts) && finalRichArtifacts.length) ? finalRichArtifacts : undefined,
 	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
@@ -13635,6 +13987,308 @@ function toggleAgentPanel(agentId) {
   if (!agentData) return;
   agentData.expanded = !agentData.expanded;
   renderAgentExecutionPanel();
+}
+
+// ---- Background Spawn Dock (one-shot background_spawn agents only) ----
+function ensureBackgroundSpawnDockMap() {
+  if (!(window.backgroundSpawnDockMap instanceof Map)) window.backgroundSpawnDockMap = new Map();
+  return window.backgroundSpawnDockMap;
+}
+
+function ensureBackgroundSpawnClearedIds() {
+  if (!(window.backgroundSpawnClearedIds instanceof Set)) window.backgroundSpawnClearedIds = new Set();
+  return window.backgroundSpawnClearedIds;
+}
+
+function backgroundSpawnEventSessionMatches(msg = {}) {
+  const id = backgroundSpawnLaneId(msg);
+  if (id && ensureBackgroundSpawnClearedIds().has(id)) return false;
+  const sid = String(msg.sessionId || msg.spawnerSessionId || '').trim();
+  if (!sid) return true;
+  return sid === String(window.activeChatSessionId || '').trim()
+    || sid === String(window.agentSessionId || '').trim();
+}
+
+function backgroundSpawnLaneId(msg = {}) {
+  return String(msg.bgId || msg.backgroundId || msg.serverAgentId || msg.agentId || '').trim();
+}
+
+function upsertBackgroundSpawnLane(msg = {}) {
+  const id = backgroundSpawnLaneId(msg);
+  if (!id) return null;
+  const lanes = ensureBackgroundSpawnDockMap();
+  const existing = lanes.get(id) || {};
+  const lane = {
+    id,
+    sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
+    label: String(msg.label || msg.name || existing.label || 'Background Spawn').trim(),
+    task: String(msg.task || msg.prompt || existing.task || '').trim(),
+    status: String(msg.state || existing.status || 'running').trim(),
+    events: Array.isArray(existing.events) ? existing.events : [],
+    expanded: existing.expanded === true,
+    startedAt: Number(existing.startedAt || Date.now()),
+    updatedAt: Date.now(),
+    result: existing.result || '',
+    error: existing.error || '',
+    fileChanges: msg.fileChanges || existing.fileChanges || null,
+    plan: existing.plan || null,
+  };
+  lanes.set(id, lane);
+  return lane;
+}
+
+function backgroundSpawnToolLabel(evt = {}) {
+  const action = String(evt.action || evt.name || evt.toolName || evt.eventType || '').trim();
+  if (!action) return 'Working';
+  return action.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function backgroundSpawnPreview(value, max = 180) {
+  let raw = '';
+  try {
+    raw = typeof value === 'string' ? value : JSON.stringify(value);
+  } catch {
+    raw = String(value || '');
+  }
+  raw = raw.replace(/\s+/g, ' ').trim();
+  return raw.length > max ? `${raw.slice(0, max - 3)}...` : raw;
+}
+
+function backgroundSpawnProcessEntryFromEvent(msg = {}) {
+  const eventType = String(msg.eventType || msg.type || '').trim();
+  const ts = new Date().toLocaleTimeString();
+  const action = String(msg.action || msg.name || msg.toolName || '').trim();
+  const label = backgroundSpawnToolLabel({ ...msg, eventType: action || eventType });
+  switch (eventType) {
+    case 'tool_call': {
+      const args = msg.args || msg.params || msg.input;
+      const content = action
+        ? formatToolCallForLog(action, args && typeof args === 'object' ? args : {}, null)
+        : label;
+      const suffix = !action && args ? `: ${backgroundSpawnPreview(args, 140)}` : '';
+      return { ts, type: action?.startsWith?.('skill_') ? 'skill' : 'tool', actor: 'Background Agent', content: `${content}${suffix}`, extra: msg };
+    }
+    case 'tool_result': {
+      const text = String(msg.result || msg.output || msg.error || '').trim();
+      const ok = msg.error !== true && !/^ERROR:/i.test(text);
+      const content = action
+        ? formatToolResultForLog(action, backgroundSpawnPreview(text, 240), ok, null)
+        : `${label}${text ? ` -> ${backgroundSpawnPreview(text, 220)}` : ok ? ' complete' : ' failed'}`;
+      return { ts, type: ok ? 'result' : 'error', actor: 'Background Agent', content, extra: msg };
+    }
+    case 'tool_progress': {
+      const text = String(msg.message || '').trim();
+      return text ? { ts, type: 'info', actor: 'Background Agent', content: action ? formatToolProgressForLog(action, text) : `${label}: ${text}`, extra: msg } : null;
+    }
+    case 'thinking':
+    case 'agent_thought': {
+      const text = String(msg.thinking || msg.text || '').trim();
+      return text ? { ts, type: 'think', actor: 'Background Agent', content: text, extra: msg } : null;
+    }
+    case 'thinking_delta': {
+      const text = String(msg.thinking || msg.text || '').trim();
+      return text ? { ts, type: 'think', actor: 'Background Agent', content: text.slice(0, 220), extra: msg } : null;
+    }
+    case 'info':
+    case 'heartbeat':
+    case 'ui_preflight': {
+      const text = String(msg.message || msg.current_step || msg.state || '').trim();
+      return text && !/^processing$/i.test(text) ? { ts, type: 'info', actor: 'Background Agent', content: text, extra: msg } : null;
+    }
+    case 'final':
+    case 'done': {
+      const text = String(msg.text || msg.reply || '').trim();
+      return text ? { ts, type: 'final', actor: 'Background Agent', content: text, extra: msg } : null;
+    }
+    case 'error': {
+      const text = String(msg.message || msg.error || 'Background spawn failed').trim();
+      return { ts, type: 'error', actor: 'Background Agent', content: text, extra: msg };
+    }
+    default:
+      return null;
+  }
+}
+
+function extractBackgroundPlanSteps(value) {
+  if (Array.isArray(value)) return value.map((step) => String(step || '').trim()).filter(Boolean);
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value.steps)) return extractBackgroundPlanSteps(value.steps);
+    if (Array.isArray(value.plan)) return extractBackgroundPlanSteps(value.plan);
+  }
+  return [];
+}
+
+function updateBackgroundSpawnPlanFromEvent(lane, msg = {}) {
+  if (!lane) return;
+  const eventType = String(msg.eventType || msg.type || '').trim();
+  const action = String(msg.action || msg.name || msg.toolName || '').trim();
+  if (eventType === 'tool_call' && action === 'bg_plan_declare') {
+    const steps = extractBackgroundPlanSteps(msg.args || msg.params || msg.input || msg);
+    if (steps.length) {
+      lane.plan = {
+        steps: steps.map((text, index) => ({ text, status: index === 0 ? 'in_progress' : 'pending' })),
+        activeIndex: 0,
+      };
+    }
+    return;
+  }
+  if (eventType !== 'tool_result' || action !== 'bg_plan_advance') return;
+  if (!lane.plan || !Array.isArray(lane.plan.steps) || !lane.plan.steps.length) return;
+  const resultText = String(msg.result || msg.output || '').trim();
+  const match = resultText.match(/Step\s+(\d+)\s*\/\s*(\d+)\s+complete/i);
+  if (!match) return;
+  const completedIndex = Math.max(0, Number(match[1]) - 1);
+  const total = Math.max(lane.plan.steps.length, Number(match[2]) || lane.plan.steps.length);
+  lane.plan.steps.forEach((step, index) => {
+    if (index <= completedIndex) step.status = 'done';
+    else if (index === completedIndex + 1 && index < total) step.status = 'in_progress';
+    else step.status = 'pending';
+  });
+  lane.plan.activeIndex = completedIndex + 1 < lane.plan.steps.length ? completedIndex + 1 : -1;
+}
+
+function renderBackgroundSpawnPlan(lane) {
+  const steps = Array.isArray(lane?.plan?.steps) ? lane.plan.steps : [];
+  if (!steps.length) return '';
+  return `
+    <div class="background-spawn-plan">
+      <div class="background-spawn-plan-head">
+        <strong>Progress</strong>
+        <span>${steps.filter((step) => step.status === 'done').length}/${steps.length}</span>
+      </div>
+      <div class="background-spawn-plan-list">
+        ${renderChecklistItemsHTML(steps, { maxText: 160 })}
+      </div>
+    </div>
+  `;
+}
+
+function pushBackgroundSpawnEvent(msg = {}) {
+  if (!backgroundSpawnEventSessionMatches(msg)) return;
+  const lane = upsertBackgroundSpawnLane(msg);
+  if (!lane) return;
+  lane.status = lane.status === 'completed' || lane.status === 'failed' ? lane.status : 'running';
+  if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
+  updateBackgroundSpawnPlanFromEvent(lane, msg);
+  const entry = backgroundSpawnProcessEntryFromEvent(msg);
+  if (entry) {
+    const prev = lane.events[lane.events.length - 1];
+    if (!prev || prev.type !== entry.type || prev.content !== entry.content) lane.events.push(entry);
+    if (lane.events.length > 160) lane.events.splice(0, lane.events.length - 160);
+  }
+  renderBackgroundSpawnDock();
+}
+
+function completeBackgroundSpawnLane(msg = {}) {
+  if (!backgroundSpawnEventSessionMatches(msg)) return;
+  const lane = upsertBackgroundSpawnLane(msg);
+  if (!lane) return;
+  const failed = msg.state === 'failed' || !!msg.error;
+  lane.status = failed ? 'failed' : 'completed';
+  lane.result = String(msg.result || '').trim();
+  lane.error = String(msg.error || '').trim();
+  if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
+  const ts = new Date().toLocaleTimeString();
+  const content = failed
+    ? `Background Spawn failed${lane.error ? `: ${backgroundSpawnPreview(lane.error, 260)}` : ''}`
+    : `Background Spawn complete${lane.result ? `: ${backgroundSpawnPreview(lane.result, 260)}` : ''}`;
+  lane.events.push({ ts, type: failed ? 'error' : 'final', actor: 'Background Agent', content, extra: msg });
+  lane.updatedAt = Date.now();
+  renderBackgroundSpawnDock();
+}
+
+function toggleBackgroundSpawnLane(id) {
+  const lane = ensureBackgroundSpawnDockMap().get(String(id || ''));
+  if (!lane) return;
+  lane.expanded = !lane.expanded;
+  renderBackgroundSpawnDock();
+}
+
+function renderBackgroundSpawnDock() {
+  const dock = document.getElementById('background-spawn-dock');
+  if (!dock) return;
+  const lanes = Array.from(ensureBackgroundSpawnDockMap().values())
+    .filter((lane) => !lane.sessionId || lane.sessionId === String(window.activeChatSessionId || '').trim() || lane.sessionId === String(window.agentSessionId || '').trim())
+    .sort((a, b) => a.startedAt - b.startedAt);
+  dock.hidden = lanes.length === 0;
+  if (!lanes.length) {
+    dock.innerHTML = '';
+    return;
+  }
+  dock.innerHTML = lanes.map((lane) => {
+    const status = String(lane.status || 'running').toLowerCase();
+    const statusLabel = status === 'in_progress' ? 'running' : status;
+    const latest = lane.events[lane.events.length - 1];
+    const detail = latest?.content || lane.task || 'Working in parallel...';
+    const task = lane.task ? `<div class="background-spawn-task">${escHtml(lane.task)}</div>` : '';
+    const events = lane.events.length
+      ? `<div class="background-spawn-events">${formatProcessLines(lane.events)}</div>`
+      : '<div class="background-spawn-empty">Waiting for live events...</div>';
+    const plan = renderBackgroundSpawnPlan(lane);
+    return `
+      <section class="background-spawn-lane ${lane.expanded ? 'expanded' : ''} ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}">
+        <button type="button" class="background-spawn-summary" data-bg-toggle="${escHtml(lane.id)}">
+          <span class="background-spawn-avatar">BG</span>
+          <span class="background-spawn-main">
+            <strong>${escHtml(lane.label || 'Background Spawn')}</strong>
+            <em>${escHtml(detail)}</em>
+          </span>
+          <span class="background-spawn-status">${escHtml(statusLabel)}</span>
+          <span class="background-spawn-chevron">${lane.expanded ? '^' : 'v'}</span>
+        </button>
+        ${task}
+        <div class="background-spawn-panel">${plan}${events}</div>
+      </section>
+    `;
+  }).join('');
+  dock.querySelectorAll('[data-bg-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleBackgroundSpawnLane(btn.getAttribute('data-bg-toggle'));
+    });
+  });
+}
+
+function clearBackgroundSpawnDockForSession(sessionId = window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  const lanes = ensureBackgroundSpawnDockMap();
+  const cleared = ensureBackgroundSpawnClearedIds();
+  for (const [id, lane] of lanes.entries()) {
+    if (!sid || !lane.sessionId || lane.sessionId === sid) {
+      cleared.add(id);
+      lanes.delete(id);
+    }
+  }
+  renderBackgroundSpawnDock();
+}
+
+function collectBackgroundFileChangeGroups(sessionId = window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  return Array.from(ensureBackgroundSpawnDockMap().values())
+    .filter((lane) => lane && lane.fileChanges && (!sid || !lane.sessionId || lane.sessionId === sid))
+    .map((lane) => ({
+      id: `bg_${lane.id}`,
+      source: `background:${lane.id}`,
+      label: lane.label && lane.label !== 'Background Spawn' ? `Background Spawn - ${lane.label}` : 'Background Spawn edits',
+      fileChanges: lane.fileChanges,
+    }));
+}
+
+function mergeFileChangesWithBackground(mainFileChanges, sessionId = window.activeChatSessionId) {
+  const existingGroups = Array.isArray(mainFileChanges?.groups) ? mainFileChanges.groups : [];
+  const groups = existingGroups.length ? existingGroups.slice() : [];
+  if (!existingGroups.length && normalizeFileChangesPayload(mainFileChanges)) {
+    groups.push({ id: 'main', source: 'main', label: 'Main agent edits', fileChanges: mainFileChanges });
+  }
+  const seen = new Set(groups.map((group) => String(group?.source || group?.id || '')));
+  for (const group of collectBackgroundFileChangeGroups(sessionId)) {
+    const key = String(group.source || group.id || '');
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    groups.push(group);
+  }
+  if (!groups.length) return mainFileChanges || null;
+  if (groups.length === 1 && groups[0]?.source === 'main' && !Array.isArray(mainFileChanges?.groups)) return mainFileChanges;
+  return { groups };
 }
 
 function openProcessLogFile() {
@@ -15219,6 +15873,7 @@ async function handleRealtimeVoiceInterruptionOnly(userInterruptionTranscript = 
     userInterruptionTranscript,
     voiceMode: 'desktop_realtime',
     source: 'desktop_realtime_voice_agent',
+    deviceTime: desktopVoiceDeviceTimeContext(),
   };
   let data = null;
   let streamingDispatcher = createDesktopVoiceAgentStreamingDispatcher();
@@ -15322,6 +15977,7 @@ async function submitDesktopVoiceAsLiveSteer(transcript = '', options = {}) {
     userInterruptionTranscript: text,
     voiceMode: 'desktop_realtime',
     source: String(options.source || 'desktop_realtime_voice_steer'),
+    deviceTime: desktopVoiceDeviceTimeContext(),
   };
   let data = null;
   let streamingDispatcher = createDesktopVoiceAgentStreamingDispatcher();
@@ -15466,6 +16122,25 @@ function logDesktopVoiceLatency(sessionId, stage, startedAt, extra = {}) {
   });
 }
 
+function desktopVoiceDeviceTimeContext() {
+  const now = new Date();
+  const timezone = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
+  })();
+  const format = (options) => {
+    try { return now.toLocaleString('en-US', options); } catch { return ''; }
+  };
+  return {
+    source: 'device',
+    capturedAt: Date.now(),
+    localIso: now.toISOString(),
+    timezone,
+    utcOffsetMinutes: -now.getTimezoneOffset(),
+    dateLabel: format({ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+    timeLabel: format({ hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
+  };
+}
+
 function getCachedRealtimeVoiceWorkerContextPacket(sessionId) {
   const sid = String(sessionId || 'default').trim() || 'default';
   const packet = realtimeVoiceWorkerContextPacketCache;
@@ -15485,6 +16160,7 @@ async function prefetchRealtimeVoiceWorkerContextPacket(sessionId, options = {})
         source: String(options.source || 'desktop_voice_context_prefetch'),
         voiceMode: realtimeVoiceRepliesEnabled ? 'desktop_realtime' : `desktop_${normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode)}`,
         originalUserPrompt: String(options.originalUserPrompt || ''),
+        deviceTime: desktopVoiceDeviceTimeContext(),
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -15512,6 +16188,7 @@ async function prepareDesktopVoiceAgentHandoff(sessionId, transcript = '', optio
       userInterruptionTranscript: text,
       source: String(options.source || 'desktop_voice_handoff'),
       voiceMode: realtimeVoiceRepliesEnabled ? 'desktop_realtime' : `desktop_${normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode)}`,
+      deviceTime: desktopVoiceDeviceTimeContext(),
       ...(contextPacket ? { contextPacket } : {}),
     };
     // Try streaming first — fires TTS chunk-by-chunk as the model generates,
@@ -17488,6 +18165,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
         voiceRuntime: wakeGate?.phrase
           ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
           : undefined,
+        deviceTime: desktopVoiceDeviceTimeContext(),
       }),
     });
     const bootstrap = await bootstrapResp.json().catch(() => ({}));
@@ -17593,6 +18271,10 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
       if (window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] session.update failed', err);
     }
 
+    // Seed the live session with the chat thread the user just had on screen so
+    // the voice agent continues the conversation instead of starting fresh.
+    seedVoiceAgentRealtimeConversationHistory(dc, sid);
+
     voiceAgentRealtimeConnection = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode };
     if (voiceAgentRealtimeQuiet.active) sendRealtimeAgentCreateResponseFlag(false);
     startVoiceAgentRealtimeContextRefreshLoop(voiceAgentRealtimeConnection);
@@ -17634,6 +18316,54 @@ function setVoiceAgentRealtimeMicEnabled(enabled) {
   const track = voiceAgentRealtimeConnection?.micTrack;
   if (!track) return;
   track.enabled = !!enabled;
+}
+
+// Seed the live realtime session with the recent chat thread so the voice agent
+// picks up the conversation the user just had on screen instead of starting cold.
+// Injected as a single system context item (mirrors the skill-context injection)
+// right after the data channel opens — robust against instruction clamping and
+// not dependent on a server restart.
+function seedVoiceAgentRealtimeConversationHistory(dc, sessionId) {
+  try {
+    if (!dc || dc.readyState !== 'open') return false;
+    const sid = String(sessionId || window.activeChatSessionId || '').trim();
+    if (!sid) return false;
+    const sess = getChatSessionById(sid);
+    const history = Array.isArray(sess?.history) ? sess.history : [];
+    const turns = history
+      .filter((msg) => {
+        const role = String(msg?.role || '');
+        if (role !== 'user' && role !== 'ai' && role !== 'assistant') return false;
+        const text = cleanVoiceSpeechText(typeof msg?.content === 'string' ? msg.content : (msg?.content?.text || ''));
+        return !!text;
+      })
+      .slice(-12)
+      .map((msg) => {
+        const speaker = String(msg?.role || '') === 'user' ? 'User' : 'Prometheus';
+        const text = cleanVoiceSpeechText(typeof msg?.content === 'string' ? msg.content : (msg?.content?.text || '')).slice(0, 600);
+        return text ? `${speaker}: ${text}` : '';
+      })
+      .filter(Boolean);
+    if (!turns.length) return false;
+    const block = [
+      'You are joining an in-progress chat the user just had on screen. Continue from here — do not reintroduce yourself, do not ask what they need from scratch, and reference what was already said. Recent conversation:',
+      '',
+      turns.join('\n'),
+    ].join('\n');
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: block }],
+      },
+    }));
+    if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] seeded conversation history', { sessionId: sid, turns: turns.length });
+    return true;
+  } catch (err) {
+    if (window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] seed conversation history failed', err);
+    return false;
+  }
 }
 
 // Push a realtime-agent turn into the visible desktop chat thread so the user
@@ -18238,6 +18968,7 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
         voiceRuntime: wakeGate?.phrase
           ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
           : undefined,
+        deviceTime: desktopVoiceDeviceTimeContext(),
       }),
     });
     const bootstrap = await bootstrapResp.json().catch(() => ({}));
@@ -35549,6 +36280,7 @@ function renderInlineApprovalRequest(item) {
   const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
   const isCommandApproval = approval.toolName === 'run_command';
   const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+  const sourceDirs = Array.isArray(approval.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
   const verificationCommand = approval.devSourceEdit?.verificationCommand || '';
   const commandBoundary = approval.commandBoundary || null;
   const boundaryScope = String(commandBoundary?.scope || '').trim();
@@ -35561,7 +36293,7 @@ function renderInlineApprovalRequest(item) {
     ? devPlan.expectedWorkflow
     : (Array.isArray(devPlan?.expected_workflow) ? devPlan.expected_workflow : []);
   const showTechnicalDetails = Boolean(technicalText || approval.reason || systems.length || approval.scopedTarget);
-  return `<div class="chat-approval-card chat-approval-card-${risk} chat-approval-card-${escHtml(statusLabel)}" data-approval-id="${escHtml(approval.id)}">
+  return `<div class="chat-approval-card chat-approval-card-${risk} chat-approval-card-${escHtml(statusLabel)} ${pending ? 'chat-approval-card-pending' : 'chat-approval-card-resolved'}" data-approval-id="${escHtml(approval.id)}">
     <div class="chat-approval-head">
       <div>
         <div class="chat-approval-kicker">${pending ? 'Approval needed' : 'Approval result'}</div>
@@ -35574,36 +36306,37 @@ function renderInlineApprovalRequest(item) {
     </div>
     ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
     ${approval.humanDetail ? `<div class="chat-approval-subdetail">${escHtml(approval.humanDetail)}</div>` : ''}
-    ${devPlan?.reasoning ? `<div class="chat-approval-scope"><span>Reasoning</span>${escHtml(String(devPlan.reasoning))}</div>` : ''}
-    ${devPlan?.currentState || devPlan?.fix ? `<div class="chat-approval-scope"><span>Fix</span>${[
+    ${pending && devPlan?.reasoning ? `<div class="chat-approval-scope"><span>Reasoning</span>${escHtml(String(devPlan.reasoning))}</div>` : ''}
+    ${pending && (devPlan?.currentState || devPlan?.fix) ? `<div class="chat-approval-scope"><span>Fix</span>${[
       devPlan.currentState ? `Current: ${String(devPlan.currentState)}` : '',
       devPlan.fix ? `Fix: ${String(devPlan.fix)}` : '',
     ].filter(Boolean).map(escHtml).join('<br>')}</div>` : ''}
-    ${devEvidence.length ? `<details class="chat-approval-technical" open>
+    ${pending && devEvidence.length ? `<details class="chat-approval-technical" open>
       <summary>Evidence</summary>
       ${devEvidence.slice(0, 5).map((item) => `<div class="chat-approval-reason"><span>${escHtml(String(item.file || 'file'))}${item.lines ? `:${escHtml(String(item.lines))}` : ''}</span>${escHtml(String(item.finding || ''))}</div>`).join('')}
     </details>` : ''}
-    ${devSteps.length ? `<details class="chat-approval-technical">
+    ${pending && devSteps.length ? `<details class="chat-approval-technical">
       <summary>Plan</summary>
       <ol class="chat-approval-plan">${devSteps.slice(0, 8).map((step) => `<li>${escHtml(String(step))}</li>`).join('')}</ol>
     </details>` : ''}
-    ${devExpectedWorkflow.length ? `<details class="chat-approval-technical" open>
+    ${pending && devExpectedWorkflow.length ? `<details class="chat-approval-technical" open>
       <summary>Expected workflow after edits</summary>
       <ol class="chat-approval-plan">${devExpectedWorkflow.slice(0, 8).map((step) => `<li>${escHtml(String(step))}</li>`).join('')}</ol>
     </details>` : ''}
-    ${boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${commandBoundary?.reason ? `<br>${escHtml(String(commandBoundary.reason))}` : ''}</div>` : ''}
-    ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
-    ${boundaryEnv.length ? `<div class="chat-approval-scope"><span>Environment</span>${boundaryEnv.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
-    ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
-    ${verificationCommand ? `<div class="chat-approval-scope"><span>Verify</span>${escHtml(verificationCommand)}</div>` : ''}
-    ${showTechnicalDetails ? `<details class="chat-approval-technical">
+    ${pending && boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${commandBoundary?.reason ? `<br>${escHtml(String(commandBoundary.reason))}` : ''}</div>` : ''}
+    ${pending && boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
+    ${pending && boundaryEnv.length ? `<div class="chat-approval-scope"><span>Environment</span>${boundaryEnv.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
+    ${pending && sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
+    ${pending && sourceDirs.length ? `<div class="chat-approval-scope"><span>Workspace docs</span>${sourceDirs.map((dir) => escHtml(String(dir))).join('<br>')}</div>` : ''}
+    ${pending && verificationCommand ? `<div class="chat-approval-scope"><span>Verify</span>${escHtml(verificationCommand)}</div>` : ''}
+    ${pending && showTechnicalDetails ? `<details class="chat-approval-technical">
       <summary>Technical details</summary>
       ${approval.reason ? `<div class="chat-approval-reason"><span>Reason</span>${escHtml(approval.reason)}</div>` : ''}
       ${technicalText ? `<pre class="chat-approval-command">${escHtml(technicalText)}</pre>` : ''}
       ${approval.scopedTarget ? `<div class="chat-approval-scope"><span>Scope</span>${escHtml(approval.scopedTarget)}</div>` : ''}
       ${systems.length ? `<div class="chat-approval-systems">${systems.map((system) => `<span>${escHtml(String(system))}</span>`).join('')}</div>` : ''}
     </details>` : ''}
-    ${isCommandApproval ? `<div class="chat-approval-process" data-approval-process="${escHtml(approval.id)}">
+    ${pending && isCommandApproval ? `<div class="chat-approval-process" data-approval-process="${escHtml(approval.id)}">
       <button class="chat-approval-process-toggle" type="button" onclick="loadApprovalProcessRun(${idArg})">Open terminal</button>
       <div class="chat-approval-process-body" id="approval-process-${escHtml(approval.id)}"></div>
     </div>` : ''}
@@ -36227,6 +36960,11 @@ window.renderFilePills = renderFilePills;
 window.canvasDownloadFile = canvasDownloadFile;
 window.copyGeneratedImagePath = copyGeneratedImagePath;
 window.copyGeneratedImageToClipboard = copyGeneratedImageToClipboard;
+window.copyGeneratedImageSetToClipboard = copyGeneratedImageSetToClipboard;
+window.saveGeneratedImageSet = saveGeneratedImageSet;
+window.openGeneratedImageSaveCopyModal = openGeneratedImageSaveCopyModal;
+window.openGeneratedImagePreviewModal = openGeneratedImagePreviewModal;
+window.closeGeneratedImageQuickModal = closeGeneratedImageQuickModal;
 window.copyChatMessage = copyChatMessage;
 window.forkConversationFromAssistantMessage = forkConversationFromAssistantMessage;
 window.sideChatFromMessage = sideChatFromMessage;
@@ -36282,6 +37020,8 @@ window.completeAgentExecution = completeAgentExecution;
 window.pauseAgentExecution = pauseAgentExecution;
 window.renderAgentExecutionPanel = renderAgentExecutionPanel;
 window.toggleAgentPanel = toggleAgentPanel;
+window.toggleBackgroundSpawnLane = toggleBackgroundSpawnLane;
+window.renderBackgroundSpawnDock = renderBackgroundSpawnDock;
 window.openProcessLogFile = openProcessLogFile;
 window.clearChat = clearChat;
 window.toggleVoiceDictation = toggleVoiceDictation;
@@ -36521,6 +37261,7 @@ wsEventBus.on('brain_thought_done', () => {
 wsEventBus.on('main_chat_goal_updated', async (msg) => {
   const sid = String(msg?.sessionId || '').trim();
   if (!sid) return;
+  const event = String(msg?.event || '');
   let sess = window.chatSessions.find(s => s.id === sid);
   if (!sess) {
     sess = createEmptyChatSession(sid);
@@ -36529,8 +37270,22 @@ wsEventBus.on('main_chat_goal_updated', async (msg) => {
   sess.mainChatGoal = msg.goal || null;
   sess.updatedAt = Date.now();
   if (sid === window.activeChatSessionId) {
+    if (['runner_started', 'turn_started'].includes(event)) {
+      window._sessionThinking[sid] = true;
+      getSessionStreamState(sid).turnStartedAt = Date.now();
+      syncActiveSessionRunState();
+      if (typeof window.setButtonState === 'function') window.setButtonState(true);
+      syncAssistantWorkTimer();
+    }
     renderMainGoalStrip();
-    if (['judged', 'summarized', 'runner_idle', 'runtime_failure'].includes(String(msg?.event || ''))) {
+    if (['runner_stopped', 'runner_idle', 'runtime_failure', 'action:pause', 'action:clear', 'action:done'].includes(event)) {
+      delete window._sessionThinking[sid];
+      if (window._sessionAbortControllers) delete window._sessionAbortControllers[sid];
+      syncActiveSessionRunState();
+      if (typeof window.setButtonState === 'function') window.setButtonState(false);
+      syncAssistantWorkTimer();
+    }
+    if (['judged', 'summarized', 'runner_idle', 'runner_stopped', 'runtime_failure'].includes(event)) {
       sess._needsServerLoad = true;
       await _loadSessionFromServer(sid);
       syncActiveChat();
@@ -36829,6 +37584,31 @@ function ensureChannelChatSession(sessionId, options = {}) {
   return sess;
 }
 
+function inferCurrentTurnProcessStartIndex(sess, userContent = '') {
+  const log = Array.isArray(sess?.processLog) ? sess.processLog : [];
+  if (!log.length) return 0;
+  const direct = String(userContent || '').replace(/\s+/g, ' ').trim();
+  let fallbackUserText = direct;
+  if (!fallbackUserText) {
+    for (let i = (Array.isArray(sess?.history) ? sess.history.length : 0) - 1; i >= 0; i -= 1) {
+      const msg = sess.history[i];
+      if (String(msg?.role || '') === 'user') {
+        fallbackUserText = String(msg?.content || '').replace(/\s+/g, ' ').trim();
+        break;
+      }
+    }
+  }
+  if (fallbackUserText) {
+    for (let i = log.length - 1; i >= 0; i -= 1) {
+      const entry = log[i] || {};
+      const entryText = String(entry.content || entry.text || '').replace(/\s+/g, ' ').trim();
+      const entryType = String(entry.type || '').toLowerCase();
+      if (entryType === 'user' && entryText === fallbackUserText) return i + 1;
+    }
+  }
+  return 0;
+}
+
 function appendLiveTraceToStreamState(streamState, type, text, { append = false } = {}) {
   const content = String(text || '');
   if (!content) return;
@@ -37066,7 +37846,7 @@ function handleMainChatStreamEvent(msg = {}) {
       if (appended) addSessionProcessEntry(sid, 'user', content, { actor: next.channelLabel || next.channel || 'Channel' });
     }
     window._sessionThinking[sid] = true;
-    streamState.currentTurnStartIndex = sess.processLog.length;
+    streamState.currentTurnStartIndex = inferCurrentTurnProcessStartIndex(sess, content);
     streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
     // Cross-channel live update: schedule auto-switch or show a toast.
     // The switch is deferred via setTimeout(0) so it runs AFTER
@@ -38080,12 +38860,17 @@ wsEventBus.on('agent_paused', (msg) => {
   if (agentId) pauseAgentExecution(agentId, msg.reason);
 });
 
+wsEventBus.on('bg_agent_event', (msg) => {
+  pushBackgroundSpawnEvent(msg || {});
+});
+
 // ─── Background agent late-completion injection ───────────────
 // When a background agent finishes AFTER the main turn's finalization gate
 // already ran (or during the turn but after the done event), the server
 // sends bg_agent_done via WebSocket with the full result. We inject it into
 // the last AI message as a proper inner panel so it's visible to the user.
 wsEventBus.on('bg_agent_done', (msg) => {
+  completeBackgroundSpawnLane(msg || {});
   if (msg.state !== 'completed' || !msg.result) return;
   if (window.isThinking) {
     addProcessEntry('info', `Background Agent ${msg.bgId}: result ready; merging into final reply.`, { actor: 'Background Agent' });
@@ -38104,12 +38889,21 @@ wsEventBus.on('bg_agent_done', (msg) => {
   if (lastAiIdx === -1) return;
   const lastMsg = history[lastAiIdx];
   const existingContent = String(lastMsg.content || '');
-  // Don't double-inject — skip if already contains a background agent section
-  if (/background agent response:/i.test(existingContent)) return;
+  const nextFileChanges = mergeFileChangesWithBackground(lastMsg.fileChanges || null, window.activeChatSessionId) || lastMsg.fileChanges;
+  // Don't double-inject text, but still allow late file-change metadata to attach.
+  if (/background agent response:/i.test(existingContent)) {
+    if (nextFileChanges && nextFileChanges !== lastMsg.fileChanges) {
+      history[lastAiIdx] = { ...lastMsg, fileChanges: nextFileChanges };
+      persistActiveChat();
+      renderChatMessages();
+    }
+    return;
+  }
   // Append the background agent inner panel marker
   history[lastAiIdx] = {
     ...lastMsg,
     content: existingContent.trim() + '\n\nBackground agent response:\n' + String(msg.result || ''),
+    fileChanges: nextFileChanges,
   };
   persistActiveChat();
   renderChatMessages();

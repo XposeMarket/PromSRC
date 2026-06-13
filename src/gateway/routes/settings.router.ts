@@ -670,7 +670,6 @@ const AGENT_MODEL_DEFAULT_KEYS = [
   'switch_model_low',
   'switch_model_medium',
   'coordinator',
-  'background_agent',
 ] as const;
 
 const HIDDEN_AGENT_MODEL_DEFAULT_KEYS = [
@@ -757,7 +756,7 @@ router.get('/api/settings/agent-model-defaults', (_req, res) => {
   const cfg = getConfig().getConfig() as any;
   res.json({
     success: true,
-    defaults: cfg.agent_model_defaults || {},
+    defaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
     templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
     activeTemplateId: cfg.active_agent_model_default_template || '',
     defaultTemplateId: cfg.default_agent_model_template || '',
@@ -799,7 +798,7 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
     if (v) merged[k] = v;
     else delete merged[k];
   }
-  cm.updateConfig({ agent_model_defaults: merged } as any);
+  cm.updateConfig({ agent_model_defaults: normalizeAgentModelDefaults(merged) } as any);
   res.json({ success: true, defaults: (cm.getConfig() as any).agent_model_defaults || {} });
 });
 

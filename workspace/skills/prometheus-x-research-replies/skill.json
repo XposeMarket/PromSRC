@@ -28,6 +28,16 @@
     {
       "path": "references/workflows/prometheus-x-research-replies-2026-06-09.md",
       "type": "doc"
+    },
+    {
+      "path": "references/workflows/prometheus-x-research-replies-2026-06-12.md",
+      "type": "doc",
+      "description": "Add workflow recipe to prometheus-x-research-replies"
+    },
+    {
+      "path": "references/workflows/prometheus-x-research-replies-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to prometheus-x-research-replies"
     }
   ]
 }

@@ -1,0 +1,79 @@
+{
+  "id": "exact-logo-brand-kit-workflow",
+  "name": "Exact-Logo Brand-Kit Workflow",
+  "version": "1.0.0",
+  "description": "Reusable workflow for creating client brand-kit mockups with exact logo preservation. Prevents logo hallucination by using deterministic asset placement instead of relying on image generation alone. Includes preprocessing, compositing, and explicit fidelity QA.",
+  "emoji": "🎨",
+  "category": "brand-and-creative",
+  "tags": [
+    "brand",
+    "branding",
+    "logo",
+    "mockup",
+    "design",
+    "compositing",
+    "quality-assurance",
+    "client-deliverable",
+    "xpose"
+  ],
+  "trigger_conditions": [
+    "Client brand kits or logo boards requested",
+    "Mockups, pitch decks, or presentation assets need exact logo placement",
+    "Xpose assets or sales collateral require brand identity fidelity",
+    "User says 'use this exact logo,' 'the real logo,' or 'our actual brand mark'",
+    "Black/transparent logos or logos with unusual backgrounds involved",
+    "Generated brand boards need logo verification before delivery",
+    "Previous logo hallucination or recreation instead of using actual file"
+  ],
+  "key_features": [
+    "Logo asset preprocessing for black-on-transparent visibility",
+    "Deterministic compositing workflow instead of probabilistic generation",
+    "Explicit visual comparison and fidelity QA",
+    "Frederick Roof Repair case study with failure-to-success path",
+    "Output template and provenance documentation",
+    "Anti-patterns and red-flag identification"
+  ],
+  "hard_rules": [
+    "Never claim exact logo preservation from generate_image.reference_images alone",
+    "Image generation is probabilistic, not pixel-perfect preservation",
+    "Always use deterministic asset placement for exact logos",
+    "Preprocess black-on-transparent logos with visible backgrounds",
+    "Perform visual comparison before reporting logo fidelity"
+  ],
+  "evidence_references": {
+    "case_study": "Frederick Roof Repair brand-kit correction (2026-05-07)",
+    "failure_transcript": "audit/chats/transcripts/ff09183e-554a-43d1-82ab-1b678a4e000e.md:25–207",
+    "success_notes": "memory/2026-05-07-intraday-notes.md:78–85",
+    "artifacts": "generated/images/brand-kits/",
+    "logo_sources": [
+      "downloads/logos/",
+      "uploads/"
+    ]
+  },
+  "workflow_steps": 7,
+  "step_summary": [
+    "1. Locate and download the real logo asset",
+    "2. Inspect logo assets for alpha, bounds, contrast, visibility risks",
+    "3. Create visible flattened preview for black-on-transparent logos",
+    "4. Generate layout/mockup with reserved logo zones",
+    "5. Place and composite exact logo asset onto board/mockups",
+    "6. Visually compare against source and check for hallucination risks",
+    "7. Record output paths and source logo path"
+  ],
+  "anti_patterns": [
+    "Claim exact logo use from generate_image.reference_images alone",
+    "Send black-on-transparent logos directly to image models without preprocessing",
+    "Trust analyzer output on low-contrast logos without visual inspection",
+    "Describe logos not actually visible in output",
+    "Reroll image generation repeatedly hoping it includes the logo",
+    "Say 'exact' or 'verified' without doing visual comparison"
+  ],
+  "related_skills": [
+    "brand-strategist",
+    "image-analyst",
+    "prometheus-creative-mode"
+  ],
+  "author": "Prometheus",
+  "created": "2026-05-07",
+  "updated": "2026-05-07"
+}

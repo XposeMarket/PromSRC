@@ -1,0 +1,12 @@
+{
+  "skillId": "knowledge-import-pipeline",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:19.295Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\knowledge-import-pipeline",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "a7a6bade6890f9bb"
+}

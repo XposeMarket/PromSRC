@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to improve task flow UX, workflow routing, task cards, progress display, agent task handling, task lifecycle behavior, or automation orchestration inside Prometheus. It frames enhancements around concrete user-facing task outcomes.",
+  "triggers": [
+    "taskflow enhancement",
+    "task flow",
+    "workflow UX",
+    "task cards",
+    "progress display",
+    "agent tasks",
+    "task lifecycle UI",
+    "automation orchestration",
+    "improve tasks",
+    "background task UX",
+    "workflow routing",
+    "task progress",
+    "task panel",
+    "task experience",
+    "task management UX"
+  ],
+  "categories": [
+    "product",
+    "automation",
+    "ux"
+  ],
+  "requiredTools": [
+    "prometheus_source_read",
+    "request_dev_source_edit"
+  ],
+  "lifecycle": "active",
+  "id": "taskflow-enhancement"
+}

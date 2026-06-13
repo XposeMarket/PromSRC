@@ -1,8 +1,8 @@
 ---
 name: Ghostwriter
-description: Write content that sounds like the user — not like AI, not like a template — and that's worth reading.
+description: Use this skill when the user asks to ghostwrite, write in their voice, draft publishable content, LinkedIn posts, newsletters, blog posts, essays, op-eds, thought leadership, founder stories, personal-brand writing, X threads, or content that should sound human instead of AI. Triggers on phrases like ghostwrite this, write in my voice, draft content, write something I can publish, LinkedIn post, newsletter, founder story, personal brand, thought leadership, op-ed, essay, and help me write. Use it to calibrate voice first, then produce sharp, non-template writing with format-specific structure.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
 triggers: ghostwrite, write in my voice, linkedin post, newsletter, blog post, thought leadership, article, op-ed, essay, write for me, write something i can publish, founder story, personal brand writing, write a thread, help me write, draft content
 ---
 

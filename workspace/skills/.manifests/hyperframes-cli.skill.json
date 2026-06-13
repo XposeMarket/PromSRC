@@ -1,56 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "hyperframes-cli",
-  "name": "HyperFrames CLI",
-  "description": "HyperFrames CLI dev loop with mandatory Prometheus no-ship gates: lint, validate when available, inspect timeline samples, inspect hero timestamps, render, and verify actual exported MP4 frames.",
-  "version": "1.1.0",
+  "description": "Use this skill when the user asks to use the HyperFrames CLI, inspect local HyperFrames packages, run init/add/lint/inspect/render commands, debug HyperFrames project output, or verify catalog behavior from the command line. It guides safe CLI-driven HyperFrames workflows.",
   "triggers": [
-    "hyperframes cli",
+    "HyperFrames CLI",
     "npx hyperframes",
+    "hyperframes init",
+    "hyperframes add",
     "hyperframes lint",
     "hyperframes inspect",
     "hyperframes render",
-    "hyperframes validate",
-    "hyperframes export verification",
-    "strict hyperframes"
+    "local HyperFrames",
+    "debug HyperFrames CLI",
+    "video CLI",
+    "catalog CLI",
+    "render clip",
+    "inspect clip",
+    "HyperFrames command",
+    "CLI workflow"
   ],
   "categories": [
     "creative",
     "video",
-    "hyperframes",
-    "cli",
-    "qa"
+    "cli"
   ],
   "requiredTools": [
     "workspace_write",
-    "media_quality"
+    "creative_mode"
   ],
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": true,
-    "shell": true
-  },
-  "resources": [
-    {
-      "path": "references/required-agent-qa-loop-2026-06-04.md",
-      "type": "reference",
-      "description": "Mandatory inspect/render/export verification workflow."
-    },
-    {
-      "path": "references/strict-hyperframes-project-flow-2026-05-24.md",
-      "type": "reference",
-      "description": "Strict CLI project flow for Raul's Windows runtime."
-    },
-    {
-      "path": "references/windows-install-troubleshooting-2026-05-24.md",
-      "type": "reference",
-      "description": "Windows runtime troubleshooting."
-    },
-    {
-      "path": "references/known-issues/exported-mp4-playback-freeze-2026-05-29.md",
-      "type": "reference",
-      "description": "Known exported MP4 playback freeze issue and recovery."
-    }
-  ]
+  "lifecycle": "active",
+  "id": "hyperframes-cli"
 }

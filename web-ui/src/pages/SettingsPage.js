@@ -760,11 +760,11 @@ function ensureSelectOption(selectOrId, value) {
 
 function getProviderSelectPlaceholder(selectId) {
   if (selectId === 'agent-edit-provider') return 'use effective default';
-  if (selectId === 'amd-background-agent-prov') return 'inherit from Background Task';
   if (selectId === 'amd-switch-model-low-prov' || selectId === 'amd-switch-model-medium-prov') return 'disabled';
   if (/^amd-subagent-.*-prov$/.test(selectId)) return 'inherit';
-  if (/^amd-.*-prov$/.test(selectId) || /^brain-.*-prov$/.test(selectId)) return 'use primary';
-  return 'inherit / use primary';
+  if (/^amd-.*-prov$/.test(selectId)) return 'same as main agent';
+  if (/^brain-.*-prov$/.test(selectId)) return 'use primary';
+  return 'inherit / same as main agent';
 }
 
 function setProviderStatusMessage(providerId, type, text) {
@@ -3896,8 +3896,6 @@ const AMD_SLOTS = {
   // Switch model tiers
   'switch-model-low':       'switch_model_low',
   'switch-model-medium':    'switch_model_medium',
-  // Background spawn agents (background_spawn tool)
-  'background-agent':       'background_agent',
 };
 
 const AMD_STATIC_MODELS = {
@@ -3920,7 +3918,7 @@ async function amdProviderChange(slotId) {
   const prov = provSel.value;
   if (typeof renderModelsUsage === 'function') renderModelsUsage();
   if (!prov) {
-    modelSel.innerHTML = '<option value="">— use primary model —</option>';
+    modelSel.innerHTML = '<option value="">— same as main agent —</option>';
     return;
   }
   modelSel.innerHTML = '<option value="">Loading…</option>';

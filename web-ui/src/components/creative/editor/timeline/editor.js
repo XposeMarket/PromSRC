@@ -1,9 +1,15 @@
 /**
- * OpenCut-style scene timeline for Prometheus Creative Editor.
+ * Multi-track timeline for the Prometheus Creative Editor.
  *
- * The scene graph remains the source of truth. This timeline edits element
- * timing metadata directly: meta.startMs, meta.endMs, meta.durationMs,
- * meta.trimStartMs, and meta.trimEndMs.
+ * The scene graph remains the source of truth. Elements are grouped into
+ * stacked lanes (CapCut-style): clips are organised by category
+ * (Text / Overlay / Video / Audio) and then greedily packed into sub-lanes so
+ * overlapping clips appear on separate rows — a real multi-track layout that
+ * works directly off the existing scene data.
+ *
+ * This timeline edits element timing metadata directly: meta.startMs,
+ * meta.endMs, meta.durationMs, meta.trimStartMs and meta.trimEndMs. A vertical
+ * drag onto a Video/Overlay lane re-stacks the clip via zIndex.
  */
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
@@ -14,6 +20,13 @@ function fmtTime(ms) {
   const s = Math.floor((total % 60000) / 1000);
   const f = total % 1000;
   return `${m}:${String(s).padStart(2, '0')}.${String(f).padStart(3, '0')}`;
+}
+
+function fmtTick(ms) {
+  const total = Math.max(0, Math.floor(Number(ms) || 0));
+  const m = Math.floor(total / 60000);
+  const s = Math.floor((total % 60000) / 1000);
+  return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
 }
 
 function safeHtml(s) {
@@ -38,36 +51,73 @@ function elementTiming(el, sceneDuration) {
   };
 }
 
-function laneForType(type) {
+const CAT_ORDER = ['text', 'overlay', 'video', 'audio'];
+const CAT_LABEL = { text: 'Text', overlay: 'Overlay', video: 'Video', audio: 'Audio' };
+
+function categoryOf(type) {
   const t = String(type || '').toLowerCase();
-  if (t === 'audio') return 'Audio';
-  if (t === 'text') return 'Text';
-  if (t === 'image') return 'Image';
-  if (t === 'video') return 'Video';
-  return 'Overlay';
+  if (t === 'audio') return 'audio';
+  if (t === 'text' || t === 'caption' || t === 'subtitle') return 'text';
+  if (t === 'video' || t === 'image' || t === 'img') return 'video';
+  return 'overlay';
 }
 
-function renderRow(el, sceneDuration, selectedIds) {
-  const timing = elementTiming(el, sceneDuration);
-  const left = clamp((timing.start / sceneDuration) * 100, 0, 100);
-  const width = clamp(((timing.end - timing.start) / sceneDuration) * 100, 0.4, 100 - left);
+/** Group elements into stacked lanes; pack overlapping clips into sub-lanes. */
+function buildLanes(elements, duration) {
+  const byCat = { text: [], overlay: [], video: [], audio: [] };
+  for (const el of elements) {
+    byCat[categoryOf(el.type)].push({ el, timing: elementTiming(el, duration) });
+  }
+  const lanes = [];
+  for (const cat of CAT_ORDER) {
+    const items = byCat[cat].sort((a, b) => a.timing.start - b.timing.start);
+    if (!items.length) continue;
+    const sub = [];
+    for (const item of items) {
+      let placed = false;
+      for (const lane of sub) {
+        if (item.timing.start >= lane.lastEnd - 1) {
+          lane.items.push(item);
+          lane.lastEnd = item.timing.end;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) sub.push({ items: [item], lastEnd: item.timing.end });
+    }
+    sub.forEach((lane, i) => {
+      lanes.push({ cat, label: CAT_LABEL[cat] + (sub.length > 1 ? ` ${i + 1}` : ''), items: lane.items });
+    });
+  }
+  return lanes;
+}
+
+function renderClip(item, duration, selectedIds) {
+  const { el, timing } = item;
+  const left = clamp((timing.start / duration) * 100, 0, 100);
+  const width = clamp(((timing.end - timing.start) / duration) * 100, 0.4, 100 - left);
   const selected = selectedIds?.includes(el.id) ? ' ce-timeline-clip--selected' : '';
-  const lane = laneForType(el.type);
+  const cat = categoryOf(el.type);
   const label = el.name || el.meta?.content || el.type || el.id;
   return `
-    <div class="ce-track-row" data-ce-timeline-row="${safeHtml(el.id)}">
-      <div class="ce-track-row__label" title="${safeHtml(label)}">${safeHtml(lane)}</div>
-      <div class="ce-track-row__lane" data-ce-lane>
-        <div class="ce-track-row__clip${selected}" data-ce-clip="${safeHtml(el.id)}"
-          style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"
-          title="${safeHtml(label)} • ${fmtTime(timing.start)} - ${fmtTime(timing.end)}">
-          <span class="ce-timeline-trim ce-timeline-trim--left" data-ce-trim="left"></span>
-          <span class="ce-timeline-clip-label">${safeHtml(label)}</span>
-          <span class="ce-timeline-trim ce-timeline-trim--right" data-ce-trim="right"></span>
-        </div>
-      </div>
+    <div class="ce-track-row__clip ce-clip--${cat}${selected}" data-ce-clip="${safeHtml(el.id)}"
+      style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"
+      title="${safeHtml(label)} • ${fmtTime(timing.start)} - ${fmtTime(timing.end)}">
+      <span class="ce-timeline-trim ce-timeline-trim--left" data-ce-trim="left"></span>
+      <span class="ce-timeline-clip-label">${safeHtml(label)}</span>
+      <span class="ce-timeline-trim ce-timeline-trim--right" data-ce-trim="right"></span>
     </div>
   `;
+}
+
+function renderTicks(duration) {
+  const count = 10;
+  let out = '';
+  for (let i = 0; i <= count; i++) {
+    const pct = (i / count) * 100;
+    out += `<span class="ce-tl-tick" style="left:${pct.toFixed(2)}%"><span class="ce-tl-tick-label">${fmtTick((duration * i) / count)}</span></span>`;
+  }
+  return out;
 }
 
 export function createTimelineEditor({ container, store, getScene, applyOps }) {
@@ -80,29 +130,56 @@ export function createTimelineEditor({ container, store, getScene, applyOps }) {
     const selectedIds = store.getState().selectedIds || [];
     const timeMs = clamp(Number(store.getState().timeMs) || 0, 0, duration);
     const playheadLeft = (timeMs / duration) * 100;
+    const lanes = buildLanes(elements, duration);
+
+    const laneRowsHtml = lanes.length
+      ? lanes.map(lane => `
+          <div class="ce-track-row" data-ce-cat="${lane.cat}">
+            <div class="ce-track-row__lane" data-ce-lane>
+              ${lane.items.map(item => renderClip(item, duration, selectedIds)).join('')}
+            </div>
+          </div>
+        `).join('')
+      : '<div class="ce-timeline-stub__empty">Drop or generate media to build the edit.</div>';
+
+    const gutterHtml = lanes.map(lane =>
+      `<div class="ce-tl-gutter-row" title="${safeHtml(lane.label)}">${safeHtml(lane.label)}</div>`
+    ).join('');
+
     container.innerHTML = `
-      <div class="ce-timeline-stub ce-timeline-editor">
+      <div class="ce-timeline-stub ce-timeline-editor ce-timeline-multitrack">
         <div class="ce-timeline-stub__header">
           <span class="ce-timeline-stub__label">Timeline</span>
-          <span class="ce-timeline-stub__dur">${fmtTime(duration)}</span>
+          <span class="ce-timeline-stub__dur">${fmtTime(timeMs)} / ${fmtTime(duration)}</span>
         </div>
-        <div class="ce-timeline-ruler" data-ce-ruler>
-          <div class="ce-timeline-playhead" style="left:${playheadLeft.toFixed(3)}%"></div>
-        </div>
-        <div class="ce-timeline-stub__tracks">
-          ${elements.length
-            ? elements.map(el => renderRow(el, duration, selectedIds)).join('')
-            : '<div class="ce-timeline-stub__empty">Drop or generate media to build the edit.</div>'}
+        <div class="ce-tl-body">
+          <div class="ce-tl-gutter">
+            <div class="ce-tl-gutter-ruler"></div>
+            ${gutterHtml}
+          </div>
+          <div class="ce-tl-lanes" data-ce-lanes>
+            <div class="ce-timeline-ruler" data-ce-ruler>
+              ${renderTicks(duration)}
+            </div>
+            <div class="ce-timeline-playhead" data-ce-playhead style="left:${playheadLeft.toFixed(3)}%"></div>
+            <div class="ce-tl-lane-rows">
+              ${laneRowsHtml}
+            </div>
+          </div>
         </div>
       </div>
     `;
   }
 
+  function lanesRect() {
+    const lanesEl = container.querySelector('[data-ce-lanes]');
+    return lanesEl?.getBoundingClientRect() || null;
+  }
+
   function timeFromClientX(clientX) {
     const scene = getScene() || {};
     const duration = Math.max(1000, Number(scene.durationMs) || 12000);
-    const ruler = container.querySelector('[data-ce-ruler]') || container.querySelector('.ce-track-row__lane');
-    const rect = ruler?.getBoundingClientRect();
+    const rect = lanesRect();
     if (!rect || rect.width <= 0) return 0;
     return clamp(((clientX - rect.left) / rect.width) * duration, 0, duration);
   }
@@ -169,7 +246,8 @@ export function createTimelineEditor({ container, store, getScene, applyOps }) {
       startDrag(e, clip);
       return;
     }
-    if (e.target.closest?.('[data-ce-ruler]')) {
+    // Click anywhere in the time area (ruler or empty lane) seeks the playhead.
+    if (e.target.closest?.('[data-ce-lanes]')) {
       store.setState({ timeMs: Math.round(timeFromClientX(e.clientX)), playing: false });
     }
   });

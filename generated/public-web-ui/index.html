@@ -65,10 +65,10 @@
 <link rel="stylesheet" href="static/styles/base.css?v=sidebar-resize-fix">
 <link rel="stylesheet" href="static/styles/components.css">
 <link rel="stylesheet" href="static/styles/onboarding.css">
-<link rel="stylesheet" href="static/styles/pages.css?v=skill-left-panel-cleanup">
+<link rel="stylesheet" href="static/styles/pages.css?v=generated-image-modal-v3">
 <link rel="stylesheet" href="static/styles/projects.css">
 <link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="static/styles/mobile.css?v=liquid-glass-v7">
+<link rel="stylesheet" href="static/styles/mobile.css?v=liquid-glass-v20">
 <link rel="stylesheet" href="static/styles/themes.css?v=blue-theme-1">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
@@ -2146,9 +2146,9 @@
         <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
       </div>
     </div>
-    <div id="main-goal-strip" class="main-goal-strip" style="display:none"></div>
-
+    <div id="background-spawn-dock" class="background-spawn-dock" hidden></div>
     <div class="chat-input-area">
+      <div id="main-goal-strip" class="main-goal-strip" style="display:none"></div>
       <!-- Queued prompts panel -->
 	      <div class="queued-prompts-panel" id="queued-prompts-panel">
 	        <div class="queued-prompts-head">
@@ -4175,27 +4175,6 @@
             </div>
           </div>
 
-	          <!-- Background Agents -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Background Agents</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Model used for tasks spawned via <code>background_spawn</code>. Leave blank to inherit from Background Task.</div>
-          <div style="margin-bottom:12px">
-            <div data-settings-icon-label="send" style="font-size:11px;color:var(--muted);margin-bottom:4px">Background Spawn Agent</div>
-            <select id="amd-background-agent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('background-agent')">
-              <option value="">— inherit from Background Task —</option>
-              <option value="ollama">Ollama (local)</option>
-              <option value="llama_cpp">llama.cpp (local)</option>
-              <option value="lm_studio">LM Studio (local)</option>
-              <option value="openai">OpenAI</option>
-              <option value="openai_codex">OpenAI Codex / ChatGPT</option>
-              <option value="anthropic">Anthropic Claude</option>
-              <option value="perplexity">Perplexity AI</option>
-              <option value="gemini">Google Gemini</option>
-            </select>
-            <select id="amd-background-agent-model" class="settings-input" style="width:100%">
-              <option value="">select provider first</option>
-            </select>
-          </div>
-
           <!-- Brain System Models -->
           <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Brain System</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Models used for autonomous Thought and Dream runs. Leave blank to use the primary model.</div>
@@ -4980,7 +4959,13 @@ function connectWS() {
 	      if (typeof checkStatus === 'function') setTimeout(() => checkStatus(), 250);
 	    });
 	
+	    const isHeartbeatOkText = (text) => /^\s*(?:`{1,3}\s*)?heartbeat[\s_-]*ok(?:\s*`{1,3})?\s*[.!]?\s*$/i.test(String(text || ''));
+
 	    bus.on('heartbeat_done', (msg) => {
+      if (msg.isOk || isHeartbeatOkText(msg.text)) {
+        if (typeof refreshHeartbeatSummary === 'function') refreshHeartbeatSummary().catch(() => {});
+        return;
+      }
       if (msg.automatedSession && typeof window.upsertAutomatedSession === 'function') {
         window.upsertAutomatedSession(msg.automatedSession);
       }
@@ -4992,6 +4977,7 @@ function connectWS() {
     });
 
     bus.on('heartbeat_result', (msg) => {
+      if (msg.isOk || isHeartbeatOkText(msg.text)) return;
       if (typeof window.bgtToast === 'function') window.bgtToast('\u2764 Heartbeat', String(msg.text || 'Actionable heartbeat result').slice(0, 120));
     });
 
@@ -7447,7 +7433,7 @@ let _errBackdrop = null;
 <script type="module" src="static/utils.js"></script>
 <script type="module" src="static/ws.js"></script>
 <script type="module" src="static/app.js?v=sidebar-width-reset"></script>
-<script type="module" src="static/pages/ChatPage.js?v=session-last-message-sort"></script>
+<script type="module" src="static/pages/ChatPage.js?v=generated-image-modal-v3"></script>
 <script type="module" src="static/pages/AuditPage.js"></script>
 <script type="module" src="static/pages/HubPage.js?v=skill-hover-actions"></script>
 <script type="module" src="static/pages/MemoryPage.js"></script>
@@ -7651,7 +7637,7 @@ let _errBackdrop = null;
     }
   })();
 </script>
-<script type="module" src="static/mobile/mobile-router.js?v=liquid-glass-v7"></script>
+<script type="module" src="static/mobile/mobile-router.js?v=liquid-glass-v20"></script>
 <script>
   // ── Prometheus Mobile: PWA bootstrap ──
   // 1. Capture beforeinstallprompt early so we can offer "Install" from the drawer.

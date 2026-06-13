@@ -105,9 +105,43 @@ const SECRET_PATTERNS: RegExp[] = [
 ];
 
 function looksHighEntropy(s: string): boolean {
-  if (s.length < 32) return false;
-  const unique = new Set(s.replace(/[^A-Za-z0-9+/=_\-]/g, '')).size;
-  return unique >= 20;
+  if (s.length < 40) return false;
+  const clean = s.replace(/[^A-Za-z0-9+/=_-]/g, '');
+  if (clean.length < 40) return false;
+
+  const classes = [
+    /[a-z]/.test(clean),
+    /[A-Z]/.test(clean),
+    /\d/.test(clean),
+    /[+/=_-]/.test(clean),
+  ].filter(Boolean).length;
+  if (classes < 3) return false;
+
+  const unique = new Set(clean).size;
+  return unique >= 24;
+}
+
+function surroundingNonSpaceToken(input: string, offset: number, length: number): string {
+  let start = offset;
+  let end = offset + length;
+  while (start > 0 && !/\s/.test(input[start - 1])) start--;
+  while (end < input.length && !/\s/.test(input[end])) end++;
+  return input.slice(start, end);
+}
+
+function isLikelyPathUrlOrFile(input: string, offset: number, word: string): boolean {
+  const token = surroundingNonSpaceToken(input, offset, word.length);
+  const trimmed = token.replace(/^[<("[']+|[>)"',.;:!?]+$/g, '');
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return true;
+  if (/^(?:www\.|file:|[a-z]:[\\/]|[\\/]{1,2})/i.test(trimmed)) return true;
+  if (/[\\/]/.test(trimmed)) return true;
+  if (/\.[A-Za-z0-9]{1,12}(?:[?#].*)?$/.test(trimmed)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(word)) return true;
+
+  const before = input[offset - 1] || '';
+  const after = input[offset + word.length] || '';
+  return /[./\\:]/.test(before) || /[./\\]/.test(after);
 }
 
 export function scrubSecrets(input: string): string {
@@ -123,9 +157,10 @@ export function scrubSecrets(input: string): string {
     });
   }
 
-  // High-entropy word catch-all
-  out = out.replace(/[A-Za-z0-9+/=_\-]{32,}/g, (word) =>
-    looksHighEntropy(word) ? '[REDACTED-HE]' : word
+  // High-entropy bare token catch-all. Avoid eating generated filenames,
+  // local paths, and URLs; explicit secret patterns above handle labeled leaks.
+  out = out.replace(/[A-Za-z0-9+/=_-]{32,}/g, (word, offset) =>
+    looksHighEntropy(word) && !isLikelyPathUrlOrFile(out, offset, word) ? '[REDACTED-HE]' : word
   );
 
   return out;

@@ -1022,7 +1022,8 @@ export function ensureAgentWorkspace(agent: AgentDefinition): string {
       '',
       '## Rules',
       '- Always write outputs to files, never just respond in chat',
-      '- If nothing is actionable, reply with HEARTBEAT_OK',
+      '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+      '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
       '- Keep runs under 5 minutes',
     ].join('\n'), 'utf-8');
   }

@@ -1,0 +1,11 @@
+{
+  "skillId": "skill-creator",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:03.280Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\skill-creator",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "e736c36e33600f04"
+}

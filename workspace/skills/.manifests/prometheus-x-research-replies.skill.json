@@ -1,36 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "prometheus-x-research-replies",
-  "name": "Prometheus X Research & Replies Operator",
-  "description": "Operating playbook for the prometheus-x-research-replies scheduled job: always read memory first, try x_search for fresh AI/tech angles, fallback to browser automation with x-browser-automation-playbook skill if x_search fails, prepare 2 natural replies + 1 original post with no em dashes and human tone, post via browser from @raulinvests, send Telegram screenshot proof, log to memory, and always close browser with browser_close at the end. Prevents duplicates and CDP issues.",
-  "version": "1.2.0",
-  "author": "Prometheus",
+  "description": "Use this skill when the scheduled @raulinvests X/Twitter research, reply, quote-repost, or live AI-topic engagement workflow needs to gather feed/search signals, avoid duplicate angles, use hook-library, post only with browser automation, avoid em dashes, log every action, and close the browser. Use it for prompts like X research replies, scheduled research posting, Mara reply run, quote-repost AI agent posts, or find AI agent conversations on X.",
   "triggers": [
     "x research",
     "research replies",
     "ai agent memory",
     "autonomous research posting",
-    "scheduled research"
+    "scheduled research",
+    "X research replies",
+    "Mara reply run",
+    "quote-repost AI posts",
+    "reply to AI agent posts",
+    "browser-first X research",
+    "@raulinvests engagement",
+    "search X for AI agents",
+    "scheduled X replies"
   ],
-  "category": "automation",
-  "tags": [
-    "x-twitter",
+  "categories": [
+    "social",
+    "X/Twitter",
     "research",
-    "social-media",
-    "scheduled-posting",
-    "autonomous",
-    "fallback",
-    "branding"
+    "scheduled workflow",
+    "browser automation",
+    "content"
   ],
-  "requirements": {
-    "toolCategories": [
-      "external_apps",
-      "browser_automation"
-    ],
-    "skills": [
-      "x-browser-automation-playbook"
-    ]
-  },
-  "instructions": "1. Read workspace/prometheus-x-posts-memory.md first to avoid duplicates.\n2. Try x_search (external_apps) for fresh AI/tech topics and reply opportunities.\n3. If x_search fails (quota, auth, error), fallback: use x-browser-automation-playbook skill to manually search/browse X.com for posts on AI, agent memory, data layers, decentralized systems, and graph orchestration. Collect 2-3 promising posts for replies.\n4. Prepare 2 natural replies + 1 original research-based post. No em dashes (—), natural human tone.\n5. Use browser automation to post all content from @raulinvests profile.\n6. Send screenshot proof to Telegram.\n7. Log the posts + research to memory via write_note.\n8. Always close browser with browser_close immediately after any browser work."
+  "requiredTools": [
+    "browser_automation",
+    "file_ops",
+    "skills"
+  ],
+  "lifecycle": "active",
+  "id": "prometheus-x-research-replies"
 }

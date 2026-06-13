@@ -1,157 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "id": "codex-frontend-engineer",
-  "name": "Codex Frontend Engineer",
-  "description": "Codex-like frontend engineering workflow for Prometheus: inspect repo patterns, build real app surfaces, apply strong UI judgment, and verify desktop/mobile behavior in-browser.",
-  "version": "1.0.0",
+  "description": "Use this skill when the user asks Codex or Prometheus to inspect, implement, debug, or hand off frontend/UI work, especially vanilla JS, web-ui, mobile UI, styling, layout, browser smoke tests, or visible app behavior. It emphasizes repo-grounded frontend changes and verification.",
   "triggers": [
-    "frontend",
-    "front end",
-    "web app",
-    "website",
-    "landing page",
-    "React",
-    "Vite",
-    "HTML CSS",
-    "dashboard",
-    "UI",
-    "UX",
-    "responsive",
-    "make it look better",
-    "polish this UI",
-    "browser verify",
-    "visual QA",
-    "game UI",
-    "Three.js",
-    "canvas app"
+    "frontend engineer",
+    "Codex frontend",
+    "UI bug",
+    "fix the UI",
+    "web-ui",
+    "mobile UI",
+    "CSS issue",
+    "layout bug",
+    "browser smoke test",
+    "frontend implementation",
+    "vanilla JS UI",
+    "app.js",
+    "visual bug",
+    "responsive UI",
+    "inspect frontend"
   ],
   "categories": [
-    "frontend",
-    "design",
     "engineering",
-    "browser",
-    "quality"
+    "frontend",
+    "dev-handoff"
   ],
   "requiredTools": [
-    "shell",
-    "browser",
-    "file_edit"
+    "desktop_automation",
+    "workspace_write"
   ],
-  "resources": [
-    {
-      "path": "references/frontend-principles.md",
-      "type": "doc",
-      "description": "Detailed Codex-like frontend rules for building actual usable experiences instead of generic mockups.",
-      "triggers": [
-        "frontend quality",
-        "visual polish",
-        "UI rules",
-        "design principles"
-      ],
-      "autoInject": false,
-      "injectMode": "summary_then_content",
-      "maxInjectChars": 6000
-    },
-    {
-      "path": "references/domain-patterns.md",
-      "type": "doc",
-      "description": "Domain-specific defaults for dashboards, tools, commerce, games, 3D, and landing pages.",
-      "triggers": [
-        "dashboard",
-        "CRM",
-        "game",
-        "landing page",
-        "3D",
-        "commerce"
-      ],
-      "autoInject": false,
-      "injectMode": "summary_then_content",
-      "maxInjectChars": 5000
-    },
-    {
-      "path": "references/verification-playbook.md",
-      "type": "doc",
-      "description": "Browser verification workflow for local frontend work.",
-      "triggers": [
-        "verify",
-        "browser QA",
-        "screenshot",
-        "responsive"
-      ],
-      "autoInject": false,
-      "injectMode": "summary_then_content",
-      "maxInjectChars": 4000
-    },
-    {
-      "path": "references/visual-quality-rubric.md",
-      "type": "doc",
-      "description": "Final visual QA rubric for layout, typography, color, controls, assets, and responsiveness.",
-      "triggers": [
-        "final QA",
-        "visual review",
-        "polish"
-      ],
-      "autoInject": false,
-      "injectMode": "summary_then_content",
-      "maxInjectChars": 3000
-    },
-    {
-      "path": "examples/build-dashboard.md",
-      "type": "example",
-      "description": "Worked execution pattern for building a practical dashboard."
-    },
-    {
-      "path": "examples/repair-existing-app.md",
-      "type": "example",
-      "description": "Worked execution pattern for improving an existing frontend."
-    },
-    {
-      "path": "examples/game-or-3d.md",
-      "type": "example",
-      "description": "Worked execution pattern for games, canvas, and Three.js surfaces."
-    },
-    {
-      "path": "assets/templates/vite-react-app",
-      "type": "template",
-      "description": "Minimal Vite React starter with a real dashboard-style app surface."
-    },
-    {
-      "path": "assets/templates/plain-html-app",
-      "type": "template",
-      "description": "Static HTML/CSS/JS app template for quick prototypes."
-    },
-    {
-      "path": "scripts/frontend_static_audit.py",
-      "type": "script",
-      "description": "Static scanner for common frontend anti-patterns before browser QA."
-    }
-  ],
-  "toolBinding": {
-    "requiredTools": [
-      "shell",
-      "file_edit"
-    ],
-    "recommendedToolCategories": [
-      "browser_automation",
-      "frontend",
-      "testing"
-    ],
-    "defaultWorkflow": [
-      "Inspect package, routes, components, styles, and existing UI conventions.",
-      "Implement the real app surface using repo-native patterns.",
-      "Run available checks and browser QA across desktop and mobile.",
-      "Report files changed, verification performed, and residual risk."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "browser": true,
-    "workspaceRead": true,
-    "workspaceWrite": true,
-    "externalSideEffects": false
-  },
-  "status": "ready",
   "lifecycle": "active",
-  "ownership": "prometheus-owned"
+  "id": "codex-frontend-engineer"
 }

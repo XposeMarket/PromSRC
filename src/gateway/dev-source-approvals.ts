@@ -26,6 +26,7 @@ export interface DevSourceEditPlan {
 export interface DevSourceEditScope {
   devEditId: string;
   allowedFiles: string[];
+  allowedDirs: string[];
   verificationCommand?: string;
   verificationProfile?: DevSourceVerificationProfile;
   verificationProfiles?: DevSourceVerificationProfile[];
@@ -45,6 +46,7 @@ export interface DevSourceEditContinuation {
   completionNoteTag: string;
   plan?: DevSourceEditPlan;
   allowedFiles: string[];
+  allowedDirs?: string[];
   affectedFiles?: string[];
   changedSurfaces?: string[];
   summary?: string;
@@ -66,6 +68,7 @@ export interface DevSourceEditContinuation {
 
 const grants = new Map<string, DevSourceEditScope>();
 const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
+const DEV_SOURCE_SELF_DOC_DIRS = ['self', 'workspace/self'];
 export type DevSourceVerificationProfile =
   | 'backend_build'
   | 'webui_sync_check'
@@ -106,6 +109,15 @@ function normalizeAllowedFiles(files: unknown): string[] {
 function normalizeTextArray(value: unknown, fallback: string[] = []): string[] {
   const raw = Array.isArray(value) ? value : fallback;
   return raw.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 12);
+}
+
+function normalizeAllowedDirs(dirs: unknown): string[] {
+  const rawDirs = Array.isArray(dirs) ? dirs : [];
+  return Array.from(new Set(
+    [...DEV_SOURCE_SELF_DOC_DIRS, ...rawDirs]
+      .map(normalizePath)
+      .filter((dir) => dir === 'self' || dir.startsWith('self/') || dir === 'workspace/self' || dir.startsWith('workspace/self/')),
+  ));
 }
 
 export function normalizeDevSourceVerificationProfiles(value: unknown): DevSourceVerificationProfile[] {
@@ -268,6 +280,7 @@ export function markDevSourceEditContinuationComplete(input: {
 export function createDevSourceEditApprovalScope(input: {
   sessionId: string;
   files: unknown;
+  allowedDirs?: unknown;
   verificationCommand?: unknown;
   verificationProfile?: unknown;
   verificationProfiles?: unknown;
@@ -292,6 +305,7 @@ export function createDevSourceEditApprovalScope(input: {
   const sessionId = String(input.sessionId || '').trim();
   if (!sessionId) throw new Error('sessionId is required');
   const allowedFiles = normalizeAllowedFiles(input.files);
+  const allowedDirs = normalizeAllowedDirs(input.allowedDirs);
   if (allowedFiles.length === 0) {
     throw new Error('At least one src/ or web-ui/ file is required.');
   }
@@ -322,6 +336,7 @@ export function createDevSourceEditApprovalScope(input: {
   return {
     devEditId,
     allowedFiles,
+    allowedDirs,
     verificationCommand,
     verificationProfile,
     verificationProfiles,
@@ -344,10 +359,14 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
     ...(currentScope?.allowedFiles || []),
     ...scope.allowedFiles,
   ]));
-  setSessionMutationScope(sid, { allowedFiles: mergedFiles, allowedDirs: currentScope?.allowedDirs || [] });
+  const mergedDirs = Array.from(new Set([
+    ...(currentScope?.allowedDirs || []),
+    ...scope.allowedDirs,
+  ].map(normalizePath).filter(Boolean)));
+  setSessionMutationScope(sid, { allowedFiles: mergedFiles, allowedDirs: mergedDirs });
   activateToolCategory(sid, 'prometheus_source_read');
   activateToolCategory(sid, 'prometheus_source_write');
-  const grant = { ...scope, allowedFiles: mergedFiles };
+  const grant = { ...scope, allowedFiles: mergedFiles, allowedDirs: mergedDirs };
   grants.set(sid, grant);
   upsertDevSourceEditContinuation({
     id: grant.devEditId,
@@ -358,6 +377,7 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
     completionNoteTag: grant.plan?.completionNoteTag || 'dev_edit_complete',
     plan: grant.plan,
     allowedFiles: grant.allowedFiles,
+    allowedDirs: grant.allowedDirs,
     verification: grant.plan?.verification,
     verificationProfile: grant.verificationProfile,
     verificationProfiles: grant.verificationProfiles,
@@ -370,6 +390,7 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
     toolName: 'request_dev_source_edit',
     toolArgs: {
       allowedFiles: scope.allowedFiles,
+      allowedDirs: scope.allowedDirs,
       verificationCommand: scope.verificationCommand,
       verificationProfile: scope.verificationProfile,
       verificationProfiles: scope.verificationProfiles,
@@ -379,7 +400,7 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
     },
     policyTier: 'commit',
     approvalStatus: 'approved',
-    resultSummary: `Granted dev source edit scope for ${scope.allowedFiles.length} file(s).`,
+    resultSummary: `Granted dev source edit scope for ${scope.allowedFiles.length} file(s) and ${scope.allowedDirs.length} workspace doc dir(s).`,
   });
   return grant;
 }

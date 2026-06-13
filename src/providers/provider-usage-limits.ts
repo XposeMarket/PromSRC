@@ -104,15 +104,42 @@ function pctFrom(win: any): number {
   return 0;
 }
 
-/** Read a reset timestamp (ISO) from a provider window object of varying shape. */
+/**
+ * Read a reset timestamp (ISO) from a provider window object of varying shape.
+ * Handles three families seen across providers:
+ *   - ISO strings:        resets_at / reset_at / resetsAt / reset_time
+ *   - relative seconds:    resets_in_seconds / reset_after_seconds / seconds_until_reset …
+ *     (ChatGPT/Codex's wham/usage uses `reset_after_seconds`, mirroring the
+ *      `x-codex-…-reset-after-seconds` response headers)
+ *   - absolute unix epoch: a numeric reset field in seconds OR milliseconds
+ */
 function resetIsoFrom(win: any): string | null {
   if (!win || typeof win !== 'object') return null;
-  if (typeof win.resets_at === 'string') return win.resets_at;
-  if (typeof win.reset_at === 'string') return win.reset_at;
-  if (typeof win.resetsAt === 'string') return win.resetsAt;
-  const secs = Number(win.resets_in_seconds ?? win.reset_in_seconds ?? win.resets_in);
+
+  // 1. Explicit ISO string fields.
+  for (const key of ['resets_at', 'reset_at', 'resetsAt', 'reset_time', 'resetTime']) {
+    if (typeof win[key] === 'string' && win[key].trim()) return win[key];
+  }
+
+  // 2. Relative "seconds until reset" fields.
+  const secs = Number(
+    win.resets_in_seconds ?? win.reset_in_seconds ?? win.resets_in ?? win.resets_in_secs ??
+    win.reset_after_seconds ?? win.reset_after ?? win.resets_after_seconds ?? win.resets_after ??
+    win.seconds_until_reset ?? win.seconds_to_reset,
+  );
   if (Number.isFinite(secs) && secs > 0) {
     return new Date(Date.now() + secs * 1000).toISOString();
+  }
+
+  // 3. Absolute numeric epoch (seconds or milliseconds) under a reset-ish key.
+  const epoch = Number(
+    win.resets_at ?? win.reset_at ?? win.reset ?? win.reset_timestamp ??
+    win.reset_time ?? win.next_reset ?? win.next_reset_at,
+  );
+  if (Number.isFinite(epoch) && epoch > 0) {
+    // < 1e12 → seconds; otherwise already milliseconds.
+    const ms = epoch < 1e12 ? epoch * 1000 : epoch;
+    return new Date(ms).toISOString();
   }
   return null;
 }
@@ -191,14 +218,23 @@ async function fetchCodexLive(configDir: string): Promise<LiveResult | null> {
   const secondary = rl.secondary_window || rl.secondary;
   if (primary) windows.push(win('5-hour', primary));
   if (secondary) windows.push(win('Weekly', secondary));
+
+  // Diagnostic: if a window came back with no recognised reset field, log its
+  // keys once so the field name can be added to resetIsoFrom. Opt-in via env to
+  // avoid noise. (Set PROM_DEBUG_USAGE=1.)
+  if (process.env.PROM_DEBUG_USAGE && windows.some((w) => !w.reset_at)) {
+    try {
+      console.error('[usage] Codex window had no reset_at. primary keys=',
+        primary && Object.keys(primary), 'secondary keys=', secondary && Object.keys(secondary),
+        'sample=', JSON.stringify(primary));
+    } catch { /* ignore */ }
+  }
   return { windows, plan_label: null, error: null };
 }
 
 // Note on xAI/Grok: Prometheus authenticates xAI via x.ai OAuth (for api.x.ai),
-// which is a different credential surface than the consumer Grok CLI billing
-// endpoint (cli-chat-proxy.grok.com). There is no usage/limit endpoint that
-// accepts the x.ai OAuth token, so xAI falls back to internal token tracking +
-// an optional manual budget rather than a live gauge.
+// which is separate from Management API team billing. Keep xAI usage here on
+// local token accounting only so usage display cannot alter the OAuth chat path.
 
 // ─── Live cache ──────────────────────────────────────────────────────────────
 
@@ -331,8 +367,8 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
     const live = await getLive(id, configDir);
     const tokens = internalTokens(id, events);
 
-    // xAI/Grok has no live usage endpoint — augment internal accounting with
-    // token counts read from the local Grok CLI session files, if present.
+    // xAI/Grok has no live usage endpoint here; augment internal accounting with
+    // token counts read from local Grok CLI session files, if present.
     if (id === 'xai') {
       const cli = readGrokCliTokens();
       tokens.total += cli.total;

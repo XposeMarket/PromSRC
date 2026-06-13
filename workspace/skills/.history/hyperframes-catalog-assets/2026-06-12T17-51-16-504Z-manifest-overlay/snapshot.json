@@ -1,0 +1,12 @@
+{
+  "skillId": "hyperframes-catalog-assets",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T17:51:16.508Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hyperframes-catalog-assets",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "ad95b170879ff43b"
+}

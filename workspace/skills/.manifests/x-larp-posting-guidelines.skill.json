@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to draft, schedule, post, revise, or review X/Twitter posts for the Prometheus/X LARP style, including Raul's account voice, scheduled post workflow, reply style, or AI-tell avoidance. It enforces no em dashes and native-feeling post language.",
+  "triggers": [
+    "X LARP",
+    "Twitter post",
+    "draft X post",
+    "post on X",
+    "scheduled X post",
+    "Prometheus X posts",
+    "reply on X",
+    "tweet style",
+    "no em dashes",
+    "AI tell",
+    "Raul X account",
+    "X posting guidelines",
+    "social posting voice",
+    "X reply",
+    "tweet draft"
+  ],
+  "categories": [
+    "social",
+    "writing",
+    "x"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "schedule_job"
+  ],
+  "lifecycle": "active",
+  "id": "x-larp-posting-guidelines"
+}

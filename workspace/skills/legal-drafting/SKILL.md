@@ -1,8 +1,9 @@
 ---
 name: legal-drafting
-description: # Legal Drafting Skill
+description: Use this skill when the user asks to draft, review, explain, or negotiate legal documents such as NDAs, MSAs, SOWs, contractor agreements, contract clauses, red-flag reviews, governing law, IP ownership, indemnification, payment terms, liability caps, or template agreements. Triggers on phrases like draft an NDA, review this contract, write an SOW, MSA clause, legal red flags, contractor agreement, explain this clause, negotiate payment terms, IP ownership, liability cap, and contract template. Use it with the required legal-advice disclaimer.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: draft NDA, review contract, write SOW, MSA clause, legal red flags, contractor agreement, explain clause, negotiate payment terms, IP ownership, liability cap, indemnification, governing law, contract template, legal drafting, agreement review
 ---
 
 # Legal Drafting Skill

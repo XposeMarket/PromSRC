@@ -1,8 +1,9 @@
 ---
 name: revenue-manager
-description: # Revenue Manager Skill
+description: Use this skill when the user asks about pricing strategy, revenue optimization, demand forecasting, yield management, competitor pricing, SaaS tier design, dynamic pricing rules, revenue reviews, or pricing audits. Triggers on phrases like pricing strategy, raise prices, revenue management, demand forecast, competitor pricing, pricing audit, SaaS pricing tiers, dynamic pricing, maximize revenue, RevPAR, yield management, and discount strategy. Use it to recommend specific price actions tied to demand, capacity, margin, and market context.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: pricing strategy, raise prices, revenue management, demand forecast, competitor pricing, pricing audit, SaaS pricing tiers, dynamic pricing, maximize revenue, RevPAR, yield management, discount strategy, price recommendation, revenue review, pricing model
 ---
 
 # Revenue Manager Skill

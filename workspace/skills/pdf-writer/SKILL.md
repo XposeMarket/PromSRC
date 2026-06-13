@@ -1,8 +1,9 @@
 ---
 name: PDF Writer
-description: Create PDF files (.pdf) using `jspdf` in pure Node. Good for reports, invoices, proposals, one-pagers, and simple formatted exports directly from Prometheus.
-emoji: "📄"
-version: 1.0.0
+description: Use this skill when the user asks to create, generate, export, or write PDF files such as reports, invoices, proposals, one-pagers, handouts, brochures, simple formatted exports, or client-ready PDFs. Triggers on phrases like create PDF, generate PDF, export PDF, write PDF, PDF report, PDF invoice, PDF proposal, one pager, handout, brochure PDF, and make this a PDF. Use it for text-first PDF generation with jsPDF and clear saved output paths.
+emoji: "🧩"
+version: 1.1.0
+triggers: create pdf, generate pdf, export pdf, write pdf, make pdf, pdf report, pdf invoice, pdf proposal, one pager, handout, brochure pdf, client PDF, formatted PDF, save as PDF
 triggers: create pdf, generate pdf, export pdf, write pdf, make pdf, pdf report, pdf invoice, pdf proposal, one pager, handout, brochure pdf
 ---
 

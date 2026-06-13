@@ -24,6 +24,16 @@
       "path": "references/workflows/prometheus-x-posts-workflow-2026-06-09.md",
       "type": "doc",
       "description": "Add workflow recipe to prometheus-x-posts-workflow"
+    },
+    {
+      "path": "references/workflows/prometheus-x-posts-workflow-2026-06-12.md",
+      "type": "doc",
+      "description": "Add workflow recipe to prometheus-x-posts-workflow"
+    },
+    {
+      "path": "references/workflows/prometheus-x-posts-workflow-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to prometheus-x-posts-workflow"
     }
   ]
 }

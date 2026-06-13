@@ -1,0 +1,11 @@
+{
+  "skillId": "local-lead-hunting",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T02:50:14.808Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\local-lead-hunting",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "40586dbec73e7f57"
+}

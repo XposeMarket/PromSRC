@@ -895,6 +895,8 @@ export class BrainRunner {
           'skill_inspect',
           'skill_resource_list',
           'skill_resource_read',
+          'skill_audit_all',
+          'skill_update_metadata',
           'skill_manifest_write',
           'skill_resource_write',
         ]),
@@ -1099,6 +1101,9 @@ export class BrainRunner {
           'skill_inspect',
           'skill_resource_list',
           'skill_resource_read',
+          'skill_audit_all',
+          'skill_update_metadata',
+          'skill_repair_metadata',
           'skill_manifest_write',
           'skill_resource_write',
           'write_proposal',
@@ -1354,6 +1359,8 @@ export class BrainRunner {
           'skill_inspect',
           'skill_resource_list',
           'skill_resource_read',
+          'skill_audit_all',
+          'skill_repair_metadata',
           'skill_resource_write',
           'skill_resource_delete',
         ],
@@ -1837,9 +1844,11 @@ STRICT RULES:
 - Do not create new skills directly
 - Do not update cron jobs, configs, or team state
 - Your direct file writes are limited to the thought output file listed above, ${businessCandidatesFileRel} when business candidates exist, and the Active Work Ledger (Brain/active-work.jsonl)
-- You may update an existing skill only through skill_manifest_write or skill_resource_write, after reading/inspecting that existing skill
+- You may update an existing skill only through skill_manifest_write, skill_resource_write, or skill_update_metadata, after reading/inspecting that existing skill
+- You may call skill_audit_all for a light fleet metadata scan, but Thought must not call skill_repair_metadata or perform broad/batch repairs
 - Existing-skill updates must be low-risk, additive or narrowly corrective, evidence-backed, and scoped to triggers, metadata, SKILL.md guidance, examples, templates, schemas, or other skill resources
-- When calling skill_manifest_write or skill_resource_write, include changeType, evidence, appliedBy="brain_thought", and reason so Dream can audit the skill change ledger
+- Prefer skill_update_metadata for focused description/trigger/category/lifecycle metadata repairs; prefer skill_manifest_write or skill_resource_write for instruction/resource changes
+- When calling skill_manifest_write, skill_resource_write, or skill_update_metadata, include evidence/appliedBy="brain_thought"/reason fields when the tool supports them so Dream can audit the skill change ledger
 - You MAY read freely and do LIGHT research: read any workspace/project file, ${isPublicBrainProfile() ? 'and use web_search/web_fetch' : 'use read_source/grep_source/read_prom_file to inspect Prometheus\'s own code and tools, and use web_search/web_fetch'} to confirm the current state of an idea and scan for prior art. Keep research light (a couple of lookups); the Dream does the deep dive.
 
 WHO YOU ARE THIS RUN:
@@ -1921,8 +1930,9 @@ C. Skill And Workflow Signals
 
 C2. Existing Skill Maintenance
 - For high-confidence, low-risk updates to an existing skill, call skill_read first, then skill_inspect or skill_resource_list/read if useful
-- Apply the update during this Thought with skill_manifest_write or skill_resource_write only when the current skill clearly benefits from observed session evidence
-- Prefer small additions: one missing trigger, one troubleshooting guardrail, one compact example, one template/resource, or one corrected tool-order note
+- Use skill_audit_all only as a light metadata scan when trigger/description/category quality is relevant to the window
+- Apply the update during this Thought with skill_update_metadata, skill_manifest_write, or skill_resource_write only when the current skill clearly benefits from observed session evidence
+- Prefer small additions: one missing trigger, one metadata correction, one troubleshooting guardrail, one compact example, one template/resource, or one corrected tool-order note
 - Preserve imported/upstream-managed skills by using overlays or additive resources where possible
 - Never split, delete, radically rewrite, or create skills in Thought
 - If a new skill is warranted, record it as an Improvement Candidate for Dream instead of creating it
@@ -2137,9 +2147,10 @@ STRICT RULES:
 - You may only remove, lightly merge, or dedupe text that is clearly redundant, stale, contradictory, or unimportant after the latest dream.
 - If the memory is already good, make no memory edits. This is a successful outcome.
 - When uncertain, preserve the memory. It is better to leave a duplicate than erase something important.
-- You may audit recent Brain Skill Curator suggestions and auto-applied low-risk skill resources.
+- You may audit recent Brain Skill Curator suggestions, auto-applied low-risk skill resources, and fleet metadata health.
+- You may call skill_audit_all to detect metadata regressions and skill_repair_metadata mode="preview" to inspect possible repairs, but cleanup must not call skill_repair_metadata mode="apply".
 - You may reject weak pending curator suggestions, delete/revert clearly bad auto-applied curator resources, or refine an auto-applied resource only when the fix is obvious and strictly improves the same lesson.
-- Do not rewrite SKILL.md, archive/merge/delete skills, or make broad skill changes in cleanup.
+- Do not rewrite SKILL.md, archive/merge/delete skills, apply bulk metadata repairs, or make broad skill changes in cleanup.
 - Your only required write is the cleanup report at ${outFileRel}. Memory and skill cleanup edits are optional and conservative.
 
 STEP 1 - READ CURRENT MEMORY
@@ -2188,12 +2199,12 @@ Quality gate for curator lessons:
 6. SAFE SCOPE - it is additive or narrowly corrective; no broad rewrites here
 
 Allowed skill critic actions:
-- To inspect: skill_read, skill_inspect, skill_resource_list, skill_resource_read
+- To inspect: skill_read, skill_inspect, skill_resource_list, skill_resource_read, skill_audit_all, skill_repair_metadata mode="preview"
 - To reject a bad pending item: skill_curator action=reject id=<suggestion id>
 - To revert a bad applied resource: skill_resource_delete id=<skill id> path=<resource path>, then skill_curator action=reject id=<suggestion id>
 - To refine an applied resource: skill_resource_read, then skill_resource_write to the same path with clearer content and the same lesson scope
 
-Do not apply pending high-risk suggestions. Do not create a new skill. Do not delete anything except an auto-applied curator resource that clearly fails the quality gate.
+Do not apply pending high-risk suggestions. Do not create a new skill. Do not delete anything except an auto-applied curator resource that clearly fails the quality gate. Do not apply bulk metadata repair previews from cleanup; record them for the next Dream.
 
 STEP 4 - OPTIONAL MEMORY/SKILL EDITS
 If and only if an edit is clearly safe:
@@ -2226,6 +2237,11 @@ _(If no edits: "None - memory already looked solid enough to preserve as-is.")_
 | sc_... / title | skill-id | accept/reject/revert/refine/needs_review | none / rejected / deleted resource / rewrote resource | [quality-gate reason] |
 
 _(If no curator items needed action: "Reviewed curator state; no skill cleanup needed.")_
+
+## Fleet Metadata Regression Check
+| Check | Result | Action |
+|-------|--------|--------|
+| skill_audit_all / skill_repair_metadata preview | [flag count, target skills, or none] | deferred to Dream / no action |
 
 ## Preserved On Purpose
 - [Any duplicate-looking or messy item you intentionally kept because it may still matter, or "None noted."]
@@ -2361,6 +2377,14 @@ PHASE 4 - SKILL GARDENER REVIEW
 
 Use the thought Skill And Workflow Signals, ${skillEpisodesDirRel}/episodes.jsonl, and ${skillGardenerDirRel}/live-candidates.jsonl + workflow-episodes.jsonl to decide whether today's work should improve existing skills or create new ones.
 
+Fleet metadata lane:
+- Start with skill_audit_all when skill metadata quality, trigger coverage, or discovery quality is relevant to today's evidence
+- Use skill_repair_metadata with mode="preview" to inspect possible bulk repairs before applying anything
+- Only call skill_repair_metadata with mode="apply" and confirm=true for a curated repair list you have reviewed; never blindly apply the whole preview set
+- Use skill_update_metadata for one or a few targeted existing skills when description, triggers, categories, required tools, lifecycle, or name need repair
+- Preserve precise trigger phrasing: descriptions should start with "Use this skill when..." and triggers should include concrete user-language phrases that should surface the skill
+- Record fleet audit counts, repair previews reviewed, metadata updates applied, and skipped/deferred repairs in the Dream output
+
 Business workflow skill lane:
 - Treat repeated business workflows as first-class skill candidates: lead qualification, prospect research, outreach packet creation, quote/invoice/follow-up drafting, customer support handling, vendor research, project status reporting, social planning, content calendar work, website audits, CRM hygiene, and industry-specific operating workflows.
 - Decide whether the workflow should update an existing generic skill, add a reusable resource/template, or become a new business workflow skill proposal.
@@ -2413,12 +2437,12 @@ Skill lifecycle metadata:
 - Mark stale, replaced, or unsafe skills deprecated/archived only with strong evidence; otherwise defer
 
 For existing skill updates:
-- Apply the update automatically tonight with skill_resource_write or skill_manifest_write
+- Apply the update automatically tonight with skill_update_metadata, skill_resource_write, or skill_manifest_write
 - Do not write a proposal for existing-skill maintenance
-- Keep edits small, evidence-backed, and directly tied to observed workflow friction or repeated success patterns
-- After writing, call skill_read or skill_inspect to verify the updated skill is visible
-- When calling skill_resource_write or skill_manifest_write, include changeType, evidence, appliedBy="brain_dream", and reason so the skill change ledger is useful
-- The skill manager will snapshot the skill before writing and append the change ledger automatically; verify the update by inspecting the skill afterward
+- Keep edits small, evidence-backed, and directly tied to observed workflow friction, repeated success patterns, or fleet metadata audit findings
+- After writing, call skill_read, skill_inspect, or skill_audit_all scoped to the target skill when appropriate to verify the updated skill is visible and scored correctly
+- When calling skill_resource_write, skill_manifest_write, or skill_update_metadata, include changeType/evidence/appliedBy="brain_dream"/reason fields when the tool supports them so the skill change ledger is useful
+- The skill manager will snapshot the skill before writing and append the change ledger automatically where supported; verify the update by inspecting the skill afterward
 - Record the automatic update in the Dream output under "Skill Gardener Review" and "Skill Updates Applied"
 - If the update would delete resources, split a skill, radically rewrite a skill, or otherwise feels high-risk, defer it instead of proposing a routine evolution
 
@@ -2580,7 +2604,12 @@ _(If none: "None - no items passed the proposal gate tonight.")_
 ## Skill Updates Applied
 | Skill | Resource/Manifest | Change Made | Evidence |
 |-------|-------------------|-------------|---------|
-| [skill id] | SKILL.md / skill.json overlay / resource path | [what Dream updated or what Thought update was accepted] | [skill episode/thought/audit ref] |
+| [skill id] | metadata overlay / SKILL.md / skill.json overlay / resource path | [what Dream updated or what Thought update was accepted] | [skill episode/thought/audit ref] |
+
+## Fleet Skill Metadata Audit
+| Scan/Repair | Count Or Scope | Decision | Evidence |
+|-------------|----------------|----------|---------|
+| [skill_audit_all / skill_repair_metadata preview/apply / targeted skill_update_metadata] | [flag count or skill ids] | applied / partially applied / deferred / no action | [tool result or audit ref] |
 
 _(If none: "None - no existing skills needed automatic evolution tonight.")_
 

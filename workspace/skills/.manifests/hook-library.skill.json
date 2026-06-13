@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to design, document, inspect, or reuse hooks, webhooks, event hooks, automation triggers, callback handlers, or integration entrypoints. It helps capture hook contracts, payloads, routing, retry behavior, and verification steps.",
+  "triggers": [
+    "hook library",
+    "webhook",
+    "event hook",
+    "automation trigger",
+    "callback handler",
+    "integration hook",
+    "webhook payload",
+    "hook contract",
+    "event receiver",
+    "trigger library",
+    "webhook route",
+    "incoming event",
+    "hook documentation",
+    "reuse hook",
+    "webhook verification"
+  ],
+  "categories": [
+    "automation",
+    "integrations",
+    "documentation"
+  ],
+  "requiredTools": [
+    "integration_admin",
+    "webhook-receiver-framework"
+  ],
+  "lifecycle": "active",
+  "id": "hook-library"
+}

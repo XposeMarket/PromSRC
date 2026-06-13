@@ -32,6 +32,17 @@ const MODEL_METADATA: Record<string, { quality: 'low' | 'medium' | 'high' }> = {
 
 const CODEX_INSTRUCTIONS = 'You are an assistant that must fulfill image generation requests by using the image_generation tool when provided.';
 
+function appendSeparateOutputGuardrail(prompt: string, count: number): string {
+  if (count <= 1) return prompt;
+  return [
+    prompt,
+    '',
+    `Generate exactly ${count} separate standalone image outputs.`,
+    'Do not create a collage, grid, contact sheet, split-screen composition, or multi-panel layout.',
+    'Each output should be a complete full-frame image on its own.',
+  ].join('\n');
+}
+
 function coerceModelId(value?: string): string | undefined {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return undefined;
@@ -249,13 +260,52 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         'OpenAI-Beta': 'responses=experimental',
       };
 
-      const images = [];
+      const images: Awaited<ReturnType<typeof persistGeneratedImage>>[] = [];
       let revisedPrompt: string | null = null;
       const referenceImages = await resolveReferenceImages(request.reference_images || []);
-      for (let attempt = 0; attempt < request.count && images.length < request.count; attempt += 1) {
-        const content: any[] = [{ type: 'input_text', text: prompt }];
+      const promptForGeneration = appendSeparateOutputGuardrail(prompt, request.count);
+
+      const persistStreamImages = async (streamResult: CodexStreamResult) => {
+        if (revisedPrompt == null) {
+          revisedPrompt = streamResult.images.find((item) => item.revisedPrompt)?.revisedPrompt ?? null;
+        }
+
+        for (const generated of streamResult.images) {
+          if (images.length >= request.count) break;
+          const persisted = await persistGeneratedImage({
+            bytes: Buffer.from(generated.imageB64, 'base64'),
+            mimeType: 'image/png',
+            provider: this.id,
+            prompt,
+            outputDir: request.output_dir,
+            outputRunDir: request.output_run_dir,
+            saveToWorkspace: request.save_to_workspace,
+          });
+          images.push(persisted);
+          try {
+            await request.on_image_persisted?.(persisted);
+          } catch {}
+        }
+      };
+
+      const runCodexImageRequest = async (requestedCount: number, includeCountParam: boolean): Promise<{ ok: true; result: CodexStreamResult } | { ok: false; response: Response; rawText: string }> => {
+        const content: any[] = [{ type: 'input_text', text: requestedCount > 1 ? promptForGeneration : prompt }];
         for (const reference of referenceImages) {
           content.push({ type: 'input_image', image_url: reference.imageUrl });
+        }
+
+        const imageTool: Record<string, unknown> = {
+          type: 'image_generation',
+          model: API_MODEL,
+          size,
+          quality: meta.quality,
+          output_format: 'png',
+          background: 'opaque',
+          action: referenceImages.length ? 'edit' : 'generate',
+          partial_images: 1,
+        };
+        if (includeCountParam && requestedCount > 1) {
+          imageTool.n = requestedCount;
         }
 
         const response = await fetch(CODEX_ENDPOINT, {
@@ -270,16 +320,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
               role: 'user',
               content,
             }],
-            tools: [{
-              type: 'image_generation',
-              model: API_MODEL,
-              size,
-              quality: meta.quality,
-              output_format: 'png',
-              background: 'opaque',
-              action: referenceImages.length ? 'edit' : 'generate',
-              partial_images: 1,
-            }],
+            tools: [imageTool],
             tool_choice: {
               type: 'allowed_tools',
               mode: 'required',
@@ -291,20 +332,42 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         });
 
         if (!response.ok) {
-          const rawText = await response.text().catch(() => '');
+          return { ok: false, response, rawText: await response.text().catch(() => '') };
+        }
+        return { ok: true, result: await collectImageFromStream(response) };
+      };
+
+      if (request.count > 1) {
+        const batch = await runCodexImageRequest(request.count, true);
+        if (batch.ok && batch.result.images.length) {
+          await persistStreamImages(batch.result);
+        } else if (!batch.ok && batch.response.status === 401) {
+          return buildImageGenerationError({
+            provider: this.id,
+            model,
+            prompt,
+            aspectRatio: request.aspect_ratio,
+            error: `OpenAI image generation via Codex auth failed: ${String(batch.rawText || batch.response.statusText || batch.response.status).slice(0, 400)}`,
+            errorType: 'auth_required',
+          });
+        }
+      }
+
+      while (images.length < request.count) {
+        const single = await runCodexImageRequest(1, false);
+        if (!single.ok) {
           if (images.length) break;
           return buildImageGenerationError({
             provider: this.id,
             model,
             prompt,
             aspectRatio: request.aspect_ratio,
-            error: `OpenAI image generation via Codex auth failed: ${String(rawText || response.statusText || response.status).slice(0, 400)}`,
-            errorType: response.status === 401 ? 'auth_required' : 'api_error',
+            error: `OpenAI image generation via Codex auth failed: ${String(single.rawText || single.response.statusText || single.response.status).slice(0, 400)}`,
+            errorType: single.response.status === 401 ? 'auth_required' : 'api_error',
           });
         }
 
-        const streamResult = await collectImageFromStream(response);
-        if (!streamResult.images.length) {
+        if (!single.result.images.length) {
           if (images.length) break;
           return buildImageGenerationError({
             provider: this.id,
@@ -316,23 +379,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
           });
         }
 
-        if (revisedPrompt == null) {
-          revisedPrompt = streamResult.images.find((item) => item.revisedPrompt)?.revisedPrompt ?? null;
-        }
-
-        for (const generated of streamResult.images) {
-          if (images.length >= request.count) break;
-          // Codex rejects tools[0].n, so multi-image requests are fanned out
-          // into multiple one-image tool calls instead of one batched call.
-          images.push(await persistGeneratedImage({
-            bytes: Buffer.from(generated.imageB64, 'base64'),
-            mimeType: 'image/png',
-            provider: this.id,
-            prompt,
-            outputDir: request.output_dir,
-            saveToWorkspace: request.save_to_workspace,
-          }));
-        }
+        await persistStreamImages(single.result);
       }
 
       if (!images.length) {

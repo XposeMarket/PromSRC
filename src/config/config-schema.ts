@@ -308,8 +308,6 @@ export const PrometheusConfigSchema = z.object({
     switch_model_medium:           z.string().optional(), // careful tier (e.g. "openai_codex/gpt-5.1-codex-mini")
     // Meta-coordinator model for ask_team_coordinator sessions
     coordinator:                   z.string().optional(),
-    // Ephemeral background_spawn agents
-    background_agent:              z.string().optional(),
   }).optional(),
 
   agent_model_default_templates: z.array(z.object({
@@ -334,7 +332,6 @@ export const PrometheusConfigSchema = z.object({
       switch_model_low:              z.string().optional(),
       switch_model_medium:           z.string().optional(),
       coordinator:                   z.string().optional(),
-      background_agent:              z.string().optional(),
     }).optional().default({}),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),

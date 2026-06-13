@@ -1211,7 +1211,7 @@ export async function loadLatestUsableSession() {
 export async function loadMobileChatSession(sessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
-  const r = await mfetch(`/api/sessions/${encodeURIComponent(sid)}`);
+  const r = await mfetch(`/api/sessions/${encodeURIComponent(sid)}?historyLimit=300&processLimit=500&includeToolLog=0`);
   return r?.session || null;
 }
 
@@ -1366,17 +1366,26 @@ export async function loadMobileFileScreenshot(path) {
   return mfetch(`/api/preview/screenshot?path=${encodeURIComponent(path)}`);
 }
 
-export async function stopMobileMainChat(sessionId) {
+export async function stopMobileMainChat(sessionId, options = {}) {
+  const body = { sessionId };
+  if (options && typeof options === 'object') {
+    if (options.runtimeId) body.runtimeId = String(options.runtimeId);
+    if (options.source) body.source = String(options.source);
+  } else if (typeof options === 'string' && options) {
+    body.source = options;
+  }
   return mfetch('/api/mobile/commands/stop-now', {
     method: 'POST',
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify(body),
   });
 }
 
-export async function stopMobileRuntime(id) {
+export async function stopMobileRuntime(id, options = {}) {
+  const body = { id };
+  if (options && typeof options === 'object' && options.source) body.source = String(options.source);
   return mfetch('/api/mobile/commands/stop', {
     method: 'POST',
-    body: JSON.stringify({ id }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -317,8 +317,6 @@ export interface AgentModelDefaults {
   team_subagent?: string;
   /** Background tasks / scheduled cron jobs */
   background_task?: string;
-  /** Ephemeral background_spawn agents */
-  background_agent?: string;
   /** Per-role planner subagents */
   subagent_planner?: string;
   /** Per-role orchestrator subagents */

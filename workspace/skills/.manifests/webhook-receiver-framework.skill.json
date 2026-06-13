@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to create, configure, test, debug, secure, or document webhook receivers, incoming event endpoints, callback URLs, signature verification, retry handling, or event ingestion pipelines. It covers payload contracts and verification.",
+  "triggers": [
+    "webhook receiver",
+    "webhook framework",
+    "incoming webhook",
+    "callback URL",
+    "signature verification",
+    "event ingestion",
+    "webhook endpoint",
+    "webhook payload",
+    "retry handling",
+    "webhook security",
+    "test webhook",
+    "configure webhook",
+    "webhook route",
+    "receive events",
+    "webhook debug"
+  ],
+  "categories": [
+    "integrations",
+    "webhooks",
+    "engineering"
+  ],
+  "requiredTools": [
+    "integration_admin",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "id": "webhook-receiver-framework"
+}

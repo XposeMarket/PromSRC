@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks to create, revise, or export PowerPoint/PPTX-style presentations, slide decks, structured slide content, speaker notes, visual slide outlines, or presentation artifacts. It emphasizes slide hierarchy, concise copy, and export-ready structure.",
+  "triggers": [
+    "pptx",
+    "powerpoint",
+    "presentation",
+    "slide deck",
+    "create slides",
+    "export deck",
+    "speaker notes",
+    "presentation outline",
+    "make a powerpoint",
+    "slide content",
+    "deck writer",
+    "client presentation",
+    "sales presentation",
+    "investor slides",
+    "training deck"
+  ],
+  "categories": [
+    "presentation",
+    "writing",
+    "documents"
+  ],
+  "lifecycle": "active",
+  "name": "PPTX Writer",
+  "id": "pptx-writer"
+}

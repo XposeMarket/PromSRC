@@ -1,0 +1,12 @@
+{
+  "skillId": "prometheus-x-research-replies",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-12T04:46:56.270Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-x-research-replies",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "f08cf0738d4e0c1d"
+}

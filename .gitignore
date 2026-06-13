@@ -225,3 +225,9 @@ workspace/generated/**
 !workspace/generated/
 !workspace/generated/**/
 !workspace/generated/.gitkeep
+# prom_repo_sync: auto-ignored exclude-matched noise
+*.tmp
+*.bak
+*.mp4
+*.mov
+*.webm

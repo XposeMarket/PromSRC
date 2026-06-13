@@ -214,3 +214,60 @@ registerEffect({
     ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
   },
 });
+
+// ── Cinematic filter looks (CapCut-style one-click filters) ───────────────────
+// Each preset is expressed as a set of CSS-filter primitives blended from the
+// identity by an intensity factor (0 = original, 1 = full look, up to 2 = boosted).
+
+function _clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, Number(v))); }
+
+export const FILTER_PRESETS = [
+  { id: 'none',      label: 'Original',  f: {} },
+  { id: 'vivid',     label: 'Vivid',     f: { saturate: 1.45, contrast: 1.12 } },
+  { id: 'warm',      label: 'Warm',      f: { sepia: 0.28, saturate: 1.30, brightness: 1.05, 'hue-rotate': -12 } },
+  { id: 'cool',      label: 'Cool',      f: { saturate: 1.12, brightness: 1.04, 'hue-rotate': 14, contrast: 1.05 } },
+  { id: 'mono',      label: 'B&W',       f: { grayscale: 1, contrast: 1.08 } },
+  { id: 'noir',      label: 'Noir',      f: { grayscale: 1, contrast: 1.45, brightness: 0.90 } },
+  { id: 'vintage',   label: 'Vintage',   f: { sepia: 0.50, saturate: 1.20, contrast: 0.95, brightness: 1.05 } },
+  { id: 'fade',      label: 'Fade',      f: { contrast: 0.82, brightness: 1.12, saturate: 0.82 } },
+  { id: 'dramatic',  label: 'Dramatic',  f: { contrast: 1.40, saturate: 1.20, brightness: 0.95 } },
+  { id: 'cyberpunk', label: 'Cyberpunk', f: { saturate: 1.60, 'hue-rotate': -22, contrast: 1.20 } },
+  { id: 'dreamy',    label: 'Dreamy',    f: { brightness: 1.10, saturate: 1.12, contrast: 0.95, blur: 0.6 } },
+  { id: 'film',      label: 'Film',      f: { sepia: 0.20, contrast: 1.16, saturate: 1.16 } },
+  { id: 'sunset',    label: 'Sunset',    f: { sepia: 0.40, saturate: 1.40, 'hue-rotate': -18, brightness: 1.05 } },
+  { id: 'arctic',    label: 'Arctic',    f: { brightness: 1.08, saturate: 0.90, 'hue-rotate': 18, contrast: 1.08 } },
+  { id: 'invert',    label: 'Negative',  f: { invert: 1 } },
+];
+
+const FILTER_IDENTITY = {
+  brightness: 1, contrast: 1, saturate: 1,
+  sepia: 0, grayscale: 0, invert: 0, blur: 0, 'hue-rotate': 0,
+};
+
+export function buildCinematicFilter(presetId, intensity = 1) {
+  const preset = FILTER_PRESETS.find(p => p.id === presetId);
+  if (!preset || presetId === 'none' || !preset.f || !Object.keys(preset.f).length) return '';
+  const t = _clamp(intensity ?? 1, 0, 2);
+  const parts = [];
+  for (const [key, target] of Object.entries(preset.f)) {
+    const ident = FILTER_IDENTITY[key] ?? 0;
+    const val = ident + (target - ident) * t;
+    if (key === 'hue-rotate')   parts.push(`hue-rotate(${val.toFixed(1)}deg)`);
+    else if (key === 'blur')    parts.push(`blur(${Math.max(0, val).toFixed(2)}px)`);
+    else                        parts.push(`${key}(${Math.max(0, val).toFixed(3)})`);
+  }
+  return parts.join(' ');
+}
+
+export function getFilterPresets() { return FILTER_PRESETS.slice(); }
+
+registerEffect({
+  id: 'cinematic',
+  label: 'Filter',
+  defaultParams: { preset: 'vivid', intensity: 1 },
+  paramDefs: [
+    { key: 'preset',    label: 'Look',     type: 'select', options: FILTER_PRESETS.map(p => p.id) },
+    { key: 'intensity', label: 'Strength', type: 'number', min: 0, max: 2, step: 0.05 },
+  ],
+  preFilter: (p) => buildCinematicFilter(p.preset || 'vivid', p.intensity ?? 1),
+});
