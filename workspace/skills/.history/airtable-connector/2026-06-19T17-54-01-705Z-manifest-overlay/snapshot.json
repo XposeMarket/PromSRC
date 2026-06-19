@@ -1,0 +1,12 @@
+{
+  "skillId": "airtable-connector",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:01.711Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\airtable-connector",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "b2456db4ecaa52d3"
+}

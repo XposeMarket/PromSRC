@@ -1,36 +1,42 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for Prometheus source edits, web-ui edits, self-edits, dev-source approvals, source proposals, implementation plans, code-change proposals, or rigorous inspection before changing Prometheus internals. It enforces exact files, evidence, verification, and build/restart expectations.",
+  "description": "Use this skill when Raul asks Prometheus to change its own src, web-ui, mobile UI, gateway, routes, tool definitions, prompts, or internal behavior. It guides dev-edit/source-edit rigor, evidence, verification, and self-doc updates.",
   "triggers": [
-    "src edit",
-    "source edit",
-    "Prometheus self edit",
-    "web-ui edit",
-    "code change proposal",
-    "request dev source edit",
-    "self-edit Prometheus",
-    "edit Prometheus source",
-    "proposal rigor",
-    "exact source edits",
-    "affected files",
-    "build verification",
-    "gateway restart",
-    "dev approval",
-    "source inspection"
+    "fix Prometheus",
+    "update Prometheus",
+    "change your source",
+    "improve your internals",
+    "Prometheus bug",
+    "self edit",
+    "dev edit",
+    "web-ui source change",
+    "mobile source fix",
+    "gateway route fix",
+    "tool schema bug",
+    "internal behavior change",
+    "edit src",
+    "edit web-ui",
+    "Prometheus feature",
+    "fix the app",
+    "change the mobile app",
+    "fix your UI",
+    "update self docs",
+    "source edit approval"
   ],
   "categories": [
-    "prometheus-source",
-    "engineering",
-    "proposals"
+    "prometheus",
+    "source-edit",
+    "dev-edit",
+    "verification"
   ],
   "requiredTools": [
-    "set_current_model",
     "prometheus_source_read",
-    "request_dev_source_edit",
-    "write_proposal"
+    "prometheus_source_write",
+    "workspace_write",
+    "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "Src Edit Proposal Rigor",
+  "name": "Source Edit Proposal Rigor",
   "id": "src-edit-proposal-rigor"
 }

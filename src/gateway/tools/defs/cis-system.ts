@@ -5,26 +5,29 @@ import { filterPublicBuildToolDefs, getPublicBuildAllowedCategories } from '../.
 
 export function getCisSystemTools(): any[] {
   const categoryDocs: Array<[string, string]> = [
-    ['browser_automation', 'browser_automation - web UI automation tools (browser_open, browser_click, browser_fill, save_site_shortcut, etc.)'],
-    ['desktop_automation', 'desktop_automation - OS/desktop automation tools (desktop_screenshot, desktop_click, desktop_launch_app, etc.)'],
-    ['agents_and_teams', 'agents_and_teams - standalone subagents, managed teams, team chat, dispatches, and agent updates.'],
-    ['prometheus_source_read', 'prometheus_source_read - Prometheus app/source inspection tools (read_source, grep_source, read_prom_file, etc.)'],
-    ['prometheus_source_write', 'prometheus_source_write - Prometheus app/source editing tools for approved dev proposal tasks only.'],
-    ['workspace_write', 'workspace_write - workspace file mutation and local command/process tools (create_file, replace_lines, run_command, start_process, process_status/process_log/process_wait/process_kill/process_submit, etc.)'],
-    ['advanced_memory', 'advanced_memory - memory graph, timeline, project-scoped search, related-record, and index refresh tools.'],
-    ['media_assets', 'media_assets - download and image analysis tools (download_url, download_media, analyze_image). Note: analyze_video is core/always available.'],
-    ['media_quality', 'media_quality - image/video validation and render inspection tools (contrast, text overflow, frame renders, caption/audio timing).'],
-    ['automations', 'automations - advanced automation management/diagnostics (history, detail, outputs, patching, stuck control, task_control, run_task_now, internal_watch). schedule_job, timer, and automation_dashboard are core.'],
-    ['external_apps', 'external_apps - only tools for currently connected external apps (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian, X/Twitter, xAI/Grok). Use connector_list first.'],
-    ['integration_admin', 'integration_admin - MCP server, webhook, and integration setup/admin tools.'],
-    ['social_intelligence', 'social_intelligence - social profile intelligence and reporting tools.'],
-    ['proposal_admin', 'proposal_admin - proposal inspection/editing administration tools.'],
-    ['mcp_server_tools', 'mcp_server_tools - dynamic tools exposed by connected MCP servers (shown as mcp__server__tool). Use only for trusted servers.'],
-    ['composite_tools', 'composite_tools - saved multi-step composite tools plus create/get/edit/delete/list composite management tools.'],
-    ['creative_mode', 'creative_mode - normal main-chat creative editor tools and workspace selectors.'],
-    ['skills', 'skills - skill authoring, packaging, and maintenance (skill_create, bundles, import/export, manifest/resource writes, skill_inspect) plus fleet metadata ops (skill_audit_all, skill_update_metadata, skill_repair_metadata). Read-only skill_list/skill_read/skill_resource_list/skill_resource_read are core.'],
-    ['model_management', 'model_management - agent fleet model administration and templates (get/set_agent_model, *_agent_model_template). switch_model and set_current_model are core.'],
-    ['business', 'business - business entity lifecycle administration (list/read/write_entity, append_entity_event). business_context_mode is core.'],
+    ['browser_automation', 'browser_automation - browser UI control and page extraction.'],
+    ['desktop_automation', 'desktop_automation - OS windows, screenshots, mouse/keyboard.'],
+    ['agents_and_teams', 'agents_and_teams - subagents, teams, dispatches, team chat.'],
+    ['prometheus_source_read', 'prometheus_source_read - inspect Prometheus source/web-ui/root files.'],
+    ['prometheus_source_write', 'prometheus_source_write - approved Prometheus source edits.'],
+    ['workspace_write', 'workspace_write - workspace files plus local commands/processes.'],
+    ['advanced_memory', 'advanced_memory - memory graph, timeline, related records, index ops.'],
+    ['media_assets', 'media_assets - download/analyze images, video, audio, remote assets.'],
+    ['creative_quality', 'creative_quality - creative image/video QA checks.'],
+    ['automations', 'automations - advanced schedule/task/watch diagnostics and repair.'],
+    ['external_apps', 'external_apps - connected app tools; call connector_list first.'],
+    ['integration_admin', 'integration_admin - MCP/webhook/integration setup.'],
+    ['social_intelligence', 'social_intelligence - social profile analysis.'],
+    ['proposal_admin', 'proposal_admin - edit pending proposals.'],
+    ['mcp_server_tools', 'mcp_server_tools - connected MCP tools as mcp__server__tool.'],
+    ['composite_tools', 'composite_tools - saved multi-step tools.'],
+    ['creative_basic', 'creative_basic - Creative canvas/project/element/style/export basics.'],
+    ['creative_image', 'creative_image - Creative image, asset, layer, cutout, icon, generation tools.'],
+    ['creative_video', 'creative_video - Creative video, shot, storyboard, audio, caption, sequence/composition tools.'],
+    ['creative_hyperframes', 'creative_hyperframes - HyperFrames and HTML motion clip/template tools.'],
+    ['skills', 'skills - skill authoring/maintenance beyond skill_list/skill_read.'],
+    ['model_management', 'model_management - agent model defaults/templates.'],
+    ['business', 'business - structured business entity files/events.'],
   ];
   const categoryEnum = getPublicBuildAllowedCategories([
     'browser_automation',
@@ -35,7 +38,7 @@ export function getCisSystemTools(): any[] {
     'workspace_write',
     'advanced_memory',
     'media_assets',
-    'media_quality',
+    'creative_quality',
     'automations',
     'external_apps',
     'integration_admin',
@@ -43,15 +46,18 @@ export function getCisSystemTools(): any[] {
     'proposal_admin',
     'mcp_server_tools',
     'composite_tools',
-    'creative_mode',
+    'creative_basic',
+    'creative_image',
+    'creative_video',
+    'creative_hyperframes',
     'skills',
     'model_management',
     'business',
   ] as const);
   const requestToolCategoryDescription =
-    'Activate a tool category for this session, unlocking those tool schemas for use. ' +
-    'Once activated, the category stays active for the entire session. ' +
-    'Available categories:\n' +
+    'Activate one on-demand tool category. Default scope is turn, so large tool groups do not stay loaded after the current user turn. ' +
+    'Use scope=session only when the user is clearly entering a longer workflow that should keep the category available across later turns. ' +
+    'Use scope=next_turn for the current turn plus one follow-up user turn, or scope=ttl with turns for a bounded multi-turn workflow. Available categories:\n' +
     categoryDocs
       .filter(([category]) => categoryEnum.includes(category as any))
       .map(([, line]) => `  ${line}`)
@@ -672,10 +678,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'ask_prometheus_questions',
         description:
-          'Ask the user 1-5 structured clarification questions and wait for their response before continuing the workflow. ' +
-          'Use this when a decision, preference, missing requirement, or tradeoff would materially improve the next step. ' +
-          'Each question can be single_select, multi_select, or text. Include concise options for select questions and allow Other unless it would be unsafe or nonsensical. ' +
-          'The question appears as an interactive Prometheus Question card in chat and Telegram; Telegram option buttons can capture the user\'s next message for Other.',
+          'Ask the user 1-5 structured questions as an interactive card, then wait for the response. Use when a missing decision/preference materially affects the next step.',
         parameters: {
           type: 'object',
           required: ['title', 'prompt', 'questions'],
@@ -751,10 +754,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'request_dev_source_edit',
         description:
-          'Dev-only fast approval request for Prometheus to edit specific src/ or web-ui/ files in the current chat without creating a full proposal. ' +
-          'Use only when the user has asked for an immediate source fix and the exact affected files are known. Public builds disable this tool completely. ' +
-          'Approval unlocks only the listed files plus the built-in workspace self-doc dirs for this session; it never grants global or always-on source write access. ' +
-          'Include a grounded plan with user request, evidence from inspected files, current state, fix, execution steps, expected post-edit workflow, and verification.',
+          'Request dev-only approval to edit listed Prometheus src/web-ui files in this chat. Use for immediate known-file fixes; approval unlocks only those files plus self docs.',
         parameters: {
           type: 'object',
           required: ['files', 'reason', 'plan'],
@@ -871,10 +871,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'write_proposal',
 	        description:
-	          'Submit a proposal for human approval. Use for any change that requires human review before execution. Every executable proposal chooses exactly one execution_mode (lane): general, action, or code_change. The proposal will appear in the Prometheus proposals panel for approval or denial. ' +
-            'When used by a team manager, executor_agent_id is REQUIRED and must name a subagent on that same team; approved execution will use that subagent model/context and report back to team chat. ' +
-            'For executable proposals, include execution_steps as the approved checklist the executor should follow after approval; dispatch requires at least two steps. ' +
-	          'Lanes: general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file/external side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook) and REQUIRES a "## Current state" section proving the gap still exists right now. code_change = Prometheus\'s OWN src/ or web-ui/ self-edit only; REQUIRED headings in details: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Editing one of the user\'s OWN projects is action, never code_change.',
+	          'Submit a human-approved proposal. Choose one execution_mode: general (read/research/internal orchestration), action (user-world work), or code_change (Prometheus src/web-ui self-edit). Include execution_steps for executable proposals.',
         parameters: {
           type: 'object',
           required: ['type', 'title', 'summary', 'details'],
@@ -1025,12 +1022,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_push',
         description:
-          'Dev-only: stage all sync-eligible working-tree changes, commit them, and push to origin on the current branch. ' +
-          'Use this to sync local edits up to GitHub so another machine (e.g. Mac ↔ desktop) can pull them. ' +
-          'SYNC EXCLUDES: respects .gitignore plus repo-local .prom-repo-sync-ignore and automatically avoids embedded Git repositories/scratch folders, so local downloaded agent repos, audit/debug logs, media, and bulky workspace artifacts are not pushed by accident. ' +
-          'COMMIT MESSAGE: if the user gave an explicit message, pass it verbatim. If they did NOT (e.g. "just push my changes"), call this tool WITHOUT a message first — it stages eligible changes and returns the real git diff/stat. Read that diff, then call again with a concise, accurate message that summarizes the ACTUAL changes, e.g. "Fix: voice debug crash on reconnect", "Features added: mobile model badge; Bug fixes: mobile router back nav". Never invent a generic placeholder — base it on the diff. ' +
-          'AUTH: uses a saved GitHub PAT (GITHUB_PAT/GITHUB_TOKEN env var, or one previously saved via set_pat) when available, otherwise the machine\'s git credential helper. If auth fails and no PAT is available, the tool tells you to ask the user for a PAT and re-call with set_pat. ' +
-          'If there are no local changes, it still pushes any unpushed commits (no message needed). Public builds disable this tool.',
+          'Dev-only: stage sync-eligible Prometheus repo changes, commit, and push. Omit message first to get a diff/stat for an accurate commit message. Supports set_pat for auth recovery.',
         parameters: {
           type: 'object',
           required: [],
@@ -1047,11 +1039,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_pull',
         description:
-          'Dev-only: pull the latest commits for the current branch from origin into the local Prometheus repo. ' +
-          'Use this to bring down edits made on another machine (e.g. Mac ↔ desktop). ' +
-          'Runs git pull --no-edit; if the working tree has conflicting uncommitted changes the pull may fail and the error is returned for you to resolve. ' +
-          'AUTH: uses a saved GitHub PAT (GITHUB_PAT/GITHUB_TOKEN env var, or one previously saved via prom_repo_push set_pat) when available, otherwise the machine\'s git credential helper. If auth fails and no PAT is available, the tool tells you to ask the user for a PAT (save it via prom_repo_push set_pat, then retry). ' +
-          'Note: this does NOT rebuild or restart — follow with prom_apply_dev_changes or gateway_restart if the pull changed src/ or web-ui/. Public builds disable this tool.',
+          'Dev-only: git pull --no-edit for the Prometheus repo. Use to bring down edits from another machine. Does not rebuild/restart; use prom_apply_dev_changes after source/UI changes.',
         parameters: {
           type: 'object',
           required: [],
@@ -1065,14 +1053,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_sync',
         description:
-          'Dev-only: the SAFE way to sync edits between machines (e.g. Mac ↔ desktop) without overwriting anything. ' +
-          'It (1) stages + commits all sync-eligible local changes, (2) git pull --no-edit to MERGE in whatever the other machine pushed, then (3) pushes the combined result. ' +
-          'SYNC EXCLUDES: respects .gitignore plus repo-local .prom-repo-sync-ignore and automatically avoids embedded Git repositories/scratch folders, so local downloaded agent repos, audit/debug logs, media, and bulky workspace artifacts are not pushed by accident. ' +
-          'Because step 2 merges, edits to DIFFERENT files (e.g. mobile pages here + prompt-context on the other machine) combine automatically — nothing is lost. ' +
-          'If the SAME lines of the SAME file were changed on both machines, git reports a real conflict: the merge is aborted (your local commit stays safe, nothing is pushed) and the conflicting files are returned for you to resolve. ' +
-          'COMMIT MESSAGE: pass the user\'s message verbatim, or omit it to first get the diff back and author an accurate one. If omitted and a diff is returned, call prom_repo_sync again with the message — do not switch to prom_repo_push, and do not emulate sync with run_command/raw git unless this tool is unavailable. ' +
-          'After a successful sync, run prom_repo_sync (or prom_repo_pull) on the OTHER machine to bring the combined changes down there too. ' +
-          'AUTH: same PAT handling as prom_repo_push (set_pat to save a token). Does NOT rebuild/restart — follow with prom_apply_dev_changes if src/ or web-ui/ changed. Public builds disable this tool.',
+          'Dev-only safe two-way sync: commit local eligible changes, pull/merge origin, then push. Omit message first to get diff/stat; if conflicts occur, no push happens. Does not rebuild/restart.',
         parameters: {
           type: 'object',
           required: [],
@@ -1096,7 +1077,18 @@ export function getCisSystemTools(): any[] {
             category: {
               type: 'string',
               enum: categoryEnum,
-              description: 'Category to activate for this session',
+              description: 'Category to activate',
+            },
+            scope: {
+              type: 'string',
+              enum: ['turn', 'next_turn', 'ttl', 'session'],
+              description: 'Activation lifetime. Defaults to turn. Use session only for explicit ongoing workflows.',
+            },
+            turns: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 12,
+              description: 'When scope is ttl, number of user turns to keep this category active.',
             },
           },
         },
@@ -1206,8 +1198,16 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'skill_list',
-        description: 'List all available skills with their ID, emoji, and description. Call this before browser/desktop automation, file edits, or other execution-heavy work to check for a relevant playbook, then use skill_read(id) for full instructions.',
-        parameters: { type: 'object', required: [], properties: {} },
+        description: 'Compact skill discovery. Returns skill IDs/names by default; use query to narrow before skill_read(id). Descriptions are omitted unless include_descriptions:true is explicitly needed.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            query: { type: 'string', description: 'Optional filter across id/name/description/triggers/categories/requiredTools.' },
+            limit: { type: 'number', description: 'Maximum skills to return. Default 24, hard cap 80.' },
+            include_descriptions: { type: 'boolean', description: 'Include short descriptions. Default false to keep prompt usage low.' },
+          },
+        },
       },
     },
     {
@@ -1477,7 +1477,9 @@ export function getCisSystemTools(): any[] {
           properties: {
             id: { type: 'string', description: 'Skill ID from skill_list.' },
             description: { type: 'string', description: 'New description. Should start with "Use this skill when..." and include concrete trigger phrasing.' },
-            triggers: { type: 'string', description: 'Comma-separated trigger phrases (or a JSON array). Aim for 5+ specific phrases.' },
+            triggers: { type: 'string', description: 'Replace all trigger phrases with a comma-separated list or JSON array. Aim for 5+ specific phrases.' },
+            addTriggers: { type: 'string', description: 'Comma-separated trigger phrases or JSON array to append while preserving existing triggers. Prefer this for trigger-only fixes.' },
+            removeTriggers: { type: 'string', description: 'Comma-separated trigger phrases or JSON array to remove from existing triggers.' },
             categories: { type: 'string', description: 'Comma-separated categories.' },
             requiredTools: { type: 'string', description: 'Comma-separated required tool/category names.' },
             lifecycle: { type: 'string', description: 'Lifecycle state: draft, active, experimental, deprecated, archived.' },
@@ -1518,6 +1520,32 @@ export function getCisSystemTools(): any[] {
               },
             },
             reason: { type: 'string', description: 'Optional rationale for the change ledger.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_ui_card',
+        description:
+          'Render a native Prometheus UI card. Use this instead of plain text when the response benefits from a structured visual card. Choose type, then put the card-specific fields in payload. Existing card renderers handle validation.',
+        parameters: {
+          type: 'object',
+          required: ['type', 'payload'],
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['sources', 'product_carousel', 'agent_work', 'market', 'stocks', 'weather', 'comparison', 'chart', 'run_result', 'prediction_market', 'map'],
+              description: 'Which card renderer to use.',
+            },
+            title: { type: 'string', description: 'Optional title copied into payload.title when the target card supports it.' },
+            payload: {
+              type: 'object',
+              description:
+                'Card-specific payload. Examples: sources={items:[...]}; product_carousel={items:[...]}; market={coins:[...]}; stocks={symbols:[...]}; weather={location:"City"}; chart={series:[...]}; comparison={columns:[...],rows:[...]}; map={markers:[...]}.',
+              additionalProperties: true,
+            },
           },
         },
       },

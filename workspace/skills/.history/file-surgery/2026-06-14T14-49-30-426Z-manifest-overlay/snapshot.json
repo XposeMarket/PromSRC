@@ -1,0 +1,12 @@
+{
+  "skillId": "file-surgery",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-14T14:49:30.430Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\file-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "3d49b541eb32b94c"
+}

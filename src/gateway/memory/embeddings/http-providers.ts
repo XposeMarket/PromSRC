@@ -77,6 +77,7 @@ function createHttpEmbeddingProvider(options: HttpProviderOptions): MemoryEmbedd
         method: 'POST',
         headers,
         body: JSON.stringify(options.buildBody(inputs, model)),
+        signal: AbortSignal.timeout(8000),
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
@@ -160,6 +161,7 @@ export function createOpenAiCodexOAuthEmbeddingProvider(): MemoryEmbeddingProvid
           ...(await resolveAuthHeaders()),
         },
         body: JSON.stringify({ model, input: inputs }),
+        signal: AbortSignal.timeout(8000),
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');

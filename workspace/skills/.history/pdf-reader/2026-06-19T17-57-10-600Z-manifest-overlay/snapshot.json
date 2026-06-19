@@ -1,0 +1,11 @@
+{
+  "skillId": "pdf-reader",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:57:10.603Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\pdf-reader",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "bb03af9cb8d34385"
+}

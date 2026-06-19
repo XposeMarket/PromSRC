@@ -1,0 +1,12 @@
+{
+  "skillId": "dev-debugging",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:04.514Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\dev-debugging",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "1a2ee2a67fd06cd0"
+}

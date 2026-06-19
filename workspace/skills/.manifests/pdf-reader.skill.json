@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when reading, extracting, summarizing, searching, OCRing, converting, or analyzing PDF files, including scanned PDFs, tables, clauses, forms, reports, and long PDF documents.",
+  "triggers": [
+    "read this PDF",
+    "summarize PDF",
+    "extract PDF text",
+    "OCR PDF",
+    "search PDF",
+    "PDF table",
+    "convert PDF to text",
+    "analyze PDF",
+    "scanned PDF",
+    "pull clauses from PDF",
+    "inspect PDF form",
+    "PDF report summary",
+    "parse PDF",
+    "read attached PDF",
+    "PDF evidence",
+    "extract data from PDF"
+  ],
+  "categories": [
+    "documents",
+    "pdf",
+    "reading",
+    "ocr"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "media_assets"
+  ],
+  "lifecycle": "active",
+  "name": "PDF Reader",
+  "id": "pdf-reader"
+}

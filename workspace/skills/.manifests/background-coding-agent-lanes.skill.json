@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when coordinating background coding agents, parallel repo investigation, isolated implementation lanes, review lanes, diffs, worktree-style task separation, or multiple coding agents working without stepping on each other.",
+  "triggers": [
+    "background coding agent",
+    "parallel coding agents",
+    "split coding work",
+    "agent implementation lane",
+    "repo investigation lane",
+    "review lane",
+    "have another agent scan",
+    "parallel source investigation",
+    "isolated worktree",
+    "coding subagent",
+    "dispatch coding agent",
+    "compare diffs",
+    "concurrent implementation",
+    "agent code review",
+    "multi-agent coding",
+    "background repo scan"
+  ],
+  "categories": [
+    "prometheus",
+    "coding",
+    "agents",
+    "workflow"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "agents_and_teams"
+  ],
+  "lifecycle": "active",
+  "id": "background-coding-agent-lanes"
+}

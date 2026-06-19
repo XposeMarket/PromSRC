@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "integration-setup",
+  "name": "Integration Setup",
+  "description": "Research, define, install, and verify Prometheus integrations for external services using connector definitions, MCP servers, webhook receivers, OAuth/API setup, credential-safe configuration, and connector-first smoke tests.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "connect to",
+    "connect me to",
+    "set up integration",
+    "add integration",
+    "hook up",
+    "use this service",
+    "monitor my",
+    "external service",
+    "MCP server",
+    "MCP preset",
+    "webhook integration",
+    "OAuth setup",
+    "API integration",
+    "Connections panel",
+    "connector setup",
+    "integration quick setup",
+    "add service tools",
+    "install connector",
+    "verify connector",
+    "connector smoke test"
+  ],
+  "categories": [
+    "integrations",
+    "connectors",
+    "mcp",
+    "webhooks",
+    "oauth"
+  ],
+  "requiredTools": [
+    "connector_list",
+    "web_search",
+    "web_fetch"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true,
+    "credentials": true
+  },
+  "resources": [
+    {
+      "path": "notes/connector-first-smoke-tests-2026-05-11.md",
+      "type": "doc",
+      "description": "Evidence-backed connector-first smoke-test guardrail: validate connected services via connector tools first and avoid CLI substitution when Raul is testing connectors."
+    }
+  ]
+}

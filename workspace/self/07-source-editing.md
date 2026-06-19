@@ -25,6 +25,8 @@ Current proposal tool families include:
 - `read_source`, `grep_source`, `source_stats`, `write_source`, `find_replace_source`, etc.
 - `read_webui_source`, `grep_webui_source`, `webui_source_stats`, `write_webui_source`, etc.
 - `list_prom`, `read_prom_file`, `grep_prom`, `write_prom_file`, etc.
+- `read_files_batch`, `file_tree`, and `search_files` are also available when `prometheus_source_read` is active for token-efficient self-edit inspection: use `read_files_batch` with `src/...` and `web-ui/...` paths for multi-file source reads, `file_tree(path:"src/...")` / `file_tree(path:"web-ui/...")` for compact structure, and `search_files(directory:"src/...")` / `search_files(directory:"web-ui/...")` for source-scoped search with the workspace-style argument shape
+
 
 The current auto-execution boundary is more nuanced than the tool list:
 

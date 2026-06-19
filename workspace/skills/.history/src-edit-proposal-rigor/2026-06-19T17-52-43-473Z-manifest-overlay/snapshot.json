@@ -1,0 +1,12 @@
+{
+  "skillId": "src-edit-proposal-rigor",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:52:43.478Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\src-edit-proposal-rigor",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "371570aab4f9a892"
+}

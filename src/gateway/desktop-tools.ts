@@ -1229,7 +1229,7 @@ function shortWindowLabel(w?: DesktopWindowInfo | null): string {
 function compactWindowList(allWindows: DesktopWindowInfo[], maxItems: number = 8): string {
   const lines = allWindows.slice(0, maxItems).map((w, i) => {
     const mon = w.monitorIndex !== undefined ? ` m=${w.monitorIndex}` : '';
-    return `${i + 1}. [${w.processName}]${mon} ${w.title} (handle=${w.handle})`;
+    return `${i + 1}. [${w.processName}]${mon} ${w.title}`;
   });
   return lines.join('\n');
 }
@@ -2198,7 +2198,7 @@ export async function desktopScreenshot(
   });
   storeDesktopPacket(sessionId, packet);
 
-  const topWindows = compactWindowList(openWindows, 12);
+  const topWindows = compactWindowList(openWindows, 8);
   const ocrPreview = ocr?.text ? ocr.text.slice(0, 400).replace(/\s+/g, ' ').trim() : '';
   const ocrLen = ocr?.text ? ocr.text.length : 0;
 
@@ -2229,8 +2229,6 @@ export async function desktopScreenshot(
       : '';
 
   const screenshotIdLine = `Screenshot ID: ${packet.screenshotId}.`;
-  const screenshotUsageLine =
-    `Use desktop_click/desktop_scroll with {x, y, coordinate_space:"capture", screenshot_id:"${packet.screenshotId}"} to target this exact screenshot; recapture after focus or window movement.`;
 
   return [
     `Desktop screenshot captured (${imageWidth}x${imageHeight}${normalized?.normalized ? `, normalized from ${shot.width}x${shot.height}` : ''}).`,
@@ -2240,7 +2238,6 @@ export async function desktopScreenshot(
     formatMonitorsForReply(ctx.monitors),
     activeMonLine,
     coordHint,
-    screenshotUsageLine,
     options?.som ? formatSomElements(somElements) || 'SOM mode requested, but no UI Automation elements were found inside this capture.' : '',
     `Active window: ${shortWindowLabel(activeWindow)}.`,
     `Open windows: ${openWindows.length}.`,
@@ -4136,18 +4133,15 @@ export async function desktopWindowScreenshot(
   const ocrLen = ocr?.text ? ocr.text.length : 0;
   const screenshotIdLine = `Screenshot ID: ${packet.screenshotId}.`;
   const captureUsageLine =
-    `Use coordinate_space="capture" with screenshot_id="${packet.screenshotId}" for clicks based on this cropped image; recapture if focus/window geometry changes.`;
-  const windowUsageLine =
-    `Use coordinate_space="window" with screenshot_id="${packet.screenshotId}" for coordinates relative to the window's own top-left. For minimize/maximize/restore/close, use desktop_window_control.`;
+    `Use coordinate_space="capture" or "window" with screenshot_id="${packet.screenshotId}" for clicks; recapture if window moves. For minimize/maximize/restore/close, use desktop_window_control.`;
 
   return [
     `Window screenshot captured (${imageWidth}x${imageHeight}${normalized?.normalized ? `, normalized from ${shot.width}x${shot.height}` : ''}).`,
     screenshotIdLine,
-    `Target window: "${target.title}" (${target.processName}, handle=${target.handle}).`,
+    `Target window: "${target.title}" (${target.processName}).`,
     `Window bounds: left=${Math.floor(left)}, top=${Math.floor(top)}, width=${Math.floor(width)}, height=${Math.floor(height)}.`,
     `Capture region: [${x1}, ${y1}] to [${x2}, ${y2}] (padding ${padding}px).`,
     captureUsageLine,
-    windowUsageLine,
     (options?.som === true || options?.mode === 'som') ? formatSomElements(somElements) || 'SOM mode requested, but no UI Automation elements were found inside this window capture.' : '',
     `Active window: ${shortWindowLabel(activeWindow)}.`,
     ocrPreview ? `OCR text (${Math.round(ocr?.confidence || 0)}% confidence):\n${ocrPreview}${ocrLen > 400 ? ' ...' : ''}` : 'OCR: unavailable.',

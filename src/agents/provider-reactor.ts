@@ -140,6 +140,8 @@ export class ProviderReactorClient implements ReactorClient {
       think: options?.think,
     });
     const estimatedMessageInputTokens = estimateMessagesTokens(messages);
+    const estimatedSystemPromptTokens = estimateMessagesTokens(messages.filter((message: any) => message?.role === 'system'));
+    const estimatedConversationTokens = Math.max(0, estimatedMessageInputTokens - estimatedSystemPromptTokens);
     const estimatedToolSchemaTokens = estimateToolSchemaTokens(options?.tools);
     const estimatedProviderInputTokens = estimatedMessageInputTokens + estimatedToolSchemaTokens;
     const usage = normalizeUsage(result.usage, {
@@ -154,6 +156,8 @@ export class ProviderReactorClient implements ReactorClient {
       agentId: options?.usageContext?.agentId,
       ...usage,
       estimatedMessageInputTokens,
+      estimatedSystemPromptTokens,
+      estimatedConversationTokens,
       estimatedToolSchemaTokens,
       estimatedProviderInputTokens,
       durationMs: Date.now() - startedAt,

@@ -34,7 +34,6 @@ export const ALL_TOOL_CATEGORIES = [
   'workspace_write',
   'advanced_memory',
   'media_assets',
-  'media_quality',
   'automations',
   'external_apps',
   'integration_admin',
@@ -42,7 +41,11 @@ export const ALL_TOOL_CATEGORIES = [
   'proposal_admin',
   'mcp_server_tools',
   'composite_tools',
-  'creative_mode',
+  'creative_basic',
+  'creative_image',
+  'creative_video',
+  'creative_hyperframes',
+  'creative_quality',
   'skills',
   'model_management',
   'business',
@@ -82,7 +85,6 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
   advanced_memory: 'advanced_memory',
   media: 'media_assets',
   media_assets: 'media_assets',
-  media_quality: 'media_quality',
   schedule: 'automations',
   scheduling: 'automations',
   automations: 'automations',
@@ -96,7 +98,18 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
   mcp_server_tools: 'mcp_server_tools',
   composites: 'composite_tools',
   composite_tools: 'composite_tools',
-  creative_mode: 'creative_mode',
+  creative_mode: 'creative_basic',
+  creative: 'creative_basic',
+  creative_basic: 'creative_basic',
+  creative_image: 'creative_image',
+  image_mode: 'creative_image',
+  creative_video: 'creative_video',
+  video_mode: 'creative_video',
+  creative_hyperframes: 'creative_hyperframes',
+  hyperframes: 'creative_hyperframes',
+  creative_quality: 'creative_quality',
+  creative_qa: 'creative_quality',
+  media_quality: 'creative_quality',
   skill_authoring: 'skills',
   skills: 'skills',
   model_management: 'model_management',
@@ -125,7 +138,7 @@ const TEAM_OPS_TOOL_NAMES = new Set([
   'post_to_team_chat', 'message_main_agent', 'reply_to_team',
   'manage_team_goal', 'manage_team_context_ref',
   // ask_team_coordinator intentionally excluded — it's a core tool (always available)
-  // deploy_analysis_team intentionally excluded — user-facing tool, must always be available
+  'deploy_analysis_team',
 ]);
 
 // schedule_job is core so cron/heartbeat/subagent sessions can reschedule and
@@ -150,9 +163,29 @@ const DEV_ONLY_SOURCE_READ_TOOL_NAMES = new Set([
   'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
   'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
   'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',
+  'source_stats_batch',
+]);
+
+const SOURCE_READ_FILE_HELPER_TOOL_NAMES = new Set([
+  'search_files',
+  'read_files_batch',
+  'file_tree',
 ]);
 
 const FILE_OPS_TOOL_NAMES = new Set([
+  'read_file',
+  'list_files',
+  'list_directory',
+  'grep_file',
+  'grep_files',
+  'file_stats',
+  'mkdir',
+  'present_file',
+  'apply_workspace_patchset',
+  'clone_repo',
+  'search_files',
+  'read_files_batch',
+  'file_tree',
   'create_file',
   'replace_lines',
   'insert_after',
@@ -231,7 +264,7 @@ const MEDIA_TOOL_NAMES = new Set([
   'download_url',
   'download_media',
   'analyze_image',
-  // analyze_video promoted to core — always available (not gated behind media_assets)
+  'analyze_video',
 ]);
 
 const MEDIA_QUALITY_TOOL_NAMES = new Set([
@@ -325,6 +358,97 @@ const CORE_CREATIVE_CONTROL_TOOL_NAMES = new Set([
   'switch_creative_mode',
 ]);
 
+const CREATIVE_QUALITY_TOOL_NAMES = new Set([
+  ...MEDIA_QUALITY_TOOL_NAMES,
+  ...CREATIVE_VIDEO_QA_TOOL_NAMES,
+  'creative_quality_report',
+  'creative_validate_layout',
+  'creative_validate_composition_layers',
+  'creative_preflight_overlay',
+  'creative_sample_composite_frames',
+  'creative_frame_trace',
+  'creative_frame_diff',
+  'creative_analyze_generated_video',
+  'creative_compare_shots',
+  'creative_select_best_take',
+  'creative_retry_shot_until_pass',
+  'creative_lint_html_motion_clip',
+  'creative_measure_text',
+  'creative_text_fit_report',
+  'creative_composition_lint',
+]);
+
+const CREATIVE_HYPERFRAMES_TOOL_NAMES = new Set([
+  ...HYPERFRAMES_TOOL_NAMES,
+  'creative_list_hyperframes_components',
+  'creative_import_hyperframes_component',
+  'creative_sync_hyperframes_catalog',
+  'creative_apply_hyperframes_component',
+  'creative_overlay_hyperframes_on_video',
+  'creative_list_html_motion_templates',
+  'creative_apply_html_motion_template',
+  'creative_create_html_motion_clip',
+  'creative_save_html_motion_template',
+  'creative_save_html_motion_block',
+  'creative_promote_scene_to_template',
+  'creative_list_html_motion_blocks',
+  'creative_render_html_motion_block',
+  'creative_read_html_motion_clip',
+  'creative_patch_html_motion_clip',
+  'creative_restore_html_motion_revision',
+  'creative_render_html_motion_snapshot',
+  'creative_export_html_motion_clip',
+]);
+
+function getCreativeToolCategory(name: string): ToolCategory {
+  if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return 'creative_basic';
+  if (CREATIVE_QUALITY_TOOL_NAMES.has(name)) return 'creative_quality';
+  if (CREATIVE_HYPERFRAMES_TOOL_NAMES.has(name)) return 'creative_hyperframes';
+  if (name.startsWith('hyperframes_')) return 'creative_hyperframes';
+  if (name.startsWith('image_') || name.startsWith('video_')) return 'creative_quality';
+
+  const n = name.toLowerCase();
+  if (
+    /\b(video|shot|sequence|clip|composition|audio|voiceover|caption|transcribe|rough_cut|stitch|timeline|motion|music|sound|continuity)\b/.test(n)
+    || /video|shot|sequence|clip|composition|audio|voiceover|caption|transcribe|rough_cut|stitch|timeline|motion|music|sound|continuity/.test(n)
+  ) {
+    return 'creative_video';
+  }
+  if (
+    /\b(image|asset|layer|icon|ascii|generation)\b/.test(n)
+    || /image|asset|layer|icon|ascii|generation/.test(n)
+  ) {
+    return 'creative_image';
+  }
+  return 'creative_basic';
+}
+
+const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
+  'web_search_single',
+  'web_search_multi',
+  'web_fetch_batch',
+  'send_telegram',
+  'browser_send_to_telegram',
+  'show_agent_work',
+  'show_product_carousel',
+  'show_sources',
+  'show_market',
+  'show_stocks',
+  'show_weather',
+  'show_comparison',
+  'show_chart',
+  'show_run_result',
+  'show_prediction_market',
+  'show_map',
+  'run_command',
+  'start_process',
+  'process_status',
+  'process_log',
+  'process_wait',
+  'process_kill',
+  'process_submit',
+]);
+
 const INTEGRATION_ADMIN_TOOL_NAMES = new Set([
   'mcp_server_manage', 'webhook_manage', 'integration_quick_setup',
 ]);
@@ -354,7 +478,8 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (name === 'browser_send_to_telegram') return null;
   if (name === 'delivery_send' || name === 'delivery_send_screenshot') return null;
   if (name === 'connector_list') return null; // core tool — always available
-  if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return null;
+  if (name === 'generate_image' || name === 'generate_video') return null;
+  if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
   if (name === 'save_site_shortcut') return 'browser_automation';
   if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test') return 'browser_automation';
   if (name.startsWith('browser_')) return 'browser_automation';
@@ -370,14 +495,15 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (FILE_OPS_TOOL_NAMES.has(name)) return 'workspace_write';
   if (MEMORY_TOOL_NAMES.has(name)) return 'advanced_memory';
   if (MEDIA_TOOL_NAMES.has(name)) return 'media_assets';
-  if (CREATIVE_VIDEO_QA_TOOL_NAMES.has(name)) return 'creative_mode';
-  if (HYPERFRAMES_TOOL_NAMES.has(name)) return 'creative_mode';
-  if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return 'media_quality';
+  if (CREATIVE_VIDEO_QA_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+  if (HYPERFRAMES_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+  if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
   if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
+  if (name.startsWith('skill_') && name !== 'skill_list' && name !== 'skill_read') return 'skills';
   if (SKILL_AUTHORING_TOOL_NAMES.has(name)) return 'skills';
   if (MODEL_MANAGEMENT_TOOL_NAMES.has(name)) return 'model_management';
   if (BUSINESS_TOOL_NAMES.has(name)) return 'business';
-  if (name.startsWith('creative_')) return 'creative_mode';
+  if (name.startsWith('creative_')) return getCreativeToolCategory(name);
   if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
   if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';
   if (PROPOSAL_ADMIN_TOOL_NAMES.has(name)) return 'proposal_admin';
@@ -461,19 +587,24 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'terminal',
-        description: 'Unified terminal command tool. Runs bounded commands with captured output by default, and starts supervised background runs for servers/watchers when mode="background". On Windows, shell="powershell" is first-class for PowerShell commands; shell="cmd" is available for cmd semantics. Use pty:true for interactive CLIs, auth flows, REPLs, and terminal UIs.',
+        description: 'Unified terminal/process tool. action=run runs a bounded captured command; start creates a supervised background process; status/log/wait/kill/submit manage process runIds.',
         parameters: {
-          type: 'object', required: ['command'],
+          type: 'object', required: [],
           properties: {
+            action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'], description: 'Default run; mode=background also means start.' },
             command: { type: 'string', description: 'Command to run.' },
             cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute path inside it.' },
-            mode: { type: 'string', enum: ['auto', 'foreground', 'background'], description: 'auto chooses foreground unless the command looks like a server/watcher. Default auto.' },
-            shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use. On Windows, choose powershell for PowerShell commands. Default auto.' },
-            pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
+            mode: { type: 'string', enum: ['auto', 'foreground', 'background'], description: 'Legacy alias: background maps to action=start.' },
+            shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use.' },
+            pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth/REPLs.' },
             timeoutMs: { type: 'number', description: 'Foreground timeout in milliseconds.' },
             noOutputTimeoutMs: { type: 'number', description: 'Kill if no output arrives within this many milliseconds.' },
             title: { type: 'string', description: 'Optional human-readable title for UI command cards.' },
-            stdin: { type: 'boolean', description: 'Keep stdin open so process_submit can answer prompts.' },
+            stdin: { type: 'boolean', description: 'Keep stdin open for interactive processes.' },
+            runId: { type: 'string', description: 'Process runId for status/log/wait/kill/submit.' },
+            limit: { type: 'number', description: 'Max process records for status.' },
+            maxChars: { type: 'number', description: 'Max log characters for log.' },
+            data: { type: 'string', description: 'Text to send for submit.' },
           },
         },
       },
@@ -706,18 +837,22 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   const runtimeToolDefs = isPublicBuild
     ? toolDefs.filter((t: any) => !isToolHiddenInPublicBuild(String(t?.function?.name || '')))
     : toolDefs;
+  const visibleToolDefs = runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || '')));
 
   // ── Filter to core + activated categories ──────────────────────────────────
   // When activatedCategories is provided, only return core tools + those in active categories.
   if (activatedCategories !== undefined) {
-    return runtimeToolDefs.filter((t: any) => {
+    return visibleToolDefs.filter((t: any) => {
       const name = String(t?.function?.name || '');
       const cat = getToolCategory(name);
+      if (SOURCE_READ_FILE_HELPER_TOOL_NAMES.has(name) && normalizedActiveCategories.has('prometheus_source_read')) {
+        return true;
+      }
       return cat === null || normalizedActiveCategories.has(cat);
     });
   }
 
-  return runtimeToolDefs;
+  return visibleToolDefs;
 }
 
 // ─── Tool Execution Helpers ────────────────────────────────────────────────────
@@ -820,7 +955,7 @@ export function normalizeToolArgsForTool(toolName: string, rawArgs: any): any {
     if (!raw) return '';
     const direct = normalizeToolCategory(raw);
     if (direct && categories.includes(direct)) return direct;
-    const match = raw.match(/\b(browser_automation|desktop_automation|agents_and_teams|prometheus_source_read|prometheus_source_write|workspace_write|advanced_memory|media_assets|media_quality|automations|external_apps|integration_admin|social_intelligence|proposal_admin|mcp_server_tools|composite_tools|creative_mode|browser|desktop|team_ops|source_read|source_write|file_ops|memory|media|integrations|connectors|mcp|composites)\b/);
+    const match = raw.match(/\b(browser_automation|desktop_automation|agents_and_teams|prometheus_source_read|prometheus_source_write|workspace_write|advanced_memory|media_assets|creative_quality|media_quality|automations|external_apps|integration_admin|social_intelligence|proposal_admin|mcp_server_tools|composite_tools|creative_basic|creative_image|creative_video|creative_hyperframes|creative_mode|browser|desktop|team_ops|source_read|source_write|file_ops|memory|media|integrations|connectors|mcp|composites|creative|image_mode|video_mode|hyperframes|creative_qa)\b/);
     const matched = match ? normalizeToolCategory(match[1]) : null;
     return matched && categories.includes(matched) ? matched : '';
   };

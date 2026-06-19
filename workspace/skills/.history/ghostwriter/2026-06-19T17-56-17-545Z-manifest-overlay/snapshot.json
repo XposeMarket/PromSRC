@@ -1,0 +1,12 @@
+{
+  "skillId": "ghostwriter",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:17.550Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\ghostwriter",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "7190b60640fa3c3d"
+}

@@ -154,7 +154,7 @@ function tryRawWebStaticFastPath(req: http.IncomingMessage, res: http.ServerResp
     if (isInsideRoot(file, candidateRoot)) candidates.push({ root: candidateRoot, file });
   };
 
-  if (pathname === '/' || pathname === '/index.html') {
+  if (pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/')) {
     push(webUiRoot, 'index.html');
   } else if (pathname.startsWith('/src/')) {
     push(webUiRoot, pathname);
@@ -414,8 +414,8 @@ export function createServer(
       return;
     }
     const account = getSessionStatus();
-    if (!account.authenticated || (!account.subscriptionActive && !account.isAdmin)) {
-      try { ws.close(1008, 'Account login or active subscription required'); } catch {}
+    if (!account.authenticated) {
+      try { ws.close(1008, 'Account login required'); } catch {}
       return;
     }
     console.log('[Prom] WS connected');

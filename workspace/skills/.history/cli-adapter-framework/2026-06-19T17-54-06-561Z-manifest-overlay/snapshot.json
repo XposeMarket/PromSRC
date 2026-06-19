@@ -1,0 +1,12 @@
+{
+  "skillId": "cli-adapter-framework",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:06.566Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\cli-adapter-framework",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "5b2c31f0c46bbfbd"
+}

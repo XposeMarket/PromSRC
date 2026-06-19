@@ -7,6 +7,7 @@ import {
   sendWhatsAppNotification,
   type ChannelCompletionNotificationConfig,
 } from '../comms/broadcaster';
+import { sendWebPushToAll } from './web-push';
 
 type CompletionSource = 'desktop' | 'mobile';
 type DeliveryChannel = 'telegram' | 'discord' | 'whatsapp';
@@ -61,12 +62,14 @@ function buildMobileChatLink(sessionId: string, requestOrigin?: string): string 
   const configuredBase = String(
     cfg?.mobile?.publicBaseUrl
       || cfg?.gateway?.publicBaseUrl
+      || cfg?.gateway?.remoteAccess?.publicUrl
       || cfg?.remoteAccess?.publicBaseUrl
+      || cfg?.remoteAccess?.publicUrl
       || '',
   ).trim();
   const origin = configuredBase || String(requestOrigin || '').trim() || `http://127.0.0.1:${Number(process.env.GATEWAY_PORT || 18789) || 18789}`;
   const base = origin.replace(/\/+$/, '');
-  return `${base}/#mobile/chat/${encodeURIComponent(sessionId || 'default')}`;
+  return `${base}/?source=pwa#mobile/chat/${encodeURIComponent(sessionId || 'default')}`;
 }
 
 function buildMessage(input: ChatCompletionNotificationInput, cfg: ChannelCompletionNotificationConfig): string {
@@ -85,6 +88,25 @@ function buildMessage(input: ChatCompletionNotificationInput, cfg: ChannelComple
     parts.push('', buildMobileChatLink(input.sessionId, input.requestOrigin));
   }
   return parts.join('\n').trim();
+}
+
+function buildWebPushPayload(input: ChatCompletionNotificationInput): { title: string; body: string; url: string; tag: string; data: Record<string, any> } {
+  let title = '';
+  try { title = String(getSessionDisplayTitle(getSession(input.sessionId)) || '').trim(); } catch {}
+  const sourceLabel = input.source === 'mobile' ? 'Mobile' : 'Desktop';
+  const body = cleanSummary(input.finalText, 240) || 'Response finished.';
+  return {
+    title: title ? `Response ready: ${title}` : `Response ready (${sourceLabel})`,
+    body,
+    url: buildMobileChatLink(input.sessionId, input.requestOrigin),
+    tag: `prometheus-chat-${input.sessionId || 'default'}`,
+    data: {
+      kind: 'chat_response',
+      sessionId: input.sessionId,
+      source: input.source,
+      clientRequestId: input.clientRequestId || '',
+    },
+  };
 }
 
 async function deliver(channel: DeliveryChannel, text: string): Promise<void> {
@@ -112,6 +134,8 @@ export function notifyChatCompletion(input: ChatCompletionNotificationInput): vo
   ].join(':');
   if (recentCompletionKeys.has(dedupeKey)) return;
   recentCompletionKeys.set(dedupeKey, now);
+
+  sendWebPushToAll(buildWebPushPayload(input));
 
   const channels = resolveChannelsConfig();
   const candidates: Array<[DeliveryChannel, ChannelCompletionNotificationConfig]> = [

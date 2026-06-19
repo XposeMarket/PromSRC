@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when tracking reliability budgets, incident counts, failures, regressions, uptime/SLOs, flaky tests, operational debt, or whether a subsystem is exceeding its error budget.",
+  "triggers": [
+    "error budget",
+    "reliability budget",
+    "SLO",
+    "SLA",
+    "incident count",
+    "uptime target",
+    "flaky failures",
+    "regression rate",
+    "track failures",
+    "operational reliability",
+    "error trend",
+    "system health budget",
+    "failure budget",
+    "reliability report",
+    "incident tracker",
+    "service level objective",
+    "too many failures"
+  ],
+  "categories": [
+    "reliability",
+    "operations",
+    "metrics"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "show_ui_card"
+  ],
+  "lifecycle": "active",
+  "name": "Error Budget Tracker",
+  "id": "error-budget-tracker"
+}

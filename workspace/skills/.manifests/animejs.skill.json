@@ -1,21 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to animate web UI, SVG, DOM elements, timelines, motion sequences, or creative effects using Anime.js. It helps map animation requirements into lightweight Anime.js timelines, easing, staggering, and export-safe motion patterns.",
+  "description": "Use this skill when animating DOM elements, SVG, web UI, creative prototypes, timelines, entrances/exits, or motion effects specifically with Anime.js or when choosing Anime.js for lightweight web animation.",
   "triggers": [
-    "animejs",
-    "Anime.js",
-    "anime timeline",
-    "anime animation",
-    "JavaScript animation",
-    "SVG animation with anime",
-    "stagger animation",
-    "DOM animation",
+    "Anime.js animation",
+    "use Anime.js",
+    "animate DOM elements",
+    "animate SVG with Anime",
     "web animation timeline",
-    "animate UI with anime",
-    "motion sequence",
-    "easing animation",
-    "creative web animation"
+    "Anime stagger effect",
+    "Anime easing",
+    "JavaScript animation sequence",
+    "animated landing page",
+    "motion effects with Anime",
+    "build an animation timeline",
+    "animate UI elements",
+    "creative DOM animation",
+    "Anime.js docs",
+    "smooth UI motion"
   ],
   "categories": [
     "creative",
@@ -23,10 +25,9 @@
     "web-ui"
   ],
   "requiredTools": [
-    "creative_mode",
+    "creative_basic",
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Anime.js",
   "id": "animejs"
 }

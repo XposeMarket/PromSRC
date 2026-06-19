@@ -659,6 +659,7 @@ const AGENT_MODEL_DEFAULT_KEYS = [
   'subagent',
   'team_subagent',
   'background_task',
+  'background_spawn',
   // Per-role-type subagent defaults
   'subagent_planner',
   'subagent_orchestrator',

@@ -1,32 +1,38 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to present complex information visually, choose between chart/dashboard/diagram formats, make a report interactive, or turn analysis into a polished visual artifact. It routes to chart, HTML, SVG, or Mermaid approaches as appropriate.",
+  "name": "Interactive Visuals",
+  "description": "Use this skill when the user asks for a polished visual, interactive card, dashboard, chart, comparison table, sources card, map, product carousel, or scannable rich output instead of plain text.",
   "triggers": [
-    "interactive visuals",
-    "make it visual",
-    "visual report",
-    "visual dashboard",
-    "diagram this",
-    "chart this",
-    "interactive artifact",
-    "visual summary",
-    "report visualization",
     "show this visually",
-    "data presentation",
-    "visual comparison",
-    "clickable report",
+    "make it interactive",
+    "visual card",
     "rich output",
-    "polished interactive output"
+    "comparison table",
+    "sources card",
+    "map card",
+    "dashboard view",
+    "chart this",
+    "product carousel",
+    "polished visual",
+    "scannable output",
+    "visual summary",
+    "interactive card",
+    "data card",
+    "present this nicely",
+    "UI card",
+    "make a dashboard",
+    "visualize the results"
   ],
   "categories": [
-    "visualization",
-    "reporting",
-    "router"
+    "visuals",
+    "router",
+    "cards",
+    "dashboards"
   ],
   "requiredTools": [
-    "skill_list",
-    "skill_read"
+    "show_ui_card",
+    "skills"
   ],
   "lifecycle": "active",
   "id": "interactive-visuals"

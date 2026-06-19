@@ -19,6 +19,8 @@ export interface ModelUsageEvent {
   source: 'provider' | 'estimated';
   durationMs?: number;
   estimatedMessageInputTokens?: number;
+  estimatedSystemPromptTokens?: number;
+  estimatedConversationTokens?: number;
   estimatedToolSchemaTokens?: number;
   estimatedProviderInputTokens?: number;
 }
@@ -82,6 +84,10 @@ const CALIBRATION_MAX = 2.5;
 const CALIBRATION_WINDOW = 12;
 const CALIBRATION_MIN_SAMPLES = 2;
 
+function cacheUsageIsSeparateFromInput(provider: string): boolean {
+  return String(provider || '').trim().toLowerCase().includes('anthropic');
+}
+
 /**
  * Derive a clamped correction factor by comparing what the provider actually
  * counted as input (input + cache read/write) against what we estimated for the
@@ -106,9 +112,11 @@ export function getUsageCalibration(provider: string, model: string): UsageCalib
     const recent = events.slice(-CALIBRATION_WINDOW);
     const ratios = recent
       .map((e) => {
+        const provider = String(e.provider || '');
         const realInput = Number(e.inputTokens || 0)
-          + Number(e.cacheReadTokens || 0)
-          + Number(e.cacheWriteTokens || 0);
+          + (cacheUsageIsSeparateFromInput(provider)
+            ? Number(e.cacheReadTokens || 0) + Number(e.cacheWriteTokens || 0)
+            : 0);
         const estimate = Number(e.estimatedProviderInputTokens || 0);
         return estimate > 0 ? realInput / estimate : NaN;
       })
@@ -188,6 +196,8 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       source: event.source || 'estimated',
       durationMs: normalizeCount(event.durationMs),
       estimatedMessageInputTokens: normalizeCount(event.estimatedMessageInputTokens),
+      estimatedSystemPromptTokens: normalizeCount(event.estimatedSystemPromptTokens),
+      estimatedConversationTokens: normalizeCount(event.estimatedConversationTokens),
       estimatedToolSchemaTokens: normalizeCount(event.estimatedToolSchemaTokens),
       estimatedProviderInputTokens: normalizeCount(event.estimatedProviderInputTokens),
     };

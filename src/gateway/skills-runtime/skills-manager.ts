@@ -106,6 +106,25 @@ export interface SkillImportOptions {
   applySafeFixes?: boolean;
 }
 
+type BuildTurnContextOptions = {
+  maxCharsPerSkill?: number;
+  excludedSkillIds?: Iterable<string> | string[];
+};
+
+function normalizeSkillIdSet(value: unknown): Set<string> {
+  const ids = new Set<string>();
+  const add = (item: unknown) => {
+    const text = String(item || '').trim().toLowerCase();
+    if (text) ids.add(text);
+  };
+  if (typeof value === 'string') {
+    value.split(',').forEach(add);
+  } else if (value && typeof (value as any)[Symbol.iterator] === 'function') {
+    for (const item of value as Iterable<unknown>) add(item);
+  }
+  return ids;
+}
+
 function normalizeSkillMatchText(value: string): string {
   return String(value || '')
     .toLowerCase()
@@ -140,7 +159,7 @@ function skillTriggerMatchesText(trigger: string, rawText: string, words: string
   return words.some((word) => {
     const normalizedWord = normalizeSkillMatchText(word);
     if (normalizedWord === normalizedTrigger) return true;
-    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
+    if (normalizedTrigger.length < 3 || normalizedWord.length < 3) return false;
     return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
   });
 }
@@ -836,10 +855,14 @@ export class SkillsManager {
     }).join('\n');
   }
 
-  buildTurnContext(_messageText: string, _maxCharsPerSkill = 3000): string {
+  buildTurnContext(_messageText: string, optionsOrMaxChars: number | BuildTurnContextOptions = 3000): string {
     const all = this.getAll();
     if (!all.length) return '';
+    const excludedSkillIds = typeof optionsOrMaxChars === 'number'
+      ? new Set<string>()
+      : normalizeSkillIdSet(optionsOrMaxChars?.excludedSkillIds);
     const matchedSkills = this.findMatchingSkillsForMessage(_messageText)
+      .filter((id) => !excludedSkillIds.has(String(id || '').trim().toLowerCase()))
       .map((id) => this.get(id))
       .filter((skill): skill is Skill => !!skill)
       .slice(0, 5);

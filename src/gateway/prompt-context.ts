@@ -6,7 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
-import { getConfig } from '../config/config';
+import { getConfig, getAgents } from '../config/config';
 import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCategories, isBusinessContextEnabled } from './session';
 import { searchMemoryIndex } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
@@ -33,6 +33,31 @@ function assembleContext(
   if (!volatileStr) return '\n\n' + stableStr;
   return '\n\n' + stableStr + PROMPT_CACHE_MARKER + volatileStr;
 }
+
+// ─── Live subagent roster block ───────────────────────────────────────────────
+// Injects the current subagent count + human display names into the runtime
+// system prompt so the main agent ALWAYS knows how many subagents exist and who
+// they are (by name, not just technical id), without having to call agent_list.
+function buildSubagentsRosterBlock(): string {
+  try {
+    const all = getAgents();
+    // Subagents = everything except the default/main agent.
+    const subs = all.filter((a: any) => a && a.default !== true && a.id !== 'main');
+    if (subs.length === 0) {
+      return `[SUBAGENTS] You currently have 0 subagents configured (only the default agent exists). If asked "how many subagents / who are they," answer: none yet.`;
+    }
+    const lines = subs.map((a: any) => {
+      const displayName = a?.identity?.displayName || a?.name || a?.id;
+      const desc = (a?.description || '').toString().trim();
+      const shortDesc = desc.length > 140 ? desc.slice(0, 137) + '…' : desc;
+      return `- ${displayName} (id: ${a.id})${shortDesc ? ` — ${shortDesc}` : ''}`;
+    });
+    return `[SUBAGENTS] You currently have ${subs.length} subagent${subs.length === 1 ? '' : 's'} configured. ALWAYS refer to each by their display name (not the technical id). When asked how many subagents exist or who they are, answer with this count and these names:\n${lines.join('\n')}`;
+  } catch {
+    return '';
+  }
+}
+
 
 // ─── Intraday notes processor ────────────────────────────────────────────────────
 // Parses raw intraday file content into capped-length entries for context injection.
@@ -62,6 +87,7 @@ export interface SkillWindow {
 
 export interface BuildPersonalityContextOptions {
   profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent';
+  excludedSkillIds?: string[];
 }
 
 const BOOT_COMPACTION_EXCLUDE_SESSION_RE = /^(startup_connection_probe_|brain_|auto_boot_|auto_restart_|task_|cron_|background_|team_dispatch_|subagent_chat_)/i;
@@ -567,10 +593,32 @@ export function detectToolCategories(text: string): Set<string> {
     'delete file', 'rename', 'copy file', 'make a file', 'update the file', 'change the file',
     'save to', 'markdown edit', 'md edit', 'edit markdown', 'skill update', 'prompt update',
     'update instructions', 'change instructions',
+    // dev/project file patterns
+    'package.json', 'tsconfig', '.env', 'dockerfile', 'makefile', 'gitignore',
+    'create a project', 'scaffold', 'new project', 'init project', 'project structure',
   ];
   const TASK = ['task', 'background', 'run this', 'start a', 'status', 'paused', 'resume', 'in progress', 'what tasks', 'running tasks'];
   const SCHEDULE = ['schedule', 'every day', 'every week', 'at ', 'recurring', 'cron', 'automate', 'remind me', 'daily', 'weekly'];
-  const SHELL = ['run command', 'execute', 'terminal', 'powershell', 'script', 'command line', 'cmd', 'bash'];
+  const SHELL = [
+    'run command', 'execute', 'terminal', 'powershell', 'script', 'command line', 'cmd', 'bash',
+    // npm / node
+    'npm', 'npx', 'node ', 'yarn', 'pnpm', 'bun ',
+    // build / compile / test
+    'build', 'compile', 'tsc', 'run build', 'run test', 'run tests', 'run lint', 'run dev',
+    'run start', 'run script', 'run npm', 'run node', 'run the build', 'run the tests',
+    'install deps', 'install dependencies', 'install packages',
+    // git
+    'git ', 'check git', 'git status', 'git commit', 'git push', 'git pull', 'git log',
+    'git diff', 'git branch', 'git merge', 'git rebase', 'git stash',
+    // other runtimes / tools
+    'python', 'pip ', 'cargo', 'make ', 'docker', 'kubectl', 'deno',
+    // server / dev server
+    'start server', 'start dev', 'dev server', 'watch mode', 'hot reload',
+    // lint / format
+    'eslint', 'prettier', 'lint', 'format code',
+    // deploy / ci
+    'deploy', 'publish package', 'ci ', 'pipeline',
+  ];
   // Much stricter MEMORY detection — only explicit memory operations, not casual conversation
   const MEMORY = ['remember this', 'note that', 'save that', 'write that down', 'dont forget', "don't forget", 'update my memory', 'add to my memory', 'save to memory', 'memory note', 'remember:', 'note:', 'update memory', 'memory write'];
   const DEBUG = ['why', 'error', 'failed', 'how does', 'architecture', 'debug', 'caused', 'broke', 'not working', 'explain how', 'whats wrong', "what's wrong"];
@@ -579,7 +627,6 @@ export function detectToolCategories(text: string): Set<string> {
   const MEDIA = ['download_url', 'download_media', 'analyze_image', 'analyze_video', 'download image', 'download video', 'analyze image', 'analyze video', 'media analysis'];
   const MEDIA_QUALITY = ['contrast', 'text overflow', 'empty region', 'bounds summary', 'element at point', 'overlap', 'contact sheet', 'render frame', 'audio sync', 'caption timing'];
   const AUTOMATIONS = ['schedule', 'scheduled', 'every day', 'every week', 'recurring', 'cron', 'automate', 'automation', 'remind me', 'daily', 'weekly'];
-  const CREATIVE_MODE = ['creative mode', 'image mode', 'video mode', 'design mode', 'enter creative', 'exit creative'];
   const CONNECTORS = ['gmail', 'github', 'slack', 'notion', 'google drive', 'hubspot', 'salesforce', 'stripe', 'ga4', 'external app', 'connected app'];
   const SOURCE_READ = ['prometheus source', 'prom source', 'read source', 'inspect source', 'grep source', 'read webui source', 'webui source', 'source_read', 'prometheus_source_read'];
   const SOURCE_WRITE = ['edit prometheus source', 'change prometheus source', 'patch prometheus source', 'modify prometheus source', 'source_write', 'prometheus_source_write', 'dev source edit'];
@@ -602,9 +649,7 @@ export function detectToolCategories(text: string): Set<string> {
   if (TEAMS.some(k => lower.includes(k))) cats.add('teams');
   if (INTEGRATIONS.some(k => lower.includes(k))) cats.add('integrations');
   if (MEDIA.some(k => lower.includes(k))) cats.add('media');
-  if (MEDIA_QUALITY.some(k => lower.includes(k))) cats.add('media_quality');
   if (AUTOMATIONS.some(k => lower.includes(k))) cats.add('automations');
-  if (CREATIVE_MODE.some(k => lower.includes(k))) cats.add('creative_mode');
   if (CONNECTORS.some(k => lower.includes(k))) cats.add('external_apps');
   if (SOURCE_READ.some(k => lower.includes(k))) cats.add('prometheus_source_read');
   if (SOURCE_WRITE.some(k => lower.includes(k))) cats.add('prometheus_source_write');
@@ -675,10 +720,10 @@ export function readMemorySnippets(workspacePath: string, categories: string[]):
 // These constants are consumed by buildPersonalityContext. Exported so
 // consumers can extend or inspect them without importing server-v2.
 export const TOOL_BLOCKS: Record<string, string> = {
-  web: `WEB: shopping_search_products(query,merchant?,max_results?,provider?,include_metadata?)→fast normalized product cards and product carousel using existing web search/fetch only, no shopping API key. web_search_multi(query,max_results?)→all configured providers, including xAI X Search when connected. web_search_single(query,provider?,max_results?)→one provider (default Settings preferred; provider=tinyfish|tavily|google|brave|ddg|xai). web_search(query,max_results?,multi_engine?,provider?)→legacy combined tool. web_fetch(url)→full page text. Search first, then fetch.
+  web: `WEB: shopping_search_products(query,merchant?,max_results?,provider?,include_metadata?)→fast normalized product cards and product carousel using existing web search/fetch only, no shopping API key. web_search(query,max_results?,multi_engine?,provider?,fetch_top_k?,fetch_max_chars?)→one unified search tool: provider="multi" or multi_engine=true queries every configured provider, provider=tinyfish|tavily|google|brave|ddg|xai targets one provider. web_fetch(url|urls,max_chars?,concurrency?)→fetch one page or a small batch of URLs. Search first, then fetch.
 Product/shopping rule: for product carousels, shopping comparisons, prices, ratings, or store-specific product lists, call shopping_search_products first. Use browser/page extraction only when this result is incomplete or needs visual/login verification.
 Strategy: for complex topics call web_search 2–3× with different query angles; scan snippets; web_fetch the 1–3 most relevant URLs.
-Use web_search_single with provider:"tavily" to test Tavily-only; use web_search_single with provider:"google" to test Google-only; use provider:"xai" for X-backed social search. Use web_search_multi for broad coverage.
+Use web_search with provider:"tavily" to test Tavily-only; use provider:"google" to test Google-only; use provider:"xai" for X-backed social search. Use provider:"multi" or multi_engine:true for broad coverage.
 Site search: web_search("site:reddit.com keyword"). Fallback: web_fetch a direct URL (reuters.com, apnews.com, bbc.com).
 Fetch routing: web_fetch for static pages; browser_get_page_text for JS-heavy or login-gated pages.`,
 
@@ -691,14 +736,14 @@ MEDIA SELECTION: when choosing an image/video on X, Google Images, or similar pa
 
   files: isPublicDistributionBuild()
     ? `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
-MANDATORY EDIT ROUTE: For workspace file edits, native file tools are the default and expected path: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts to edit files unless the user explicitly asks for shell editing or the native tools cannot perform the transformation.
+MANDATORY EDIT ROUTE: For workspace file edits, native file tools are the default and expected path: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use terminal/Python/PowerShell/sed/node scripts to edit files unless the user explicitly asks for shell editing or native tools cannot perform the transformation.
 WORKSPACE ONLY: In the public app, file tools operate on the user workspace and generated app data only. Always read before editing.`
     : `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
 	SOURCE CODE REFERENCE FILES: self/index.md is the canonical Prometheus architecture/debug map. Read it with read_file('self/index.md'), not read_source. Use the split self/* files it points to when you only need one subsystem.
-	SRC SURFACES (read-only by default): source_stats|src_stats(file), read_source(file,start_line?,num_lines?), list_source(directory?), and grep_source(pattern, directory?, file_glob?) inspect src/. WEB-UI SURFACES (read-only by default): webui_source_stats|webui_stats(file), read_webui_source(file,start_line?,num_lines?), list_webui_source(directory?), and grep_webui_source(pattern, directory?, file_glob?) inspect web-ui/. PROM-ROOT SURFACE (dev/proposal only): list_prom, prom_file_stats, read_prom_file, and grep_prom inspect allowlisted Prometheus project-root files/directories such as scripts/, electron/, build/, dist/, src/, web-ui/, and .prometheus/.
-	Write (approved dev source sessions only): use request_dev_source_edit for fast user approval in the current dev chat, or write_proposal execution_mode="code_change" for the full proposal lane. request_dev_source_edit must include a grounded plan: user_request, reasoning, evidence with file/line findings, current_state, fix, steps, expected_workflow, verification, and completion_note_tag (default dev_edit_complete). expected_workflow should explain exactly what happens after approval and after edits apply live: scoped tool unlock, verification/preflight, restart/reload/checkpoint behavior, completion note, and final response shape. After approval, follow that declared plan and prefer read_dev_sources plus apply_dev_source_patchset for src/web-ui file tasks; use scoped workspace file tools for the approved self docs (self/ and workspace/self/) and tiny source tools only for one-off emergency source edits. Approved fallback write tools remain: src/: find_replace_source, replace_lines_source, insert_after_source, delete_lines_source, write_source, delete_source; web-ui/: find_replace_webui_source, replace_lines_webui_source, insert_after_webui_source, delete_lines_webui_source, write_webui_source, delete_webui_source; approved self docs: read_file, write_file, find_replace, replace_lines, insert_after, delete_lines, create_file, delete_file, mkdir; allowlisted prom-root proposal scope only: find_replace_prom, replace_lines_prom, insert_after_prom, delete_lines_prom, write_prom_file, delete_prom_file. Prometheus Mobile is part of the web UI source tree: edit mobile app source under web-ui/src/mobile/*, never hand-edit generated/public-web-ui/static/mobile/* except for emergency verification, and finalize quick live mobile edits with prom_apply_dev_changes changed_surfaces:["mobile"]. For quick live dev edits, finalize with prom_apply_dev_changes rather than raw npm run build; use mode="verify_only" for a no-restart preflight or mode="apply_live" to sync/build/restart/reload. After apply_live/restart/reload succeeds, call write_note with the approved completion_note_tag and dev_edit_id so the dev-edit plan can close before the final user summary. Proposal/code_exec lanes are isolated sandboxes: verify them with the canonical run_command build inside the sandbox, and do not call prom_apply_dev_changes there.
-	MANDATORY EDIT ROUTE: For workspace file edits, native file tools are the default and expected path: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts to edit files unless the user explicitly asks for shell editing or the native tools cannot perform the transformation.
-	EDIT PRIORITY: Always inspect before editing. For source-controlled Prometheus code, prefer batch tools first: read_dev_sources for multi-file inspection, then apply_dev_source_patchset for approved edits. Use tiny source tools only for one-off emergency edits. For normal workspace files, prefer read_files_batch for multi-file inspection, then apply_patchset for grouped edits; use file_stats/search_files/grep_file/read_file and find_replace/replace_lines/insert_after/delete_lines/write_file/create_file/delete_file only when a narrow one-off tool is faster or safer.`,
+	SRC/WEB-UI SURFACES (read-only by default): source_stats|src_stats(file), read_source(file,start_line?,num_lines?), list_source(directory?), grep_source(pattern, path?, glob?) inspect src/; webui_source_stats|webui_stats(file), read_webui_source(file,start_line?,num_lines?), list_webui_source(directory?), grep_webui_source(pattern, path?, glob?) inspect web-ui/. For self-edit token savings, prefer read_files_batch with src/... and web-ui/... paths for multi-file reads, file_tree(path:"src/..."|"web-ui/...") for compact structure, and search_files(directory:"src/..."|"web-ui/...") when you want search_files-style args that delegate to source grep. PROM-ROOT SURFACE (dev/proposal only): list_prom, prom_file_stats, read_prom_file, and grep_prom inspect allowlisted Prometheus project-root files/directories such as scripts/, electron/, build/, dist/, src/, web-ui/, and .prometheus/.
+	Write (approved dev source sessions only): use request_dev_source_edit for fast user approval in the current dev chat, or write_proposal execution_mode="code_change" for the full proposal lane. request_dev_source_edit must include a grounded plan: user_request, reasoning, evidence with file/line findings, current_state, fix, steps, expected_workflow, verification, and completion_note_tag (default dev_edit_complete). expected_workflow should explain exactly what happens after approval and after edits apply live: scoped tool unlock, verification/preflight, restart/reload/checkpoint behavior, completion note, and final response shape. After approval, follow that declared plan and prefer read_dev_sources plus apply_dev_source_patchset for src/web-ui file tasks; use scoped workspace file tools for the approved self docs (self/ and workspace/self/) and tiny source tools only for one-off emergency source edits. Approved fallback write tools remain: src/: find_replace_source, replace_lines_source, insert_after_source, delete_lines_source, write_source, delete_source; web-ui/: find_replace_webui_source, replace_lines_webui_source, insert_after_webui_source, delete_lines_webui_source, write_webui_source, delete_webui_source; approved self docs: read_file, write_file, find_replace, replace_lines, insert_after, delete_lines, create_file, delete_file, mkdir; allowlisted prom-root proposal scope only: find_replace_prom, replace_lines_prom, insert_after_prom, delete_lines_prom, write_prom_file, delete_prom_file. Prometheus Mobile is part of the web UI source tree: edit mobile app source under web-ui/src/mobile/*, never hand-edit generated/public-web-ui/static/mobile/* except for emergency verification, and finalize quick live mobile edits with prom_apply_dev_changes changed_surfaces:["mobile"]. For quick live dev edits, finalize with prom_apply_dev_changes rather than raw npm run build; use mode="verify_only" for a no-restart preflight or mode="apply_live" to sync/build/restart/reload. After apply_live/restart/reload succeeds, call write_note with the approved completion_note_tag and dev_edit_id so the dev-edit plan can close before the final user summary. Proposal/code_exec lanes are isolated sandboxes: verify them with the canonical terminal build command inside the sandbox, and do not call prom_apply_dev_changes there.
+	MANDATORY EDIT ROUTE: For workspace file edits, native file tools are the default and expected path: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use terminal/Python/PowerShell/sed/node scripts to edit files unless the user explicitly asks for shell editing or native tools cannot perform the transformation.
+	EDIT PRIORITY: Always inspect before editing. For source-controlled Prometheus code, prefer file_tree for orientation, search_files/grep_source for call sites, read_files_batch/read_dev_sources for multi-file inspection, then apply_dev_source_patchset for approved edits. Use tiny source tools only for one-off emergency edits. For normal workspace files, prefer read_files_batch for multi-file inspection, then apply_workspace_patchset for grouped edits; use file_stats/search_files/grep_file/read_file and find_replace/replace_lines/insert_after/delete_lines/write_file/create_file/delete_file only when a narrow one-off tool is faster or safer.`,
 
   task: `TASK: task_control(action,...) — list/get/resume/rerun/pause/delete. task_control(list) returns active tasks AND cron jobs in one call. Do NOT use read_file for task state.`,
 
@@ -708,7 +753,7 @@ instruction_prompt must be FULLY SELF-CONTAINED — write as if briefing a fresh
 
   browser_vision: `VISION MODE: Few DOM elements — canvas/WebGL/SPA. browser_vision_screenshot()→viewport PNG. browser_vision_click(x,y)→pixel coords from image. browser_vision_type(x,y,text)→focus+type. Vision screenshot is the primary source of truth in this mode. Workflow: screenshot → pick coords → click/type. Switch back to browser_click(@ref) when element count exceeds 10.`,
 
-  shell: `SHELL/RUN COMMANDS: activate workspace_write before using run_command, start_process, or process_* tools. Use run_command(command)→stdout/stderr/exit for bounded terminal tasks (git/npm/python/curl). Use start_process plus process_status/process_log/process_wait/process_kill/process_submit for dev servers, watchers, long builds, renders, and interactive CLIs. Use browser_* for websites, desktop_* for UI interaction.`,
+  shell: `SHELL/RUN COMMANDS: activate workspace_write before terminal work. Use terminal(action:"run", command) for bounded commands and terminal(action:"start", command) for dev servers, watchers, long builds, renders, or interactive CLIs; manage runIds with terminal(action:"status"|"log"|"wait"|"kill"|"submit"). Use browser_* for websites, desktop_* for UI interaction.`,
 
   memory: `MEMORY: memory_browse(file)→categories. memory_write(file,category,content)→add/update fact. memory_read(file)→full contents. file="user"|"soul"|"memory". Use user for user profile facts, soul for operating rules, memory for durable long-term context and decisions.
 LONG-TERM RETRIEVAL: memory_search(query, mode?, ...filters)→SQLite/FTS/vector-ranked hits with operational/evidence layers, citations, authority, status, and source spans when available. memory_read_record(record_id)→full source record. memory_search_project(project_id, query) and memory_search_timeline(query, date_from?, date_to?) for scoped retrieval. memory_get_related(record_id) expands to connected context.
@@ -719,7 +764,7 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   integrations: `INTEGRATIONS: mcp_server_manage(action,...)→MCP lifecycle (list/upsert/import/connect/disconnect/delete/list_tools). webhook_manage(action,...)→webhook settings (enabled/token/path). integration_quick_setup(action,...)→one-shot presets (supabase/github/windows/brave/postgres/sqlite/filesystem/memory).`,
 
-  media_assets: `MEDIA ASSETS: download_url(url,filename?) and download_media(url,audio_only?) retrieve remote assets. analyze_image/analyze_video inspect uploaded or downloaded media. Use browser_automation for browser-triggered downloads and media_assets for direct URL/media processing.`,
+  media_assets: `MEDIA ASSETS: download_url(url,filename?) and download_media(url,audio_only?) retrieve remote assets. download_url auto-rewrites GitHub blob URLs to raw files. For a git/GitHub REPO (URL or owner/repo), use clone_repo(repo,paths?) to pull the whole repo or only specific files/dirs into the workspace (repos/<name>) — never fetch individual file URLs and re-type their contents. analyze_image/analyze_video inspect uploaded or downloaded media. Use browser_automation for browser-triggered downloads and media_assets for direct URL/media processing.`,
 
   media_quality: `MEDIA QUALITY: image_check_contrast, image_check_text_overflow, image_detect_empty_regions, image_get_bounds_summary, image_get_element_at_point, image_get_overlaps, video_render_frame, video_render_contact_sheet, video_check_audio_sync, and video_check_caption_timing validate visual/video output. Activate when checking layout polish, frame rendering, captions, or audio timing.`,
 
@@ -748,7 +793,7 @@ WHEN TO USE EACH:
   → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles (planner+builder+verifier etc.)
 TEAM OPS: Do NOT call team_manage directly from main chat — ask_team_coordinator handles it. reply_to_team(team_id, msg) is the only direct team call — use it when a coordinator is waiting on your reply.`,
 
-  skills: `SKILLS (catalog + maintenance — routing rule lives in the [SKILLS] block): skills are living, reusable workflow playbooks, and the goal is to have one for essentially every workflow. After finishing real work (a multi-step task, a tricky fix, or any non-trivial workflow), maintain the system while evidence is fresh — update an outdated/incomplete/wrong skill in the same turn (skill_resource_write/delete, skill_manifest_write), or create one if a reusable workflow had no fit (skill_create_bundle when it needs resources/templates/examples/schemas, skill_create for a one-file playbook). CRITICAL on create/update: set accurate trigger words/metadata — the kinds of requests that should surface this skill — so it auto-matches next time the same kind of work comes up. Load bundle resources only as needed via skill_resource_list(id)/skill_resource_read(id,path); add focused files under examples/templates/schemas/prompts/references rather than bloating SKILL.md. Don't force maintenance chatter into casual replies; an unmaintained or missing skill is a liability. Core skill tools (always available): skill_list, skill_read, skill_inspect, skill_resource_list/read/write/delete, skill_manifest_write, skill_import_bundle, skill_export_bundle, skill_update_from_source, skill_create, skill_create_bundle.`,
+  skills: `SKILLS (catalog + maintenance — routing rule lives in the [SKILLS] block): skills are living, reusable workflow playbooks, and the goal is to have one for essentially every workflow. After finishing real work (a multi-step task, a tricky fix, or any non-trivial workflow), maintain the system while evidence is fresh — update an outdated/incomplete/wrong skill in the same turn (skill_resource_write/delete, skill_update_metadata for discovery metadata, skill_manifest_write only for full overlay changes), or create one if a reusable workflow had no fit (skill_create_bundle when it needs resources/templates/examples/schemas, skill_create for a one-file playbook). CRITICAL on create/update: set accurate trigger words/metadata — the kinds of requests that should surface this skill — so it auto-matches next time the same kind of work comes up. For trigger-only fixes, prefer skill_update_metadata({ id, addTriggers:[...] }) so existing triggers are preserved instead of rebuilding/replacing the whole skill. Load bundle resources only as needed via skill_resource_list(id)/skill_resource_read(id,path); add focused files under examples/templates/schemas/prompts/references rather than bloating SKILL.md. Don't force maintenance chatter into casual replies; an unmaintained or missing skill is a liability. Core skill tools (always available): skill_list, skill_read, skill_inspect, skill_resource_list/read/write/delete, skill_update_metadata, skill_manifest_write, skill_import_bundle, skill_export_bundle, skill_update_from_source, skill_create, skill_create_bundle.`,
 
   agent_builder: `AGENT BUILDER (localhost:3005): search_workflow_templates(query) first → architect_workflow() only if no match → verify_workflow_credentials → deploy_workflow → create_node_subagent if needed.
 STOP if credentials missing — tell user exactly what's needed with add_credential_url links. Workflows run inside Agent Builder — use execute_workflow_template(), NOT browser_* tools.`,
@@ -802,6 +847,11 @@ export const CATEGORY_POLICIES: Record<string, string> = {
   composite_tools: 'COMPOSITE TOOLS: Activate when the user wants to create, inspect, edit, delete, list, or run saved multi-step composite tools. Composite management tools are not core; request composite_tools first.',
   composites: 'COMPOSITE TOOLS: Activate when the user wants to create, inspect, edit, delete, list, or run saved multi-step composite tools. Composite management tools are not core; request composite_tools first.',
   creative_mode: TOOL_BLOCKS.creative_mode,
+  creative_basic: TOOL_BLOCKS.creative_mode,
+  creative_image: TOOL_BLOCKS.creative_mode,
+  creative_video: TOOL_BLOCKS.creative_mode,
+  creative_hyperframes: TOOL_BLOCKS.creative_mode,
+  creative_quality: TOOL_BLOCKS.media_quality,
   skills: TOOL_BLOCKS.skills,
   model_management: 'MODEL MANAGEMENT: get/set agent model defaults and manage reusable agent model templates. switch_model and set_current_model are core; activate only for agent fleet model administration.',
   business: 'BUSINESS: list/read/write structured business entities and append entity events for clients, contacts, projects, vendors, and social accounts. business_context_mode is core for BUSINESS.md injection.',
@@ -818,7 +868,12 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
   proposal_admin: 'use edit_proposal to revise pending proposal metadata/details/diffs before approval.',
   mcp_server_tools: 'use dynamic mcp__server__tool functions exposed by connected MCP servers; inspect/setup servers with integration_admin first when needed.',
   composite_tools: 'manage or run saved multi-step tools: create_composite, get_composite, edit_composite, delete_composite, list_composites, plus saved composite tool names.',
-  skills: 'author and maintain reusable skills: skill_create, skill_create_bundle, import/export/update bundles, skill_manifest_write, skill_resource_write/delete, and skill_inspect.',
+  creative_basic: 'use normal Creative canvas/editor controls for basic scene, element, style, export, undo/redo, and project state work.',
+  creative_image: 'use Creative image/asset/layer/generation tools for image editing, reusable assets, cutouts, icons, and image-derived scenes.',
+  creative_video: 'use Creative video, shot, storyboard, audio, caption, sequence, timeline, and composition tools.',
+  creative_hyperframes: 'use HyperFrames and HTML motion clip/template tools for source-backed animated videos.',
+  creative_quality: 'use Creative QA tools for frame renders, layout checks, text fit, contrast, overlaps, timing, and clip validation.',
+  skills: 'author and maintain reusable skills: skill_create, skill_create_bundle, import/export/update bundles, skill_update_metadata for trigger/metadata patches, skill_manifest_write for full overlays, skill_resource_write/delete, and skill_inspect.',
   model_management: 'administer agent model routing/templates: get_agent_models, set_agent_model, list/save/update/apply/select/delete agent model templates.',
   business: 'manage structured entity files: list_entities, read_entity, write_entity, and append_entity_event for clients, contacts, projects, vendors, and social accounts.',
 };
@@ -833,8 +888,8 @@ function buildToolCategoryMatchContext(messageText: string, activatedCategories:
     if (activatedCategories.has(category)) continue;
     lines.push(
       `The user message may need category: ${category}.`,
-      `Use request_tool_category({"category":"${category}"}) if you need tools to ${TOOL_CATEGORY_MATCH_HINTS[category]}`,
-      'Do not activate it if core tools are enough.',
+      `Use request_tool_category({"category":"${category}","scope":"turn"}) if you need tools to ${TOOL_CATEGORY_MATCH_HINTS[category]}`,
+      'Do not activate it if core tools are enough. Use scope=session only for explicit ongoing workflows.',
     );
   }
   return lines.length ? `[TOOL_CATEGORY_MATCH]\n${lines.join('\n')}` : '';
@@ -871,12 +926,12 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['browser_automation', 'browser_automation (web UI control, forms, DOM/screenshot, shortcuts)'],
     ['desktop_automation', 'desktop_automation (OS windows, apps, clipboard, screenshots, mouse/keyboard)'],
     ['agents_and_teams', 'agents_and_teams (standalone subagents, managed teams, team chat, dispatches)'],
-    ['workspace_write', 'workspace_write (workspace file mutations plus run_command/start_process/process_* tools)'],
+    ['workspace_write', 'workspace_write (workspace file mutations plus terminal command/process tools)'],
     ['prometheus_source_read', 'prometheus_source_read (inspect Prometheus src/, web-ui/, and allowlisted root files)'],
     ['prometheus_source_write', 'prometheus_source_write (edit Prometheus app/source files for approved dev tasks)'],
     ['advanced_memory', 'advanced_memory (memory graph, timeline, related records, project search, index refresh)'],
     ['media_assets', 'media_assets (download/analyze images, video, audio, remote assets)'],
-    ['media_quality', 'media_quality (layout/video QA: contrast, overflow, frame renders, caption/audio timing)'],
+    ['creative_quality', 'creative_quality (creative QA: contrast, overflow, frame renders, caption/audio timing)'],
     ['automations', 'automations (schedule detail/history/outputs/patch/stuck control/dashboard)'],
     ['integration_admin', 'integration_admin (MCP server setup, webhooks, integration quick setup)'],
     ['external_apps', 'external_apps (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian)'],
@@ -885,7 +940,10 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['proposal_admin', 'proposal_admin (edit pending proposals before approval)'],
     ['mcp_server_tools', 'mcp_server_tools (dynamic mcp__server__tool functions from connected servers)'],
     ['composite_tools', 'composite_tools (saved multi-step tools and composite management)'],
-    ['creative_mode', 'creative_mode (creative editor tools)'],
+    ['creative_basic', 'creative_basic (Creative canvas/project/element/style/export basics)'],
+    ['creative_image', 'creative_image (Creative image, asset, layer, cutout, icon, generation tools)'],
+    ['creative_video', 'creative_video (Creative video, shot, storyboard, audio, caption, sequence/composition tools)'],
+    ['creative_hyperframes', 'creative_hyperframes (HyperFrames and HTML motion clip/template tools)'],
     ['skills', 'skills (skill authoring, packaging, import/export, and resource maintenance)'],
     ['model_management', 'model_management (agent fleet model administration and templates)'],
     ['business', 'business (structured business entity lifecycle administration)'],
@@ -899,7 +957,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     'prometheus_source_write',
     'advanced_memory',
     'media_assets',
-    'media_quality',
+    'creative_quality',
     'automations',
     'external_apps',
     'integration_admin',
@@ -907,7 +965,10 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     'proposal_admin',
     'mcp_server_tools',
     'composite_tools',
-    'creative_mode',
+    'creative_basic',
+    'creative_image',
+    'creative_video',
+    'creative_hyperframes',
     'skills',
     'model_management',
     'business',
@@ -917,14 +978,14 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     .map(([, label]) => label)
     .join(' | ');
 
-  const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill tools including skill_list/skill_read/skill_resource_*/skill_inspect/skill_manifest_write/skill_import_bundle/skill_create_bundle, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
+  const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill tools including skill_list/skill_read/skill_resource_*/skill_inspect/skill_update_metadata/skill_manifest_write/skill_import_bundle/skill_create_bundle, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
-  Use: request_tool_category({"category":"browser"}) — stays active for the whole session.
+  Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
 
-[FILE EDIT ROUTING] For workspace edits, activate/use file_ops and follow: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts as the default file editor.
+[FILE EDIT ROUTING] For workspace edits, activate/use file_ops and follow: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use terminal/Python/PowerShell/sed/node scripts as the default file editor.
 
-[RUN COMMAND ROUTING] For shell/dev-server/process work, activate workspace_write. Use run_command for bounded commands; use start_process plus process_status/process_log/process_wait/process_kill/process_submit for long-running or interactive commands.
+[RUN COMMAND ROUTING] For shell/dev-server/process work, activate workspace_write. Use terminal(action:"run", command) for bounded commands; use terminal(action:"start", command) for long-running or interactive commands; manage runIds with terminal(action:"status"|"log"|"wait"|"kill"|"submit").
 
 [PROPOSAL LANES] When using write_proposal, set execution_mode explicitly:
 - code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings. Do not use code_change for prom-root/config/build scripts unless the proposal lane explicitly supports that scope.
@@ -937,7 +998,7 @@ SHOPPING: for products, shopping comparisons, prices, ratings, or product carous
 HOW: complex topics → call web_search 2–3× with different angles (not the same query twice). Scan snippets → web_fetch the 1–3 most relevant URLs. Add site:domain.com to target a source.
 FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
 ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.
-For broad coverage use web_search_multi(query,max_results?) or web_search(..., provider:"multi"). For provider checks use web_search_single(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg"|"xai") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
+For broad coverage use web_search(..., provider:"multi") or web_search(..., multi_engine:true). For provider checks use web_search(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg"|"xai") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
 
 [WRITE NOTE] write_note(content, tag?) is always available — use it to preserve context between sessions.
 WHEN TO WRITE: something was discussed, decided, or discovered that future sessions should know about; a file/task/plan step completed; data gathered from browser/desktop/API mid-task.
@@ -1032,7 +1093,18 @@ export async function buildPersonalityContext(
   extraCats?: Set<string>,
   options?: BuildPersonalityContextOptions,
 ): Promise<string> {
+  if ((getSessionSkillWindowsFn as unknown) instanceof Set || getSessionSkillWindowsFn == null) {
+    options = (setCurrentTurn && typeof setCurrentTurn === 'object' && !((setCurrentTurn as unknown) instanceof Set))
+      ? (setCurrentTurn as unknown as BuildPersonalityContextOptions)
+      : options;
+    extraCats = (getSessionSkillWindowsFn as unknown) instanceof Set ? getSessionSkillWindowsFn as unknown as Set<string> : extraCats;
+    getSessionSkillWindowsFn = (() => new Map<string, SkillWindow>()) as any;
+    setCurrentTurn = (() => {}) as any;
+  } else if (typeof setCurrentTurn !== 'function') {
+    setCurrentTurn = (() => {}) as any;
+  }
   const profile = options?.profile || 'default';
+  const skillContextOptions = options?.excludedSkillIds?.length ? { excludedSkillIds: options.excludedSkillIds } : undefined;
 
   // ── Path LOCAL_LLM: tiny prompt for small local model primaries ───────────────
   // Activated only when isLocalPrimary() is true in chat.router.ts.
@@ -1063,7 +1135,7 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchTeach = buildToolCategoryMatchContext(messageText, activatedCatsTeach);
-    const skillCtxTeach = skillsManager.buildTurnContext(messageText);
+    const skillCtxTeach = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtxTeach = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
@@ -1114,7 +1186,7 @@ export async function buildPersonalityContext(
     const referenceHint = isPublicDistributionBuild()
       ? ''
       : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map. The Voice Agent has direct voice-system notes below and should dispatch to the worker if it needs to read more files.`;
-    const skillCtx = skillsManager.buildTurnContext(messageText);
+    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
@@ -1153,7 +1225,7 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchSwitch = buildToolCategoryMatchContext(messageText, activatedCatsSwitch);
-    const skillCtx = skillsManager.buildTurnContext(messageText);
+    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
@@ -1197,7 +1269,7 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchBackground = buildToolCategoryMatchContext(messageText, activatedCatsBackground);
-    const skillCtx = skillsManager.buildTurnContext(messageText);
+    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
     const referenceHintBackground = isPublicDistributionBuild()
       ? ''
@@ -1207,6 +1279,7 @@ export async function buildPersonalityContext(
     return assembleContext(
       [
         messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
+        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
         subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
@@ -1255,7 +1328,7 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchSub = buildToolCategoryMatchContext(messageText, activatedCatsSub);
-    const skillCtx = skillsManager.buildTurnContext(messageText);
+    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
     const referenceHintSub = isPublicDistributionBuild()
       ? ''
@@ -1264,6 +1337,7 @@ export async function buildPersonalityContext(
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
       [
+        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
         subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
@@ -1331,7 +1405,7 @@ export async function buildPersonalityContext(
     const toolCategoryMatchAuto = buildToolCategoryMatchContext(messageText, activatedCatsAuto);
     const toolsBlockAuto = buildToolsContext(activatedCatsAuto);
     // Autonomous agents: same hint + pinned skills as interactive chat.
-    const skillCtx = skillsManager.buildTurnContext(messageText);
+    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
@@ -1382,7 +1456,7 @@ export async function buildPersonalityContext(
     }
     const toolCategoryMatchT1 = buildToolCategoryMatchContext(messageText, activatedCatsT1);
     // First turn: still get the skills hint + any pinned skills.
-    const skillCtxT1 = skillsManager.buildTurnContext(messageText);
+    const skillCtxT1 = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtxT1 = buildActiveSkillsContext(sessionId, skillsManager);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
@@ -1438,7 +1512,7 @@ export async function buildPersonalityContext(
     : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use read_file('self/index.md'). Follow its links to focused self/* subsystem files as needed.`;
 
   // Skills: one-liner hint + any pinned skills injected in full.
-  const skillCtx = skillsManager.buildTurnContext(messageText);
+  const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
   const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
 
   await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
@@ -1449,6 +1523,7 @@ export async function buildPersonalityContext(
       soul ? `[SOUL]\n${soul}` : '',
       business ? `[BUSINESS]\n${business}` : '',
       memory ? `[MEMORY]\n${memory}` : '',
+      buildSubagentsRosterBlock(),
       projectContextBlockT2 ? `[PROJECT_CONTEXT]\n${projectContextBlockT2}` : '',
       toolsBlock,
     ],

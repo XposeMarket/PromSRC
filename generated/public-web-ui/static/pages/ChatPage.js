@@ -591,6 +591,7 @@ const chatContextWindowState = {
   loading: false,
   open: false,
   expanded: false,
+  expandedRows: new Set(),
   lastSessionId: '',
   lastFetchAt: 0,
   refreshTimer: 0,
@@ -633,21 +634,46 @@ function renderChatContextRows(rows, windowTokens) {
   const metrics = document.querySelector('#chat-context-window-popover .chat-context-window-metrics');
   if (!metrics) return;
   const source = Array.isArray(rows) && rows.length ? rows : [];
-  metrics.innerHTML = source.map((row) => {
+  const renderRow = (row, depth = 0) => {
     const tokens = Math.max(0, Number(row?.tokens || 0));
     const active = row?.active !== false && tokens > 0;
     const muted = row?.outOfBand === true ? ' is-out-of-band' : '';
     const percentText = row?.percentLabel
       ? String(row.percentLabel)
       : (row?.percentBasis === 'window' ? formatContextPercent(tokens, windowTokens) : '');
+    const children = Array.isArray(row?.children) ? row.children.filter(Boolean) : [];
+    const rowId = String(row?.id || row?.label || `row_${depth}`);
+    const expandable = children.length > 0;
+    const expanded = expandable && chatContextWindowState.expandedRows.has(rowId);
+    const tag = expandable ? 'button' : 'div';
+    const typeAttr = expandable ? ' type="button"' : '';
+    const dataAttr = expandable ? ` data-ccw-row-id="${escHtml(rowId)}" aria-expanded="${expanded ? 'true' : 'false'}"` : '';
+    const titleAttr = row?.estimated ? ' title="Estimated drill-down; parent total is authoritative."' : '';
+    const caret = expandable ? `<span class="chat-context-window-caret" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>` : '';
+    const estimate = row?.estimated ? '<span class="chat-context-window-estimate">est</span>' : '';
+    const childHtml = expanded ? children.map((child) => renderRow(child, depth + 1)).join('') : '';
     return `
-      <div class="chat-context-window-row${active ? ' is-active' : ''}${muted}">
-        <span class="chat-context-window-label"><span class="chat-context-window-swatch"></span>${escHtml(row?.label || 'Context')}</span>
+      <${tag}${typeAttr}${dataAttr}${titleAttr} class="chat-context-window-row${active ? ' is-active' : ''}${muted}${expandable ? ' is-expandable' : ''}${depth > 0 ? ' is-child' : ''}" style="--ccw-depth:${Math.max(0, depth)};">
+        <span class="chat-context-window-label">${caret}<span class="chat-context-window-swatch"></span>${escHtml(row?.label || 'Context')}${estimate}</span>
         <span class="chat-context-window-value">${formatContextTokenCount(tokens)}</span>
         <span class="chat-context-window-percent">${escHtml(percentText)}</span>
-      </div>
+      </${tag}>
+      ${childHtml}
     `;
-  }).join('');
+  };
+  metrics.innerHTML = source.map((row) => renderRow(row, 0)).join('');
+  metrics.querySelectorAll('[data-ccw-row-id]').forEach((row) => {
+    row.addEventListener('click', toggleChatContextWindowRow);
+  });
+}
+
+function toggleChatContextWindowRow(event) {
+  if (event) event.stopPropagation();
+  const id = event?.currentTarget?.dataset?.ccwRowId;
+  if (!id) return;
+  if (chatContextWindowState.expandedRows.has(id)) chatContextWindowState.expandedRows.delete(id);
+  else chatContextWindowState.expandedRows.add(id);
+  renderChatContextWindow(chatContextWindowState.data);
 }
 
 function renderChatContextWindow(data = chatContextWindowState.data) {
@@ -882,6 +908,7 @@ function makeEmptyStreamState() {
     currentProgressThinkingText: '',
     liveTraceEntries: [],
     finalResponseStarted: false,
+    agentExecutionMode: '',
     runtimeProgressState: { source: 'none', activeIndex: -1, items: [] },
     declaredPlanToolCounter: 0,
     declaredPlanToolActiveIndex: -1,
@@ -997,15 +1024,17 @@ function normalizeQueuedChatTurn(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const message = String(value.message || value.text || '').trim();
     const files = Array.isArray(value.files) ? value.files : [];
-    return { message, files };
+    const excludedSkillIds = Array.isArray(value.excludedSkillIds) ? value.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
+    return { message, files, excludedSkillIds };
   }
-  return { message: String(value || '').trim(), files: [] };
+  return { message: String(value || '').trim(), files: [], excludedSkillIds: [] };
 }
 
-function makeQueuedChatTurn(message, files = []) {
+function makeQueuedChatTurn(message, files = [], options = {}) {
   return {
     message: String(message || '').trim(),
     files: Array.isArray(files) ? files.slice() : [],
+    excludedSkillIds: Array.isArray(options.excludedSkillIds) ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
   };
 }
 
@@ -5045,13 +5074,17 @@ function renderQueuedPromptsPanel() {
   const panel = document.getElementById('queued-prompts-panel');
   const list = document.getElementById('queued-prompts-list');
   const title = document.getElementById('queued-prompts-title');
-  if (!panel || !list || !title) return;
+  if (!panel || !list || !title) {
+    updateBackgroundSpawnDockOffset();
+    return;
+  }
   const queue = getActiveQueuedPrompts();
   window.queuedPrompts = queue;
   const count = queue.length;
   if (count === 0) {
     panel.style.display = 'none';
     list.innerHTML = '';
+    updateBackgroundSpawnDockOffset();
     return;
   }
   panel.style.display = 'block';
@@ -5070,6 +5103,7 @@ function renderQueuedPromptsPanel() {
       </div>
     </div>
   `).join('');
+  updateBackgroundSpawnDockOffset();
 }
 
 function removeQueuedPrompt(index) {
@@ -5252,6 +5286,7 @@ function updateQueuedPromptUI() {
       : 'Type a message... (Enter to send, Shift+Enter for newline)';
   }
   renderQueuedPromptsPanel();
+  updateBackgroundSpawnDockOffset();
 }
 
 function getVoicePendingTurns() {
@@ -10444,7 +10479,13 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
         ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
         : `${isWorkerHandoff ? '<div class="msg-role voice-handoff-role">Voice Agent to Worker</div>' : ''}${renderUserMessageContent(msg)}`);
     const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
-    const assistantQuestionHtml = !isUser ? renderInlinePrometheusQuestion(msg.questionRequest) : '';
+    // While the turn is live, a pending question is docked in the streaming
+    // bubble instead — suppress the history copy so it isn't shown twice. A
+    // question-only message (no content/approval) then renders nothing here.
+    const isPendingQuestionMsg = !!msg.questionRequest && String(msg.questionRequest.status || 'pending').toLowerCase() === 'pending';
+    const suppressDockedQuestion = isPendingQuestionMsg && isSessionThinking(options.sessionId || window.activeChatSessionId);
+    if (suppressDockedQuestion && !msg.content && !msg.approvalRequest) return '';
+    const assistantQuestionHtml = (!isUser && !suppressDockedQuestion) ? renderInlinePrometheusQuestion(msg.questionRequest) : '';
     const assistantContentHtml = !isUser
       ? `${assistantApprovalHtml}${assistantQuestionHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
       : userContentHtml;
@@ -10491,10 +10532,11 @@ function renderSessionThinkingHtml(sessionId) {
   const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || []);
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
   const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
+  const pendingQuestionHtml = renderStreamingPrometheusQuestionHtml(sessionId);
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !answerStarted && !!liveTraceHtml;
-  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
+  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml && !pendingQuestionHtml;
   const currentProcessOpen = !!st.currentTurnProcessOpen;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
@@ -10529,6 +10571,7 @@ function renderSessionThinkingHtml(sessionId) {
             }
             ${liveApprovalsHtml}
             ${processPanelHtml}
+            ${pendingQuestionHtml}
             ${inlinePlanHtml}
           </div>
           ${processActionHtml}
@@ -10658,7 +10701,7 @@ function captureQuestionDraftState() {
       // Only the card root carries data-question-id with a child input structure.
       const qid = card.getAttribute('data-question-id');
       if (!qid || !card.classList || !card.classList.contains('chat-question-card')) return;
-      const state = { checked: [], texts: {}, others: {}, general: '' };
+      const state = { checked: [], texts: {}, others: {}, general: '', focus: null };
       card.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked').forEach((el) => {
         state.checked.push(`${el.getAttribute('data-question-id') || ''}::${el.value}`);
       });
@@ -10666,6 +10709,25 @@ function captureQuestionDraftState() {
       card.querySelectorAll('[data-question-other]').forEach((el) => { state.others[el.getAttribute('data-question-other')] = { value: el.value || '', hidden: el.hasAttribute('hidden') }; });
       const gen = card.querySelector('[data-question-general-other="1"]');
       if (gen) state.general = gen.value || '';
+      // Preserve which textbox is focused + caret position, so streaming
+      // re-renders don't steal focus / interrupt typing.
+      try {
+        const active = document.activeElement;
+        if (active && card.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
+          let kind = '', key = '';
+          if (active.hasAttribute('data-question-general-other')) { kind = 'general'; }
+          else if (active.hasAttribute('data-question-text')) { kind = 'text'; key = active.getAttribute('data-question-text') || ''; }
+          else if (active.hasAttribute('data-question-other')) { kind = 'other'; key = active.getAttribute('data-question-other') || ''; }
+          if (kind) {
+            state.focus = {
+              kind,
+              key,
+              selStart: typeof active.selectionStart === 'number' ? active.selectionStart : null,
+              selEnd: typeof active.selectionEnd === 'number' ? active.selectionEnd : null,
+            };
+          }
+        }
+      } catch {}
       out[qid] = state;
     });
   } catch {}
@@ -10693,6 +10755,23 @@ function restoreQuestionDraftState(map) {
       });
       const gen = card.querySelector('[data-question-general-other="1"]');
       if (gen) gen.value = state.general || '';
+      // Re-focus the textbox the user was typing in and restore the caret,
+      // so a streaming re-render mid-keystroke doesn't drop focus.
+      try {
+        if (state.focus && state.focus.kind) {
+          let el = null;
+          if (state.focus.kind === 'general') el = gen;
+          else if (state.focus.kind === 'text') el = card.querySelector(`[data-question-text="${(window.CSS && CSS.escape) ? CSS.escape(state.focus.key) : state.focus.key}"]`);
+          else if (state.focus.kind === 'other') el = card.querySelector(`[data-question-other="${(window.CSS && CSS.escape) ? CSS.escape(state.focus.key) : state.focus.key}"]`);
+          if (el && !el.hasAttribute('hidden') && document.activeElement !== el) {
+            el.focus({ preventScroll: true });
+            const len = el.value ? el.value.length : 0;
+            const s = state.focus.selStart == null ? len : Math.min(state.focus.selStart, len);
+            const e = state.focus.selEnd == null ? len : Math.min(state.focus.selEnd, len);
+            if (typeof el.setSelectionRange === 'function') el.setSelectionRange(s, e);
+          }
+        }
+      } catch {}
     });
   } catch {}
 }
@@ -10859,7 +10938,7 @@ async function copyChatMessage(originalIndex, ev) {
   await copyTextToClipboard(text, 'Message copied', '', 'success');
 }
 
-function forkConversationFromAssistantMessage(originalIndex, ev) {
+async function forkConversationFromAssistantMessage(originalIndex, ev) {
   if (ev) ev.stopPropagation();
   const history = window.chatHistory || [];
   const msg = history[originalIndex];
@@ -10891,6 +10970,15 @@ function forkConversationFromAssistantMessage(originalIndex, ev) {
   window.editingUserMessageIndex = -1;
   saveChatSessions();
   syncActiveChat();
+  // Seed the backend session with the forked history. /api/chat builds context purely
+  // from the server-side session store (getSession(sessionId).history) and ignores the
+  // request `history` array, so without this the new session starts empty and the next
+  // turn behaves like a fresh chat with no prior context.
+  try {
+    await syncSessionHistoryToServerById(id, forkedHistory, { resetCompaction: true });
+  } catch (err) {
+    console.warn('[ChatPage] failed to seed forked session history on server:', err);
+  }
   showToast('Conversation forked', 'Continue from the new branch when ready.', 'success');
 }
 
@@ -11921,6 +12009,26 @@ function renderInlineRuntimePlanHtml(progressState) {
   `;
 }
 
+// The pending Prometheus question for a session is docked inside the live
+// streaming bubble (below the tool stream, above the Process button) — the same
+// slot as the plan-progress panel — so it reads as part of the active turn that
+// is blocked waiting on the answer, instead of a detached history card.
+function findPendingPrometheusQuestionForSession(sessionId) {
+  const sess = getChatSessionById(sessionId);
+  if (!sess || !Array.isArray(sess.history)) return null;
+  for (let i = sess.history.length - 1; i >= 0; i--) {
+    const q = sess.history[i]?.questionRequest;
+    if (q && String(q.status || 'pending').toLowerCase() === 'pending') return q;
+  }
+  return null;
+}
+
+function renderStreamingPrometheusQuestionHtml(sessionId) {
+  const question = findPendingPrometheusQuestionForSession(sessionId);
+  if (!question) return '';
+  return `<div class="streaming-question-dock">${renderInlinePrometheusQuestion(question)}</div>`;
+}
+
 function getTaskProgressItems(task) {
   const runtimeItems = Array.isArray(task?.runtimeProgress?.items) ? task.runtimeProgress.items : [];
   if (runtimeItems.length > 0) {
@@ -12218,6 +12326,7 @@ let skillTriggerPillExpanded = false;
 let skillTriggerSelectedId = '';
 let skillTriggerLastKey = '';
 let skillTriggerCacheLoadPromise = null;
+let skillTriggerExcludedIds = new Set();
 
 const SKILL_TRIGGER_STOPWORDS = new Set([
   'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
@@ -12297,6 +12406,27 @@ function getInstalledSkillCache() {
   return Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [];
 }
 
+function normalizeSkillTriggerExclusionId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getSkillTriggerIdentity(skill) {
+  return String(skill?.id || skill?.name || '').trim();
+}
+
+function getSkillTriggerExcludedIds() {
+  return Array.from(skillTriggerExcludedIds || []).filter(Boolean);
+}
+
+function clearSkillTriggerExclusions() {
+  skillTriggerExcludedIds = new Set();
+}
+
+function isSkillTriggerExcluded(skill) {
+  const key = normalizeSkillTriggerExclusionId(getSkillTriggerIdentity(skill));
+  return !!key && skillTriggerExcludedIds.has(key);
+}
+
 function ensureSkillTriggerCacheLoaded() {
   if (getInstalledSkillCache().length || skillTriggerCacheLoadPromise) return;
   const loader = typeof window.loadInstalledSkills === 'function'
@@ -12318,6 +12448,7 @@ function getComposerSkillMatches(value) {
   const words = text.split(/\W+/).filter((word) => word.length > 2);
   if (!text.trim()) return [];
   return getInstalledSkillCache()
+    .filter((skill) => !isSkillTriggerExcluded(skill))
     .filter((skill) => getSkillTriggerCandidates(skill).some((trigger) => skillTriggerMatchesText(trigger, text, words)))
     .slice(0, 8);
 }
@@ -12342,6 +12473,16 @@ function openSkillTriggerDescription(id) {
   skillTriggerPillExpanded = true;
   const input = document.getElementById('chat-input');
   renderSkillTriggerPill(input ? input.value : '');
+}
+
+function removeComposerSkillMatch(id) {
+  const key = normalizeSkillTriggerExclusionId(id);
+  if (!key) return;
+  skillTriggerExcludedIds.add(key);
+  if (normalizeSkillTriggerExclusionId(skillTriggerSelectedId) === key) skillTriggerSelectedId = '';
+  const input = document.getElementById('chat-input');
+  renderSkillTriggerPill(input ? input.value : '');
+  if (typeof showToast === 'function') showToast('Skill removed from this message', 'It will not be sent as a matching skill for this turn.', 'info', 1800);
 }
 
 function toggleSkillTriggerPill() {
@@ -12389,8 +12530,11 @@ function renderSkillTriggerPill(value = '') {
       </div>
       <div class="skill-trigger-description">
         ${selectedSkill ? `
-          <strong>${escHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
-          <span>${escHtml(selectedSkill.description || 'No description available.')}</span>
+          <div class="skill-trigger-description-copy">
+            <strong>${escHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
+            <span>${escHtml(selectedSkill.description || 'No description available.')}</span>
+          </div>
+          <button type="button" class="skill-trigger-remove" data-skill-id="${escHtml(getSkillTriggerIdentity(selectedSkill))}">Remove</button>
         ` : '<span>Select a skill to preview its description.</span>'}
       </div>
     ` : ''}
@@ -12410,6 +12554,10 @@ function renderSkillTriggerPill(value = '') {
       openSkillTriggerDescription(button.getAttribute('data-skill-id') || '');
     });
   });
+  pill.querySelector('.skill-trigger-remove')?.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    removeComposerSkillMatch(event.currentTarget?.getAttribute('data-skill-id') || '');
+  });
 
   pill.style.display = 'flex';
   if (shouldPop) {
@@ -12421,6 +12569,7 @@ function renderSkillTriggerPill(value = '') {
 
 function handleSkillTriggerInput(input) {
   if (!input) return;
+  if (!String(input.value || '').trim()) clearSkillTriggerExclusions();
   ensureSkillTriggerCacheLoaded();
   renderSkillTriggerPill(input.value);
 }
@@ -12587,6 +12736,7 @@ function clearChatComposerAfterSend(input) {
     input.style.height = 'auto';
   }
   clearActiveSlashCommand({ focus: false });
+  clearSkillTriggerExclusions();
   hideSkillTriggerPill();
 }
 
@@ -12639,6 +12789,9 @@ async function sendChat(queuedMessage = null, options = {}) {
   const message = String(raw || '').trim();
   if (!message) return;
   if (!queuedTurn && handleImmediateChatSlashCommand(message)) return;
+  const excludedSkillIds = queuedTurn
+    ? (Array.isArray(queuedTurn.excludedSkillIds) ? queuedTurn.excludedSkillIds.slice() : [])
+    : getSkillTriggerExcludedIds();
   const forcedSessionId = String(options.sessionIdOverride || '').trim();
   if (!forcedSessionId) ensureActiveChatSessionExists();
   const thisSessionId = forcedSessionId || window.activeChatSessionId; // capture at send time — stable through async closure
@@ -12722,6 +12875,11 @@ async function sendChat(queuedMessage = null, options = {}) {
     streamState.finalResponseStarted = false;
     if (window.activeChatSessionId === thisSessionId) window.streamingAIText = '';
   };
+  const shouldRouteTokenToLiveTrace = () => {
+    if (!window.useAgentMode || streamState.finalResponseStarted) return false;
+    const mode = String(streamState.agentExecutionMode || '').trim();
+    return mode !== 'chat';
+  };
   const sessionHistoryRef = thisSession ? (thisSession.history || (thisSession.history = [])) : window.chatHistory;
   if (thisSession && window.activeChatSessionId === thisSessionId) {
     window.chatHistory = sessionHistoryRef;
@@ -12762,7 +12920,7 @@ async function sendChat(queuedMessage = null, options = {}) {
       return;
     }
     const queuedFiles = pendingChatFiles.length ? pendingChatFiles.slice() : [];
-    sessionQueue.push(makeQueuedChatTurn(message, queuedFiles));
+    sessionQueue.push(makeQueuedChatTurn(message, queuedFiles, { excludedSkillIds }));
     if (queuedFiles.length) {
       pendingChatFiles = [];
       renderChatFilePills();
@@ -13148,7 +13306,7 @@ async function sendChat(queuedMessage = null, options = {}) {
         'Accept': 'text/event-stream'
       },
 	      signal: turnAbortController.signal,
-	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, clientRequestId, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined, reasoning: buildReasoningPayload(), callerContext: turnCallerContext, origin: { channel: 'web', surface: 'desktop_app', device: 'computer', label: 'Desktop app', source: 'chat_page' } })
+	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, clientRequestId, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined, reasoning: buildReasoningPayload(), callerContext: turnCallerContext, excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined, origin: { channel: 'web', surface: 'desktop_app', device: 'computer', label: 'Desktop app', source: 'chat_page' } })
     });
 
     if (!res.ok) {
@@ -13181,6 +13339,7 @@ async function sendChat(queuedMessage = null, options = {}) {
           case 'agent_mode':
             window.lastAgentMode = event.mode || '-';
             window.lastTurnKind = event.turnKind || window.lastTurnKind;
+            streamState.agentExecutionMode = String(event.mode || streamState.agentExecutionMode || '').trim();
             if (event.mode === 'execute') {
               movePreToolAnswerTextIntoPreamble();
             }
@@ -13213,7 +13372,7 @@ async function sendChat(queuedMessage = null, options = {}) {
                 voiceLatencyFirstTokenLogged = true;
                 logDesktopVoiceLatency(thisSessionId, 'worker first token', voiceLatencyTurnStartedAt, { textLen: chunk.length });
               }
-              const treatAsLiveWorkflowProse = window.useAgentMode && !streamState.finalResponseStarted;
+              const treatAsLiveWorkflowProse = shouldRouteTokenToLiveTrace();
               if (treatAsLiveWorkflowProse) {
                 appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', chunk, { append: true });
               } else {
@@ -13824,10 +13983,25 @@ async function sendChat(queuedMessage = null, options = {}) {
 	      });
 	    }
     persistSession(thisSessionId);
-    if (finalReply && window.activeChatSessionId === thisSessionId && !realtimeAgentDispatch) {
-      speakAssistantReply(finalReply).catch((err) => {
-        addProcessEntry('warn', `Voice reply failed: ${String(err?.message || err)}`);
-      });
+    if (finalReply && window.activeChatSessionId === thisSessionId) {
+      const voiceAgentShouldSummarize = !!(
+        realtimeAgentDispatch
+        || (
+          wantsVoiceAgentRealtimeMode()
+          && voiceAgentRealtimeConnection?.dc?.readyState === 'open'
+          && String(voiceAgentRealtimeConnection?.sessionId || '') === String(thisSessionId || '')
+        )
+      );
+      if (voiceAgentShouldSummarize) {
+        requestVoiceAgentRealtimeFinalSummaryWithRetry(finalReply, {
+          key: `worker_final:${thisSessionId}:${finalReply.length}:${finalReply.slice(0, 120)}`,
+          sessionId: thisSessionId,
+        });
+      } else {
+        speakAssistantReply(finalReply).catch((err) => {
+          addProcessEntry('warn', `Voice reply failed: ${String(err?.message || err)}`);
+        });
+      }
     }
 
   } catch (err) {
@@ -14207,12 +14381,23 @@ function toggleBackgroundSpawnLane(id) {
 function renderBackgroundSpawnDock() {
   const dock = document.getElementById('background-spawn-dock');
   if (!dock) return;
+  updateBackgroundSpawnDockOffset();
+  const previousScroll = new Map();
+  dock.querySelectorAll('.background-spawn-lane[data-bg-id]').forEach((node) => {
+    const id = String(node.getAttribute('data-bg-id') || '');
+    const panel = node.querySelector('.background-spawn-panel');
+    if (id && panel) previousScroll.set(id, {
+      top: Number(panel.scrollTop || 0),
+      nearBottom: (panel.scrollHeight - panel.scrollTop - panel.clientHeight) < 6,
+    });
+  });
   const lanes = Array.from(ensureBackgroundSpawnDockMap().values())
     .filter((lane) => !lane.sessionId || lane.sessionId === String(window.activeChatSessionId || '').trim() || lane.sessionId === String(window.agentSessionId || '').trim())
     .sort((a, b) => a.startedAt - b.startedAt);
   dock.hidden = lanes.length === 0;
   if (!lanes.length) {
     dock.innerHTML = '';
+    updateBackgroundSpawnDockOffset();
     return;
   }
   dock.innerHTML = lanes.map((lane) => {
@@ -14245,6 +14430,25 @@ function renderBackgroundSpawnDock() {
     btn.addEventListener('click', () => {
       toggleBackgroundSpawnLane(btn.getAttribute('data-bg-toggle'));
     });
+  });
+  dock.querySelectorAll('.background-spawn-lane[data-bg-id]').forEach((node) => {
+    const id = String(node.getAttribute('data-bg-id') || '');
+    const panel = node.querySelector('.background-spawn-panel');
+    const saved = previousScroll.get(id);
+    if (!panel || !saved) return;
+    panel.scrollTop = saved.nearBottom ? panel.scrollHeight : saved.top;
+  });
+  updateBackgroundSpawnDockOffset();
+}
+
+function updateBackgroundSpawnDockOffset() {
+  const chatView = document.getElementById('chat-view');
+  const inputArea = document.querySelector('#chat-view > .chat-input-area');
+  if (!chatView || !inputArea) return;
+  requestAnimationFrame(() => {
+    const height = Math.ceil(inputArea.getBoundingClientRect?.().height || 0);
+    const bottom = Math.max(128, height + 34);
+    chatView.style.setProperty('--background-spawn-dock-bottom', `${bottom}px`);
   });
 }
 
@@ -14730,7 +14934,7 @@ function getCurrentRealtimeVoiceSpeed() {
   if (mode === 'xai') {
     const speed = Number(desktopVoiceSettings.xaiSpeed || realtimeVoiceSpeed || 1);
     if (!Number.isFinite(speed)) return 1;
-    return Math.max(0.5, Math.min(2, Math.round(speed * 100) / 100));
+    return Math.max(0.7, Math.min(1.5, Math.round(speed * 100) / 100));
   }
   return normalizeRealtimeVoiceSpeed(desktopVoiceSettings.realtimeSpeed || realtimeVoiceSpeed);
 }
@@ -14741,7 +14945,15 @@ function sendVoiceAgentRealtimeSpeedUpdate() {
   const speed = getCurrentRealtimeVoiceSpeed();
   try {
     if (voiceAgentRealtimeConnection?.provider === 'xai') {
-      dc.send(JSON.stringify({ type: 'session.update', session: { speed } }));
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          speed,
+          audio: {
+            output: { speed },
+          },
+        },
+      }));
     } else {
       dc.send(JSON.stringify({
         type: 'session.update',
@@ -17105,12 +17317,12 @@ function renderRealtimeVoiceSpeedSelect() {
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
   const options = mode === 'xai'
     ? [
+      { value: 0.7, label: '0.7x' },
       { value: 0.75, label: '0.75x' },
       { value: 1, label: '1.0x' },
       { value: 1.1, label: '1.1x' },
       { value: 1.25, label: '1.25x' },
       { value: 1.5, label: '1.5x' },
-      { value: 2, label: '2.0x' },
     ]
     : [
       { value: 0.9, label: '0.9x' },
@@ -17122,7 +17334,7 @@ function renderRealtimeVoiceSpeedSelect() {
     ];
   select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join('');
   const speed = mode === 'xai'
-    ? Math.max(0.5, Math.min(2, Number(desktopVoiceSettings.xaiSpeed || 1.0) || 1.0))
+    ? Math.max(0.7, Math.min(1.5, Number(desktopVoiceSettings.xaiSpeed || 1.0) || 1.0))
     : normalizeRealtimeVoiceSpeed(realtimeVoiceSpeed);
   select.value = options.some((option) => option.value === speed) ? String(speed) : (mode === 'xai' ? '1' : '1.1');
 }
@@ -17295,7 +17507,7 @@ function onRealtimeVoiceSpeedChanged() {
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
   const rawSpeed = Number(select?.value || (mode === 'xai' ? 1 : 1.1));
   const speed = mode === 'xai'
-    ? Math.max(0.5, Math.min(2, Math.round((Number.isFinite(rawSpeed) ? rawSpeed : 1) * 100) / 100))
+    ? Math.max(0.7, Math.min(1.5, Math.round((Number.isFinite(rawSpeed) ? rawSpeed : 1) * 100) / 100))
     : storeRealtimeVoiceSpeed(rawSpeed);
   saveDesktopVoiceSettings(mode === 'xai' ? { xaiSpeed: speed } : { realtimeSpeed: speed });
   if (select) select.value = String(speed);
@@ -17716,6 +17928,7 @@ let voiceAgentRealtimeConnection = null;       // { pc, dc, audio, micStream, mi
 let voiceAgentRealtimeConnecting = null;
 let voiceAgentRealtimeListenMode = 'idle';      // 'idle' | 'push_to_talk' | 'always_listening'
 const voiceAgentRealtimeFunctionCallBuffers = new Map(); // call_id -> { name, argsStr }
+let voiceAgentRealtimeLastHotRestartSummaryKey = '';
 
 // Quiet mode for the realtime end-to-end agent. We keep OpenAI's own STT running
 // (transcription stays on) but flip turn_detection.create_response OFF so the model
@@ -17882,6 +18095,70 @@ function requestVoiceAgentRealtimeWorkerNarration(reason = 'worker_context_tick'
     try { addProcessEntry?.('warn', `Realtime narration request failed: ${String(err?.message || err)}`); } catch {}
     return false;
   }
+}
+
+function requestVoiceAgentRealtimeFinalSummary(text, options = {}) {
+  const content = String(text || '').replace(/\s+/g, ' ').trim();
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!content || !dc || dc.readyState !== 'open') return false;
+  if (voiceAgentRealtimeQuiet?.active) return false;
+  const sid = String(options.sessionId || window.activeChatSessionId || '').trim();
+  const connSid = String(voiceAgentRealtimeConnection?.sessionId || '').trim();
+  if (sid && connSid && sid !== connSid) return false;
+  if (voiceAgentRealtimeConnection?.activeResponse || realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) return false;
+  try {
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: [
+            '[WORKER_FINAL_RESPONSE]',
+            'The Prometheus worker has finished. Give the user one natural spoken wrap-up in your own realtime voice.',
+            'Do not read this verbatim. Do not repeat the full worker answer. Do not preserve the worker wording or sentence order.',
+            'Summarize the result, outcome, or next useful thing conversationally. Quote only tiny names, paths, or labels when needed.',
+            'Keep it concise unless the result genuinely needs detail.',
+            '',
+            content.slice(0, 5000),
+            '[/WORKER_FINAL_RESPONSE]',
+          ].join('\n'),
+        }],
+      },
+    }));
+    dc.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        output_modalities: ['audio'],
+        instructions: 'You are Prometheus in realtime voice mode. Speak a natural, concise wrap-up grounded in the worker final response. Use your own words; do not read whole worker sentences unchanged or preserve its structure. Do not start new work.',
+      },
+    }));
+    return true;
+  } catch (err) {
+    try { addProcessEntry?.('warn', `Realtime final summary request failed: ${String(err?.message || err)}`); } catch {}
+    return false;
+  }
+}
+
+function requestVoiceAgentRealtimeFinalSummaryWithRetry(text, options = {}) {
+  const content = String(text || '').trim();
+  const key = String(options.key || `${String(options.sessionId || '')}:${content.length}:${content.slice(0, 120)}`);
+  if (!content || key === voiceAgentRealtimeLastHotRestartSummaryKey) return false;
+  const markIfSpoken = () => {
+    if (key === voiceAgentRealtimeLastHotRestartSummaryKey) return true;
+    const spoke = requestVoiceAgentRealtimeFinalSummary(content, options);
+    if (spoke) voiceAgentRealtimeLastHotRestartSummaryKey = key;
+    return spoke;
+  };
+  if (markIfSpoken()) return true;
+  if (voiceAgentRealtimeConnection?.dc?.readyState !== 'open' || voiceAgentRealtimeQuiet?.active) return false;
+  [900, 2400].forEach((delay) => {
+    setTimeout(() => {
+      try { markIfSpoken(); } catch {}
+    }, delay);
+  });
+  return false;
 }
 
 async function refreshVoiceAgentRealtimeWorkerContext(reason = 'manual_refresh', options = {}) {
@@ -19079,11 +19356,15 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
     // input_audio_transcription to surface user-speech transcripts. Send core
     // config first (must be accepted), then tools separately so a tools-schema
     // mismatch can't break the audio/transcription config.
+    const speed = getCurrentRealtimeVoiceSpeed();
     const coreSession = {
       modalities: ['audio', 'text'],
       instructions: bootstrap.instructions,
       voice: bootstrap.voice,
-      speed: getCurrentRealtimeVoiceSpeed(),
+      speed,
+      audio: {
+        output: { speed },
+      },
       input_audio_format: 'pcm16',
       output_audio_format: 'pcm16',
       input_audio_transcription: { model: 'grok-stt' },
@@ -36407,8 +36688,10 @@ function renderInlinePrometheusQuestion(item) {
     const options = (q.options || []).map((option, optIndex) => {
       const inputId = `${qName}__${optIndex}`;
       const type = q.mode === 'multi_select' ? 'checkbox' : 'radio';
+      // For single_select radios, allow re-clicking a checked option to deselect it.
+      const deselect = type === 'radio' ? ` onmousedown="toggleQuestionRadio(${encodeInlineJsString(inputId)})"` : '';
       return `<label for="${escHtml(inputId)}" class="pq-option">
-        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}" />
+        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}"${deselect} />
         <span>${escHtml(option)}</span>
       </label>`;
     }).join('');
@@ -36457,6 +36740,19 @@ function toggleQuestionOther(questionId, itemId) {
   const other = card?.querySelector?.(`[data-question-other="${cssEscapeValue(itemId)}"]`);
   if (!other) return;
   if (other.hasAttribute('hidden')) { other.removeAttribute('hidden'); other.focus(); } else { other.setAttribute('hidden', ''); }
+}
+
+// Single_select radios can't be deselected natively. On mousedown, if the radio
+// is already checked, cancel the event and uncheck it so the user can clear it.
+function toggleQuestionRadio(inputId) {
+  try {
+    const el = document.getElementById(inputId);
+    if (!el || el.type !== 'radio') return;
+    if (el.checked) {
+      // Defer until after the native click would have re-checked it.
+      setTimeout(() => { el.checked = false; el.dispatchEvent(new Event('change', { bubbles: true })); }, 0);
+    }
+  } catch {}
 }
 
 function collectPrometheusQuestionAnswers(question) {
@@ -36528,8 +36824,21 @@ function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
   if (window.activeChatSessionId === sessionId) renderChatMessages();
 }
 
+function findLocalPrometheusQuestionRecord(id) {
+  const qid = String(id || '').trim();
+  if (!qid) return null;
+  for (const sess of (window.chatSessions || [])) {
+    const msg = (sess.history || []).find((m) => String(m?.questionRequest?.id || '') === qid);
+    if (msg?.questionRequest) return msg.questionRequest;
+  }
+  return null;
+}
+
 async function submitInlinePrometheusQuestion(id) {
-  const question = await fetchPrometheusQuestionDetailsById(id);
+  // Prefer the locally-rendered question record so a slow/failed
+  // /api/questions fetch can't make Submit appear to do nothing. Fall back to
+  // the network only if the card isn't in local state.
+  const question = findLocalPrometheusQuestionRecord(id) || await fetchPrometheusQuestionDetailsById(id);
   if (!question) {
     showToast('Question missing', 'Could not load the pending question.', 'error');
     return;
@@ -36898,6 +37207,7 @@ if (typeof window.resolveInlineApproval !== 'function') window.resolveInlineAppr
 if (typeof window.submitInlinePrometheusQuestion !== 'function') window.submitInlinePrometheusQuestion = submitInlinePrometheusQuestion;
 if (typeof window.cancelInlinePrometheusQuestion !== 'function') window.cancelInlinePrometheusQuestion = cancelInlinePrometheusQuestion;
 if (typeof window.toggleQuestionOther !== 'function') window.toggleQuestionOther = toggleQuestionOther;
+if (typeof window.toggleQuestionRadio !== 'function') window.toggleQuestionRadio = toggleQuestionRadio;
 if (typeof window.loadApprovalProcessRun !== 'function') window.loadApprovalProcessRun = loadApprovalProcessRun;
 if (!window.__promProcessRunHandlersInstalled) {
   window.__promProcessRunHandlersInstalled = true;
@@ -37365,6 +37675,14 @@ wsEventBus.on('session_notification', async (msg) => {
       if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
       renderChatMessages();
     }
+    const restartText = String(msg.text || '').trim();
+    const notificationKey = String(msg.notificationId || `${restored?.id || msg.previousSessionId || ''}:${restartText.length}:${restartText.slice(0, 120)}`);
+    if (restartText && notificationKey !== voiceAgentRealtimeLastHotRestartSummaryKey) {
+      requestVoiceAgentRealtimeFinalSummaryWithRetry(restartText, {
+        key: notificationKey,
+        sessionId: restored?.id || msg.previousSessionId || msg.sessionId,
+      });
+    }
     ack();
     return;
   }
@@ -37818,6 +38136,11 @@ function handleMainChatStreamEvent(msg = {}) {
     streamState.streamingAIText = '';
     streamState.finalResponseStarted = false;
   };
+  const shouldRouteTokenToLiveTrace = () => {
+    if (streamState.finalResponseStarted) return false;
+    const mode = String(streamState.agentExecutionMode || '').trim();
+    return mode !== 'chat';
+  };
 
   if (evt.type === 'session_title') {
     applyServerSessionTitle(sid, evt.title);
@@ -37871,7 +38194,7 @@ function handleMainChatStreamEvent(msg = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
-      if (streamState.agentExecutionMode === 'execute' && !streamState.finalResponseStarted) {
+      if (shouldRouteTokenToLiveTrace()) {
         appendLiveTraceToStreamState(streamState, streamState.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
       } else {
         streamState.finalResponseStarted = true;

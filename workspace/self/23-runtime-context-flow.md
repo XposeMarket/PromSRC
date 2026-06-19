@@ -31,7 +31,7 @@ provider / model / vision flag
     │
     ▼
 [RECENT_TOOL_OBSERVATIONS] ─────────────── session.ts → chat.router.ts:1894
-prior tool run log (session-scoped)
+prior tool run log (session-scoped, lean by default; per-tool telemetry stored but only injected when explicitly requested)
     │
     ▼
 callerContext ──────────────────────────── mode-specific source (see below)
@@ -65,7 +65,7 @@ buildPersonalityContext() ──────────────── promp
     ├─ buildToolsContext() ────────────────── prompt-context.ts:795–925
     │    always-on tool menu
     │    TOOL_BLOCKS.skills (always)
-    │    TOOL_BLOCKS.{category} (per activated category)
+    │    TOOL_BLOCKS.{category} (persistent session categories plus unexpired scoped categories)
     │
     ├─ Skills hint ────────────────────────── skills-manager.ts:858–872
     │    [SKILLS] N playbooks / [MATCHING_SKILLS] if pre-matched
@@ -131,10 +131,44 @@ These arrive as the user turn, not the system prompt:
 
 | Path | Entry point |
 |------|-------------|
-| Context compactor | chat.router.ts:1527 — no persona, no memory |
+| Context compactor | chat.router.ts:1527 — no persona, no memory. Mid-workflow compaction also receives a bounded `[RECENT_REASONING_AND_DECISIONS]` block from the active turn's `allThinking` trail so conclusions, ruled-out files/searches, hypotheses, and next-step reasoning survive message trimming. |
 | Brain runner | brain-runner.ts — calls handleChat as `cron` (interactive personality) with a per-job tool allowlist; not a separate pipeline |
 | Realtime voice | realtime.router.ts:166–214 — separate pack |
 | Reactor subagents | reactor.ts:431 — soul-loader.buildSystemPrompt |
+
+---
+
+## Context-window microscope
+
+The live context-window endpoint is `GET /api/sessions/:id/context-window` in `src/gateway/routes/chat.router.ts`.
+
+As of 2026-06-18 it keeps the existing authoritative top-level rows (`Messages`, `System tools`, `System prompt`, `Skills`, `Tool observations`, storage/free-space rows), and adds nested `children` rows for drill-down in the desktop and mobile popovers.
+
+- `System tools` children are estimated from the current active tool schema surface, grouped by `getToolCategory()`, then scaled to the latest recorded `estimatedToolSchemaTokens`.
+- `System prompt` children are heuristic block estimates for the known runtime prompt layers (`[PROMETHEUS_SOUL]`, `[USER]`, `[SOUL]`, `[MEMORY]`, `[BUSINESS]`, `[PROJECT_CONTEXT]`, `[TODAY_NOTES]`, tools menu, activated tool blocks, caller/browser/model/base context). The parent `System prompt` total remains the authoritative number.
+- `Skills` children are also marked as estimates until the model-usage logger records exact skill hint / matching / active-skill block telemetry.
+- `Logged provider usage` is out-of-band and should not be treated as current context size. It drills into `Last provider call` and `Session provider total` so cache reads/writes can be inspected separately from current prompt rows.
+- Model-usage events record `estimatedSystemPromptTokens` and `estimatedConversationTokens` separately from total message input. The context-window UI must use that split for `System prompt`; do not infer prompt size by subtracting the current compacted chat history from the last provider call, because compaction and tool-category changes make those snapshots diverge.
+- Fresh/idle sessions may have no provider-call telemetry yet. In that case the endpoint estimates current active tool schema directly and builds a no-side-effect prompt estimate so `System tools` and `System prompt` do not collapse to zero before the first model call.
+
+Cache-accounting caution:
+
+- OpenAI/Codex-compatible providers report cache hits as `cached_tokens` inside normal input tokens, so calibration must not add cache-read tokens on top of input tokens.
+- Anthropic reports cache reads/writes separately from `input_tokens`, so calibration should add `cache_read_input_tokens` and `cache_creation_input_tokens` when comparing provider input against estimates.
+
+Tool category lifetime:
+
+- `activatedToolCategories` is the persistent session-scope category list.
+- `scopedToolCategoryActivations` is the temporary category list. It expires by monotonic `userTurnCounter`, not by raw history length, so rolling compaction or history replacement does not accidentally extend or erase scoped activations.
+- Main-chat auto-detection activates categories with `scope:"turn"` only. A category is available for the current assistant run and then falls out when the next user turn increments `userTurnCounter`.
+- `request_tool_category` defaults to `scope:"turn"`; use `scope:"session"` only for explicit ongoing workflows, `scope:"next_turn"` for one follow-up user turn, or `scope:"ttl"` with `turns` for bounded multi-turn work.
+- Creative categories remain manually requestable but are intentionally not emitted by the generic auto-detection path.
+
+UI renderers:
+
+- Desktop: `web-ui/src/pages/ChatPage.js` renders expandable rows inside the context-window popover.
+- Mobile: `web-ui/src/mobile/mobile-context-window.js` renders the same `children` contract in the mobile context chip popover.
+- Public generated web UI must stay synced with `npm run sync:web-ui`.
 
 ---
 

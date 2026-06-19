@@ -1,0 +1,11 @@
+{
+  "skillId": "windows-shell-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-06-19T06:34:51.836Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\windows-shell-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "1b8bb9d68a606432"
+}

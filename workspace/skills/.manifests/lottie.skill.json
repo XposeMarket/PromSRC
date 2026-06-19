@@ -1,22 +1,22 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to use, inspect, embed, create, optimize, or troubleshoot Lottie animations, JSON animation assets, Bodymovin exports, animated icons, or lightweight vector motion in web/UI/video work. It focuses on asset fidelity and runtime compatibility.",
+  "description": "Use this skill when using, inspecting, embedding, creating, optimizing, or troubleshooting Lottie animations, JSON animation assets, Bodymovin exports, animated icons, or lightweight web motion assets.",
   "triggers": [
-    "Lottie",
-    "lottie animation",
-    "Bodymovin",
+    "Lottie animation",
+    "Bodymovin export",
+    "Lottie JSON",
     "animated icon",
-    "lottie JSON",
     "embed Lottie",
     "optimize Lottie",
-    "vector animation",
-    "lottie player",
-    "animated illustration",
-    "JSON animation",
-    "lottie asset",
-    "lottie export",
-    "UI animation asset"
+    "inspect Lottie file",
+    "create Lottie",
+    "troubleshoot Lottie",
+    "lightweight animation asset",
+    "Lottie web animation",
+    "convert animation to Lottie",
+    "Lottie player",
+    "animation JSON asset"
   ],
   "categories": [
     "creative",
@@ -25,9 +25,9 @@
   ],
   "requiredTools": [
     "media_assets",
-    "creative_mode"
+    "creative_basic",
+    "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Lottie",
   "id": "lottie"
 }

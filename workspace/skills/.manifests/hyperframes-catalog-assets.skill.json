@@ -1,32 +1,31 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to use, inspect, browse, import, adapt, or verify HyperFrames catalog assets, templates, examples, components, or registry-provided clips for Creative Video work. It favors real catalog assets over hand-authored approximations.",
+  "description": "Use this skill when finding, organizing, importing, or using HyperFrames catalog assets, reusable components, scene templates, visual assets, typography packs, or motion snippets.",
   "triggers": [
-    "HyperFrames catalog",
-    "catalog assets",
     "HyperFrames assets",
-    "browse templates",
+    "catalog assets",
+    "scene template",
+    "reusable motion asset",
+    "import asset to HyperFrames",
+    "asset pack",
+    "motion component",
+    "HyperFrames catalog",
     "video template",
-    "registry asset",
-    "clip catalog",
-    "import HyperFrames template",
-    "HyperFrames component",
-    "catalog-first",
-    "asset registry",
-    "inspect catalog",
-    "add catalog clip",
-    "use template",
-    "creative video asset"
+    "use existing assets",
+    "visual asset library",
+    "typography asset",
+    "reusable scene",
+    "catalog component"
   ],
   "categories": [
     "creative",
-    "video",
-    "hyperframes"
+    "hyperframes",
+    "assets"
   ],
   "requiredTools": [
-    "creative_mode",
-    "media_assets"
+    "creative_hyperframes",
+    "workspace_write"
   ],
   "lifecycle": "active",
   "id": "hyperframes-catalog-assets"

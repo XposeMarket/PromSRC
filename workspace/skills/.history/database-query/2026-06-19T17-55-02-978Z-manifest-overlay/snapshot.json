@@ -1,0 +1,11 @@
+{
+  "skillId": "database-query",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:02.981Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\database-query",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "769a7489d29ac018"
+}

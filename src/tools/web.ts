@@ -2044,11 +2044,30 @@ export const webSearchMultiTool = {
 
 export const webFetchTool = {
   name: 'web_fetch',
-  description: 'Fetch and extract the text content of any URL. For X/Twitter status URLs, returns structured tweet/thread data and will attempt to download and analyze attached media automatically.',
-  execute: executeWebFetch,
+  description: 'Fetch and extract text content from one URL, or from multiple URLs in parallel when urls is provided. For X/Twitter status URLs, returns structured tweet/thread data and will attempt to download and analyze attached media automatically.',
+  execute: (args: { url?: string; urls?: string[]; max_chars?: number; concurrency?: number }, progress?: WebFetchProgressReporter) =>
+    Array.isArray(args?.urls) && args.urls.length
+      ? executeWebFetchBatch({ urls: args.urls, max_chars: args.max_chars, concurrency: args.concurrency }, progress)
+      : executeWebFetch({ url: args?.url || '', max_chars: args?.max_chars }, progress),
   schema: {
-    url: 'string (required) - Full URL to fetch (include https://)',
-    max_chars: 'number (optional, default 10000) - Max characters to return',
+    url: 'string (optional) - Single full URL to fetch (include https://)',
+    urls: 'string[] (optional, max 20) - Multiple full URLs to fetch in parallel',
+    max_chars: 'number (optional) - Single fetch max characters, or max characters per URL for urls',
+    concurrency: 'number (optional, default 4, max 8) - Batch-only parallel fetches',
+  },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: 'Single full URL to fetch.' },
+      urls: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Multiple full URLs to fetch. Duplicate and blank URLs are ignored. Max 20.',
+      },
+      max_chars: { type: 'number', description: 'Single fetch max characters, or max characters per URL for urls.' },
+      concurrency: { type: 'number', description: 'Batch-only parallel fetches. Default 4, max 8.' },
+    },
+    additionalProperties: false,
   },
 };
 

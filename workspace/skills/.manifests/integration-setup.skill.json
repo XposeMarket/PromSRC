@@ -1,28 +1,31 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to connect, configure, troubleshoot, verify, or document an integration, connector, OAuth app, webhook, API credential, external app, or MCP server. It starts with connector availability and ends with a tested integration path.",
+  "description": "Use this skill when setting up, connecting, debugging, or verifying external app integrations, OAuth flows, connector setup, API app registrations, webhooks, redirect URLs, and connection status.",
   "triggers": [
+    "set up integration",
+    "connect this app",
     "integration setup",
-    "connect app",
-    "setup connector",
-    "configure integration",
     "OAuth setup",
+    "redirect URI",
+    "app registration",
+    "connector setup",
     "webhook setup",
-    "API integration",
-    "MCP server setup",
-    "external app connection",
-    "connector troubleshooting",
-    "integration test",
-    "add integration",
-    "connect Gmail",
-    "connect Slack",
-    "connect GitHub"
+    "connection status",
+    "integration failed",
+    "authorize account",
+    "add connected app",
+    "configure integration",
+    "verify integration works",
+    "external app setup",
+    "reconnect service",
+    "integration credentials"
   ],
   "categories": [
     "integrations",
+    "connectors",
     "setup",
-    "automation"
+    "auth"
   ],
   "requiredTools": [
     "connector_list",

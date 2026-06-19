@@ -1,32 +1,32 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when a scheduled or delegated @raulinvests X/Twitter posting workflow needs to publish or prepare one original post using browser automation, schedule-owner memory, duplicate checks, no-em-dash copy, keyboard-first X composer fallback, browser_close cleanup, and post-run logging. Use it for prompts like autonomous X posting, scheduled X post, Mara post run, tweet from @raulinvests, or update the X post schedule.",
+  "description": "Use this skill when Mara or a scheduled/delegated @raulinvests X/Twitter workflow needs to publish or prepare one original post that complements the broader engagement strategy and avoids generic AI voice.",
   "triggers": [
-    "x post",
-    "tweet",
-    "autonomous x posting",
-    "scheduled posting",
-    "prometheus x posts",
+    "Mara post workflow",
     "scheduled X post",
-    "Mara post run",
-    "@raulinvests post",
-    "post via browser automation",
-    "keyboard compose on X",
-    "no em dash tweet",
-    "X post schedule",
-    "schedule-owner memory"
+    "@raulinvests original post",
+    "publish one tweet",
+    "prepare X post",
+    "X posting workflow",
+    "daily X post",
+    "scheduled tweet job",
+    "original post strategy",
+    "raulinvests tweet",
+    "approval packet for tweet",
+    "Mara scheduled post",
+    "post queue for X",
+    "one original X post"
   ],
   "categories": [
     "social",
-    "X/Twitter",
-    "scheduled workflow",
-    "browser automation",
-    "content"
+    "x",
+    "automation",
+    "scheduled-jobs"
   ],
   "requiredTools": [
     "browser_automation",
-    "file_ops",
+    "workspace_write",
     "skills"
   ],
   "lifecycle": "active",

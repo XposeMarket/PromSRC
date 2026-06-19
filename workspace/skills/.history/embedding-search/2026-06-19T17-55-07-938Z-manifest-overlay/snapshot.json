@@ -1,0 +1,11 @@
+{
+  "skillId": "embedding-search",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:07.942Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\embedding-search",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "aa733a2fba641795"
+}

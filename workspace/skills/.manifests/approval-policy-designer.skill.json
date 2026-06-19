@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when designing, auditing, or changing Prometheus approval/confirmation policy for shell, file mutation, browser/desktop final actions, posting, purchasing, deleting, source edits, connectors, or high-impact tool gates.",
+  "triggers": [
+    "approval policy",
+    "confirmation gate",
+    "final action approval",
+    "require approval before",
+    "tool approval rules",
+    "browser final action",
+    "desktop final action",
+    "source edit approval",
+    "shell approval",
+    "delete confirmation",
+    "purchase approval",
+    "posting approval",
+    "approval UX",
+    "audit approval gates",
+    "change approval policy",
+    "high impact action gate",
+    "one-shot approval"
+  ],
+  "categories": [
+    "prometheus",
+    "security",
+    "approvals",
+    "tools"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "integration_admin"
+  ],
+  "lifecycle": "active",
+  "id": "approval-policy-designer"
+}

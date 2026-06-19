@@ -6,6 +6,66 @@ import { embedMemoryHash } from '../memory/embeddings/hash-provider';
 import { rerankMmr } from '../memory/ranking/mmr';
 import { temporalDecayMultiplier } from '../memory/ranking/temporal-decay';
 
+// ── Query embedding cache ─────────────────────────────────────────────────────
+// Avoids re-calling OpenAI (or any cloud provider) on repeated / closely-spaced
+// identical searches.  TTL is 30 seconds — short enough not to serve stale
+// vectors after a provider switch, long enough to cover typical chat bursts.
+const QUERY_EMBED_TTL_MS = 30_000;
+type QueryEmbedCacheEntry = { vector: number[]; providerId: string; model: string; dimensions: number; ts: number };
+const _queryEmbedCache = new Map<string, QueryEmbedCacheEntry>();
+
+const QUERY_EMBED_TIMEOUT_MS = Math.max(500, Math.min(5_000, Number(process.env.PROMETHEUS_MEMORY_QUERY_EMBED_TIMEOUT_MS || 2_500) || 2_500));
+const QUERY_EMBED_SUPPRESS_MS = Math.max(30_000, Math.min(30 * 60_000, Number(process.env.PROMETHEUS_MEMORY_QUERY_EMBED_SUPPRESS_MS || 5 * 60_000) || 5 * 60_000));
+type QueryEmbedSuppression = { until: number; reason: string };
+const _queryEmbedSuppressions = new Map<string, QueryEmbedSuppression>();
+
+function getQueryEmbedSuppression(providerId: string): QueryEmbedSuppression | null {
+  const suppression = _queryEmbedSuppressions.get(providerId);
+  if (!suppression) return null;
+  if (Date.now() >= suppression.until) { _queryEmbedSuppressions.delete(providerId); return null; }
+  return suppression;
+}
+
+function suppressQueryEmbeddingProvider(providerId: string, reason: string): void {
+  if (!providerId || providerId === 'hash') return;
+  _queryEmbedSuppressions.set(providerId, { until: Date.now() + QUERY_EMBED_SUPPRESS_MS, reason: reason.slice(0, 500) });
+}
+
+function isFastFallbackEmbeddingError(message: string): boolean {
+  return /\b(429|rate.?limit|quota|insufficient_quota|too many requests|timeout|timed out|abort|aborted)\b/i.test(message);
+}
+
+async function withQueryEmbeddingTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${label} timed out after ${QUERY_EMBED_TIMEOUT_MS}ms`)), QUERY_EMBED_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+
+function getCachedQueryEmbed(key: string): QueryEmbedCacheEntry | null {
+  const entry = _queryEmbedCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > QUERY_EMBED_TTL_MS) { _queryEmbedCache.delete(key); return null; }
+  return entry;
+}
+
+function setCachedQueryEmbed(key: string, entry: Omit<QueryEmbedCacheEntry, 'ts'>): void {
+  // Evict oldest entries if cache grows large (safety valve)
+  if (_queryEmbedCache.size > 200) {
+    const oldest = [..._queryEmbedCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+    if (oldest) _queryEmbedCache.delete(oldest[0]);
+  }
+  _queryEmbedCache.set(key, { ...entry, ts: Date.now() });
+}
+
 type MemoryIndexSourceType =
   | 'chat_session'
   | 'chat_transcript'
@@ -171,7 +231,7 @@ type MemorySearchResult = {
   totalCandidates: number;
   hits: MemorySearchHit[];
   citations?: NonNullable<MemorySearchHit['citation']>[];
-  stats: { records: number; chunks: number; indexedAt: string; backend?: string; embedding?: any; rerank?: string };
+  stats: { records: number; chunks: number; indexedAt: string; backend?: string; embedding?: any; rerank?: string; telemetry?: any };
 };
 
 type ResolvedMemoryRecord = {
@@ -221,10 +281,36 @@ const AUTHORITY_WEIGHT: Record<string, number> = {
 
 let DatabaseCtor: any | undefined;
 let databaseLoadError = '';
+let sqliteDisabledReason = '';
+let sqliteDisabledAt = 0;
+
+function classifySqliteFailure(message: string): string {
+  const text = String(message || '').trim();
+  if (!text) return 'unknown sqlite failure';
+  if (/NODE_MODULE_VERSION|was compiled against|re-compile|re-install|invalid ELF|not a valid Win32|specified module could not be found/i.test(text)) {
+    return `native module unavailable: ${text}`;
+  }
+  return text;
+}
+
+function disableSqliteForProcess(reason: string): void {
+  sqliteDisabledReason = classifySqliteFailure(reason);
+  sqliteDisabledAt = Date.now();
+  for (const db of _readDbCache.values()) {
+    try { if (db?.open) db.close(); } catch { /* best effort */ }
+  }
+  _readDbCache.clear();
+}
+
+export function getSqliteMemoryDisabledState(): { disabled: boolean; reason?: string; disabledAt?: string } {
+  return sqliteDisabledReason
+    ? { disabled: true, reason: sqliteDisabledReason, disabledAt: new Date(sqliteDisabledAt || Date.now()).toISOString() }
+    : { disabled: false };
+}
 
 function loadBetterSqlite(): any | null {
   if (DatabaseCtor) return DatabaseCtor;
-  if (databaseLoadError) return null;
+  if (sqliteDisabledReason || databaseLoadError) return null;
   try {
     // Lazy require keeps memory_search functional when native bindings need rebuild.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -232,6 +318,7 @@ function loadBetterSqlite(): any | null {
     return DatabaseCtor;
   } catch (err: any) {
     databaseLoadError = String(err?.message || err);
+    disableSqliteForProcess(databaseLoadError);
     return null;
   }
 }
@@ -246,17 +333,19 @@ export function getSqliteMemoryStatus(workspacePath: string): {
 } {
   const dbPath = sqlitePath(workspacePath);
   const Database = loadBetterSqlite();
-  if (!Database) return { available: false, path: dbPath, error: databaseLoadError || 'better-sqlite3 unavailable' };
+  if (!Database) return { available: false, path: dbPath, error: sqliteDisabledReason || databaseLoadError || 'better-sqlite3 unavailable' };
   try {
     const db = openDb(workspacePath);
-    if (!db) return { available: false, path: dbPath, error: databaseLoadError || 'open failed' };
+    if (!db) return { available: false, path: dbPath, error: sqliteDisabledReason || databaseLoadError || 'open failed' };
     const records = Number(db.prepare('SELECT COUNT(*) AS n FROM memory_records').get()?.n || 0);
     const chunks = Number(db.prepare('SELECT COUNT(*) AS n FROM memory_chunks').get()?.n || 0);
     const indexedAt = String(db.prepare("SELECT value FROM memory_index_state WHERE key = 'indexed_at'").get()?.value || '');
     db.close();
     return { available: true, path: dbPath, records, chunks, indexedAt };
   } catch (err: any) {
-    return { available: false, path: dbPath, error: String(err?.message || err) };
+    const message = String(err?.message || err);
+    disableSqliteForProcess(message);
+    return { available: false, path: dbPath, error: sqliteDisabledReason || message };
   }
 }
 
@@ -264,16 +353,40 @@ function sqlitePath(workspacePath: string): string {
   return path.join(workspacePath, 'audit', '_index', 'memory', 'memory.sqlite');
 }
 
+// ── Persistent read connection cache ──────────────────────────────────────────
+// better-sqlite3 is synchronous and single-threaded; WAL mode supports
+// concurrent readers, so we keep one open connection per workspace path and
+// reuse it for all read-only operations (search, readRecord, getRelated).
+// Write/migrate operations (syncSqlite*, backfill*) open their own short-lived
+// connection as before so they never share state with the read cache.
+const _readDbCache = new Map<string, SqliteDatabase>();
+
+function getCachedDb(workspacePath: string): SqliteDatabase | null {
+  const existing = _readDbCache.get(workspacePath);
+  if (existing && existing.open) return existing;
+  const db = openDb(workspacePath);
+  if (!db) return null;
+  _readDbCache.set(workspacePath, db);
+  return db;
+}
+
 function openDb(workspacePath: string): SqliteDatabase | null {
+  if (sqliteDisabledReason) return null;
   const Database = loadBetterSqlite();
   if (!Database) return null;
   const dbPath = sqlitePath(workspacePath);
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  initializeSchema(db);
-  return db;
+  try {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.pragma('cache_size = -8000'); // 8 MB page cache
+    initializeSchema(db);
+    return db;
+  } catch (err: any) {
+    disableSqliteForProcess(String(err?.message || err));
+    return null;
+  }
 }
 
 function initializeSchema(db: SqliteDatabase): void {
@@ -353,6 +466,11 @@ function initializeSchema(db: SqliteDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_memory_chunks_record ON memory_chunks(record_id);
     CREATE INDEX IF NOT EXISTS idx_memory_edges_from ON memory_edges(from_id);
     CREATE INDEX IF NOT EXISTS idx_memory_edges_to ON memory_edges(to_id);
+    -- Performance indexes added for date-range filters, durability filter, and sorted scans
+    CREATE INDEX IF NOT EXISTS idx_memory_records_timestamp ON memory_records(timestamp_ms);
+    CREATE INDEX IF NOT EXISTS idx_memory_records_durability ON memory_records(durability);
+    CREATE INDEX IF NOT EXISTS idx_memory_records_updated_at ON memory_records(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_memory_records_layer_source ON memory_records(layer, source_type);
   `);
 
   db.exec(`
@@ -372,11 +490,25 @@ function initializeSchema(db: SqliteDatabase): void {
     );
   `);
 
-  const embeddingColumns = new Set(
-    db.prepare('PRAGMA table_info(memory_embeddings)').all().map((row: any) => String(row.name)),
+  // Gate the ALTER TABLE migration behind a schema_version key so we only pay
+  // the PRAGMA table_info cost once per process after a schema upgrade, not on
+  // every connection open.  Version '2' means both columns already exist.
+  const schemaVersion = String(
+    db.prepare("SELECT value FROM memory_index_state WHERE key = 'schema_version'").get()?.value || '1'
   );
-  if (!embeddingColumns.has('provider_id')) db.exec("ALTER TABLE memory_embeddings ADD COLUMN provider_id TEXT NOT NULL DEFAULT 'hash'");
-  if (!embeddingColumns.has('dimensions')) db.exec('ALTER TABLE memory_embeddings ADD COLUMN dimensions INTEGER NOT NULL DEFAULT 96');
+  if (schemaVersion < '2') {
+    const embeddingColumns = new Set(
+      db.prepare('PRAGMA table_info(memory_embeddings)').all().map((row: any) => String(row.name)),
+    );
+    if (!embeddingColumns.has('provider_id')) db.exec("ALTER TABLE memory_embeddings ADD COLUMN provider_id TEXT NOT NULL DEFAULT 'hash'");
+    if (!embeddingColumns.has('dimensions')) db.exec('ALTER TABLE memory_embeddings ADD COLUMN dimensions INTEGER NOT NULL DEFAULT 96');
+    db.prepare("INSERT OR REPLACE INTO memory_index_state (key, value) VALUES ('schema_version', '2')").run();
+  }
+
+  // Add embedding index if not present (cheap IF NOT EXISTS)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_memory_embeddings_provider ON memory_embeddings(provider_id, model);
+  `);
 }
 
 function norm(s: string): string {
@@ -531,7 +663,7 @@ export function syncSqliteMemoryIndex(workspacePath: string, store: EvidenceStor
 } {
   const db = openDb(workspacePath);
   const dbPath = sqlitePath(workspacePath);
-  if (!db) return { ok: false, path: dbPath, records: 0, chunks: 0, error: databaseLoadError || 'better-sqlite3 unavailable' };
+  if (!db) return { ok: false, path: dbPath, records: 0, chunks: 0, error: sqliteDisabledReason || databaseLoadError || 'better-sqlite3 unavailable' };
 
   const operational = readOperationalRecords(workspacePath);
   const nowIso = new Date().toISOString();
@@ -886,11 +1018,27 @@ type SqliteSearchVector = {
   dimensions: number;
 };
 
-function searchSqliteMemoryIndexWithVector(workspacePath: string, params: MemorySearchParams, queryVector?: SqliteSearchVector): MemorySearchResult | null {
-  const db = openDb(workspacePath);
-  if (!db) return null;
+function searchSqliteMemoryIndexWithVector(workspacePath: string, params: MemorySearchParams, queryVector?: SqliteSearchVector, baseTelemetry: Record<string, any> = {}): MemorySearchResult | null {
+  const startedAt = Date.now();
+  const phases: Record<string, number> = { ...(baseTelemetry.phases || {}) };
+  const markPhase = (name: string, phaseStartedAt: number) => { phases[name] = Math.max(0, Date.now() - phaseStartedAt); };
+  if (sqliteDisabledReason) {
+    baseTelemetry.sqlite_disabled = true;
+    baseTelemetry.sqlite_disabled_reason = sqliteDisabledReason;
+    return null;
+  }
+  const openStartedAt = Date.now();
+  const db = getCachedDb(workspacePath);
+  markPhase('open_cached_db_ms', openStartedAt);
+  if (!db) {
+    baseTelemetry.sqlite_disabled = Boolean(sqliteDisabledReason);
+    baseTelemetry.sqlite_disabled_reason = sqliteDisabledReason || databaseLoadError || 'open failed';
+    return null;
+  }
   try {
+    const countStartedAt = Date.now();
     const recordCount = Number(db.prepare('SELECT COUNT(*) AS n FROM memory_records').get()?.n || 0);
+    markPhase('count_records_ms', countStartedAt);
     if (!recordCount) return null;
 
     const q = String(params.query || '').trim();
@@ -919,6 +1067,7 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
     const candidates = new Map<string, { row: any; chunkText?: string; fts: number; lexical: string[] }>();
 
     if (query) {
+      const ftsStartedAt = Date.now();
       const where = filters.where.length ? `AND ${filters.where.join(' AND ')}` : '';
       const recordRows = db.prepare(`
         SELECT r.*, e.embedding, e.provider_id, e.model, e.dimensions, bm25(memory_fts) AS rank_score
@@ -958,9 +1107,11 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
         };
         if (!existing || fts > existing.fts) candidates.set(row.id, { row: mergedRow, chunkText: row.chunk_text, fts, lexical });
       }
+      markPhase('fts_query_ms', ftsStartedAt);
     }
 
     if (!candidates.size || mode === 'deep' || mode === 'timeline') {
+      const scanStartedAt = Date.now();
       const where = filters.where.length ? `WHERE ${filters.where.join(' AND ')}` : '';
       const rows = db.prepare(`
         SELECT r.*, e.embedding, e.provider_id, e.model, e.dimensions
@@ -976,8 +1127,10 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
         const lexical = qTerms.filter((term) => rowTerms.has(term));
         candidates.set(row.id, { row, fts: lexical.length ? lexical.length / Math.max(1, qTerms.length) : 0.05, lexical });
       }
+      markPhase('candidate_scan_ms', scanStartedAt);
     }
 
+    const rankingStartedAt = Date.now();
     const ranked = [...candidates.values()]
       .map((entry) => {
         const scored = scoreRow(
@@ -998,7 +1151,9 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
         if (mode === 'timeline') return Number(a.entry.row.timestamp_ms || 0) - Number(b.entry.row.timestamp_ms || 0);
         return b.score - a.score || Number(b.entry.row.timestamp_ms || 0) - Number(a.entry.row.timestamp_ms || 0);
       });
+    markPhase('rank_candidates_ms', rankingStartedAt);
 
+    const rerankStartedAt = Date.now();
     const reranked = mode === 'timeline' || params.rerank === false
       ? ranked.slice(0, limit)
       : rerankMmr(
@@ -1015,7 +1170,9 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
           };
           return { ...item, diagnostics, score: diagnostics.finalScore };
         });
+    markPhase('rerank_ms', rerankStartedAt);
 
+    const hydrateStartedAt = Date.now();
     const hits = reranked
       .map(({ entry, score, diagnostics }, index) => rowToHit(entry.row, score, index + 1, {
         exactTerms: [],
@@ -1024,9 +1181,12 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
         recordTypeReason: entry.row.layer === 'operational' ? `authority:${entry.row.authority || 'operational'}` : undefined,
         recencyReason: recencyBias ? 'recency bias' : undefined,
       }, entry.chunkText, diagnostics));
+    markPhase('hydrate_hits_ms', hydrateStartedAt);
 
+    const statsStartedAt = Date.now();
     const chunks = Number(db.prepare('SELECT COUNT(*) AS n FROM memory_chunks').get()?.n || 0);
     const indexedAt = String(db.prepare("SELECT value FROM memory_index_state WHERE key = 'indexed_at'").get()?.value || '');
+    markPhase('stats_query_ms', statsStartedAt);
     return {
       query: q,
       mode,
@@ -1046,11 +1206,24 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
           dimensions: activeQueryVector.dimensions || undefined,
         },
         rerank: mode === 'timeline' || params.rerank === false ? 'disabled' : 'mmr',
+        telemetry: {
+          ...(baseTelemetry || {}),
+          total_ms: Math.max(0, Date.now() - startedAt),
+          phases,
+          candidate_count: candidates.size,
+          ranked_count: ranked.length,
+          returned_hits: hits.length,
+          vector_provider_used: activeQueryVector.providerId,
+          vector_model_used: activeQueryVector.model,
+          requested_vector_used: canUseRequestedVector,
+        },
       },
     };
-  } finally {
-    try { db.close(); } catch {}
+  } catch (err: any) {
+    disableSqliteForProcess(String(err?.message || err));
+    throw err;
   }
+  // db is a cached connection — not closed here
 }
 
 export function searchSqliteMemoryIndex(workspacePath: string, params: MemorySearchParams): MemorySearchResult | null {
@@ -1064,22 +1237,88 @@ export function searchSqliteMemoryIndex(workspacePath: string, params: MemorySea
 }
 
 export async function searchSqliteMemoryIndexAsync(workspacePath: string, params: MemorySearchParams): Promise<MemorySearchResult | null> {
+  const startedAt = Date.now();
+  const phases: Record<string, number> = {};
+  const markPhase = (name: string, phaseStartedAt: number) => { phases[name] = Math.max(0, Date.now() - phaseStartedAt); };
+  if ((params.mode || 'quick') === 'quick' && process.env.PROMETHEUS_MEMORY_QUICK_REMOTE_EMBEDDING !== '1') {
+    const result = searchSqliteMemoryIndex(workspacePath, params);
+    if (result) {
+      const stats: any = result.stats || {};
+      result.stats = {
+        ...stats,
+        telemetry: {
+          ...(stats.telemetry || {}),
+          async_total_before_search_ms: Math.max(0, Date.now() - startedAt),
+          quick_hash_fast_path: true,
+          quick_hash_fast_path_reason: 'quick mode skips remote query embeddings by default',
+          remote_embedding_opt_in_env: 'PROMETHEUS_MEMORY_QUICK_REMOTE_EMBEDDING=1',
+        },
+      } as any;
+    }
+    return result;
+  }
   try {
-    const provider = await getActiveMemoryEmbeddingProvider();
-    const embedded = await provider.embedQuery(String(params.query || ''));
+    const providerStartedAt = Date.now();
+    const provider = await withQueryEmbeddingTimeout(getActiveMemoryEmbeddingProvider(), 'memory embedding provider resolution');
+    markPhase('resolve_embedding_provider_ms', providerStartedAt);
+    const suppression = getQueryEmbedSuppression(provider.id);
+    if (suppression) {
+      throw new Error(`${provider.id} query embedding suppressed: ${suppression.reason}`);
+    }
+    const queryText = String(params.query || '');
+    const cacheKey = `${provider.id}::${provider.defaultModel}::${queryText}`;
+    let embedded = getCachedQueryEmbed(cacheKey);
+    const cacheHit = Boolean(embedded);
+    if (!embedded) {
+      const embedStartedAt = Date.now();
+      try {
+        const result = await withQueryEmbeddingTimeout(provider.embedQuery(queryText), `${provider.id} query embedding`);
+        markPhase('embed_query_ms', embedStartedAt);
+        embedded = { vector: result.vector, providerId: result.providerId, model: result.model, dimensions: result.dimensions, ts: 0 };
+        setCachedQueryEmbed(cacheKey, embedded);
+      } catch (err: any) {
+        markPhase('embed_query_ms', embedStartedAt);
+        const message = String(err?.message || err || 'embedding provider failed');
+        if (!provider.local || isFastFallbackEmbeddingError(message)) suppressQueryEmbeddingProvider(provider.id, message);
+        throw err;
+      }
+    }
     return searchSqliteMemoryIndexWithVector(workspacePath, params, {
       vector: embedded.vector,
       providerId: embedded.providerId,
       model: embedded.model,
       dimensions: embedded.dimensions,
+    }, {
+      async_total_before_search_ms: Math.max(0, Date.now() - startedAt),
+      phases,
+      query_embedding_cache_hit: cacheHit,
+      requested_embedding_provider: provider.id,
+      requested_embedding_model: provider.defaultModel,
     });
-  } catch {
-    return searchSqliteMemoryIndex(workspacePath, params);
+  } catch (err: any) {
+    const fallbackStartedAt = Date.now();
+    const result = searchSqliteMemoryIndex(workspacePath, params);
+    if (result) {
+      const stats: any = result.stats || {};
+      result.stats = {
+        ...stats,
+        telemetry: {
+          ...(stats.telemetry || {}),
+          async_total_before_search_ms: Math.max(0, Date.now() - startedAt),
+          async_fallback_reason: String(err?.message || err || 'embedding provider failed'),
+          async_hash_fallback_ms: Math.max(0, Date.now() - fallbackStartedAt),
+          async_phases: phases,
+          query_embedding_timeout_ms: QUERY_EMBED_TIMEOUT_MS,
+          query_embedding_suppression_ms: QUERY_EMBED_SUPPRESS_MS,
+        },
+      } as any;
+    }
+    return result;
   }
 }
 
 export function readSqliteMemoryRecord(workspacePath: string, recordId: string): ResolvedMemoryRecord | null {
-  const db = openDb(workspacePath);
+  const db = getCachedDb(workspacePath);
   if (!db) return null;
   try {
     const record = db.prepare('SELECT * FROM memory_records WHERE id = ? OR canonical_key = ?').get(recordId, recordId);
@@ -1124,7 +1363,7 @@ export function readSqliteMemoryRecord(workspacePath: string, recordId: string):
       })),
     };
   } finally {
-    try { db.close(); } catch {}
+    // db is a cached connection — do not close here
   }
 }
 
@@ -1143,7 +1382,7 @@ export async function backfillSqliteMemoryEmbeddings(workspacePath: string, opti
   error?: string;
 }> {
   const db = openDb(workspacePath);
-  if (!db) return { ok: false, provider: 'none', model: '', scanned: 0, updated: 0, skipped: 0, error: databaseLoadError || 'better-sqlite3 unavailable' };
+  if (!db) return { ok: false, provider: 'none', model: '', scanned: 0, updated: 0, skipped: 0, error: sqliteDisabledReason || databaseLoadError || 'better-sqlite3 unavailable' };
   try {
     const provider = await getActiveMemoryEmbeddingProvider(options?.provider);
     if (provider.id === 'hash' && !options?.force) {
@@ -1270,7 +1509,7 @@ function vectorsDimensionHint(db: SqliteDatabase, providerId: string, model: str
 }
 
 export function getRelatedSqliteMemory(workspacePath: string, recordId: string, limit = 8): MemorySearchHit[] | null {
-  const db = openDb(workspacePath);
+  const db = getCachedDb(workspacePath);
   if (!db) return null;
   try {
     const base = db.prepare('SELECT * FROM memory_records WHERE id = ? OR canonical_key = ?').get(recordId, recordId);
@@ -1290,7 +1529,7 @@ export function getRelatedSqliteMemory(workspacePath: string, recordId: string, 
       recordTypeReason: `related:${row.relation || 'edge'}`,
     }));
   } finally {
-    try { db.close(); } catch {}
+    // db is a cached connection — do not close here
   }
 }
 

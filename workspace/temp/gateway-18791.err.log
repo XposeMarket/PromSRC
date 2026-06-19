@@ -1,0 +1,3 @@
+[Gateway] Port 127.0.0.1:18789 is already in use.
+[Gateway] Another gateway instance is likely already running or the port is stuck.
+[Gateway] Close the other process or run: prom gateway stop

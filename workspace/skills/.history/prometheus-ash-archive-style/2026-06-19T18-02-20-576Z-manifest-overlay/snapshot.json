@@ -1,0 +1,12 @@
+{
+  "skillId": "prometheus-ash-archive-style",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T18:02:20.580Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-ash-archive-style",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "06b054baa9c8aaa9"
+}

@@ -1,23 +1,24 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to animate web pages, landing pages, scroll sequences, timelines, SVGs, text reveals, or polished UI motion using GSAP. It helps build timeline-based motion with ScrollTrigger-style thinking, sequencing, easing, and verification.",
+  "description": "Use this skill when building or editing GSAP animations, timelines, ScrollTrigger effects, staggered motion, landing-page motion, SVG animation, or advanced JavaScript animation sequencing.",
   "triggers": [
-    "GSAP",
-    "gsap animation",
-    "GreenSock",
-    "animation timeline",
+    "GSAP animation",
+    "use GSAP",
     "ScrollTrigger",
-    "text reveal",
+    "GSAP timeline",
+    "animate with GSAP",
+    "stagger animation",
     "scroll animation",
+    "SVG GSAP",
     "landing page animation",
-    "SVG animation",
-    "web motion",
+    "motion sequence",
     "timeline animation",
-    "motion choreography",
-    "animated hero",
-    "professional web animation",
-    "staggered animation"
+    "GreenSock",
+    "GSAP easing",
+    "pin section animation",
+    "reveal on scroll",
+    "advanced web animation"
   ],
   "categories": [
     "creative",
@@ -25,8 +26,9 @@
     "web-ui"
   ],
   "requiredTools": [
-    "creative_mode",
-    "workspace_write"
+    "workspace_write",
+    "creative_basic",
+    "browser_automation"
   ],
   "lifecycle": "active",
   "name": "GSAP",

@@ -1,35 +1,34 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when running Prometheus X/Twitter growth work: drafting posts, building approval packets, researching AI-agent conversations, finding reply opportunities, analyzing competitor/community signals, or operating an approved Prometheus social schedule with strict autonomy and truth/safety boundaries.",
+  "description": "Use this skill when running Prometheus X/Twitter growth work: drafting posts, approval packets, researching AI-agent conversations, finding reply opportunities, analyzing profiles, or planning growth loops.",
   "triggers": [
     "Prometheus X growth",
+    "grow Twitter account",
+    "X growth work",
+    "find reply opportunities",
+    "AI agent conversations on X",
+    "draft X posts for Prometheus",
     "X approval packet",
-    "Twitter growth",
-    "draft Prometheus posts",
-    "find X reply opportunities",
-    "AI agent social research",
-    "building in public posts",
-    "Prometheus social schedule",
-    "X content strategy",
-    "competitor signal mining",
-    "community signal mining",
-    "Prometheus product tweets",
-    "@PrometheusAI_x"
+    "social growth loop",
+    "analyze X profiles",
+    "engagement opportunities",
+    "Prometheus Twitter strategy",
+    "X content calendar",
+    "reply strategy",
+    "post ideas for X"
   ],
   "categories": [
     "social",
     "marketing",
     "growth",
-    "prometheus",
-    "x-twitter"
+    "prometheus"
   ],
   "requiredTools": [
     "browser_automation",
-    "web",
-    "composite_tools",
+    "web_search",
     "media_assets",
-    "creative_mode"
+    "creative_basic"
   ],
   "lifecycle": "active",
   "id": "prometheus-x-growth-operator"

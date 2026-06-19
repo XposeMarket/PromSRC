@@ -1,35 +1,36 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Raul asks to run an AI smoke research test, AI surface test, browser desktop AI test, focus Codex and Claude then search Reddit/X, or summarize live AI chatter from Claude/OpenClaw/Hermes style searches. It executes the repeatable desktop-plus-browser smoke workflow, sends screenshot proof after visible desktop focus actions unless Raul explicitly skips proof, collects read-only Reddit/X signals, and reports only after tool-backed verification.",
+  "description": "Use this skill when Raul asks Prometheus to run an AI surface smoke test across visible AI apps or web surfaces, such as focusing Codex/Claude, searching current AI chatter, checking Reddit/X/web results, and reporting what the AI ecosystem is saying.",
   "triggers": [
-    "run ai smoke research",
-    "ai surface test",
-    "codex claude reddit x test",
-    "search reddit and x for ai",
-    "focus codex and claude then search x",
-    "focus Codex and Claude then search Reddit",
-    "test browser desktop research",
-    "quick ai research workflow",
+    "AI smoke test",
+    "run an AI surface test",
+    "test Codex and Claude",
+    "focus Codex then search",
+    "browser desktop AI test",
+    "search Reddit for AI chatter",
+    "search X for AI chatter",
     "Claude OpenClaw Hermes search",
-    "summarize AI chatter",
-    "browser desktop ai test",
-    "do the AI smoke test",
-    "run that test again",
-    "send screenshot proof after focusing Codex",
-    "live AI chatter smoke test"
+    "check current AI discussion",
+    "live AI chatter",
+    "AI research smoke test",
+    "compare AI app surfaces",
+    "run the AI browser test",
+    "summarize AI ecosystem buzz",
+    "smoke test AI research flow"
   ],
   "categories": [
-    "browser automation",
-    "desktop automation",
     "research",
-    "smoke test",
-    "social intelligence"
+    "browser",
+    "desktop",
+    "smoke-test",
+    "ai"
   ],
   "requiredTools": [
     "browser_automation",
     "desktop_automation",
-    "skills"
+    "skills",
+    "web_search"
   ],
   "lifecycle": "active",
   "id": "ai-surface-smoke-research"

@@ -4,6 +4,7 @@ import {
   webSearch,
 } from '../../../tools/web';
 import { executeDownloadMedia, executeDownloadUrl } from '../../../tools/download-tools';
+import { executeCloneRepo } from '../../../tools/repo-tools';
 import { executeAnalyzeImage, executeAnalyzeVideo } from '../../../tools/media-analysis';
 import { executeGenerateImage } from '../../../tools/generate-image';
 import { executeGenerateVideo } from '../../../tools/generate-video';
@@ -21,6 +22,7 @@ const WEB_MEDIA_TOOL_NAMES = new Set([
   'web_fetch',
   'web_fetch_batch',
   'download_url',
+  'clone_repo',
   'download_media',
   'generate_image',
   'generate_video',
@@ -226,6 +228,26 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           result: toolResult.success
             ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'download_url complete' }, null, 2)
             : `ERROR: ${toolResult.error || 'download_url failed'}`,
+          error: toolResult.success !== true,
+        };
+      }
+
+      case 'clone_repo': {
+        const toolResult = await executeCloneRepo({
+          repo: String(args.repo || ''),
+          dest: args.dest != null ? String(args.dest) : undefined,
+          ref: args.ref != null ? String(args.ref) : undefined,
+          branch: args.branch != null ? String(args.branch) : undefined,
+          depth: args.depth != null ? Number(args.depth) : undefined,
+          paths: Array.isArray(args.paths) ? args.paths.map((p: any) => String(p)) : (args.paths != null ? String(args.paths) : undefined),
+          overwrite: args.overwrite === true,
+        });
+        return {
+          name,
+          args,
+          result: toolResult.success
+            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'clone_repo complete' }, null, 2)
+            : `ERROR: ${toolResult.error || 'clone_repo failed'}`,
           error: toolResult.success !== true,
         };
       }

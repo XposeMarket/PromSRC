@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when finding, indexing, normalizing, retrieving, deduplicating, or reasoning about generated artifacts from chats, tasks, teams, Brain runs, proposals, creative exports, reports, or tool outputs.",
+  "triggers": [
+    "find that artifact",
+    "artifact registry",
+    "generated artifact",
+    "index outputs",
+    "retrieve report",
+    "where did the file save",
+    "normalize artifacts",
+    "artifact metadata",
+    "task output file",
+    "team output artifact",
+    "Brain artifact",
+    "proposal output",
+    "creative export registry",
+    "artifact search",
+    "latest generated file",
+    "output catalog",
+    "save artifact reference",
+    "dedupe artifacts"
+  ],
+  "categories": [
+    "prometheus",
+    "artifacts",
+    "memory",
+    "workflow"
+  ],
+  "requiredTools": [
+    "advanced_memory",
+    "workspace_write",
+    "automations"
+  ],
+  "lifecycle": "active",
+  "id": "artifact-registry"
+}

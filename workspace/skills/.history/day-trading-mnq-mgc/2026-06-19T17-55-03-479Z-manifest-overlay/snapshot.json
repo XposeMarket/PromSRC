@@ -1,0 +1,12 @@
+{
+  "skillId": "day-trading-mnq-mgc",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:03.483Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\day-trading-mnq-mgc",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "8d5049fb2b7ced70"
+}

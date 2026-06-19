@@ -1,5 +1,6 @@
 import {
-  isRuntimeRecoverableAfterRestart,
+  isInterruptedByRestart,
+  getRestartInterruptEpoch,
   listDurableRuntimes,
   listInterruptedRuntimes,
   markActiveRuntimesInterrupted,
@@ -45,33 +46,49 @@ function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefine
   const toolName = String(runtime.checkpoint?.toolName || '').trim();
   if (!toolName) return undefined;
   if (toolName === 'gateway_restart') return toolName;
+  if (toolName === 'prom_apply_dev_changes') return toolName;
   if (/^(prom_)?dev_.*apply/i.test(toolName)) return toolName;
   if (/^(apply_)?dev_source_(changes|edit|patch)$/i.test(toolName)) return toolName;
   return undefined;
 }
 
-function buildCheckpointText(runtime: LiveRuntimeSnapshot, reason: string): string {
+type RestartCheckpointPhase = 'initiated' | 'recovered';
+
+function buildCheckpointText(runtime: LiveRuntimeSnapshot, reason: string, phase: RestartCheckpointPhase = 'initiated'): string {
   const plannedTool = plannedRestartToolName(runtime);
+  if (plannedTool) {
+    if (phase === 'recovered') {
+      return [
+        '[Hot restart checkpoint: planned by this chat]',
+        'Gateway Restart Successful - Prometheus Back Online ✅',
+      ].join('\n');
+    }
+    return [
+      '[Hot restart checkpoint: planned by this chat]',
+      'Gateway Restart Initiated',
+      '',
+      `Restart trigger: ${plannedTool}`,
+      'Prometheus called this restart tool from this chat.',
+    ].join('\n');
+  }
+
   const lines = [
-    plannedTool ? '[Hot restart checkpoint: planned by this chat]' : '[Interrupted by gateway restart]',
+    '[Interrupted by gateway restart]',
     `Runtime: ${runtime.label || runtime.kind}`,
     runtime.detail ? `Work: ${runtime.detail}` : '',
     `Reason: ${reason}`,
     runtime.checkpoint?.event ? `Last event: ${runtime.checkpoint.event}` : '',
     runtime.checkpoint?.message ? `Last progress: ${String(runtime.checkpoint.message).slice(0, 1000)}` : '',
     runtime.checkpoint?.toolName ? `Last tool: ${runtime.checkpoint.toolName}` : '',
-    plannedTool ? `Restart trigger: ${plannedTool}` : '',
     '',
-    plannedTool
-      ? 'Prometheus called this restart tool from this chat, so treat the restart boundary as the expected completion of that tool/apply flow rather than a failure or unexpected interruption.'
-      : 'Prometheus saved this checkpoint before shutdown. Continue from the latest known progress instead of restarting completed work.',
+    'Prometheus saved this checkpoint before shutdown. Continue from the latest known progress instead of restarting completed work.',
   ].filter(Boolean);
   return lines.join('\n');
 }
 
-function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: string): void {
+function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: string, phase: RestartCheckpointPhase = 'initiated'): void {
   if (!runtime.sessionId) return;
-  const content = buildCheckpointText(runtime, reason);
+  const content = buildCheckpointText(runtime, reason, phase);
   const recent = getHistory(runtime.sessionId, 8);
   const alreadyPresent = recent.some((msg) =>
     msg.role === 'assistant' && String(msg.content || '').trim() === content.trim()
@@ -177,11 +194,39 @@ function runtimeTimestamp(runtime: LiveRuntimeSnapshot): number {
   return Number(runtime.interruptedAt || runtime.updatedAt || runtime.startedAt || 0);
 }
 
-function isMainChatHotRestartRecoveryCandidate(runtime: LiveRuntimeSnapshot): boolean {
+function runtimeRestartEpoch(runtime: LiveRuntimeSnapshot): number {
+  return Number(runtime.recoveryData?.restartEpoch || 0);
+}
+
+// Resolve the epoch of the restart we're recovering from. In the process that did
+// the shutdown, getRestartInterruptEpoch() holds it. In a freshly-launched process
+// (normal restart), that's 0, so we derive it from the durable ledger: the most
+// recent restartEpoch stamped on any not-yet-recovered runtime IS this restart.
+// This is what lets us exclude runtimes that were paused/failed before the restart
+// (no restartEpoch stamp) and stale records from older crashes (lower epoch).
+function resolveActiveRestartEpoch(): number {
+  const live = getRestartInterruptEpoch();
+  if (live > 0) return live;
+  let max = 0;
+  for (const runtime of listDurableRuntimes()) {
+    const rd = runtime.recoveryData || {};
+    if (rd.recoveredAt || rd.recovery) continue;
+    const epoch = runtimeRestartEpoch(runtime);
+    if (epoch > max) max = epoch;
+  }
+  return max;
+}
+
+function isMainChatHotRestartRecoveryCandidate(runtime: LiveRuntimeSnapshot, sinceEpoch = 0): boolean {
   if (runtime.kind !== 'main_chat' || !runtime.sessionId) return false;
-  if (isRuntimeRecoverableAfterRestart(runtime)) return true;
+  // Only main-chat runtimes this restart actually interrupted.
+  if (isInterruptedByRestart(runtime, sinceEpoch)) return true;
+  // The explicit shutdown-marked checkpoint path also counts, but only when it
+  // belongs to this restart epoch (else it's a stale/older checkpoint).
   const recovery = String(runtime.recoveryData?.recovery || '').trim();
-  return recovery === 'chat_checkpointed';
+  if (recovery !== 'chat_checkpointed') return false;
+  if (sinceEpoch <= 0) return true;
+  return runtimeRestartEpoch(runtime) >= sinceEpoch;
 }
 
 function numberOrUndefined(value: unknown): number | undefined {
@@ -203,8 +248,9 @@ function formatRuntimeLastProgress(runtime: LiveRuntimeSnapshot, maxLen = 180): 
 
 export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs = 0): HotRestartMainChatRecovery[] {
   const cutoff = Math.max(Date.now() - Math.max(60_000, maxAgeMs), Number(sinceMs || 0));
+  const restartEpoch = resolveActiveRestartEpoch();
   const runtimes = listDurableRuntimes()
-    .filter((runtime) => isMainChatHotRestartRecoveryCandidate(runtime))
+    .filter((runtime) => isMainChatHotRestartRecoveryCandidate(runtime, restartEpoch))
     .filter((runtime) => runtimeTimestamp(runtime) >= cutoff)
     .sort((a, b) => runtimeTimestamp(b) - runtimeTimestamp(a));
 
@@ -254,20 +300,27 @@ export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs
     .sort((a, b) => b.interruptedAt - a.interruptedAt);
 }
 
-export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs = 0): string {
+export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs = 0, opts: { currentSessionId?: string } = {}): string {
   const cutoff = Math.max(Date.now() - Math.max(60_000, maxAgeMs), Number(sinceMs || 0));
+  const restartEpoch = resolveActiveRestartEpoch();
+  const currentSessionId = String(opts.currentSessionId || '').trim();
+
+  // Only runtimes THIS restart actually interrupted. Pre-paused/failed work and
+  // stale records from older crashes (no matching restartEpoch stamp) are excluded.
   const runtimes = listDurableRuntimes()
-    .filter((runtime) => isRuntimeRecoverableAfterRestart(runtime) || isMainChatHotRestartRecoveryCandidate(runtime))
+    .filter((runtime) => isInterruptedByRestart(runtime, restartEpoch) || isMainChatHotRestartRecoveryCandidate(runtime, restartEpoch))
     .filter((runtime) => runtimeTimestamp(runtime) >= cutoff)
     .sort((a, b) => runtimeTimestamp(b) - runtimeTimestamp(a));
 
-  if (!runtimes.length) return '(No interrupted runtime records were found for this restart window.)';
+  if (!runtimes.length) return '(No work was interrupted by this restart.)';
 
-  const lines: string[] = [];
-  for (const runtime of runtimes.slice(0, 12)) {
+  // Split task jobs (resume candidates) from interrupted chat threads.
+  const taskLines: string[] = [];
+  const otherChatThreads = new Map<string, { label: string; last: string; planned?: string }>();
+
+  for (const runtime of runtimes) {
     const recovery = String(runtime.recoveryData?.recovery || '').trim();
     const label = String(runtime.label || runtime.kind || 'runtime').trim();
-    const id = runtime.taskId || runtime.sessionId || runtime.id;
     const kind = String(runtime.kind || 'runtime');
     const last = formatRuntimeLastProgress(runtime, 140);
     if (runtime.taskId) {
@@ -276,21 +329,43 @@ export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs =
       const team = task?.teamSubagent ? ` team=${task.teamSubagent.teamId} agent=${task.teamSubagent.agentId}` : '';
       const resumeHint = recovery === 'task_auto_resumed'
         ? 'auto-resumed'
-        : `paused; ask before resuming. Resume command: task_control(action:"resume", task_id:"${runtime.taskId}")`;
-      lines.push(`- ${kind}: ${label} (${runtime.taskId})${team}; status=${status}; ${resumeHint}${last ? `; ${last}` : ''}`);
+        : `paused by this restart; ask before resuming. Resume command: task_control(action:"resume", task_id:"${runtime.taskId}")`;
+      taskLines.push(`- ${kind}: ${label} (${runtime.taskId})${team}; status=${status}; ${resumeHint}${last ? `; ${last}` : ''}`);
     } else if (runtime.kind === 'main_chat' && runtime.sessionId) {
-      const plannedTool = plannedRestartToolName(runtime);
-      const resumeHint = plannedTool
-        ? `planned restart boundary from ${plannedTool}; do not ask to resume just because this checkpoint exists`
-        : 'checkpoint saved; ask whether to continue in this chat';
-      lines.push(`- main_chat: ${label} (session ${runtime.sessionId}); ${resumeHint}${last ? `; ${last}` : ''}`);
-    } else {
-      lines.push(`- ${kind}: ${label} (${id}); marked interrupted${last ? `; ${last}` : ''}`);
+      const sessionId = String(runtime.sessionId).trim();
+      // The chat we're currently restarting INTO is handled by the live restart
+      // confirmation, not listed as an "other thread to go back to".
+      if (sessionId && sessionId !== currentSessionId && !otherChatThreads.has(sessionId)) {
+        otherChatThreads.set(sessionId, { label, last, planned: plannedRestartToolName(runtime) || undefined });
+      }
     }
   }
 
-  if (runtimes.length > 12) lines.push(`- ${runtimes.length - 12} more interrupted runtime(s) recorded.`);
-  return lines.join('\n');
+  const sections: string[] = [];
+
+  if (taskLines.length) {
+    sections.push('Tasks interrupted by this restart:');
+    sections.push(...taskLines.slice(0, 12));
+    if (taskLines.length > 12) sections.push(`- ${taskLines.length - 12} more interrupted task(s) recorded.`);
+  }
+
+  if (otherChatThreads.size) {
+    if (sections.length) sections.push('');
+    sections.push('Other chat threads you had open (interrupted by this restart — you can jump back to them):');
+    let count = 0;
+    for (const [sessionId, info] of otherChatThreads) {
+      if (count >= 8) break;
+      const note = info.planned
+        ? `planned restart boundary from ${info.planned}`
+        : 'checkpoint saved; pick up where you left off';
+      sections.push(`- ${info.label} (session ${sessionId}); ${note}${info.last ? `; ${info.last}` : ''}`);
+      count++;
+    }
+    if (otherChatThreads.size > 8) sections.push(`- ${otherChatThreads.size - 8} more interrupted chat thread(s).`);
+  }
+
+  if (!sections.length) return '(No work was interrupted by this restart.)';
+  return sections.join('\n');
 }
 
 export function recoverInterruptedRuntimes(opts: {
@@ -338,7 +413,7 @@ export function recoverInterruptedRuntimes(opts: {
 
       if (runtime.kind === 'main_chat' && runtime.sessionId) {
         pauseMainChatGoalRuntimeForRestart(runtime, runtime.interruptReason || 'gateway_restart');
-        addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart');
+        addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart', 'recovered');
         interruptedChats.push(runtime.sessionId);
         markDurableRuntimeRecovered(runtime.id, 'interrupted', { recovery: 'chat_checkpointed', sessionId: runtime.sessionId });
         continue;
@@ -358,3 +433,5 @@ export function recoverInterruptedRuntimes(opts: {
 
   return { inspected: runtimes.length, resumedTasks, interruptedChats };
 }
+
+

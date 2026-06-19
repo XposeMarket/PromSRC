@@ -38,6 +38,18 @@
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     },
     {
+      "name": "Voice",
+      "short_name": "Voice",
+      "url": "/?source=pwa#mobile/voice",
+      "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Tasks",
+      "short_name": "Tasks",
+      "url": "/?source=pwa#mobile/tasks",
+      "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
+    },
+    {
       "name": "Schedule",
       "short_name": "Schedule",
       "url": "/?source=pwa#mobile/schedule",
@@ -47,6 +59,12 @@
       "name": "Teams",
       "short_name": "Teams",
       "url": "/?source=pwa#mobile/teams",
+      "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Proposals",
+      "short_name": "Proposals",
+      "url": "/?source=pwa#mobile/proposals",
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     }
   ]

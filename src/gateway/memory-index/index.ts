@@ -8,6 +8,7 @@ import {
   autoBackfillSqliteMemoryEmbeddings,
   backfillSqliteMemoryEmbeddings,
   getRelatedSqliteMemory,
+  getSqliteMemoryDisabledState,
   getSqliteMemoryGraphSnapshot,
   readSqliteMemoryRecord,
   searchSqliteMemoryIndexAsync,
@@ -103,7 +104,7 @@ export interface MemorySearchResult {
   totalCandidates: number;
   hits: MemorySearchHit[];
   citations?: NonNullable<MemorySearchHit['citation']>[];
-  stats: { records: number; chunks: number; indexedAt: string; backend?: string; sqlite?: any; embedding?: any; rerank?: string };
+  stats: { records: number; chunks: number; indexedAt: string; backend?: string; sqlite?: any; embedding?: any; rerank?: string; telemetry?: any };
 }
 
 export interface ResolvedMemoryRecord {
@@ -893,11 +894,17 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     manifest.lastRunAtMs = now;
     manifest.updatedAt = manifest.updatedAt || nowIso;
     writeJson(manifestPath, manifest);
-    if (shouldSyncSqlite && !fs.existsSync(sqliteIndexPath(workspacePath)) && fs.existsSync(storePath)) {
-      const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: manifest.updatedAt || nowIso, records: {}, chunks: {}, tokenIndex: {}, relations: [] });
-      try { syncSqliteMemoryIndex(workspacePath, store); } catch { /* non-fatal: JSON index remains the fallback */ }
-      scheduleAutomaticEmbeddingBackfill(workspacePath);
-      memoryMark('missing sqlite synced from existing store');
+    if (shouldSyncSqlite && fs.existsSync(storePath)) {
+      // Sync SQLite if the DB is missing OR exists but is empty (e.g. created by getCachedDb but never populated)
+      const sqliteDbPath = sqliteIndexPath(workspacePath);
+      const sqliteMissing = !fs.existsSync(sqliteDbPath);
+      const sqliteEmpty = !sqliteMissing && (() => { try { const r = searchSqliteMemoryIndex(workspacePath, { query: '_', limit: 1 }); return !r || (r.stats?.records ?? 0) === 0; } catch { return true; } })();
+      if (sqliteMissing || sqliteEmpty) {
+        const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: manifest.updatedAt || nowIso, records: {}, chunks: {}, tokenIndex: {}, relations: [] });
+        try { syncSqliteMemoryIndex(workspacePath, store); } catch { /* non-fatal: JSON index remains the fallback */ }
+        scheduleAutomaticEmbeddingBackfill(workspacePath);
+        memoryMark('missing or empty sqlite synced from existing store');
+      }
     }
     const stats = readIndexStatsFromLightFiles(workspacePath, manifest.updatedAt);
     memoryMark('no-op refresh complete');
@@ -1086,19 +1093,33 @@ function toOperationalMemoryHit(hit: any): MemorySearchHit {
 }
 
 export function searchMemoryIndex(workspacePath: string, params: MemorySearchParams): MemorySearchResult {
+  const startedAt = Date.now();
+  const phases: Record<string, number> = {};
+  const markPhase = (name: string, phaseStartedAt: number) => { phases[name] = Math.max(0, Date.now() - phaseStartedAt); };
+  const refreshStartedAt = Date.now();
   scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  markPhase('schedule_refresh_ms', refreshStartedAt);
   try {
+    const sqliteStartedAt = Date.now();
     const sqliteResult = searchSqliteMemoryIndex(workspacePath, params);
+    markPhase('sqlite_sync_attempt_ms', sqliteStartedAt);
     if (sqliteResult) return sqliteResult;
   } catch { /* non-fatal: fall back to JSON index */ }
+  const storeStartedAt = Date.now();
   const store = readStoreSnapshot(workspacePath);
+  markPhase('read_store_ms', storeStartedAt);
   const q = String(params.query || '').trim(); const mode = String(params.mode || 'quick'); const qTerms = uniqTop(terms(q), 24);
+  const embedStartedAt = Date.now();
   const qEmbedding = embedTerms(qTerms);
+  markPhase('hash_embed_ms', embedStartedAt);
+  const candidateStartedAt = Date.now();
   const candidates = new Set<string>(); if (qTerms.length) for (const t of qTerms) for (const id of (store.tokenIndex[t] || [])) candidates.add(id);
   if (!candidates.size || mode === 'deep' || mode === 'timeline') for (const cid of Object.keys(store.chunks)) candidates.add(cid);
+  markPhase('candidate_collect_ms', candidateStartedAt);
   const sourceSet = new Set((params.sourceTypes || []).filter(Boolean)); const projectId = String(params.projectId || '').trim();
   const from = parseDate(params.dateFrom); const to = parseDate(params.dateTo, true); const minDur = Number.isFinite(Number(params.minDurability)) ? Number(params.minDurability) : 0;
   const limit = Math.max(1, Math.min(50, Number(params.limit || 8))); const now = Date.now();
+  const scoreStartedAt = Date.now();
   const scored: Array<{ c: ChunkItem; r: RecordItem; s: number }> = [];
   for (const cid of candidates) {
     const c = store.chunks[cid]; if (!c) continue; const r = store.records[c.recordId]; if (!r) continue;
@@ -1113,6 +1134,7 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
     scored.push({ c, r, s });
   }
   scored.sort((a,b) => b.s - a.s || b.r.timestampMs - a.r.timestampMs);
+  markPhase('score_sort_ms', scoreStartedAt);
 
   // ── Layer B: evidence hits ──────────────────────────────────────────────
   const evidenceHits: MemorySearchHit[] = []; const seenRec = new Set<string>();
@@ -1150,6 +1172,7 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
   let opHits: MemorySearchHit[] = [];
   // Skip operational layer for timeline mode (timeline is evidence-centric)
   if (mode !== 'timeline' && !sourceSet.size) {
+    const operationalStartedAt = Date.now();
     try {
       const opResults = searchOperationalLayer(workspacePath, {
         query: q, limit: opLimit, projectId: projectId || undefined, recencyBias: mode === 'deep',
@@ -1159,6 +1182,7 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
         score: Number((oh.score * 1.1).toFixed(4)), // 10% boost over evidence
       }));
     } catch { /* non-fatal: fall back to evidence only */ }
+    markPhase('operational_search_ms', operationalStartedAt);
   }
 
   // ── Merge: operational first, then evidence to fill remaining slots ─────
@@ -1177,17 +1201,80 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
     totalCandidates: scored.length,
     hits: finalHits,
     citations: finalHits.map((hit) => hit.citation).filter(Boolean) as NonNullable<MemorySearchHit['citation']>[],
-    stats: { records: Object.keys(store.records).length, chunks: Object.keys(store.chunks).length, indexedAt: store.updatedAt, backend: 'json_hybrid' },
+    stats: {
+      records: Object.keys(store.records).length,
+      chunks: Object.keys(store.chunks).length,
+      indexedAt: store.updatedAt,
+      backend: 'json_hybrid',
+      telemetry: {
+        total_ms: Math.max(0, Date.now() - startedAt),
+        phases,
+        candidate_count: candidates.size,
+        scored_count: scored.length,
+        evidence_hit_count: evidenceHits.length,
+        operational_hit_count: opHits.length,
+      },
+    },
   };
 }
 
 export async function searchMemoryIndexAsync(workspacePath: string, params: MemorySearchParams): Promise<MemorySearchResult> {
+  const startedAt = Date.now();
+  const phases: Record<string, number> = {};
+  const markPhase = (name: string, phaseStartedAt: number) => { phases[name] = Math.max(0, Date.now() - phaseStartedAt); };
+  const refreshStartedAt = Date.now();
   scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  markPhase('schedule_refresh_ms', refreshStartedAt);
+  let sqliteError = '';
+  const sqliteStartedAt = Date.now();
+  const sqliteStateBefore = getSqliteMemoryDisabledState();
   try {
-    const sqliteResult = await searchSqliteMemoryIndexAsync(workspacePath, params);
-    if (sqliteResult) return sqliteResult;
-  } catch { /* non-fatal: fall back to sync memory index */ }
-  return searchMemoryIndex(workspacePath, params);
+    const sqliteResult = sqliteStateBefore.disabled ? null : await searchSqliteMemoryIndexAsync(workspacePath, params);
+    markPhase('sqlite_attempt_ms', sqliteStartedAt);
+    if (sqliteResult) {
+      const stats: any = sqliteResult.stats || {};
+      const innerTelemetry = stats.telemetry || {};
+      return {
+        ...sqliteResult,
+        stats: {
+          ...stats,
+          telemetry: {
+            ...innerTelemetry,
+            total_ms: Math.max(0, Date.now() - startedAt),
+            wrapper_phases: phases,
+            backend_selected: stats.backend || 'sqlite_fts_vector_hybrid',
+            fallback: false,
+          },
+        },
+      };
+    }
+  } catch (err: any) {
+    markPhase('sqlite_attempt_ms', sqliteStartedAt);
+    sqliteError = String(err?.message || err || 'sqlite search failed');
+  }
+  const sqliteStateAfter = getSqliteMemoryDisabledState();
+  if (sqliteStateBefore.disabled) sqliteError = sqliteStateBefore.reason || 'sqlite disabled for process';
+  else if (sqliteStateAfter.disabled && !sqliteError) sqliteError = sqliteStateAfter.reason || 'sqlite disabled for process';
+  const jsonStartedAt = Date.now();
+  const fallback = searchMemoryIndex(workspacePath, params);
+  markPhase('json_fallback_ms', jsonStartedAt);
+  const stats: any = fallback.stats || {};
+  return {
+    ...fallback,
+    stats: {
+      ...stats,
+      telemetry: {
+        ...(stats.telemetry || {}),
+        total_ms: Math.max(0, Date.now() - startedAt),
+        wrapper_phases: phases,
+        backend_selected: stats.backend || 'json_hybrid',
+        fallback: true,
+        fallback_reason: sqliteError || 'sqlite returned no result',
+        sqlite_disabled: Boolean(sqliteStateBefore.disabled || sqliteStateAfter.disabled),
+        sqlite_disabled_reason: sqliteStateAfter.reason || sqliteStateBefore.reason || undefined,
+      },
+    },
+  };
 }
 
 export function readMemoryRecord(workspacePath: string, recordId: string): ResolvedMemoryRecord {

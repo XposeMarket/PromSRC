@@ -9,6 +9,7 @@ import { api } from '../api.js';
 import { escHtml, bgtToast, timeAgo, showToast } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
+import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let subagentsData = [];          // All standalone agents (not team members)
@@ -28,6 +29,7 @@ let subagentChatQueueDrainTimers = {}; // agentId -> timer id
 let subagentChatPendingFilesByAgent = {}; // agentId -> staged files before send
 let subagentChatFileStagingPromisesByAgent = {}; // agentId -> Promise[]
 let subagentChatApprovalsByAgent = {}; // agentId -> inline approval cards shown in direct chat
+let subagentDesktopVoiceTargetAgentId = '';
 
 const SUBAGENT_CHAT_TEXT_EXTENSIONS = new Set([
   'txt','md','csv','json','js','ts','jsx','tsx','html','htm','css','scss','less',
@@ -371,12 +373,17 @@ function refreshSubagentChatComposerState(agentId) {
   const abortMode = busy && !hasOutbound;
   const btn = document.getElementById('subagent-chat-send-button');
   if (btn) {
-    btn.textContent = abortMode ? 'Stop' : busy ? 'Queue' : 'Send';
-    btn.title = abortMode ? 'Stop the active subagent chat turn' : busy ? 'Queue this message for the subagent' : 'Send message';
-    btn.setAttribute('aria-label', abortMode ? 'Stop' : busy ? 'Queue message' : 'Send');
+    const voiceMode = !busy && !hasOutbound;
+    btn.title = abortMode ? 'Stop the active subagent chat turn' : voiceMode ? 'Start voice mode' : busy ? 'Queue this message for the subagent' : 'Send message';
+    btn.setAttribute('aria-label', abortMode ? 'Stop' : voiceMode ? 'Start voice mode' : busy ? 'Queue message' : 'Send');
     btn.onclick = () => abortMode ? abortSubagentChat(agentId) : sendSubagentChat(agentId);
     btn.style.background = abortMode ? '#e05c5c' : 'var(--brand)';
     btn.style.boxShadow = abortMode ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)';
+    btn.innerHTML = abortMode
+      ? '<iconify-icon icon="solar:stop-bold" width="20" height="20"></iconify-icon>'
+      : voiceMode
+        ? '<iconify-icon icon="solar:microphone-3-bold-duotone" width="20" height="20"></iconify-icon>'
+        : '<iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>';
   }
   const badge = document.getElementById('subagent-chat-queue-badge');
   if (badge) {
@@ -981,6 +988,10 @@ function commitSubagentStreamingReply(agentId, streamState, content, startTs, ex
     subagentChatHistory.push(mergeStreamingStateIntoMessage({ ...message, duration: durationSec }));
     subagentChatHistory = dedupeSubagentChatMessages(subagentChatHistory);
   }
+  if (subagentDesktopVoiceTargetAgentId === agentId && finalContent) {
+    speakSubagentVoiceReply(finalContent);
+    subagentDesktopVoiceTargetAgentId = '';
+  }
   setSubagentStreamingState(agentId, null);
   if (activeSubagentId === agentId && subagentDetailTab === 'chat') renderSubagentBoard(agentId);
   return true;
@@ -1091,6 +1102,17 @@ function restoreSubagentChatScroll(snapshot, opts = {}) {
   });
 }
 
+function speakSubagentVoiceReply(text) {
+  const finalText = String(text || '').trim();
+  if (!finalText || !window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(finalText);
+    utterance.rate = 1;
+    window.speechSynthesis.speak(utterance);
+  } catch {}
+}
+
 function captureSubagentChatDraft() {
   if (subagentDetailTab !== 'chat') return null;
   const input = document.getElementById('subagent-chat-input');
@@ -1174,6 +1196,7 @@ function renderSubagentBoard(agentId) {
 
   if (subagentDetailTab === 'overview') {
     agentModelPickerHydrate('sa-model', agent);
+    agentVoicePickerHydrate('sa-voice', agent);
   }
   restoreSubagentChatScroll(chatScrollSnapshot);
   hydrateSubagentChatComposer(agentId, { selection: chatDraftSelection });
@@ -1259,6 +1282,13 @@ registerAgentModelPickerOnSaved('sa-model', async (agentId) => {
   }
 });
 
+registerAgentVoicePickerOnSaved('sa-voice', async (agentId) => {
+  await _refreshSubagentEntry(agentId);
+  if (subagentDetailTab === 'overview' && activeSubagentId === agentId) {
+    renderSubagentBoard(agentId);
+  }
+});
+
 // ── Tab Renderers ─────────────────────────────────────────────────────────────
 function renderSubagentOverviewTab(agent) {
   const color = agentColor(agent.id);
@@ -1332,6 +1362,7 @@ function renderSubagentOverviewTab(agent) {
       </div>
 
       ${_renderAgentModelPicker(agent, 'sa-model')}
+      ${_renderAgentVoicePicker(agent, 'sa-voice')}
 
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
@@ -1552,21 +1583,75 @@ function renderSubagentChatTab(agent) {
         ${liveStream ? renderSubagentStreamingBubble(agent) : ''}
         ${approvalsHtml}
       </div>
-      <div style="flex-shrink:0;border-top:1px solid var(--line);padding:12px 0 0;display:flex;gap:10px;align-items:flex-end">
-        <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openSubagentChatFilePicker()">
-          <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
-        </button>
+      <div class="chat-input-area panel-chat-composer" style="flex-shrink:0;border-top:1px solid var(--line);padding:12px 0 0">
         <input id="subagent-chat-file-input" type="file" multiple style="display:none" onchange="onSubagentChatFilesChosen(${subagentChatJsArg(agent.id)}, this)" />
         <div id="subagent-chat-composer" style="flex:1;display:flex;flex-direction:column;gap:6px">
           <div id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-self:flex-start;align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800">${queuedCount} queued</div>
           <div id="subagent-chat-file-staging" class="chat-file-staging panel-chat-file-staging" style="display:none"></div>
-          <div style="position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden">
-            <textarea id="subagent-chat-input" rows="3" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" style="width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:var(--text);outline:none;min-height:64px;box-sizing:border-box" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}">${escHtml(subagentChatDraft)}</textarea>
+          <div class="chat-input-row" style="align-items:flex-end">
+            <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openSubagentChatFilePicker()">
+              <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
+            </button>
+            <button type="button" id="subagent-chat-voice-button" class="chat-voice-btn" title="Start voice mode" aria-label="Start voice mode" onclick="startSubagentDesktopVoice(${subagentChatJsArg(agent.id)})">
+              <iconify-icon icon="solar:microphone-3-bold-duotone" width="18" height="18"></iconify-icon>
+            </button>
+            <textarea id="subagent-chat-input" rows="1" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" class="chat-textarea" style="min-height:42px;max-height:150px" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}">${escHtml(subagentChatDraft)}</textarea>
+            <button id="subagent-chat-send-button" class="send-btn" onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" title="${isSending ? 'Stop' : 'Send'}">
+              ${isSending ? '<iconify-icon icon="solar:stop-bold" width="20" height="20"></iconify-icon>' : '<iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>'}
+            </button>
           </div>
         </div>
-        <button id="subagent-chat-send-button" onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:12px;padding:10px 16px;font-size:12px;font-weight:800;cursor:pointer;height:42px;min-width:64px;box-shadow:${isSending ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)'}">${isSending ? 'Stop' : 'Send'}</button>
       </div>
     </div>`;
+}
+
+function startSubagentDesktopVoice(agentId) {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    showToast('Voice unavailable', 'This browser does not expose speech recognition for desktop subagent chat.', 'warning');
+    return;
+  }
+  const btn = document.getElementById('subagent-chat-voice-button');
+  try {
+    const recognition = new SpeechRecognition();
+    let finalTranscript = '';
+    recognition.lang = navigator.language || 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.onstart = () => {
+      btn?.classList.add('recording');
+      showToast('Listening', `Talk to ${getActiveSubagentName(agentId)}.`, 'info');
+    };
+    recognition.onresult = (event) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = String(event.results[i][0]?.transcript || '');
+        if (event.results[i].isFinal) finalTranscript += transcript;
+        else interim += transcript;
+      }
+      const input = document.getElementById('subagent-chat-input');
+      if (input) {
+        input.value = `${finalTranscript}${interim}`.trim();
+        subagentChatDraft = input.value;
+        resizeSubagentChatInput();
+        refreshSubagentChatComposerState(agentId);
+      }
+    };
+    recognition.onerror = (event) => {
+      showToast('Voice error', event?.error || 'Could not capture speech.', 'error');
+    };
+    recognition.onend = () => {
+      btn?.classList.remove('recording');
+      const text = String(finalTranscript || document.getElementById('subagent-chat-input')?.value || '').trim();
+      if (!text) return;
+      subagentDesktopVoiceTargetAgentId = agentId;
+      sendSubagentChat(agentId);
+    };
+    recognition.start();
+  } catch (err) {
+    btn?.classList.remove('recording');
+    showToast('Voice error', err?.message || 'Could not start speech recognition.', 'error');
+  }
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
@@ -1581,7 +1666,10 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
   const filesToUpload = fromQueue ? (Array.isArray(queuedTurn.files) ? queuedTurn.files.slice() : []) : getSubagentPendingFiles(agentId).slice();
   const rawMsg = fromQueue ? String(queuedTurn.content || '').trim() : String(inp?.value || '').trim();
   const msg = rawMsg || (filesToUpload.length ? 'Please review the attached file(s).' : '');
-  if (!msg && !filesToUpload.length) return;
+  if (!msg && !filesToUpload.length) {
+    startSubagentDesktopVoice(agentId);
+    return;
+  }
 
   if (isSubagentChatBusy(agentId)) {
     const queued = queueSubagentChatMessage(agentId, msg, filesToUpload);
@@ -2472,6 +2560,10 @@ wsEventBus.on('subagent_chat_message', (data) => {
     message = mergeStreamingStateIntoMessage(message);
     setSubagentStreamingState(data.agentId, null);
   }
+  if (message.role === 'agent' && subagentDesktopVoiceTargetAgentId === data.agentId && String(message.content || '').trim()) {
+    speakSubagentVoiceReply(message.content);
+    subagentDesktopVoiceTargetAgentId = '';
+  }
   if (data.agentId !== activeSubagentId) {
     return;
   }
@@ -2535,6 +2627,7 @@ window.closeSubagentDetail = closeSubagentDetail;
 window.switchSubagentTab = switchSubagentTab;
 window.sendSubagentChat = sendSubagentChat;
 window.abortSubagentChat = abortSubagentChat;
+window.startSubagentDesktopVoice = startSubagentDesktopVoice;
 window.resolveSubagentInlineApproval = resolveSubagentInlineApproval;
 window.openSubagentChatFilePicker = openSubagentChatFilePicker;
 window.onSubagentChatFilesChosen = onSubagentChatFilesChosen;

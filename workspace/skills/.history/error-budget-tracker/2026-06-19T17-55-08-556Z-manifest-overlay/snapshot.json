@@ -1,0 +1,11 @@
+{
+  "skillId": "error-budget-tracker",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:08.560Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\error-budget-tracker",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "b78f712385e437d9"
+}

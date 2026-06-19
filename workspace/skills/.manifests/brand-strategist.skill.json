@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks for brand strategy, positioning, messaging, naming, differentiation, brand voice, narrative, audience framing, offer story, or a full brand brief.",
+  "triggers": [
+    "brand strategy",
+    "positioning",
+    "brand voice",
+    "naming ideas",
+    "brand messaging",
+    "differentiation",
+    "brand story",
+    "brand brief",
+    "audience positioning",
+    "messaging pillars",
+    "value proposition",
+    "tagline ideas",
+    "brand archetype",
+    "make the brand sharper",
+    "clarify the brand",
+    "founder story",
+    "market positioning",
+    "rebrand this",
+    "brand narrative"
+  ],
+  "categories": [
+    "brand",
+    "strategy",
+    "marketing",
+    "writing"
+  ],
+  "requiredTools": [
+    "skills"
+  ],
+  "lifecycle": "active",
+  "name": "Brand Strategist",
+  "id": "brand-strategist"
+}

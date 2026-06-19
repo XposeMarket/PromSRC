@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "windows-shell-playbook",
+  "name": "Windows Shell Playbook",
+  "description": "Use this skill when the user asks to run Windows shell commands, PowerShell commands, scripts, builds, tests, process checks, environment inspection, or command-line troubleshooting on the local Windows machine. It favors bounded commands and avoids fragile quoting patterns.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "windows shell",
+    "powershell",
+    "run command",
+    "command line",
+    "shell command",
+    "windows command",
+    "build command",
+    "test command",
+    "process check",
+    "environment variable",
+    "script execution",
+    "terminal command",
+    "npm run",
+    "start process",
+    "command troubleshooting"
+  ],
+  "categories": [
+    "shell",
+    "windows",
+    "operations"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/terminal-tool-smoke-test.md",
+      "type": "doc",
+      "description": "Terminal tool smoke-test notes and PowerShell quoting guardrail from Raul's 2026-06-19 worker test."
+    }
+  ]
+}

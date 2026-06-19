@@ -1,0 +1,13 @@
+{
+  "skillId": "prometheus-x-posts-workflow",
+  "reason": "resource-write",
+  "createdAt": "2026-06-14T05:05:11.449Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-x-posts-workflow",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/styles/prometheus-x-posts-workflow-2026-06-13.md"
+  ],
+  "hash": "02ea31632bcc0bc3"
+}

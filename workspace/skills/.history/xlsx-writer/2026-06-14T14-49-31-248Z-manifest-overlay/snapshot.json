@@ -1,0 +1,11 @@
+{
+  "skillId": "xlsx-writer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-14T14:49:31.251Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\xlsx-writer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "aa1d0bf4dfa17ba9"
+}

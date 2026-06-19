@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when turning task output, research, data, errors, weekly activity, audit findings, or structured results into a clean report with sections, summary, evidence, recommendations, and next steps.",
+  "triggers": [
+    "make a report",
+    "generate report",
+    "summarize task output",
+    "audit report",
+    "weekly report",
+    "research report",
+    "error report",
+    "findings summary",
+    "clean report",
+    "structured results",
+    "turn this into a report",
+    "report with recommendations",
+    "evidence report",
+    "status report",
+    "activity report",
+    "write up the findings"
+  ],
+  "categories": [
+    "writing",
+    "reports",
+    "analysis",
+    "documentation"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "skills"
+  ],
+  "lifecycle": "active",
+  "name": "Report Generator",
+  "id": "report-generator"
+}

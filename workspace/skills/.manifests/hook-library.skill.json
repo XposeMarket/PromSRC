@@ -1,32 +1,32 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to design, document, inspect, or reuse hooks, webhooks, event hooks, automation triggers, callback handlers, or integration entrypoints. It helps capture hook contracts, payloads, routing, retry behavior, and verification steps.",
+  "description": "Use this skill when creating or improving hooks, headlines, openers, social post starts, email subject lines, landing-page hero lines, ad hooks, or attention-grabbing first lines.",
   "triggers": [
+    "write a hook",
+    "better headline",
+    "opening line",
+    "tweet hook",
+    "email subject line",
+    "landing page headline",
+    "ad hook",
+    "first line",
+    "attention grabber",
+    "improve the opener",
+    "make this punchier",
     "hook library",
-    "webhook",
-    "event hook",
-    "automation trigger",
-    "callback handler",
-    "integration hook",
-    "webhook payload",
-    "hook contract",
-    "event receiver",
-    "trigger library",
-    "webhook route",
-    "incoming event",
-    "hook documentation",
-    "reuse hook",
-    "webhook verification"
+    "headline ideas",
+    "scroll-stopping hook",
+    "social media opener",
+    "stronger angle"
   ],
   "categories": [
-    "automation",
-    "integrations",
-    "documentation"
+    "writing",
+    "marketing",
+    "copywriting"
   ],
   "requiredTools": [
-    "integration_admin",
-    "webhook-receiver-framework"
+    "skills"
   ],
   "lifecycle": "active",
   "id": "hook-library"

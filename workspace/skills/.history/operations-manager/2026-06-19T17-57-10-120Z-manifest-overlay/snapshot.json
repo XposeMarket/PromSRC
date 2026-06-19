@@ -1,0 +1,11 @@
+{
+  "skillId": "operations-manager",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:57:10.123Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\operations-manager",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "4bf5379d3bc7c5c9"
+}

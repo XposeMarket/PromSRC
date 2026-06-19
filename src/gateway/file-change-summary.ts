@@ -55,6 +55,8 @@ const FILE_MUTATION_TOOL_NAMES = new Set([
   'insert_after_prom',
   'delete_lines_prom',
   'delete_prom_file',
+  'skill_manifest_write',
+  'skill_update_metadata',
   'skill_resource_write',
   'skill_resource_delete',
   'prom_apply_dev_changes',

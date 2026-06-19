@@ -64,6 +64,7 @@ export interface MainChatGoalState {
   completedAt?: number;
   lastVerdict?: 'done' | 'continue' | 'blocked' | 'failed';
   lastReason?: string;
+  nextStepDirective?: string;
   blockedReason?: string;
   pausedReason?: string;
   failureReason?: string;
@@ -106,6 +107,17 @@ export interface CreativeReferenceRecord {
   updatedAt: string;
 }
 
+export type ToolCategoryActivationScope = 'session' | 'turn' | 'next_turn' | 'ttl';
+
+export interface ScopedToolCategoryActivation {
+  category: string;
+  scope: Exclude<ToolCategoryActivationScope, 'session'>;
+  activatedAtTurn: number;
+  expiresAfterTurn: number;
+  turns?: number;
+  activatedAt: number;
+}
+
 export interface CanvasProjectLink {
   rootPath?: string | null;
   github?: {
@@ -142,7 +154,9 @@ export interface Session {
   contextStartIndex?: number;
   contextSummaryUpdatedAt?: number;
   tags?: string[];
+  userTurnCounter?: number;
   activatedToolCategories?: string[];
+  scopedToolCategoryActivations?: ScopedToolCategoryActivation[];
   activatedSkillIds?: string[];
   activatedSkillResources?: Record<string, string[]>;
   businessContextEnabled?: boolean;
@@ -373,6 +387,43 @@ function normalizeCreativeReferences(input: any): CreativeReferenceRecord[] {
     .map(normalizeCreativeReferenceRecord)
     .filter((item): item is CreativeReferenceRecord => !!item)
     .slice(0, 120);
+}
+
+function normalizeToolCategoryActivationScope(input: any): ToolCategoryActivationScope {
+  const value = String(input || '').trim().toLowerCase();
+  if (value === 'session' || value === 'turn' || value === 'next_turn' || value === 'ttl') return value;
+  return 'session';
+}
+
+function normalizeScopedToolCategoryActivations(input: any, fallbackTurn?: number): ScopedToolCategoryActivation[] {
+  if (!Array.isArray(input)) return [];
+  const fallback = Number.isFinite(Number(fallbackTurn)) ? Math.max(0, Math.floor(Number(fallbackTurn))) : 0;
+  const seen = new Set<string>();
+  const normalized: ScopedToolCategoryActivation[] = [];
+  for (const raw of input) {
+    const category = String(raw?.category || '').trim();
+    if (!category) continue;
+    const scope = normalizeToolCategoryActivationScope(raw?.scope);
+    if (scope === 'session') continue;
+    const activatedAtTurn = Number.isFinite(Number(raw?.activatedAtTurn))
+      ? Math.max(0, Math.floor(Number(raw.activatedAtTurn)))
+      : fallback;
+    const expiresAfterTurn = Number.isFinite(Number(raw?.expiresAfterTurn))
+      ? Math.max(activatedAtTurn, Math.floor(Number(raw.expiresAfterTurn)))
+      : activatedAtTurn;
+    const key = `${category}:${scope}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      category,
+      scope,
+      activatedAtTurn,
+      expiresAfterTurn,
+      turns: Number.isFinite(Number(raw?.turns)) ? Math.max(1, Math.floor(Number(raw.turns))) : undefined,
+      activatedAt: Number.isFinite(Number(raw?.activatedAt)) ? Number(raw.activatedAt) : Date.now(),
+    });
+  }
+  return normalized.slice(0, 64);
 }
 
 function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState | null {
@@ -859,7 +910,13 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       latestContextSummary: typeof data?.latestContextSummary === 'string' ? data.latestContextSummary : undefined,
       contextStartIndex: Number.isFinite(Number(data?.contextStartIndex)) ? Math.max(0, Math.floor(Number(data.contextStartIndex))) : undefined,
       contextSummaryUpdatedAt: Number.isFinite(Number(data?.contextSummaryUpdatedAt)) ? Number(data.contextSummaryUpdatedAt) : undefined,
+      userTurnCounter: Number.isFinite(Number(data?.userTurnCounter))
+        ? Math.max(0, Math.floor(Number(data.userTurnCounter)))
+        : Array.isArray(data?.history)
+          ? data.history.filter((msg: any) => msg?.role === 'user').length
+          : 0,
       activatedToolCategories: Array.isArray(data?.activatedToolCategories) ? data.activatedToolCategories : [],
+      scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data?.scopedToolCategoryActivations, Number(data?.userTurnCounter)),
       activatedSkillIds: Array.isArray(data?.activatedSkillIds) ? data.activatedSkillIds : [],
       businessContextEnabled: data?.businessContextEnabled === true,
       creativeMode: normalizeCreativeMode(data?.creativeMode),
@@ -1420,7 +1477,13 @@ export function getSession(id: string): Session {
         contextSummaryUpdatedAt: Number.isFinite(Number(data.contextSummaryUpdatedAt))
           ? Number(data.contextSummaryUpdatedAt)
           : undefined,
+        userTurnCounter: Number.isFinite(Number(data.userTurnCounter))
+          ? Math.max(0, Math.floor(Number(data.userTurnCounter)))
+          : Array.isArray(data.history)
+            ? data.history.filter((msg: any) => msg?.role === 'user').length
+            : 0,
         activatedToolCategories: Array.isArray(data.activatedToolCategories) ? data.activatedToolCategories : [],
+        scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data.scopedToolCategoryActivations, Number(data.userTurnCounter)),
         activatedSkillIds: Array.isArray(data.activatedSkillIds) ? data.activatedSkillIds : [],
         businessContextEnabled: data.businessContextEnabled === true,
         creativeMode: normalizeCreativeMode(data.creativeMode),
@@ -1459,7 +1522,9 @@ export function getSession(id: string): Session {
     latestContextSummary: undefined,
     contextStartIndex: 0,
     contextSummaryUpdatedAt: undefined,
+    userTurnCounter: 0,
     activatedToolCategories: [],
+    scopedToolCategoryActivations: [],
     activatedSkillIds: [],
     businessContextEnabled: false,
     creativeMode: null,
@@ -1582,6 +1647,9 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
 
   if (!deferredForCompaction && !deferredForMemoryFlush) {
     session.history.push(storedMsg);
+    if (storedMsg.role === 'user') {
+      session.userTurnCounter = Math.max(0, Math.floor(Number(session.userTurnCounter) || 0)) + 1;
+    }
     if (storedMsg.role === 'assistant') {
       const assistantAt = Number(storedMsg.timestamp || Date.now());
       session.lastAssistantAt = Number.isFinite(assistantAt) && assistantAt > 0 ? assistantAt : Date.now();
@@ -1733,11 +1801,13 @@ export function getRecentToolObservationsForContext(
   id: string,
   lookbackTurns: number = 5,
   maxChars?: number,
+  includeTelemetry = false,
 ): string {
   const observations = readRecentToolObservationsForContext(id, {
     lookbackTurns,
     maxChars,
     includeHeader: true,
+    includeTelemetry,
   });
   if (observations) return observations;
   const legacy = getRecentToolLog(id, lookbackTurns, maxChars);
@@ -2229,11 +2299,76 @@ export function getSessionMutationScope(id: string): SessionMutationScope | null
   return sessionMutationScopes.get(id) || null;
 }
 
-export function activateToolCategory(id: string, category: string): void {
+function getSessionUserTurnCounter(session: Session): number {
+  if (Number.isFinite(Number(session.userTurnCounter))) {
+    return Math.max(0, Math.floor(Number(session.userTurnCounter)));
+  }
+  const derived = (session.history || []).filter((msg) => msg.role === 'user').length;
+  session.userTurnCounter = derived;
+  return derived;
+}
+
+function pruneScopedToolCategoryActivations(session: Session): boolean {
+  const currentTurn = getSessionUserTurnCounter(session);
+  const before = Array.isArray(session.scopedToolCategoryActivations)
+    ? session.scopedToolCategoryActivations.length
+    : 0;
+  const next = normalizeScopedToolCategoryActivations(session.scopedToolCategoryActivations, currentTurn)
+    .filter((entry) => entry.expiresAfterTurn >= currentTurn);
+  session.scopedToolCategoryActivations = next;
+  return next.length !== before;
+}
+
+export function activateToolCategory(
+  id: string,
+  category: string,
+  options: { scope?: ToolCategoryActivationScope; turns?: number } = {},
+): void {
   const session = getSession(id);
-  if (!session.activatedToolCategories) session.activatedToolCategories = [];
-  if (!session.activatedToolCategories.includes(category)) {
-    session.activatedToolCategories.push(category);
+  const cleanCategory = String(category || '').trim();
+  if (!cleanCategory) return;
+  const scope = normalizeToolCategoryActivationScope(options.scope);
+  const currentTurn = getSessionUserTurnCounter(session);
+  pruneScopedToolCategoryActivations(session);
+
+  if (scope === 'session') {
+    if (!session.activatedToolCategories) session.activatedToolCategories = [];
+    const scopedBefore = (session.scopedToolCategoryActivations || []).length;
+    session.scopedToolCategoryActivations = (session.scopedToolCategoryActivations || [])
+      .filter((entry) => entry.category !== cleanCategory);
+    if (!session.activatedToolCategories.includes(cleanCategory)) {
+      session.activatedToolCategories.push(cleanCategory);
+      saveSession(id);
+    } else if ((session.scopedToolCategoryActivations || []).length !== scopedBefore) {
+      saveSession(id);
+    }
+    return;
+  }
+
+  const ttlTurns = scope === 'ttl'
+    ? Math.max(1, Math.floor(Number(options.turns) || 1))
+    : scope === 'next_turn'
+      ? 2
+      : 1;
+  const expiresAfterTurn = currentTurn + ttlTurns - 1;
+  const nextEntry: ScopedToolCategoryActivation = {
+    category: cleanCategory,
+    scope: scope === 'ttl' ? 'ttl' : scope,
+    activatedAtTurn: currentTurn,
+    expiresAfterTurn,
+    turns: ttlTurns,
+    activatedAt: Date.now(),
+  };
+  const scoped = (session.scopedToolCategoryActivations || [])
+    .filter((entry) => entry.category !== cleanCategory);
+  scoped.push(nextEntry);
+  session.scopedToolCategoryActivations = scoped.slice(-64);
+  saveSession(id);
+}
+
+export function expireScopedToolCategoryActivations(id: string): void {
+  const session = getSession(id);
+  if (pruneScopedToolCategoryActivations(session)) {
     saveSession(id);
   }
 }
@@ -2246,12 +2381,19 @@ export function setActivatedToolCategories(id: string, categories: string[]): vo
       .filter(Boolean),
   ));
   session.activatedToolCategories = next;
+  session.scopedToolCategoryActivations = [];
   saveSession(id);
 }
 
 export function getActivatedToolCategories(id: string): Set<string> {
   const session = getSession(id);
-  return new Set(session.activatedToolCategories || []);
+  const changed = pruneScopedToolCategoryActivations(session);
+  const active = new Set(session.activatedToolCategories || []);
+  for (const entry of session.scopedToolCategoryActivations || []) {
+    active.add(entry.category);
+  }
+  if (changed) saveSession(id);
+  return active;
 }
 
 function normalizeSessionSkillId(input: string): string {

@@ -1,0 +1,11 @@
+{
+  "skillId": "web-scraper",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-14T14:49:30.016Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\web-scraper",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "a2f264ec4f6e9108"
+}

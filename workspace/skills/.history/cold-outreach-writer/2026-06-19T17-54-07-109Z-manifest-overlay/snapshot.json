@@ -1,0 +1,11 @@
+{
+  "skillId": "cold-outreach-writer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:07.111Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\cold-outreach-writer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "771c6de82994e63d"
+}

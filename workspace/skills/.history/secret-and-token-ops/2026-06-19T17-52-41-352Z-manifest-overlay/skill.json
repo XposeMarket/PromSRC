@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "secret-and-token-ops",
+  "name": "Secret and Token Ops",
+  "description": "Credential-safe Prometheus workflow for tasks involving secrets, API keys, OAuth tokens, PATs, client secrets, cookies, vault references, authentication material, redaction, rotation, least-privilege scopes, and log-safe reporting.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "secret",
+    "token",
+    "API key",
+    "api key",
+    "credential",
+    "credentials",
+    "password",
+    "client secret",
+    "OAuth token",
+    "oauth secret",
+    "PAT",
+    "personal access token",
+    "GitHub token",
+    "vault://",
+    "auth token",
+    "cookie",
+    "session token",
+    "rotate key",
+    "revoke token",
+    "redact secret",
+    "store credential",
+    "environment variable",
+    "env var"
+  ],
+  "categories": [
+    "security",
+    "credentials",
+    "oauth",
+    "secrets",
+    "connectors"
+  ],
+  "requiredTools": [
+    "scan_secrets"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "credentials": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "notes/subscription-gated-oauth-api-access-2026-05-15.md",
+      "type": "doc",
+      "description": "Guardrail for subscription-gated OAuth/API feature investigations, with redaction and entitlement-classification steps."
+    },
+    {
+      "path": "notes/github-token-cli-auth-safety-2026-05-16.md",
+      "type": "doc",
+      "description": "GitHub PAT and CLI auth safety guardrail for repo-access setup workflows."
+    },
+    {
+      "path": "notes/xurl-oauth-client-secret-2026-05-22.md",
+      "type": "doc",
+      "description": "Guardrail for X/xurl OAuth setup workflows involving Client ID/Secret and connector distinction."
+    }
+  ]
+}

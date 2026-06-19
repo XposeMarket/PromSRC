@@ -1,103 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "website-to-hyperframes",
-  "name": "website-to-hyperframes",
-  "description": "Use this skill when the user provides a website URL and wants a HyperFrames video, promo, social ad, product tour, website capture, or video content based on the existing site. Triggers on phrases like turn this website into a video, capture this site, make a promo from my site, website to HyperFrames, social ad from URL, product tour from site, video based on this website, and make a video from this link. Use it to capture the site, extract messaging/assets, storyboard scenes, and build a HyperFrames composition from real website evidence.",
-  "version": "1.1.0",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user provides a website URL and wants a HyperFrames video, promo, social ad, product tour, website capture, or video content based on the existing site.",
   "triggers": [
-    "turn website into video",
-    "capture this site",
-    "make promo from my site",
     "website to HyperFrames",
-    "social ad from URL",
-    "product tour from site",
-    "video based on website",
-    "make video from link",
-    "website promo video",
-    "site capture video",
-    "HyperFrames from website"
+    "turn this website into a video",
+    "make promo from website",
+    "website product tour",
+    "video from URL",
+    "capture website for video",
+    "social ad from website",
+    "site-based promo",
+    "website walkthrough video",
+    "animate website content",
+    "website to motion clip",
+    "create video from landing page"
   ],
   "categories": [
-    "codex",
-    "imported",
     "creative",
     "hyperframes",
-    "website-video"
+    "website",
+    "video"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "shell",
-      "browser",
-      "desktop"
-    ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": true,
-    "browser": true,
-    "desktop": true,
-    "externalSideEffects": false
-  },
-  "resources": [
-    {
-      "path": "references/step-1-capture.md",
-      "type": "doc",
-      "sizeBytes": 4878
-    },
-    {
-      "path": "references/step-2-design.md",
-      "type": "doc",
-      "sizeBytes": 8888
-    },
-    {
-      "path": "references/step-3-script.md",
-      "type": "doc",
-      "sizeBytes": 638
-    },
-    {
-      "path": "references/step-4-storyboard.md",
-      "type": "doc",
-      "sizeBytes": 9742
-    },
-    {
-      "path": "references/step-5-vo.md",
-      "type": "doc",
-      "sizeBytes": 2498
-    },
-    {
-      "path": "references/step-6-build.md",
-      "type": "doc",
-      "sizeBytes": 15610
-    },
-    {
-      "path": "references/step-7-validate.md",
-      "type": "doc",
-      "sizeBytes": 5543
-    }
+  "requiredTools": [
+    "browser_automation",
+    "creative_hyperframes",
+    "workspace_write"
   ],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium"
+  "lifecycle": "active",
+  "name": "Website to HyperFrames",
+  "id": "website-to-hyperframes"
 }

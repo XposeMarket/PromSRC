@@ -233,7 +233,7 @@ export function evaluateHardToolDeny(input: HardToolDenyInput): HardToolDenyDeci
   const argsText = toolArgsText(input.args);
   const isAutonomousGoal = input.executionPolicy?.mode === 'goal_autonomous';
 
-  if (['run_command', 'start_process', 'run_command_supervised'].includes(toolName)) {
+  if (['terminal', 'run_command', 'start_process', 'run_command_supervised'].includes(toolName)) {
     const decision = evaluateCommandDeny(commandFromArgs(input.args));
     if (decision.denied) return decision;
   }

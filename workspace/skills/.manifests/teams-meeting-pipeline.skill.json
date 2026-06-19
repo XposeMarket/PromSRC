@@ -1,23 +1,22 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to process Teams meetings, meeting transcripts, recordings, summaries, action items, decisions, speaker notes, or follow-up packets. It structures meeting ingestion into useful outputs with evidence and next steps.",
+  "description": "Use this skill when processing Teams meetings, transcripts, recordings, summaries, action items, decisions, speaker notes, or follow-up packets from Microsoft Teams or similar meeting recordings.",
   "triggers": [
     "Teams meeting",
-    "meeting pipeline",
+    "Microsoft Teams recording",
     "meeting transcript",
-    "meeting summary",
-    "action items",
-    "decisions",
-    "meeting recording",
-    "Microsoft Teams",
+    "Teams transcript",
+    "meeting action items",
     "speaker notes",
-    "follow-up packet",
-    "summarize meeting",
-    "meeting notes",
-    "transcript processing",
-    "meeting action plan",
-    "team meeting review"
+    "meeting follow-up packet",
+    "summarize Teams call",
+    "process meeting recording",
+    "meeting decisions",
+    "Teams notes",
+    "recording summary",
+    "call recap",
+    "meeting pipeline"
   ],
   "categories": [
     "meetings",
@@ -26,8 +25,7 @@
   ],
   "requiredTools": [
     "external_apps",
-    "media_assets",
-    "analyze_video"
+    "media_assets"
   ],
   "lifecycle": "active",
   "id": "teams-meeting-pipeline"

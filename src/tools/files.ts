@@ -254,11 +254,8 @@ export async function executeRead(args: ReadToolArgs): Promise<ToolResult> {
         size: outContent.length,
         lines: allLines.length,
         window: {
-          retrieval_mode: mode,
           start_line: startLine,
           end_line: endLine,
-          returned_lines: selected.length,
-          max_lines_cap: cap,
           truncated,
         },
       }
@@ -363,9 +360,6 @@ export async function executeEdit(args: EditToolArgs): Promise<ToolResult> {
       data: {
         path: absPath,
         replacements: 1,
-        old_length: content.length,
-        new_length: newContent.length,
-        diff: newContent.length - content.length
       }
     };
   } catch (error: any) {
@@ -654,8 +648,13 @@ export async function executeGrepFile(args: GrepFileArgs): Promise<ToolResult> {
     let regex: RegExp;
     try { regex = new RegExp(args.pattern, flags); }
     catch { return { success: false, error: `Invalid regex pattern: ${args.pattern}` }; }
-    const ctx = Math.max(0, Math.min(10, Number(args.context_lines || 0)));
-    const maxResults = Math.min(200, Math.max(1, Number(args.max_results || 100)));
+    const requestedMaxResults = Math.floor(Number(args.max_results || 50));
+    const ctx = Math.max(0, Math.min(3, Number(args.context_lines || 0)));
+    const maxResults = Math.min(80, Math.max(1, requestedMaxResults));
+    const trimLine = (line: string, max = 500): string => {
+      const value = String(line || '');
+      return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
+    };
     const matches: Array<{ line_number: number; line: string; context_before?: string[]; context_after?: string[] }> = [];
     for (let i = 0; i < lines.length; i++) {
       if (matches.length >= maxResults) break;
@@ -664,17 +663,30 @@ export async function executeGrepFile(args: GrepFileArgs): Promise<ToolResult> {
       if (regex.test(lines[i])) {
         matches.push({
           line_number: i + 1,
-          line: lines[i],
+          line: trimLine(lines[i]),
           ...(ctx > 0 ? {
-            context_before: lines.slice(Math.max(0, i - ctx), i),
-            context_after: lines.slice(i + 1, Math.min(lines.length, i + 1 + ctx)),
+            context_before: lines.slice(Math.max(0, i - ctx), i).map((line) => trimLine(line, 260)),
+            context_after: lines.slice(i + 1, Math.min(lines.length, i + 1 + ctx)).map((line) => trimLine(line, 260)),
           } : {}),
         });
       }
     }
     return {
       success: true,
-      data: { path: abs, pattern: args.pattern, match_count: matches.length, matches },
+      data: {
+        path: abs,
+        pattern: args.pattern,
+        match_count: matches.length,
+        returned_count: matches.length,
+        result_limit: {
+          requested: requestedMaxResults,
+          applied: maxResults,
+          context_lines: ctx,
+          limit_reached: matches.length >= maxResults,
+          note: 'Result payloads are hard-clamped. Narrow the pattern or read a targeted file window for more context.',
+        },
+        matches,
+      },
     };
   } catch (err: any) {
     return { success: false, error: `grep_file failed: ${err.message}` };
@@ -688,9 +700,9 @@ export const grepFileTool = {
   schema: {
     path: 'string (required) - File to search',
     pattern: 'string (required) - Regex or literal pattern',
-    context_lines: 'number (optional) - Lines of context around each match (default 0, max 10)',
+    context_lines: 'number (optional) - Lines of context around each match (default 0, hard cap 3)',
     case_insensitive: 'boolean (optional) - Case-insensitive match (default false)',
-    max_results: 'number (optional) - Max matches to return (default 100, max 200)',
+    max_results: 'number (optional) - Max matches to return (default 50, hard cap 80)',
   },
 };
 
@@ -713,8 +725,13 @@ export async function executeSearchFiles(args: SearchFilesArgs): Promise<ToolRes
     try { regex = new RegExp(args.pattern, flags); }
     catch { return { success: false, error: `Invalid regex pattern: ${args.pattern}` }; }
     const globPattern = (args.file_glob || '').toLowerCase().trim();
-    const maxResults = Math.min(500, Math.max(1, Number(args.max_results || 100)));
-    const ctx = Math.max(0, Math.min(5, Number(args.context_lines || 0)));
+    const requestedMaxResults = Math.floor(Number(args.max_results || 50));
+    const maxResults = Math.min(80, Math.max(1, requestedMaxResults));
+    const ctx = Math.max(0, Math.min(3, Number(args.context_lines || 0)));
+    const trimLine = (line: string, max = 500): string => {
+      const value = String(line || '');
+      return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
+    };
     const results: Array<{ file: string; line_number: number; line: string; context_before?: string[]; context_after?: string[] }> = [];
 
     function matchesGlob(filename: string): boolean {
@@ -747,10 +764,10 @@ export async function executeSearchFiles(args: SearchFilesArgs): Promise<ToolRes
               results.push({
                 file: full,
                 line_number: i + 1,
-                line: lines[i],
+                line: trimLine(lines[i]),
                 ...(ctx > 0 ? {
-                  context_before: lines.slice(Math.max(0, i - ctx), i),
-                  context_after: lines.slice(i + 1, Math.min(lines.length, i + 1 + ctx)),
+                  context_before: lines.slice(Math.max(0, i - ctx), i).map((line) => trimLine(line, 260)),
+                  context_after: lines.slice(i + 1, Math.min(lines.length, i + 1 + ctx)).map((line) => trimLine(line, 260)),
                 } : {}),
               });
             }
@@ -762,7 +779,20 @@ export async function executeSearchFiles(args: SearchFilesArgs): Promise<ToolRes
     await walk(dirAbs);
     return {
       success: true,
-      data: { directory: dirAbs, pattern: args.pattern, match_count: results.length, matches: results },
+      data: {
+        directory: dirAbs,
+        pattern: args.pattern,
+        match_count: results.length,
+        returned_count: results.length,
+        result_limit: {
+          requested: requestedMaxResults,
+          applied: maxResults,
+          context_lines: ctx,
+          limit_reached: results.length >= maxResults,
+          note: 'Result payloads are hard-clamped. Narrow directory, glob, or pattern to inspect more matches.',
+        },
+        matches: results,
+      },
     };
   } catch (err: any) {
     return { success: false, error: `search_files failed: ${err.message}` };
@@ -777,9 +807,9 @@ export const searchFilesTool = {
     directory: 'string (optional) - Directory to search (default: workspace root)',
     pattern: 'string (required) - Regex or literal pattern',
     file_glob: 'string (optional) - Comma-separated file globs e.g. "*.md,*.ts" (default: all files)',
-    context_lines: 'number (optional) - Lines of context around each match (default 0, max 5)',
+    context_lines: 'number (optional) - Lines of context around each match (default 0, hard cap 3)',
     case_insensitive: 'boolean (optional) - Case-insensitive match (default false)',
-    max_results: 'number (optional) - Max total matches (default 100, max 500)',
+    max_results: 'number (optional) - Max total matches (default 50, hard cap 80)',
   },
 };
 
@@ -935,4 +965,249 @@ export const applyPatchTool = {
     patch: 'string (required) - Unified diff patch text',
     check: 'boolean (optional) - Validate patch only without applying it',
   }
+};
+
+// ── READ FILES BATCH ──────────────────────────────────────────────────────────
+export interface ReadFilesBatchEntry {
+  filename: string;
+  start_line?: number;
+  num_lines?: number;
+}
+export interface ReadFilesBatchArgs {
+  files: ReadFilesBatchEntry[];
+}
+
+export async function executeReadFilesBatch(args: ReadFilesBatchArgs): Promise<ToolResult> {
+  if (!Array.isArray(args.files) || !args.files.length) {
+    return { success: false, error: 'files array is required and must not be empty' };
+  }
+  const mode = getRetrievalMode();
+  const cap = retrievalMaxLines(mode);
+  const results: Array<{ filename: string; content?: string; line_count?: number; error?: string }> = [];
+  for (const entry of args.files) {
+    const filename = entry?.filename || (entry as any)?.name;
+    if (!filename) { results.push({ filename: String(filename || ''), error: 'filename is required' }); continue; }
+    try {
+      const absPath = resolveWorkspacePath(String(filename));
+      const pathCheck = isPathAllowed(absPath);
+      if (!pathCheck.allowed) { results.push({ filename: String(filename), error: pathCheck.reason }); continue; }
+      const content = await fs.readFile(absPath, 'utf-8');
+      const allLines = content.split('\n');
+      const startLine = Math.max(1, Number(entry.start_line || 1) || 1);
+      const requested = Math.max(1, Number(entry.num_lines || cap) || cap);
+      const window = Math.min(requested, cap);
+      const startIdx = Math.max(0, startLine - 1);
+      const selected = allLines.slice(startIdx, startIdx + window);
+      const numbered = selected.map((l, i) => `${startLine + i}: ${l}`).join('\n');
+      const header = `--- ${filename} (${allLines.length} lines)` +
+        (startLine > 1 || selected.length < allLines.length ? ` [lines ${startLine}-${startLine + selected.length - 1}]` : '') + ' ---';
+      results.push({ filename: String(filename), content: `${header}\n${numbered}`, line_count: allLines.length });
+    } catch (err: any) {
+      results.push({ filename: String(filename), error: err.message });
+    }
+  }
+  return {
+    success: true,
+    data: { file_count: results.length, results },
+    stdout: results.map(r => r.content || `ERROR ${r.filename}: ${r.error}`).join('\n\n'),
+  };
+}
+
+export const readFilesBatchTool = {
+  name: 'read_files_batch',
+  description: 'Read multiple workspace files in one call. Prefer this over repeated read_file calls when inspecting 2+ files before editing.',
+  execute: executeReadFilesBatch,
+  schema: {
+    files: 'array (required) - Each item: { filename: string, start_line?: number, num_lines?: number }',
+  },
+};
+
+// ── APPLY WORKSPACE PATCHSET ─────────────────────────────────────────────────
+export interface WorkspacePatchEdit {
+  filename: string;
+  op: 'find_replace' | 'replace_lines' | 'insert_after' | 'delete_lines' | 'write_file' | 'create_file';
+  find?: string;
+  replace?: string;
+  replace_all?: boolean;
+  start_line?: number;
+  end_line?: number;
+  new_content?: string;
+  after_line?: number;
+  content?: string;
+}
+export interface ApplyWorkspacePatchsetArgs {
+  edits: WorkspacePatchEdit[];
+}
+
+export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchsetArgs): Promise<ToolResult> {
+  if (!Array.isArray(args.edits) || !args.edits.length) {
+    return { success: false, error: 'edits array is required and must not be empty' };
+  }
+  const results: Array<{ filename: string; op: string; ok: boolean; error?: string }> = [];
+  for (const edit of args.edits) {
+    const filename = edit?.filename;
+    const op = String(edit?.op || '').trim();
+    if (!filename || !op) { results.push({ filename: String(filename || ''), op, ok: false, error: 'filename and op are required' }); continue; }
+    try {
+      const absPath = resolveWorkspacePath(String(filename));
+      const pathCheck = isPathAllowed(absPath);
+      if (!pathCheck.allowed) { results.push({ filename: String(filename), op, ok: false, error: pathCheck.reason }); continue; }
+
+      if (op === 'create_file') {
+        const c = String(edit.content ?? '');
+        if (fsSync.existsSync(absPath)) { results.push({ filename: String(filename), op, ok: false, error: `File already exists. Use write_file to overwrite.` }); continue; }
+        await fs.mkdir(path.dirname(absPath), { recursive: true });
+        await fs.writeFile(absPath, c, 'utf-8');
+        results.push({ filename: String(filename), op, ok: true });
+
+      } else if (op === 'write_file') {
+        const c = String(edit.content ?? '');
+        await fs.mkdir(path.dirname(absPath), { recursive: true });
+        await fs.writeFile(absPath, c, 'utf-8');
+        results.push({ filename: String(filename), op, ok: true });
+
+      } else if (op === 'find_replace') {
+        const findStr = String(edit.find ?? '');
+        const replaceStr = String(edit.replace ?? '');
+        if (!findStr) { results.push({ filename: String(filename), op, ok: false, error: 'find is required' }); continue; }
+        const content = await fs.readFile(absPath, 'utf-8');
+        if (!content.includes(findStr)) { results.push({ filename: String(filename), op, ok: false, error: `Text not found: "${findStr.slice(0, 60)}"` }); continue; }
+        const newContent = edit.replace_all
+          ? content.split(findStr).join(replaceStr)
+          : content.replace(findStr, replaceStr);
+        await fs.writeFile(absPath, newContent, 'utf-8');
+        results.push({ filename: String(filename), op, ok: true });
+
+      } else if (op === 'replace_lines') {
+        const startL = Math.max(1, Number(edit.start_line) || 1);
+        const endL = Math.max(startL, Number(edit.end_line) || startL);
+        const newContent = String(edit.new_content ?? '');
+        const content = await fs.readFile(absPath, 'utf-8');
+        const lines = content.split('\n');
+        lines.splice(startL - 1, endL - startL + 1, ...newContent.split('\n'));
+        await fs.writeFile(absPath, lines.join('\n'), 'utf-8');
+        results.push({ filename: String(filename), op, ok: true });
+
+      } else if (op === 'insert_after') {
+        const afterL = Math.max(0, Number(edit.after_line) || 0);
+        const ins = String(edit.content ?? '');
+        const content = await fs.readFile(absPath, 'utf-8');
+        const lines = content.split('\n');
+        lines.splice(afterL, 0, ...ins.split('\n'));
+        await fs.writeFile(absPath, lines.join('\n'), 'utf-8');
+        results.push({ filename: String(filename), op, ok: true });
+
+      } else if (op === 'delete_lines') {
+        const startL = Math.max(1, Number(edit.start_line) || 1);
+        const endL = Math.max(startL, Number(edit.end_line) || startL);
+        const content = await fs.readFile(absPath, 'utf-8');
+        const lines = content.split('\n');
+        lines.splice(startL - 1, endL - startL + 1);
+        await fs.writeFile(absPath, lines.join('\n'), 'utf-8');
+        results.push({ filename: String(filename), op, ok: true });
+
+      } else {
+        results.push({ filename: String(filename), op, ok: false, error: `Unknown op: ${op}` });
+      }
+    } catch (err: any) {
+      results.push({ filename: String(filename), op, ok: false, error: err.message });
+    }
+  }
+  const failed = results.filter(r => !r.ok);
+  return {
+    success: failed.length === 0,
+    data: { edit_count: results.length, results },
+    stdout: results.map(r => `${r.ok ? '✅' : '❌'} [${r.op}] ${r.filename}${r.error ? ': ' + r.error : ''}`).join('\n'),
+    ...(failed.length ? { error: `${failed.length}/${results.length} edits failed` } : {}),
+  };
+}
+
+export const applyWorkspacePatchsetTool = {
+  name: 'apply_workspace_patchset',
+  description: 'Apply multiple file edits atomically. Supports find_replace, replace_lines, insert_after, delete_lines, write_file, create_file. Returns per-edit results.',
+  execute: executeApplyWorkspacePatchset,
+  schema: {
+    edits: 'array (required) - Each: { filename, op, ...op-specific fields }',
+  },
+};
+
+// ── FILE TREE ─────────────────────────────────────────────────────────────────
+export interface FileTreeArgs {
+  path?: string;
+  max_depth?: number;
+  glob?: string;
+  exclude?: string;
+}
+
+export async function executeFileTree(args: FileTreeArgs): Promise<ToolResult> {
+  try {
+    const rootAbs = resolveWorkspacePath(args.path || '.');
+    const pathCheck = isPathAllowed(rootAbs);
+    if (!pathCheck.allowed) return { success: false, error: pathCheck.reason };
+    const maxDepth = Math.max(1, Math.min(8, Number(args.max_depth || 3) || 3));
+    const defaultExclude = ['node_modules', '.git', 'dist'];
+    const excludeRaw = String(args.exclude || '').trim();
+    const excludeNames = new Set<string>([
+      ...defaultExclude,
+      ...(excludeRaw ? excludeRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : []),
+    ]);
+    const globRaw = String(args.glob || '').trim().toLowerCase();
+    const globs = globRaw ? globRaw.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
+
+    function matchesGlob(name: string): boolean {
+      if (!globs.length) return true;
+      const low = name.toLowerCase();
+      return globs.some((g: string) => {
+        if (g.startsWith('*.')) return low.endsWith(g.slice(1));
+        if (g.includes('*')) return low.includes(g.replace(/\*/g, ''));
+        return low === g;
+      });
+    }
+
+    const lines: string[] = [];
+    const rootLabel = args.path || '.';
+    lines.push(rootLabel + '/');
+
+    function walk(dir: string, depth: number, prefix: string): void {
+      if (depth > maxDepth) return;
+      let entries: fsSync.Dirent[];
+      try { entries = fsSync.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      entries = entries.filter(e => !excludeNames.has(e.name));
+      entries.sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const isLast = i === entries.length - 1;
+        const connector = isLast ? '└── ' : '├── ';
+        const childPrefix = isLast ? '    ' : '│   ';
+        if (e.isDirectory()) {
+          lines.push(`${prefix}${connector}${e.name}/`);
+          walk(path.join(dir, e.name), depth + 1, prefix + childPrefix);
+        } else {
+          if (!globs.length || matchesGlob(e.name)) {
+            lines.push(`${prefix}${connector}${e.name}`);
+          }
+        }
+      }
+    }
+
+    walk(rootAbs, 1, '');
+    return { success: true, stdout: lines.join('\n'), data: { root: rootAbs, max_depth: maxDepth } };
+  } catch (err: any) {
+    return { success: false, error: `file_tree failed: ${err.message}` };
+  }
+}
+
+export const fileTreeTool = {
+  name: 'file_tree',
+  description: 'Return a compact indented tree of files and folders. Cleaner than list_directory for orientation.',
+  execute: executeFileTree,
+  schema: {
+    path: 'string (optional) - Root path (default workspace root)',
+    max_depth: 'number (optional) - Max recursion depth (default 3, max 8)',
+    glob: 'string (optional) - Comma-separated file globs to filter output',
+    exclude: 'string (optional) - Comma-separated names to exclude (default: node_modules,.git,dist)',
+  },
 };

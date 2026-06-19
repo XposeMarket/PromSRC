@@ -1,32 +1,37 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for an interactive dashboard, live HTML widget, rich report, scorecard, visual comparison, filterable table, clickable prototype, or polished chat-embedded HTML artifact. It guides self-contained HTML/CSS/JS output that renders cleanly in chat.",
+  "description": "Use this skill when creating an interactive HTML report, dashboard, iframe-style visual artifact, live card, rich analysis view, visual summary, or polished single-file HTML deliverable.",
   "triggers": [
-    "interactive dashboard",
-    "HTML widget",
-    "live report",
-    "scorecard",
-    "filterable table",
-    "clickable prototype",
-    "interactive visual",
-    "dashboard report",
-    "HTML interactive",
+    "make an interactive report",
+    "HTML dashboard",
+    "visual dashboard",
+    "interactive visualization",
     "rich report",
+    "iframe report",
+    "single page report",
+    "polished dashboard",
+    "clickable report",
+    "build a live card",
+    "interactive summary",
     "visual analysis",
-    "embedded iframe",
-    "KPI cards",
-    "interactive comparison",
-    "make it visual"
+    "HTML artifact",
+    "dashboard for this analysis",
+    "make this scannable",
+    "interactive table",
+    "styled report"
   ],
   "categories": [
-    "visualization",
+    "visuals",
     "html",
-    "reporting"
+    "dashboard",
+    "report"
   ],
   "requiredTools": [
-    "creative_mode"
+    "workspace_write",
+    "creative_basic"
   ],
   "lifecycle": "active",
+  "name": "HTML Interactive",
   "id": "html-interactive"
 }

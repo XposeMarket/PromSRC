@@ -598,7 +598,7 @@ export function getAgentTeamScheduleTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'schedule_job',
-	        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). By default, schedule jobs are assigned to Prometheus itself and run through the main scheduler context. Use subagent_id only when the user explicitly asks for a specific subagent owner or the task genuinely requires a specialized delegated agent. Use team_id to schedule a managed team run where the manager wakes first and dispatches members from the team goal. If ownership is ambiguous and delegation would materially change the workflow, ask whether the user wants Prometheus itself or a subagent/team to own the schedule.',
+	        description: 'Manage scheduled jobs: list/create/update/pause/resume/delete/run_now. Default owner is Prometheus; use subagent_id or team_id only when delegation is intended.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -606,10 +606,10 @@ export function getAgentTeamScheduleTools(): any[] {
             action: { type: 'string', description: 'One of: list, create, update, pause, resume, delete, run_now' },
             job_id: { type: 'string', description: 'Required for update/pause/resume/delete/run_now' },
             name: { type: 'string', description: 'Job name (create/update)' },
-            instruction_prompt: { type: 'string', description: 'REQUIRED for create. Optional for update — only include if you want to replace the existing prompt. This is the ONLY instruction the agent receives when the job fires — it must be fully self-contained. Include: who the agent is, the exact step-by-step actions to take (with tool names where relevant), any constraints, and what success looks like. Do NOT write a label or summary — write executable instructions as if briefing a fresh agent with zero context.' },
+            instruction_prompt: { type: 'string', description: 'Required for create. Self-contained instructions the future run receives; include steps, constraints, and success criteria.' },
             schedule: {
               type: 'object',
-              description: 'Recurring/one-shot schedule. You may provide raw cron/run_at, or friendly fields equivalent to the web UI: {kind:"recurring", repeat:"daily|weekday|weekend", time:"09:00"}, {days_of_week:["monday","wednesday"], time:"14:30"}, {every_hours:6}, {every_days:2, time:"09:00"}, or {text:"weekdays at 9am"}.',
+              description: 'Recurring/one-shot schedule. Accepts cron/run_at or friendly fields like repeat/time, days_of_week/time, every_hours, every_days, or text.',
               properties: {
                 kind: { type: 'string', description: 'recurring or one_shot' },
                 cron: { type: 'string', description: 'Cron expression for recurring jobs' },
@@ -631,7 +631,7 @@ export function getAgentTeamScheduleTools(): any[] {
               },
             },
             model_override: { type: 'string', description: 'Optional model override for this scheduled job' },
-	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use as the schedule owner. Omit to have Prometheus itself own and execute the scheduled job. IMPORTANT — during update: omit this field entirely to preserve existing ownership (do NOT re-pass it just because the job previously had one). Only include subagent_id if you explicitly want to change who owns the job. Pass an empty string "" to return ownership to Prometheus itself.' },
+	            subagent_id: { type: 'string', description: 'Optional configured subagent owner. Omit on update to preserve existing owner; pass "" to return ownership to Prometheus.' },
             team_id: { type: 'string', description: 'Optional: managed team ID. When set, the scheduled run wakes that team manager first; the manager derives the run from team goal/memory and dispatches agents accordingly.' },
             skillIds: {
               type: 'array',
@@ -649,7 +649,7 @@ export function getAgentTeamScheduleTools(): any[] {
                   content: { type: 'string', description: 'Context content injected when the schedule runs.' },
                 },
               },
-              description: 'Full replacement schedule context cards for create/update. Use schedule_job_detail first if preserving existing cards while updating.',
+              description: 'Full replacement schedule context cards for create/update.',
             },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
@@ -844,11 +844,7 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'automation_dashboard',
         description:
-          'Return ONE unified internal-state snapshot — the single tool for "what is going on", "what has everyone done", "what are my priorities", or an operator/morning snapshot. ' +
-          'Joins the agent roster with each agent\'s scheduled jobs, background tasks, recent runs, and last produced output; also returns managed teams with members, scheduled jobs (with health), recent tasks, internal watches, the pending event queue, and aggregate counts. ' +
-          'Prefer this over chaining agent_list + task_control(list/get) + schedule_job_detail/history — one call answers the operator questions and is the data source for the show_agent_work card. ' +
-          'Use depth:"full" to get untruncated output/results, agent_id to focus on one agent, and include to narrow which sections are returned. Drop to the granular schedule_job_* / task_control tools only for control/mutation or deep single-entity inspection. '
-          + 'The "build" field reports app version + whether an update is available (build.updateAvailable / build.latestVersion); build.repo (local git working-tree state) is present ONLY in dev builds and must never be surfaced to end users — prefer the update signal for any operator snapshot.',
+          'Unified read-only operator snapshot for priorities, agents, schedules, tasks, teams, watches, recent outputs, and app update status. Prefer over chaining granular list/detail tools.',
         parameters: {
           type: 'object',
           required: [],

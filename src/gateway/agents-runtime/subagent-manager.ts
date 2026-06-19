@@ -16,6 +16,7 @@ import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/conf
 import { appendSubagentChatMessage } from './subagent-chat-store';
 import type { AgentIdentity, AgentPersonality } from '../../types.js';
 import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
+import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 
 export interface SubagentDefinition {
   id: string;
@@ -26,6 +27,7 @@ export interface SubagentDefinition {
   max_steps: number;
   timeout_ms: number;
   model?: string;  // Override from main config
+  voice?: Record<string, any>;
   executionWorkspace?: string;
   allowedWorkPaths?: string[];
   
@@ -358,6 +360,11 @@ export class SubagentManager {
       allowedWorkPaths,
     });
     const agentWorkspace = executionWorkspace;
+    const agentDefinition = getAgentById(definition.id);
+    const executorModel = resolveConfiguredAgentModel(getConfig().getConfig(), agentDefinition || definition, {
+      agentType: 'subagent',
+      fallbackToPrimary: false,
+    }).model;
     const parentTask = loadTask(parentTaskId);
     const parentTaskLink = parentTask ? parentTaskId : undefined;
     const originatingSessionId = parentTask ? undefined : parentTaskId;
@@ -374,6 +381,7 @@ export class SubagentManager {
       suppressOriginDelivery: request.delivery_mode === 'task_panel_only',
       agentWorkspace,
       agentAllowedWorkPaths: allowedWorkPaths,
+      executorProvider: executorModel || undefined,
       plan: this.buildDefaultPlan(definition),
     });
 
@@ -482,6 +490,7 @@ export class SubagentManager {
       max_steps: params.max_steps ?? 20,
       timeout_ms: params.timeout_ms ?? 300_000,
       model: params.model,
+      voice: (params as any).voice && typeof (params as any).voice === 'object' ? (params as any).voice : undefined,
       executionWorkspace,
       allowedWorkPaths,
       allowed_tools: params.allowed_tools ?? [],
@@ -726,6 +735,7 @@ export class SubagentManager {
       if (def.teamRole) entry.teamRole = def.teamRole;
       if (def.teamAssignment) entry.teamAssignment = def.teamAssignment;
       if (def.identity) entry.identity = def.identity;
+      if (def.voice && typeof def.voice === 'object') entry.voice = def.voice;
 	      agents.push(entry);
       configManager.updateConfig({ agents } as any);
       console.log(`[SubagentManager] Registered "${def.id}" into config.json (isTeamManager=${!!opts.isTeamManager})`);
@@ -835,6 +845,10 @@ export class SubagentManager {
     } else {
       next.executionWorkspace = this.normalizeExecutionWorkspace(next.executionWorkspace, next.allowedWorkPaths);
     }
+    if (patch.voice !== undefined) {
+      if (patch.voice && typeof patch.voice === 'object') next.voice = patch.voice;
+      else delete (next as any).voice;
+    }
 
     next.modified_at = Date.now();
 
@@ -865,6 +879,7 @@ export class SubagentManager {
       executionWorkspace: next.executionWorkspace,
       allowedWorkPaths: next.allowedWorkPaths,
       skillIds: next.skillIds || [],
+      voice: next.voice && typeof next.voice === 'object' ? next.voice : undefined,
       modifiedAt: next.modified_at,
 	      teamRole: next.teamRole,
       teamAssignment: next.teamAssignment,

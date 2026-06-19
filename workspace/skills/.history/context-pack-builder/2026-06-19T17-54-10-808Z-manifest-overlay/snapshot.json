@@ -1,0 +1,12 @@
+{
+  "skillId": "context-pack-builder",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:10.812Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\context-pack-builder",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c15f36010e40f2e0"
+}

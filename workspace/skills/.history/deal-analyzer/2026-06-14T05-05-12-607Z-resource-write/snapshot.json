@@ -1,0 +1,11 @@
+{
+  "skillId": "deal-analyzer",
+  "reason": "resource-write",
+  "createdAt": "2026-06-14T05:05:12.609Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\deal-analyzer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "b3b760d58a39f5df"
+}

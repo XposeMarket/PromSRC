@@ -1,0 +1,11 @@
+{
+  "skillId": "image-analyst",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-14T14:49:32.066Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\image-analyst",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "bea9f1cdfba55b3e"
+}

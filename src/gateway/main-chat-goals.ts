@@ -32,6 +32,8 @@ export interface MainChatGoalPolicy {
 export interface MainChatGoalJudgeResult {
   status: 'done' | 'continue' | 'blocked';
   reason: string;
+  /** Concrete instruction for the next autonomous worker turn. Empty only when the goal is done. */
+  directive: string;
   confidence: number;
   parseFailed: boolean;
 }
@@ -227,19 +229,75 @@ function stripThink(text: string): string {
   return String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
+function compactTextBlock(text: string, max = 1800): string {
+  const clean = String(text || '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}...` : clean;
+}
+
+function buildGoalJudgeSessionContext(goal: MainChatGoalState): string {
+  const session = getSession(goal.sessionId);
+  const history = Array.isArray(session.history) ? session.history : [];
+  if (!history.length) return '(none)';
+
+  const createdAt = Number(goal.createdAt || 0);
+  const beforeGoal = history
+    .filter((msg) => !createdAt || Number(msg.timestamp || 0) <= createdAt)
+    .slice(-10);
+  const sinceGoal = history
+    .filter((msg) => createdAt && Number(msg.timestamp || 0) > createdAt)
+    .slice(-18);
+
+  const seen = new Set<string>();
+  const selected: ChatMessage[] = [];
+  for (const msg of [...beforeGoal, ...sinceGoal]) {
+    const key = `${msg.role}:${msg.timestamp}:${String(msg.content || '').slice(0, 80)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push(msg);
+  }
+
+  return formatGoalMessages(selected).slice(0, 9000) || '(none)';
+}
+
+function normalizeJudgeDirective(parsed: any, status: MainChatGoalJudgeResult['status'], reason: string): string {
+  const raw = parsed?.directive ?? parsed?.next_step_directive ?? parsed?.nextStepDirective ?? parsed?.next_step ?? '';
+  const directive = compactTextBlock(String(raw || ''), 1200);
+  if (status === 'done') return '';
+  if (directive) return directive;
+  if (status === 'blocked') return `Stop and surface the blocker clearly: ${reason}`;
+  return `Continue the goal by addressing what remains incomplete: ${reason}`;
+}
+
 export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: string): Promise<MainChatGoalJudgeResult> {
   const response = String(lastResponse || '').trim();
   if (!response) {
-    return { status: 'continue', reason: 'No assistant response to evaluate yet.', confidence: 0, parseFailed: false };
+    return {
+      status: 'continue',
+      reason: 'No assistant response to evaluate yet.',
+      directive: 'Run the next concrete worker turn for the goal and produce observable progress.',
+      confidence: 0,
+      parseFailed: false,
+    };
   }
   const policy = resolveMainChatGoalPolicy();
+  const sessionContext = buildGoalJudgeSessionContext(goal);
+  const toolLog = getRecentToolObservationsForContext(goal.sessionId, 18, 8000);
   const prompt = [
     'Evaluate whether the assistant has satisfied the active main-chat goal.',
-    'Return exactly one JSON object with keys: status, reason, confidence.',
+    'You are an isolated judge using the main model path, but you do not receive the normal soul/memory/persona prompt.',
+    'Return exactly one JSON object with keys: status, reason, directive, confidence.',
     'status must be one of: done, continue, blocked.',
-    'Use done only when the goal is actually completed or the final deliverable exists.',
-    'Use blocked when the assistant is waiting for user input, approval, credentials, or an external dependency.',
-    'Use continue for partial progress.',
+    'Use done only when the actual requested outcome is complete and backed by evidence in the chat, tool observations, or assistant response.',
+    'STRONG DONE SIGNALS — any of these in the tool observations is sufficient evidence of completion for source/file/build goals:',
+    '  - apply_dev_source_patchset with status "ok" or "applied"',
+    '  - find_replace_source / write_source / write_webui_source with status "ok"',
+    '  - prom_apply_dev_changes with a result mentioning "succeeded" or "apply_live"',
+    '  - write_note with a result or args mentioning "dev_edit_complete" tag',
+    '  - A final assistant response that enumerates specific numbered changes that were shipped (e.g. "1. ws.js: replaced X with Y", "2. mobile-api.js: added cache")',
+    'For coding/build goals, done is satisfied when tool observations show successful file writes or source edits AND either a build/verify result or a final assistant summary enumerating what was shipped. Do NOT demand a separate explicit verification step if prom_apply_dev_changes, apply_dev_source_patchset, or find_replace_source results already confirm success in the tool observations.',
+    'Use blocked only when work cannot continue without user input, credentials, approval, an unavailable external system, or a hard policy/tool constraint.',
+    'Use continue for genuinely partial progress where implementation work remains — not for turns where file edits succeeded but the summary reads like natural language. A detailed enumerated summary of shipped changes IS completion evidence, not a "vague claim".',
+    'The directive field is the instruction that will be given to the next worker turn. Make it concrete, imperative, and focused on the next missing work. Do not ask the user unless status is blocked.',
     '',
     '[GOAL]',
     goal.goal.slice(0, 3000),
@@ -247,24 +305,36 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
     '[CURRENT_PROGRESS_SUMMARY]',
     String(goal.progressSummary || '(none)').slice(0, 3000),
     '',
+    '[LAST_JUDGE_REASON]',
+    String(goal.lastReason || '(none)').slice(0, 1200),
+    '',
+    '[LAST_JUDGE_DIRECTIVE]',
+    String(goal.nextStepDirective || '(none)').slice(0, 1200),
+    '',
+    '[RELEVANT_CHAT_CONTEXT]',
+    sessionContext,
+    '',
+    '[RECENT_TOOL_OBSERVATIONS]',
+    toolLog || '(none)',
+    '',
     '[DENIED_ACTIONS]',
     formatDeniedActions(goal, 8).slice(0, 2500),
     '',
-    '[ASSISTANT_RESPONSE]',
-    response.slice(0, 5000),
+    '[LATEST_ASSISTANT_RESPONSE]',
+    response.slice(0, 6000),
   ].join('\n');
 
   try {
     const result = await getOllamaClient().chatWithThinking(
       [
-        { role: 'system', content: 'You are GoalJudge. You return strict JSON only.' },
+        { role: 'system', content: 'You are GoalJudge. Return strict JSON only. No markdown, no prose outside JSON.' },
         { role: 'user', content: prompt },
       ],
       'manager',
       {
         temperature: 0,
-        num_ctx: 8192,
-        num_predict: 240,
+        num_ctx: 16384,
+        num_predict: 700,
         ...(policy.judgeModel ? { model: policy.judgeModel } : {}),
         usageContext: { sessionId: goal.sessionId, agentId: 'main_chat_goal_judge' },
       },
@@ -272,16 +342,30 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
     const raw = stripThink(String(result?.message?.content || ''));
     const parsed = extractJsonObject(raw);
     if (!parsed || typeof parsed !== 'object') {
-      return { status: 'continue', reason: `Judge returned unparseable output: ${oneLine(raw || '(empty)', 180)}`, confidence: 0, parseFailed: true };
+      return {
+        status: 'continue',
+        reason: `Judge returned unparseable output: ${oneLine(raw || '(empty)', 180)}`,
+        directive: 'Continue with the next concrete step toward the goal, then verify the result with tools before claiming completion.',
+        confidence: 0,
+        parseFailed: true,
+      };
     }
     const statusRaw = String(parsed.status || '').trim().toLowerCase();
     const status = statusRaw === 'done' || statusRaw === 'blocked' ? statusRaw : 'continue';
-    const reason = oneLine(String(parsed.reason || 'No reason provided.'), 400);
+    const reason = oneLine(String(parsed.reason || 'No reason provided.'), 700);
+    const directive = normalizeJudgeDirective(parsed, status, reason);
     const confidenceNum = Number(parsed.confidence);
     const confidence = Number.isFinite(confidenceNum) ? Math.max(0, Math.min(1, confidenceNum)) : 0.5;
-    return { status, reason, confidence, parseFailed: false };
+    return { status, reason, directive, confidence, parseFailed: false };
   } catch (err: any) {
-    return { status: 'continue', reason: `Judge error: ${err?.message || String(err)}`, confidence: 0, parseFailed: false };
+    const reason = `Judge error: ${err?.message || String(err)}`;
+    return {
+      status: 'continue',
+      reason,
+      directive: 'The judge errored. Continue with the next concrete step toward the goal and gather clear evidence for the next evaluation.',
+      confidence: 0,
+      parseFailed: false,
+    };
   }
 }
 
@@ -301,7 +385,7 @@ function buildFallbackGoalSummary(goal: MainChatGoalState, messages: ChatMessage
     goal.progressSummary ? `Previous progress: ${oneLine(goal.progressSummary, 900)}` : '',
     latestAssistant ? `Latest work: ${oneLine(latestAssistant.content, 700)}` : '',
     goal.lastReason ? `Still incomplete because: ${goal.lastReason}` : 'Still incomplete because: the goal judge has not marked it done.',
-    'Next best step: continue from the latest work without restarting completed steps.',
+    goal.nextStepDirective ? `Next best step: ${oneLine(goal.nextStepDirective, 700)}` : 'Next best step: continue from the latest work without restarting completed steps.',
   ].filter(Boolean).join('\n');
 }
 
@@ -339,6 +423,9 @@ export async function maybeSummarizeMainChatGoal(sessionId: string): Promise<Mai
     '',
     '[LAST_JUDGE_REASON]',
     current.lastReason || '(none)',
+    '',
+    '[LAST_JUDGE_DIRECTIVE]',
+    current.nextStepDirective || '(none)',
     '',
     '[DENIED_ACTIONS]',
     formatDeniedActions(current, 12).slice(0, 3500),
@@ -398,6 +485,9 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
     'Last judge reason:',
     goal.lastReason || '(No judge reason yet.)',
     '',
+    'Judge next-step directive:',
+    goal.nextStepDirective || '(No judge directive yet. Infer the next concrete step from the goal, chat context, and current workspace state.)',
+    '',
     'Denied actions to avoid:',
     formatDeniedActions(goal, 8),
     '',
@@ -432,6 +522,7 @@ export function applyMainChatGoalJudgeResult(
         completedAt: now,
         lastVerdict: 'done',
         lastReason: judge.reason,
+        nextStepDirective: undefined,
         consecutiveJudgeFailures,
         consecutiveRuntimeFailures: 0,
         updatedAt: now,
@@ -445,6 +536,7 @@ export function applyMainChatGoalJudgeResult(
         lastTurnAt: now,
         lastVerdict: 'blocked',
         lastReason: judge.reason,
+        nextStepDirective: judge.directive || undefined,
         blockedReason: judge.reason,
         consecutiveJudgeFailures,
         consecutiveRuntimeFailures: 0,
@@ -459,6 +551,7 @@ export function applyMainChatGoalJudgeResult(
       lastTurnAt: now,
       lastVerdict: 'continue',
       lastReason: judge.reason,
+      nextStepDirective: judge.directive || goal.nextStepDirective,
       pausedReason: pauseForJudge ? `Judge returned unparseable output ${consecutiveJudgeFailures} turns in a row.` : goal.pausedReason,
       consecutiveJudgeFailures,
       consecutiveRuntimeFailures: 0,
@@ -541,6 +634,120 @@ export function recordMainChatGoalDeniedAction(
 
 export function getAllMainChatGoalRecords() {
   return listMainChatGoalRecords();
+}
+
+export interface GoalApprovalJudgeResult {
+  approved: boolean;
+  reason: string;
+  /** If rejected, concrete instruction for the worker on what to do instead. */
+  redirectDirective: string;
+}
+
+/**
+ * Judge-evaluated approval gate for /goal autonomous mode.
+ * Called synchronously (awaited) inside tool handlers for request_dev_source_edit
+ * and request_final_action_approval instead of blindly auto-approving.
+ *
+ * The judge decides:
+ *   - Does this approval make sense given the active goal?
+ *   - Is it necessary and scoped correctly?
+ *   - If not, what should the worker do instead?
+ *
+ * Returns approved=true/false with reason and (on rejection) a redirect directive.
+ * Falls back to approved=true on judge error so the goal loop is never permanently
+ * blocked by a judge failure.
+ */
+export async function judgeGoalApprovalRequest(
+  sessionId: string,
+  approvalType: 'dev_source_edit' | 'final_action',
+  context: {
+    /** Human-readable summary of what is being approved */
+    summary: string;
+    /** Files being unlocked (dev_source_edit only) */
+    files?: string[];
+    /** Action kind (final_action only) */
+    actionKind?: string;
+    /** Target label (final_action only) */
+    targetLabel?: string;
+    /** Plan reason or description provided by the worker */
+    reason?: string;
+    /** The plan object (dev_source_edit only) */
+    plan?: Record<string, any>;
+  },
+): Promise<GoalApprovalJudgeResult> {
+  const goal = getMainChatGoal(sessionId);
+  if (!goal || goal.status !== 'active') {
+    // No active goal — fall back to approved so normal approval flow runs
+    return { approved: true, reason: 'No active goal; approval passed through.', redirectDirective: '' };
+  }
+
+  const policy = resolveMainChatGoalPolicy();
+
+  const approvalDesc = approvalType === 'dev_source_edit'
+    ? [
+        `Type: dev_source_edit (Prometheus source code edit)`,
+        `Files: ${(context.files || []).join(', ') || '(none listed)'}`,
+        `Reason: ${context.reason || '(none)'}`,
+        context.plan ? `Plan user_request: ${String(context.plan.user_request || context.plan.userRequest || '(none)')}` : '',
+        context.plan ? `Plan fix: ${String(context.plan.fix || '(none)')}` : '',
+      ].filter(Boolean).join('\n')
+    : [
+        `Type: final_action (UI action requiring confirmation)`,
+        `Action kind: ${context.actionKind || '(unknown)'}`,
+        `Target: ${context.targetLabel || '(none)'}`,
+        `Summary: ${context.summary || '(none)'}`,
+      ].filter(Boolean).join('\n');
+
+  const prompt = [
+    'You are GoalJudge evaluating an approval request from an autonomous worker running toward a /goal.',
+    'Decide whether this approval is necessary, safe, and aligned with the active goal.',
+    'Return exactly one JSON object with keys: approved (boolean), reason (string, <=300 chars), redirectDirective (string, <=500 chars).',
+    'approved=true: the approval is on-goal, necessary, and safe to grant automatically.',
+    'approved=false: the approval is off-goal, unnecessary, risky, or the worker should take a different approach.',
+    'redirectDirective: if approved=false, give the worker a concrete instruction on what to do instead. If approved=true, leave empty string.',
+    '',
+    '[ACTIVE GOAL]',
+    goal.goal.slice(0, 2000),
+    '',
+    '[CURRENT PROGRESS SUMMARY]',
+    String(goal.progressSummary || '(none)').slice(0, 1500),
+    '',
+    '[LAST JUDGE DIRECTIVE]',
+    String(goal.nextStepDirective || '(none)').slice(0, 800),
+    '',
+    '[APPROVAL REQUEST]',
+    approvalDesc,
+  ].join('\n');
+
+  try {
+    const result = await getOllamaClient().chatWithThinking(
+      [
+        { role: 'system', content: 'You are GoalJudge. Return strict JSON only. No markdown, no prose outside JSON.' },
+        { role: 'user', content: prompt },
+      ],
+      'manager',
+      {
+        temperature: 0,
+        num_ctx: 8192,
+        num_predict: 400,
+        ...(policy.judgeModel ? { model: policy.judgeModel } : {}),
+        usageContext: { sessionId, agentId: 'main_chat_goal_approval_judge' },
+      },
+    );
+    const raw = stripThink(String(result?.message?.content || ''));
+    const parsed = extractJsonObject(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      // Parse failure — default to approved so the loop doesn't stall
+      return { approved: true, reason: `Approval judge parse failed; defaulting to approved. Raw: ${oneLine(raw, 120)}`, redirectDirective: '' };
+    }
+    const approved = parsed.approved !== false;
+    const reason = oneLine(String(parsed.reason || 'No reason provided.'), 300);
+    const redirectDirective = oneLine(String(parsed.redirectDirective || parsed.redirect_directive || ''), 500);
+    return { approved, reason, redirectDirective };
+  } catch (err: any) {
+    // Judge error — default to approved so the loop doesn't stall
+    return { approved: true, reason: `Approval judge error: ${String(err?.message || err).slice(0, 120)}; defaulting to approved.`, redirectDirective: '' };
+  }
 }
 
 export function snapshotMainChatGoal(sessionId: string): MainChatGoalState | null {

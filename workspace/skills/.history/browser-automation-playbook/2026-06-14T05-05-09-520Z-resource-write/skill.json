@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "browser-automation-playbook",
+  "name": "Browser Automation Playbook",
+  "description": "Current operating guide for Prometheus browser automation. Covers visual-first execution, DOM refs, vision fallback, keyboard flows, uploads/downloads, media capture, structured extraction, network interception, browser smoke tests, and when to use browser tools versus web_search/web_fetch_batch/web_fetch/download tools.",
+  "version": "4.2.1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "browser",
+    "browser_open",
+    "browser_click",
+    "browser_fill",
+    "browser_type",
+    "browser_snapshot",
+    "browser_snapshot_delta",
+    "browser_scroll",
+    "browser_scroll_collect",
+    "browser_scroll_collect_v2",
+    "browser_drag",
+    "browser_press_key",
+    "browser_key",
+    "browser_wait",
+    "browser_close",
+    "browser_upload_file",
+    "browser_click_and_download",
+    "browser_send_to_telegram",
+    "browser_vision",
+    "browser_run_js",
+    "browser_intercept_network",
+    "browser_element_watch",
+    "browser_extract_structured",
+    "browser_get_page_text",
+    "browser_get_focused_item",
+    "browser_teach_verify",
+    "save_site_shortcut",
+    "observe",
+    "browser observation modes",
+    "navigate",
+    "web page",
+    "click button",
+    "fill form",
+    "login",
+    "submit form",
+    "upload file",
+    "download image",
+    "download video",
+    "media download",
+    "scrape page",
+    "automate website",
+    "browser automation",
+    "computer use",
+    "ai smoke test",
+    "browser smoke test",
+    "open chrome and search",
+    "test computer use"
+  ],
+  "categories": [
+    "browser",
+    "automation",
+    "playbook"
+  ],
+  "requiredTools": [
+    "browser_automation"
+  ],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/browser-session-recovery-2026-05-22.md",
+      "type": "doc",
+      "description": "Guardrail for recovering browser workflows after no-session, user-Chrome debugger, about:blank, and screenshot-before-open errors."
+    },
+    {
+      "path": "notes/product-carousel-browser-extraction-2026-05-23.md",
+      "type": "doc",
+      "description": "Browser extraction workflow for product carousels and shopping/product result pages."
+    },
+    {
+      "path": "notes/locked-desktop-browser-vision-fallback-2026-05-26.md",
+      "type": "doc",
+      "description": "Locked-Windows browser fallback note: browser/vision can work under lock even when DOM refs are weak; prefer page text, vision, keyboard, and JS fallback before declaring browser automation blocked."
+    },
+    {
+      "path": "notes/x-media-extraction-escalation-2026-06-07.md",
+      "type": "doc",
+      "description": "Browser-adjacent X media escalation: when web_fetch doesn't capture video, use download_media"
+    },
+    {
+      "path": "notes/audio-transcription-workflow-2026-06-07.md",
+      "type": "doc"
+    },
+    {
+      "path": "references/workflows/browser-automation-playbook-2026-06-12.md",
+      "type": "doc",
+      "description": "Add workflow recipe to browser-automation-playbook"
+    },
+    {
+      "path": "references/workflows/browser-automation-playbook-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to browser-automation-playbook"
+    }
+  ]
+}

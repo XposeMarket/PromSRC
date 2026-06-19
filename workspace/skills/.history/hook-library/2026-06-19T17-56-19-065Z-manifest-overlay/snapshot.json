@@ -1,0 +1,12 @@
+{
+  "skillId": "hook-library",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:19.069Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hook-library",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "787f167b3483d8d5"
+}

@@ -1,0 +1,12 @@
+{
+  "skillId": "taskflow-enhancement",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T18:02:23.670Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\taskflow-enhancement",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "24166d8fb1577c4c"
+}

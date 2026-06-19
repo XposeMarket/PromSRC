@@ -41,7 +41,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'shell-exec',
     description: 'Shell command execution requires approval',
-    toolPattern: 'shell|run_command',
+    toolPattern: 'terminal|shell|run_command',
     tier: 'commit',
     riskScore: 8,
   },
@@ -227,7 +227,7 @@ class PolicyEngine {
   // Infer which systems are affected by a tool call
   private inferAffectedSystems(toolName: string, args: Record<string, any>): string[] {
     const systems: string[] = [];
-    if (/shell|run_command/.test(toolName)) systems.push('shell');
+    if (/terminal|shell|run_command/.test(toolName)) systems.push('shell');
     if (/file|write|read|edit|delete|rename|copy|mkdir|append/.test(toolName)) {
       const p = args?.path || args?.file || '';
       systems.push(p ? `filesystem:${path.basename(String(p))}` : 'filesystem');

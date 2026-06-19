@@ -1,0 +1,12 @@
+{
+  "skillId": "artifact-registry",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:03.364Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\artifact-registry",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "67e406bba5e061de"
+}

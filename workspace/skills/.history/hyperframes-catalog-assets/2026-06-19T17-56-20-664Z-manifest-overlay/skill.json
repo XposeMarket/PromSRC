@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "hyperframes-catalog-assets",
+  "name": "HyperFrames Catalog Assets",
+  "description": "Reusable Prometheus reference for every official HeyGen HyperFrames catalog block/component, mapped into Creative Mode assets/templates with raw registry URLs and usage rules.",
+  "emoji": "🎞️",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "hyperframes",
+    "heygen hyperframes",
+    "hyperframes catalog",
+    "hyperframes component",
+    "hyperframes block",
+    "video component catalog",
+    "social overlay",
+    "shader transition",
+    "html motion template",
+    "creative video asset",
+    "reuse hyperframes"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "hyperframes",
+    "templates",
+    "assets"
+  ],
+  "requiredTools": [
+    "creative_mode",
+    "browser_automation",
+    "web",
+    "skills"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "resources/catalog-manifest.json",
+      "type": "data",
+      "description": "Canonical extracted catalog inventory for HeyGen HyperFrames blocks/components."
+    },
+    {
+      "path": "resources/category-map.md",
+      "type": "doc",
+      "description": "Human-readable category index for the HyperFrames catalog inventory."
+    },
+    {
+      "path": "resources/prometheus-adaptation-guide.md",
+      "type": "doc",
+      "description": "How to turn HyperFrames catalog items into Prometheus reusable Creative Mode assets/templates."
+    },
+    {
+      "path": "resources/background-research-notes.md",
+      "type": "doc",
+      "description": "Deeper findings from background agents for the HyperFrames catalog ingestion."
+    },
+    {
+      "path": "resources/compatibility-notes-2026-05-09.md",
+      "type": "doc",
+      "description": "Compatibility notes from May 9 official HyperFrames catalog tests: browse works, but individual blocks need lint/QA/frame/export proof."
+    }
+  ]
+}

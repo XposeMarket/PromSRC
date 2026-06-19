@@ -24,13 +24,15 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'read_file',
-        description: 'Read a file and return its content WITH line numbers. Supports windowed reading for large files — use start_line + num_lines to read a specific range (e.g. start_line:200, num_lines:100 reads lines 200–300). Always use file_stats first on unknown files to check line count before reading. Always use this before editing a file.',
+        description: 'Read a capped, line-numbered window from a file. Defaults to the first 240 lines to control context usage. Use start_line + num_lines for specific ranges. Use full:true only when the whole file is truly needed. Always use file_stats first on unknown files and always read before editing.',
         parameters: {
           type: 'object', required: ['filename'],
           properties: {
             filename: { type: 'string', description: 'Name of the file to read' },
             start_line: { type: 'number', description: '1-based line to start reading from (default: 1)' },
-            num_lines: { type: 'number', description: 'Number of lines to return. Omit to read up to the retrieval mode cap. Example: start_line:200, num_lines:100 returns lines 200–300.' },
+            num_lines: { type: 'number', description: 'Number of lines to return. Default cap is 240 unless max_lines is lower/higher.' },
+            max_lines: { type: 'number', description: 'Maximum lines to return unless full:true is set. Default 240, max 480.' },
+            full: { type: 'boolean', description: 'Explicitly allow a full/large read. Use only when necessary.' },
           },
         },
       },
@@ -61,7 +63,7 @@ export function getFileWebMemoryTools(): any[] {
             context: { type: 'number', description: 'Lines of context around each match (default 0, max 10)' },
             context_lines: { type: 'number', description: 'Alias for context.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match (default false)' },
-            max_results: { type: 'number', description: 'Max matches to return (default 100)' },
+            max_results: { type: 'number', description: 'Max matches to return (default 50, hard cap 80)' },
           },
         },
       },
@@ -77,9 +79,9 @@ export function getFileWebMemoryTools(): any[] {
             directory: { type: 'string', description: 'Directory to search (default: workspace root)' },
             pattern: { type: 'string', description: 'Regex or literal pattern to search for' },
             file_glob: { type: 'string', description: 'Comma-separated file globs to limit search, e.g. "*.md,*.ts" (default: all files)' },
-            context_lines: { type: 'number', description: 'Lines of context around each match (default 0, max 5)' },
+            context_lines: { type: 'number', description: 'Lines of context around each match (default 0, hard cap 3)' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match (default false)' },
-            max_results: { type: 'number', description: 'Max total matches to return (default 100, max 500)' },
+            max_results: { type: 'number', description: 'Max total matches to return (default 50, hard cap 80). Narrow directory/glob/pattern instead of requesting huge result sets.' },
           },
         },
       },
@@ -215,6 +217,83 @@ export function getFileWebMemoryTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'read_files_batch',
+        description: 'Read capped, line-numbered windows from multiple files in one call. Prefer this over repeated read_file calls when inspecting 2+ files before editing. Defaults to first 200 lines per file and first 8 files. Each entry accepts filename plus optional start_line/num_lines. Use full:true per file only when truly needed. Also accepts src/... and web-ui/... paths.',
+
+        parameters: {
+          type: 'object', required: ['files'],
+          properties: {
+            files: {
+              type: 'array',
+              description: 'Files to read. Each item needs filename; add start_line/num_lines for a windowed read.',
+              items: {
+                type: 'object',
+                required: ['filename'],
+                properties: {
+                  filename: { type: 'string', description: 'Workspace-relative file path.' },
+                  start_line: { type: 'number', description: '1-based start line for windowed read.' },
+                  num_lines: { type: 'number', description: 'Number of lines to return from start_line.' },
+                  full: { type: 'boolean', description: 'Explicitly allow full read for this file. Use only when necessary.' },
+                },
+              },
+            },
+            max_files: { type: 'number', description: 'Maximum files to read in this call. Default 8, max 12.' },
+            max_lines_per_file: { type: 'number', description: 'Default per-file line cap. Default 200, max 480.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_workspace_patchset',
+        description: 'Apply multiple file edits to workspace files in one atomic call. Supports find_replace, replace_lines, insert_after, delete_lines, write_file, and create_file ops. Returns per-edit results with success/error per entry. Use instead of repeated find_replace/replace_lines calls when editing multiple files or applying multiple hunks.',
+        parameters: {
+          type: 'object', required: ['edits'],
+          properties: {
+            edits: {
+              type: 'array',
+              description: 'List of edits to apply in order.',
+              items: {
+                type: 'object',
+                required: ['filename', 'op'],
+                properties: {
+                  filename: { type: 'string', description: 'Workspace-relative file path.' },
+                  op: { type: 'string', enum: ['find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'write_file', 'create_file', 'rename_file'], description: 'Edit operation.' },
+                  find: { type: 'string', description: 'For find_replace: exact text to find.' },
+                  replace: { type: 'string', description: 'For find_replace: replacement text.' },
+                  replace_all: { type: 'boolean', description: 'For find_replace: replace all occurrences. Default false.' },
+                  start_line: { type: 'number', description: 'For replace_lines/delete_lines: first line (1-based).' },
+                  end_line: { type: 'number', description: 'For replace_lines/delete_lines: last line (1-based, inclusive).' },
+                  new_content: { type: 'string', description: 'For replace_lines: replacement content.' },
+                  after_line: { type: 'number', description: 'For insert_after: insert after this line (0 = beginning).' },
+                  content: { type: 'string', description: 'For insert_after/write_file/create_file: content to insert or write.' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'file_tree',
+        description: 'Return a compact indented tree of files and folders under a path. Cleaner than list_directory for orientation — shows structure at a glance without metadata noise. Supports depth control and glob filtering. Also accepts src/... and web-ui/... paths to tree Prometheus source directories.',
+        parameters: {
+          type: 'object', required: [],
+          properties: {
+            path: { type: 'string', description: 'Root path relative to workspace root. Default: workspace root.' },
+            max_depth: { type: 'number', description: 'Max recursion depth. Default 3, max 8.' },
+            glob: { type: 'string', description: 'Optional comma-separated file globs to filter output, e.g. "*.ts,*.js". Folders always shown if they contain matches.' },
+            exclude: { type: 'string', description: 'Comma-separated folder/file names to exclude. Defaults: node_modules, .git, dist.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'list_directory',
         description: 'List files and folders under a path in the workspace. Use "." or "" for the workspace root. More detailed than list_files, which only returns root files.',
         parameters: {
@@ -236,13 +315,15 @@ export function getFileWebMemoryTools(): any[] {
           'Read a file from the Prometheus src/ directory (TypeScript source code). READ-ONLY — never modifies files. ' +
           'Use this to understand the codebase before writing a proposal or making edits. ' +
           'Pass the path relative to src/, e.g. "gateway/server-v2.ts" or "gateway/tool-builder.ts". ' +
-          'Supports windowed reads for large files: use start_line+num_lines for arbitrary ranges, or head/tail for first/last N lines.',
+          'Defaults to a capped first window to control context usage. Use start_line+num_lines for arbitrary ranges, head/tail for first/last N lines, and full:true only when the whole file is truly needed.',
         parameters: {
           type: 'object', required: ['file'],
           properties: {
             file: { type: 'string', description: 'Path relative to src/, e.g. "gateway/server-v2.ts". Or a root file: package.json, tsconfig.json.' },
             start_line: { type: 'number', description: '1-based line to start reading from (default: 1). Use with num_lines for a specific range.' },
-            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
+            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Defaults to the cap when omitted.' },
+            max_lines: { type: 'number', description: 'Maximum lines to return unless full:true is set. Default 300, max 480.' },
+            full: { type: 'boolean', description: 'Explicitly allow a full/large read. Use only when necessary.' },
             head: { type: 'number', description: 'Return only first N lines (shorthand for start_line:1, num_lines:N)' },
             tail: { type: 'number', description: 'Return only last N lines' },
           },
@@ -254,8 +335,8 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'read_dev_sources',
         description:
-          'Read multiple Prometheus dev source files in one compact call. Prefer this over repeated source_stats/read_source/read_webui_source calls. ' +
-          'Accepts src/..., web-ui/..., or src-relative paths, and supports line windows plus around/anchor matching.',
+          'Read capped windows from multiple Prometheus dev source files in one compact call. Prefer this over repeated source_stats/read_source/read_webui_source calls. ' +
+          'Defaults to first 220 lines per file and first 8 files. Accepts src/..., web-ui/..., or src-relative paths, and supports line windows plus around/anchor matching. Use full:true per file only when truly needed.',
         parameters: {
           type: 'object', required: ['files'],
           properties: {
@@ -270,6 +351,7 @@ export function getFileWebMemoryTools(): any[] {
                   num_lines: { type: 'number' },
                   head: { type: 'number' },
                   tail: { type: 'number' },
+                  full: { type: 'boolean', description: 'Explicitly allow full read for this file. Use only when necessary.' },
                   around: { type: 'string' },
                   anchor: { type: 'string' },
                   regex: { type: 'boolean' },
@@ -277,6 +359,8 @@ export function getFileWebMemoryTools(): any[] {
                 },
               },
             },
+            max_files: { type: 'number', description: 'Maximum files to read in this call. Default 8, max 12.' },
+            max_lines_per_file: { type: 'number', description: 'Default per-file line cap. Default 220, max 480.' },
           },
         },
       },
@@ -308,6 +392,24 @@ export function getFileWebMemoryTools(): any[] {
           type: 'object', required: ['file'],
           properties: {
             file: { type: 'string', description: 'Path relative to src/, e.g. "gateway/server-v2.ts".' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'source_stats_batch',
+        description:
+          'Get metadata for multiple src/ or web-ui/ files in one call. Accepts an array of paths (src/... or web-ui/...) and returns line_count, last_modified, and is_large for each. Use before read_dev_sources when planning windowed reads across several files.',
+        parameters: {
+          type: 'object', required: ['files'],
+          properties: {
+            files: {
+              type: 'array',
+              description: 'Array of file paths. Each accepts src/... or web-ui/... prefix, or a bare src-relative path.',
+              items: { type: 'string' },
+            },
           },
         },
       },
@@ -379,13 +481,15 @@ export function getFileWebMemoryTools(): any[] {
           'Read a file from the Prometheus web-ui/ directory (frontend source code). READ-ONLY — never modifies files. ' +
           'Use this for deterministic frontend inspection before proposing edits. ' +
           'Pass the path relative to web-ui/, e.g. "src/pages/TeamsPage.js" or "package.json". ' +
-          'Supports windowed reads: use start_line+num_lines for arbitrary ranges, or head/tail for first/last N lines.',
+          'Defaults to a capped first window to control context usage. Use start_line+num_lines for arbitrary ranges, head/tail for first/last N lines, and full:true only when the whole file is truly needed.',
         parameters: {
           type: 'object', required: ['file'],
           properties: {
             file: { type: 'string', description: 'Path relative to web-ui/, e.g. "src/pages/TeamsPage.js".' },
             start_line: { type: 'number', description: '1-based line to start reading from (default: 1). Use with num_lines for a specific range.' },
-            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
+            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Defaults to the cap when omitted.' },
+            max_lines: { type: 'number', description: 'Maximum lines to return unless full:true is set. Default 300, max 480.' },
+            full: { type: 'boolean', description: 'Explicitly allow a full/large read. Use only when necessary.' },
             head: { type: 'number', description: 'Return only first N lines' },
             tail: { type: 'number', description: 'Return only last N lines' },
           },
@@ -411,8 +515,8 @@ export function getFileWebMemoryTools(): any[] {
             path: { type: 'string', description: 'Subdirectory to limit search within the chosen root, e.g. "gateway/routes". Ignored when root is "both".' },
             glob: { type: 'string', description: 'Comma-separated file name patterns to include, e.g. "*.ts" or "*.js,*.jsx". Default: all files.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match. Default: false.' },
-            context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0.' },
-            max_results: { type: 'number', description: 'Max matching lines to return. Default: 100.' },
+            context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0, hard cap 3.' },
+            max_results: { type: 'number', description: 'Max matching lines to return. Default: 50, hard cap 80. Narrow root/path/glob/pattern instead of requesting huge result sets.' },
           },
         },
       },
@@ -432,8 +536,8 @@ export function getFileWebMemoryTools(): any[] {
             path: { type: 'string', description: 'Subdirectory of web-ui/ to limit search, e.g. "src" or "src/pages". Default: all of web-ui/.' },
             glob: { type: 'string', description: 'Comma-separated file name patterns to include, e.g. "*.js,*.jsx,*.css". Default: all files.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match. Default: false.' },
-            context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0.' },
-            max_results: { type: 'number', description: 'Max matching lines to return. Default: 100.' },
+            context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0, hard cap 3.' },
+            max_results: { type: 'number', description: 'Max matching lines to return. Default: 50, hard cap 80.' },
           },
         },
       },
@@ -476,13 +580,15 @@ export function getFileWebMemoryTools(): any[] {
         description:
           'Read an allowlisted file from the real Prometheus project root. READ-ONLY — internal/dev inspection only. ' +
           'Use this for launcher/bootstrap/debug surfaces outside src/ and web-ui/, such as scripts/, electron/, build/, dist/, or .prometheus/. SELF.md and AGENTS.md are workspace-root files; use read_file for them. ' +
-          'Supports start_line+num_lines plus head/tail, and returns a directory listing when the target is a directory. Hidden in public/Electron builds.',
+          'Defaults to a capped first window to control context usage. Supports start_line+num_lines plus head/tail, full:true for intentional full reads, and returns a directory listing when the target is a directory. Hidden in public/Electron builds.',
         parameters: {
           type: 'object', required: ['file'],
           properties: {
             file: { type: 'string', description: 'Allowlisted prom-root path, e.g. "scripts". SELF.md is a workspace-root file; use read_file("SELF.md").' },
             start_line: { type: 'number', description: '1-based line to start reading from (default: 1). Use with num_lines for a specific range.' },
-            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
+            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Defaults to the cap when omitted.' },
+            max_lines: { type: 'number', description: 'Maximum lines to return unless full:true is set. Default 300, max 480.' },
+            full: { type: 'boolean', description: 'Explicitly allow a full/large read. Use only when necessary.' },
             head: { type: 'number', description: 'Return only first N lines.' },
             tail: { type: 'number', description: 'Return only last N lines.' },
           },
@@ -503,8 +609,8 @@ export function getFileWebMemoryTools(): any[] {
             path: { type: 'string', description: 'Allowlisted prom-root directory to search within. Leave empty to search the allowlisted prom-root surface.' },
             glob: { type: 'string', description: 'Comma-separated file name patterns to include, e.g. "*.ts,*.md". Default: all files.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match. Default: false.' },
-            context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0.' },
-            max_results: { type: 'number', description: 'Max matching lines to return. Default: 100.' },
+            context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0, hard cap 3.' },
+            max_results: { type: 'number', description: 'Max matching lines to return. Default: 50, hard cap 80.' },
           },
 	        },
 	      },
@@ -628,8 +734,8 @@ export function getFileWebMemoryTools(): any[] {
             path: { type: 'string', description: 'Subdirectory of workspace to limit search. Default: workspace root.' },
             glob: { type: 'string', description: 'Comma-separated file name patterns to include, e.g. "*.md" or "*.json". Default: all files.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match. Default: false.' },
-            context: { type: 'number', description: 'Lines of context around each match. Default: 0.' },
-            max_results: { type: 'number', description: 'Max matching lines to return. Default: 100.' },
+            context: { type: 'number', description: 'Lines of context around each match. Default: 0, hard cap 3.' },
+            max_results: { type: 'number', description: 'Max matching lines to return. Default: 50, hard cap 80.' },
           },
         },
       },
@@ -920,7 +1026,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_search',
-        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, or provider:"multi" to force all configured engines. Use fetch_top_k to fetch the top result URLs in the same call, or web_fetch_batch for selected URLs.',
+        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, provider:"multi" to force all configured engines, or multi_engine:false for preferred-provider-only search. Use fetch_top_k to fetch top result URLs in the same call.',
         parameters: {
           type: 'object', required: ['query'],
           properties: {
@@ -973,10 +1079,20 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_fetch',
-        description: 'Fetch the full text content of a webpage URL. Use this AFTER web_search to read the actual page content instead of just snippets. For X/Twitter status URLs, it returns structured post data and will attempt attached-media download plus analysis automatically.',
+        description: 'Fetch the full text content of one webpage URL, or multiple URLs in parallel when urls is provided. Use this AFTER web_search to read actual page content instead of snippets. For X/Twitter status URLs, it returns structured post data and will attempt attached-media download plus analysis automatically.',
         parameters: {
-          type: 'object', required: ['url'],
-          properties: { url: { type: 'string', description: 'Full URL to fetch (from web_search results or any URL)' } },
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'Single full URL to fetch (from web_search results or any URL)' },
+            urls: {
+              type: 'array',
+              items: { type: 'string' },
+              maxItems: 20,
+              description: 'Optional multiple full URLs to fetch in parallel. Use instead of url for batch evidence gathering.',
+            },
+            max_chars: { type: 'number', description: 'Single fetch max characters, or max characters per URL for urls. Default 10000 single / 6000 batch.' },
+            concurrency: { type: 'number', description: 'Batch-only parallel fetch count. Default 4, max 8.' },
+          },
         },
       },
     },
@@ -1394,13 +1510,31 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'download_url',
-        description: 'Download a URL directly into the workspace. Use this for direct image URLs, article assets, PDFs, and normal file links. Saves to downloads/ by default.',
+        description: 'Download a single URL directly into the workspace. Use this for direct image URLs, article assets, PDFs, and normal file links. GitHub blob URLs (github.com/owner/repo/blob/ref/path) are auto-rewritten to the raw file. For a whole git repo or multiple files from a repo, use clone_repo instead. Saves to downloads/ by default.',
         parameters: {
           type: 'object', required: ['url'],
           properties: {
             url: { type: 'string', description: 'Direct URL to download' },
             filename: { type: 'string', description: 'Optional output filename override' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: downloads' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'clone_repo',
+        description: 'Clone a git repository into the workspace, or pull only specific files/dirs from it. Use this FIRST whenever the user gives you a git/GitHub repo (URL or owner/repo) and wants you to download, inspect, or analyze it — do NOT fall back to fetching individual web URLs and re-typing file contents. Defaults to a shallow clone (depth 1) into repos/<name> inside the workspace. Pass paths:[...] to sparse-checkout just those files/dirs (e.g. ["src/index.ts","README.md"]). After cloning, use list_directory/read_file/search_files on the cloned path to analyze it.',
+        parameters: {
+          type: 'object', required: ['repo'],
+          properties: {
+            repo: { type: 'string', description: 'Repo URL (https or ssh) or owner/repo shorthand, e.g. "vercel/next.js" or "https://github.com/vercel/next.js".' },
+            dest: { type: 'string', description: 'Optional workspace-relative destination directory. Default: repos/<repo-name>.' },
+            ref: { type: 'string', description: 'Optional branch, tag, or commit to check out. A ref embedded in a github tree/blob URL is auto-detected.' },
+            depth: { type: 'number', description: 'Clone depth. Default 1 (shallow). Use 0 for full history.' },
+            paths: { type: 'array', items: { type: 'string' }, description: 'Optional list of files/dirs to fetch via sparse checkout instead of the whole repo, e.g. ["src/app","package.json"].' },
+            overwrite: { type: 'boolean', description: 'Replace an existing non-empty destination. Default false.' },
           },
         },
       },

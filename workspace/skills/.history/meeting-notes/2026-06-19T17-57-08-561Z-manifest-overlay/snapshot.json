@@ -1,0 +1,11 @@
+{
+  "skillId": "meeting-notes",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:57:08.564Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\meeting-notes",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "a576ea50378b338c"
+}

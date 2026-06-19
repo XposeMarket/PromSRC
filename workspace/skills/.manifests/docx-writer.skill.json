@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when creating, editing, formatting, or exporting Microsoft Word DOCX files such as reports, proposals, contracts, one-pagers, templates, letters, or structured documents.",
+  "triggers": [
+    "create DOCX",
+    "write Word document",
+    "export to DOCX",
+    "format Word file",
+    "DOCX report",
+    "proposal document",
+    "contract draft in Word",
+    "one-pager DOCX",
+    "document template",
+    "edit DOCX",
+    "generate Word file",
+    "DOCX formatting",
+    "add headings to Word",
+    "make a .docx",
+    "Word proposal",
+    "DOCX output"
+  ],
+  "categories": [
+    "documents",
+    "docx",
+    "writing"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "DOCX Writer",
+  "id": "docx-writer"
+}

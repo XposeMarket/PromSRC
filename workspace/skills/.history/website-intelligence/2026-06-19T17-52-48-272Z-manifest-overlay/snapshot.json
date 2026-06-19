@@ -1,0 +1,11 @@
+{
+  "skillId": "website-intelligence",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:52:48.275Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\website-intelligence",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "87d6d134f77c4c15"
+}

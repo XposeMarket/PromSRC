@@ -139,9 +139,38 @@ export function buildMetadataManifest(skill: any, args: any): Record<string, unk
     const d = String(args.description).trim();
     if (d && d !== String(skill?.description || '').trim()) { manifest.description = d; changed = true; }
   }
+  const currentTriggers = Array.isArray(skill?.triggers)
+    ? skill.triggers.map((t: any) => String(t || '').trim()).filter(Boolean)
+    : [];
+  let nextTriggers: string[] | null = null;
   if (args.triggers !== undefined && args.triggers !== null) {
     const t = splitCsv(args.triggers);
-    if (t.length) { manifest.triggers = t; changed = true; }
+    if (t.length) nextTriggers = t;
+  }
+  if (args.addTriggers !== undefined || args.add_triggers !== undefined) {
+    const additions = splitCsv(args.addTriggers ?? args.add_triggers);
+    if (additions.length) nextTriggers = [...(nextTriggers || currentTriggers), ...additions];
+  }
+  if (args.removeTriggers !== undefined || args.remove_triggers !== undefined) {
+    const removals = new Set(splitCsv(args.removeTriggers ?? args.remove_triggers).map((t: string) => t.toLowerCase()));
+    if (removals.size) nextTriggers = (nextTriggers || currentTriggers).filter((t: string) => !removals.has(t.toLowerCase()));
+  }
+  if (nextTriggers) {
+    const seen = new Set<string>();
+    const deduped = nextTriggers
+      .map((t) => String(t || '').trim())
+      .filter((t) => {
+        const key = t.toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    const before = currentTriggers.map((t: string) => t.toLowerCase()).join('\n');
+    const after = deduped.map((t: string) => t.toLowerCase()).join('\n');
+    if (deduped.length && before !== after) {
+      manifest.triggers = deduped;
+      changed = true;
+    }
   }
   if (args.categories !== undefined && args.categories !== null) {
     const c = splitCsv(args.categories);
@@ -174,6 +203,46 @@ function stripSkillEmojiFrontmatter(content: string): string {
   return frontmatter + raw.slice(end);
 }
 
+function formatCompactSkillList(skills: any[], args: any): string {
+  const query = String(args?.query || args?.q || '').trim().toLowerCase();
+  const includeDescriptions = args?.include_descriptions === true || args?.includeDescriptions === true;
+  const requestedLimit = Math.floor(Number(args?.limit) || 24);
+  const limit = Math.max(1, Math.min(80, requestedLimit));
+  const haystackFor = (s: any): string => [
+    s?.id,
+    s?.name,
+    s?.description,
+    ...(Array.isArray(s?.triggers) ? s.triggers : []),
+    ...(Array.isArray(s?.categories) ? s.categories : []),
+    ...(Array.isArray(s?.requiredTools) ? s.requiredTools : []),
+  ].map((v) => String(v || '')).join(' ').toLowerCase();
+  const matched = query ? skills.filter((s: any) => haystackFor(s).includes(query)) : skills;
+  const rows = matched.slice(0, limit).map((s: any) => {
+    const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
+    const base = {
+      id: String(s.id || ''),
+      name: String(s.name || s.id || ''),
+      status: status ? String(s.eligibility.status || '') : undefined,
+      categories: Array.isArray(s.categories) ? s.categories.slice(0, 4) : undefined,
+      requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools.slice(0, 6) : undefined,
+      description: includeDescriptions ? String(s.description || '').slice(0, 180) : undefined,
+    };
+    return Object.fromEntries(Object.entries(base).filter(([, value]) =>
+      value !== undefined && (!Array.isArray(value) || value.length > 0)
+    ));
+  });
+  return JSON.stringify({
+    totalInstalled: skills.length,
+    query: query || undefined,
+    matchedCount: matched.length,
+    returnedCount: rows.length,
+    truncated: matched.length > rows.length,
+    compact: !includeDescriptions,
+    note: 'Compact skill discovery. Use query to narrow, include_descriptions:true only when descriptions are needed, then call skill_read(id) for one relevant skill.',
+    skills: rows,
+  }, null, 2);
+}
+
 export const skillsCapabilityExecutor: CapabilityExecutor = {
   id: 'skills',
 
@@ -191,13 +260,9 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         if (all.length === 0) {
           return { name, args, result: 'No skills installed yet. Use skill_create to save a new one.', error: false };
         }
-        const slLines = all.map((s: any) => {
-          const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
-          return `${s.id}${status} - ${s.description || '(no description)'}`;
-        }).join('\n');
         return {
           name, args,
-          result: `${all.length} skill${all.length !== 1 ? 's' : ''} available. Call skill_read(id) to load one.\n\n${slLines}`,
+          result: formatCompactSkillList(all, args),
           error: false,
         };
       }
@@ -466,6 +531,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             id: scId,
             name: scName,
             description: args.description ? String(args.description).trim() : '',
+            triggers: splitCsv(args.triggers),
             instructions: scInstructions,
           });
           return {
@@ -505,7 +571,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         if (!skill) return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
         const manifest = buildMetadataManifest(skill, args);
         if (!manifest) {
-          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, categories, requiredTools, lifecycle, or name).`, error: true };
+          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, or name).`, error: true };
         }
         try {
           const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {

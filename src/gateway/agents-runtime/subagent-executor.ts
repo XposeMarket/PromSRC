@@ -14,7 +14,7 @@ import { getPolicyEngine } from '../policy';
 import { scoreSkillMetadata, skillMatchesScope, buildMetadataManifest, splitCsv, type SkillMetadataAudit } from './capabilities/skills-executor';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
-import { executeWebFetch, executeShoppingSearchProducts } from '../../tools/web';
+import { executeWebFetch, executeWebFetchBatch, executeShoppingSearchProducts } from '../../tools/web';
 import { executeMarketLookup } from '../../tools/market';
 import { executeWeatherLookup } from '../../tools/weather';
 import { executeMapLookup } from '../../tools/mapcard';
@@ -113,6 +113,7 @@ import { notifyMainAgent } from '../teams/notify-bridge';
 import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
+import { judgeGoalApprovalRequest } from '../main-chat-goals';
 
 const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
 const getBgAgentResults = () => getTeamDispatchRuntime()._bgAgentResults;
@@ -1459,11 +1460,50 @@ function rejectInvalidSourceEdit(toolName: string, args: any, absPath: string, c
 }
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  let approvalDisplayToolName = name;
   if (name === 'terminal') {
-    const background = args?.background === true || args?.mode === 'background';
+    const action = String(args?.action || '').trim().toLowerCase();
+    const background = args?.background === true || args?.mode === 'background' || action === 'start';
     args = { ...args };
     delete args.mode;
-    name = background ? 'start_process' : 'run_command';
+    if (!args.action) args.action = background ? 'start' : 'run';
+    if (action === 'status') name = 'process_status';
+    else if (action === 'log') name = 'process_log';
+    else if (action === 'wait') name = 'process_wait';
+    else if (action === 'kill') name = 'process_kill';
+    else if (action === 'submit') name = 'process_submit';
+    else name = background ? 'start_process' : 'run_command';
+  }
+  if (name === 'show_ui_card') {
+    const cardType = String(args?.type || '').trim().toLowerCase();
+    const cardToolByType: Record<string, string> = {
+      sources: 'show_sources',
+      product_carousel: 'show_product_carousel',
+      products: 'show_product_carousel',
+      agent_work: 'show_agent_work',
+      market: 'show_market',
+      stocks: 'show_stocks',
+      weather: 'show_weather',
+      comparison: 'show_comparison',
+      chart: 'show_chart',
+      run_result: 'show_run_result',
+      prediction_market: 'show_prediction_market',
+      map: 'show_map',
+    };
+    const targetTool = cardToolByType[cardType];
+    if (!targetTool) {
+      return {
+        name,
+        args,
+        result: `Unknown UI card type "${cardType}". Valid: ${Object.keys(cardToolByType).join(', ')}`,
+        error: true,
+      };
+    }
+    const payload = args?.payload && typeof args.payload === 'object' && !Array.isArray(args.payload)
+      ? { ...args.payload }
+      : {};
+    if (args?.title != null && payload.title == null) payload.title = String(args.title);
+    return executeTool(targetTool, payload, workspacePath, deps, sessionId);
   }
   // Filename inference: if the model forgot to pass filename, use the last one
   const needsFilename = ['read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'delete_file'];
@@ -1650,30 +1690,45 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		  function ensureProposalPromWriteTool(toolName: string): ToolResult | null {
         return ensureDevSrcSelfEditWriteSession(toolName, 'prom-root');
 		  }
-	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any): string {
+	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any, defaultCap = 300): string {
     const head = argsObj.head ? Number(argsObj.head) : 0;
     const tail = argsObj.tail ? Number(argsObj.tail) : 0;
     const startLine = argsObj.start_line ? Math.max(1, Math.floor(Number(argsObj.start_line))) : 0;
     const numLines = argsObj.num_lines ? Math.max(1, Math.floor(Number(argsObj.num_lines))) : 0;
+    const allowFull = argsObj.full === true || argsObj.full_file === true || argsObj.allow_large === true;
+    const cap = Math.max(1, Math.floor(Number(argsObj.max_lines) || defaultCap));
     let sliced: string[];
     let firstLineNum: number;
+    let requestedFull = false;
     if (startLine > 0) {
       const from = startLine - 1;
-      const to = numLines > 0 ? from + numLines : allLines.length;
+      const requested = numLines > 0 ? numLines : (allowFull ? allLines.length : cap);
+      const window = allowFull ? requested : Math.min(requested, cap);
+      const to = from + window;
       sliced = allLines.slice(from, to);
       firstLineNum = startLine;
     } else if (head > 0) {
-      sliced = allLines.slice(0, head);
+      sliced = allLines.slice(0, allowFull ? head : Math.min(head, cap));
       firstLineNum = 1;
     } else if (tail > 0) {
-      sliced = allLines.slice(-tail);
+      sliced = allLines.slice(-(allowFull ? tail : Math.min(tail, cap)));
       firstLineNum = allLines.length - sliced.length + 1;
     } else {
-      sliced = allLines;
+      requestedFull = true;
+      sliced = allowFull ? allLines : allLines.slice(0, cap);
       firstLineNum = 1;
     }
+    const endLine = firstLineNum + sliced.length - 1;
+    const truncated = sliced.length < allLines.length || (startLine > 0 && endLine < allLines.length);
+    const range = sliced.length ? ` [window ${firstLineNum}-${endLine}${truncated ? ', truncated' : ''}]` : '';
+    const hint = truncated
+      ? `\n[READ_TRUNCATED] Returned ${sliced.length} of ${allLines.length} lines. Use start_line:${endLine + 1}, num_lines:${cap} for the next chunk, or pass full:true only when the whole file is truly needed.`
+      : '';
+    const fullHint = requestedFull && !allowFull && truncated
+      ? `\n[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.`
+      : '';
     const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${line}`).join('\n');
-    return `${displayPath} (${allLines.length} lines):\n${numbered}`;
+    return `${displayPath} (${allLines.length} lines)${range}:\n${numbered}${fullHint}${hint}`;
   }
   function normalizeFindTextForRecovery(text: string): string {
     return String(text || '').replace(/\s+/g, ' ').trim();
@@ -2572,6 +2627,30 @@ export async function executeTool(name: string, args: any, workspacePath: string
     }
   }
 
+  function getShellApprovalMode(): 'default' | 'lite' {
+    return String((getConfig().getConfig() as any)?.tools?.permissions?.shell?.approval_mode || 'default') === 'lite'
+      ? 'lite'
+      : 'default';
+  }
+
+  function maybeBlockShellTokenPolicy(rawCmd: string, normalizedCmd: string): ToolResult | null {
+    if (getShellApprovalMode() !== 'lite') return null;
+    const cmd = rawCmd.toLowerCase();
+    const blockedPattern = commandContainsBlockedPattern(cmd, deps.BLOCKED_PATTERNS);
+    if (blockedPattern) {
+      return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blockedPattern}"`, error: true };
+    }
+    if (!deps.isAllowedShellCommand(normalizedCmd)) {
+      return {
+        name,
+        args,
+        result: `Blocked: shell command is not allowed by Lite terminal permissions: "${rawCmd}"`,
+        error: true,
+      };
+    }
+    return null;
+  }
+
   function normalizeUrlOrigin(rawUrl: string): string {
     const value = String(rawUrl || '').trim();
     if (!value) return '';
@@ -2634,23 +2713,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
       };
     }
 
-    const cmd = rawCmd.toLowerCase();
-    const blockedPattern = commandContainsBlockedPattern(cmd, deps.BLOCKED_PATTERNS);
-    if (blockedPattern) {
-      return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blockedPattern}"`, error: true };
-    }
-
     const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
     const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
     if (commandBoundary.blocked) return commandBoundary.blocked;
-    if (!deps.isAllowedShellCommand(normalizedCmd)) {
-      return {
-        name,
-        args,
-        result: `Blocked: shell command is not allowed by policy: "${rawCmd}"`,
-        error: true,
-      };
-	    }
+    const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
+    if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
 
     let commandCwdForApproval: { cwd: string; displayCwd: string };
     try {
@@ -2679,7 +2746,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       requiresExplicitApproval: commandBoundary.requiresExplicitApproval,
       requiresAdmin: commandBoundary.requiresAdmin,
     };
-    const shellApprovalMode = String((getConfig().getConfig() as any)?.tools?.permissions?.shell?.approval_mode || 'default');
+    const shellApprovalMode = getShellApprovalMode();
     const isLiteCommandApprovalBypass = shellApprovalMode === 'lite' && !commandBoundary.requiresExplicitApproval;
     const existingCommandGrant = findCommandPermissionGrant(permissionCandidate);
     const isAutonomousCommandApprovalBypass = isGoalAutonomousApprovalBypass && !commandBoundary.requiresExplicitApproval;
@@ -2690,7 +2757,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           sessionId,
           agentId: inferAgentIdFromSession(sessionId, args),
           actionType: 'approval_resolved',
-          toolName: name,
+          toolName: approvalDisplayToolName,
           toolArgs: args,
           policyTier: evaluation.tier,
           approvalStatus: 'auto_allowed',
@@ -2739,12 +2806,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	      agentId: inferAgentIdFromSession(sessionId, args),
 	      originType: approvalOrigin.originType,
 	      originLabel: approvalOrigin.originLabel,
-	      toolName: name,
+	      toolName: approvalDisplayToolName,
       toolArgs: { ...args, command: rawCmd },
       commandPermissionCandidate: permissionCandidate,
       action: commandBoundary.requiresExplicitApproval
-        ? `Run outside-workspace command in ${approvalCwd}: ${rawCmd}`
-        : `Run command in ${approvalCwd}: ${rawCmd}`,
+        ? `Run terminal command outside workspace in ${approvalCwd}: ${rawCmd}`
+        : `Run terminal command in ${approvalCwd}: ${rawCmd}`,
       reason: [evaluation.reason, boundaryDetails].filter(Boolean).join('\n\n'),
       policyTier: 'commit',
       riskScore: permissionCandidate.riskScore,
@@ -2760,7 +2827,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         sessionId,
         agentId: inferAgentIdFromSession(sessionId, args),
         actionType: 'approval_requested',
-        toolName: name,
+        toolName: approvalDisplayToolName,
         toolArgs: args,
         policyTier: evaluation.tier,
         approvalStatus: 'pending',
@@ -2775,7 +2842,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        taskId: activeTaskId,
 	        approvalId: approval.id,
 	        summary: approval.action,
-	        toolName: name,
+	        toolName: approvalDisplayToolName,
           approval: serializeApprovalForClient(approval),
       });
     } catch {}
@@ -2842,7 +2909,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return '[unserializable args]';
       }
     })();
-    const action = `Run ${name}${summaryArgs && summaryArgs !== '{}' ? ` with ${summaryArgs}` : ''}`;
+    const action = `Run ${approvalDisplayToolName}${summaryArgs && summaryArgs !== '{}' ? ` with ${summaryArgs}` : ''}`;
     const permissionCandidate = await buildScopedToolPermissionCandidate(name, args, Number(evaluation.riskScore || 0));
     const existingToolGrant = permissionCandidate ? findCommandPermissionGrant(permissionCandidate) : null;
 
@@ -2853,7 +2920,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           sessionId,
           agentId: inferAgentIdFromSession(sessionId, args),
           actionType: 'approval_resolved',
-          toolName: name,
+          toolName: approvalDisplayToolName,
           toolArgs: args,
           policyTier: evaluation.tier,
           approvalStatus: 'auto_allowed',
@@ -2887,7 +2954,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       agentId: inferAgentIdFromSession(sessionId, args),
       originType: approvalOrigin.originType,
       originLabel: approvalOrigin.originLabel,
-      toolName: name,
+      toolName: approvalDisplayToolName,
       toolArgs: args,
       commandPermissionCandidate: permissionCandidate || undefined,
       action,
@@ -2903,7 +2970,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         sessionId,
         agentId: inferAgentIdFromSession(sessionId, args),
         actionType: 'approval_requested',
-        toolName: name,
+        toolName: approvalDisplayToolName,
         toolArgs: args,
         policyTier: evaluation.tier,
         approvalStatus: 'pending',
@@ -2918,7 +2985,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         taskId: activeTaskId,
         approvalId: approval.id,
         summary: approval.action,
-        toolName: name,
+        toolName: approvalDisplayToolName,
         approval: serializeApprovalForClient(approval),
       });
     } catch {}
@@ -4270,6 +4337,71 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result: `${header}\n${entries.join('\n') || '(empty directory)'}${footer}`, error: false };
       }
 
+      case 'read_files_batch': {
+        const batchFiles = Array.isArray(args.files) ? args.files : [];
+        if (!batchFiles.length) return { name, args, result: 'files array is required and must not be empty', error: true };
+        const maxFiles = Math.max(1, Math.min(12, Math.floor(Number(args.max_files) || 8)));
+        const batchCap = Math.max(1, Math.min(480, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || 200)));
+        const batchResults: Array<{ filename: string; content?: string; line_count?: number; truncated?: boolean; next_start_line?: number; error?: string }> = [];
+        for (const entry of batchFiles.slice(0, maxFiles)) {
+          const bFilename = entry?.filename || entry?.name;
+          if (!bFilename) { batchResults.push({ filename: String(bFilename || ''), error: 'filename is required' }); continue; }
+          try {
+            const bNorm = String(bFilename).replace(/\\/g, '/');
+            let bContent: string;
+            let bDisplay: string;
+            if (bNorm.startsWith('src/')) {
+              const r = await executeTool('read_source', { file: bNorm, start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full, allow_large: entry.allow_large }, workspacePath, deps, sessionId);
+              batchResults.push({ filename: bFilename, content: r.result, line_count: undefined });
+              continue;
+            }
+            if (bNorm.startsWith('web-ui/')) {
+              const r = await executeTool('read_webui_source', { file: bNorm.slice('web-ui/'.length), start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full, allow_large: entry.allow_large }, workspacePath, deps, sessionId);
+              batchResults.push({ filename: bFilename, content: r.result, line_count: undefined });
+              continue;
+            }
+            const bResolved = resolveAllowedWorkspacePath(String(bFilename), { requireFile: true });
+            bDisplay = bResolved.displayPath;
+            bContent = fs.readFileSync(bResolved.absPath, 'utf-8');
+            const bAllLines = bContent.split('\n');
+            if (entry.start_line !== undefined || entry.num_lines !== undefined) {
+              const bStart = Math.max(1, Math.floor(Number(entry.start_line) || 1));
+              const requested = Math.max(1, Math.floor(Number(entry.num_lines) || batchCap));
+              const bNum = entry.full === true || entry.allow_large === true ? requested : Math.min(requested, batchCap);
+              const bIdx = bStart - 1;
+              const bWindow = bAllLines.slice(bIdx, bIdx + bNum);
+              const bNumbered = bWindow.map((l, i) => `${bStart + i}: ${l}`).join('\n');
+              const bEnd = bStart + bWindow.length - 1;
+              const truncated = bEnd < bAllLines.length;
+              batchResults.push({
+                filename: bFilename,
+                content: `${bDisplay} (${bAllLines.length} lines) [window ${bStart}-${bEnd}${truncated ? ', truncated' : ''}]:\n${bNumbered}`,
+                line_count: bAllLines.length,
+                truncated,
+                next_start_line: truncated ? bEnd + 1 : undefined,
+              });
+            } else {
+              const bWindow = entry.full === true || entry.allow_large === true ? bAllLines : bAllLines.slice(0, batchCap);
+              const bNumbered = bWindow.map((l, i) => `${i + 1}: ${l}`).join('\n');
+              const truncated = bWindow.length < bAllLines.length;
+              batchResults.push({
+                filename: bFilename,
+                content: `${bDisplay} (${bAllLines.length} lines) [window 1-${bWindow.length}${truncated ? ', truncated' : ''}]:\n${bNumbered}${truncated ? `\n[READ_DEFAULT_CAP] Use start_line:${bWindow.length + 1}, num_lines:${batchCap} for the next chunk, or full:true only when needed.` : ''}`,
+                line_count: bAllLines.length,
+                truncated,
+                next_start_line: truncated ? bWindow.length + 1 : undefined,
+              });
+            }
+          } catch (err: any) {
+            batchResults.push({ filename: String(bFilename), error: err?.message || String(err) });
+          }
+        }
+        if (batchFiles.length > maxFiles) {
+          batchResults.push({ filename: '[batch truncated]', error: `Only first ${maxFiles} files read. Re-run with remaining files if needed.` });
+        }
+        return { name, args, result: JSON.stringify(batchResults, null, 2), error: false };
+      }
+
 	      case 'read_file': {
 	        const filename = args.filename || args.name;
 	        if (!filename) return { name, args, result: 'filename is required', error: true };
@@ -4291,10 +4423,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const filePath = resolvedFile.absPath;
         const content = fs.readFileSync(filePath, 'utf-8');
         const allLines = content.split('\n');
+        const readCap = Math.max(1, Math.min(480, Math.floor(Number(args.max_lines) || 240)));
+        const allowFull = args.full === true || args.full_file === true || args.allow_large === true;
         const hasWindowArgs = args.start_line !== undefined || args.num_lines !== undefined;
         if (hasWindowArgs) {
           const startLine = Math.max(1, Math.floor(Number(args.start_line) || 1));
-          const numLines = Math.max(1, Math.floor(Number(args.num_lines) || 240));
+          const requested = Math.max(1, Math.floor(Number(args.num_lines) || readCap));
+          const numLines = allowFull ? requested : Math.min(requested, readCap);
           const startIdx = startLine - 1;
           if (startIdx >= allLines.length) {
             return { name, args, result: buildLineOutOfRangeRecovery(resolvedFile.displayPath, allLines, startLine, 'read_file', 'start_line'), error: true };
@@ -4302,10 +4437,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const windowLines = allLines.slice(startIdx, startIdx + numLines);
           const numberedWindow = windowLines.map((line, i) => `${startLine + i}: ${line}`).join('\n');
           const endLine = startLine + windowLines.length - 1;
-          return { name, args, result: `${resolvedFile.displayPath} (${allLines.length} lines) [window ${startLine}-${endLine}]:\n${numberedWindow}`, error: false };
+          const truncated = endLine < allLines.length;
+          return { name, args, result: `${resolvedFile.displayPath} (${allLines.length} lines) [window ${startLine}-${endLine}${truncated ? ', truncated' : ''}]:\n${numberedWindow}${truncated ? `\n[READ_TRUNCATED] Use start_line:${endLine + 1}, num_lines:${readCap} for the next chunk, or full:true only when needed.` : ''}`, error: false };
         }
-	        const numbered = allLines.map((line, i) => `${i + 1}: ${line}`).join('\n');
-	        return { name, args, result: `${resolvedFile.displayPath} (${allLines.length} lines):\n${numbered}`, error: false };
+        const selectedLines = allowFull ? allLines : allLines.slice(0, readCap);
+	        const numbered = selectedLines.map((line, i) => `${i + 1}: ${line}`).join('\n');
+        const truncated = selectedLines.length < allLines.length;
+	        return { name, args, result: `${resolvedFile.displayPath} (${allLines.length} lines) [window 1-${selectedLines.length}${truncated ? ', truncated' : ''}]:\n${numbered}${truncated ? `\n[READ_DEFAULT_CAP] Whole-file reads are capped by default. Use start_line:${selectedLines.length + 1}, num_lines:${readCap} for the next chunk, or full:true only when needed.` : ''}`, error: false };
 	      }
 
 	      case 'mkdir': {
@@ -4628,14 +4766,34 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const payload = {
           file: resolvedFile.displayPath,
           line_count: lineCount,
-          bytes: stat.size,
           last_modified: stat.mtime.toISOString(),
           is_large: lineCount > readCap,
-          read_hint: lineCount > readCap
-            ? `File has ${lineCount} lines (cap=${readCap}). Use read_file with start_line/num_lines for chunked reads.`
-            : `File fits in one read_file call (${lineCount} lines).`,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
+      }
+
+      case 'source_stats_batch': {
+        const batchPaths = Array.isArray(args.files) ? args.files : [];
+        if (!batchPaths.length) return { name, args, result: 'files array is required', error: true };
+        const projectRoot = resolveProjectRootForSourceAccess();
+        const batchStatResults: Array<{ file: string; line_count?: number; last_modified?: string; is_large?: boolean; error?: string }> = [];
+        for (const rawPath of batchPaths) {
+          const normalized = String(rawPath || '').replace(/\\/g, '/').replace(/^\.?\//, '');
+          if (!normalized) { batchStatResults.push({ file: String(rawPath), error: 'path required' }); continue; }
+          const isWebUi = normalized.startsWith('web-ui/');
+          const root = path.join(projectRoot, isWebUi ? 'web-ui' : 'src');
+          const rel = isWebUi ? normalized.slice('web-ui/'.length) : normalized.replace(/^src\//, '');
+          const absPath = path.resolve(root, rel);
+          const display = `${isWebUi ? 'web-ui' : 'src'}/${rel}`;
+          if (!absPath.startsWith(root)) { batchStatResults.push({ file: display, error: 'path escapes source root' }); continue; }
+          if (!fs.existsSync(absPath)) { batchStatResults.push({ file: display, error: 'not found' }); continue; }
+          const bsStat = fs.statSync(absPath);
+          if (!bsStat.isFile()) { batchStatResults.push({ file: display, error: 'not a file' }); continue; }
+          const content = fs.readFileSync(absPath, 'utf-8');
+          const lineCount = content.split('\n').length;
+          batchStatResults.push({ file: display, line_count: lineCount, last_modified: bsStat.mtime.toISOString(), is_large: lineCount > 300 });
+        }
+        return { name, args, result: JSON.stringify(batchStatResults, null, 2), error: false };
       }
 
       case 'source_stats':
@@ -4660,12 +4818,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const payload = {
           file: `src/${normalizedRel}`,
           line_count: lineCount,
-          bytes: stat.size,
           last_modified: stat.mtime.toISOString(),
           is_large: lineCount > readCap,
-          read_hint: lineCount > readCap
-            ? `File has ${lineCount} lines (cap=${readCap}). Use read_source with start_line+num_lines for chunked reads.`
-            : `File fits in one read_source call (${lineCount} lines).`,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
@@ -4691,12 +4845,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const payload = {
           file: promDisplay,
           line_count: lineCount,
-          bytes: stat.size,
           last_modified: stat.mtime.toISOString(),
           is_large: lineCount > readCap,
-          read_hint: lineCount > readCap
-            ? `File has ${lineCount} lines (cap=${readCap}). Use read_prom_file with start_line+num_lines for chunked reads.`
-            : `File fits in one read_prom_file call (${lineCount} lines).`,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
@@ -4723,12 +4873,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const payload = {
           file: `web-ui/${normalizedRel}`,
           line_count: lineCount,
-          bytes: stat.size,
           last_modified: stat.mtime.toISOString(),
           is_large: lineCount > readCap,
-          read_hint: lineCount > readCap
-            ? `File has ${lineCount} lines (cap=${readCap}). Use read_webui_source with start_line+num_lines for chunked reads.`
-            : `File fits in one read_webui_source call (${lineCount} lines).`,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
@@ -4752,8 +4898,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch {
           return { name, args, result: `Invalid regex pattern: ${pattern}`, error: true };
         }
-        const contextLines = Math.max(0, Math.min(10, Math.floor(Number(args.context ?? args.context_lines) || 0)));
-        const maxResults = Math.max(1, Math.min(200, Math.floor(Number(args.max_results) || 100)));
+        const requestedMaxResults = Math.floor(Number(args.max_results) || 50);
+        const contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context ?? args.context_lines) || 0)));
+        const maxResults = Math.max(1, Math.min(80, requestedMaxResults));
+        const trimLine = (line: string, max = 500): string => {
+          const value = String(line || '');
+          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
+        };
         const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
         const matches: Array<{
           line_number: number;
@@ -4771,11 +4922,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
             context_after?: string[];
           } = {
             line_number: i + 1,
-            line: lines[i],
+            line: trimLine(lines[i]),
           };
           if (contextLines > 0) {
-            item.context_before = lines.slice(Math.max(0, i - contextLines), i);
-            item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines));
+            item.context_before = lines.slice(Math.max(0, i - contextLines), i).map((line) => trimLine(line, 260));
+            item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines)).map((line) => trimLine(line, 260));
           }
           matches.push(item);
         }
@@ -4783,6 +4934,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
           file: resolvedFile.displayPath,
           pattern,
           match_count: matches.length,
+          returned_count: matches.length,
+          result_limit: {
+            requested: requestedMaxResults,
+            applied: maxResults,
+            context_lines: contextLines,
+            limit_reached: matches.length >= maxResults,
+            note: 'Result payloads are hard-clamped. Narrow pattern/path/glob or rerun with a smaller directory to inspect more matches.',
+          },
           matches,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
@@ -4795,6 +4954,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const directoryArg = name === 'grep_files'
           ? (args.path || args.directory || '.')
           : (args.directory || args.path || '.');
+        const sourceSearchRawGlob = String((name === 'grep_files' ? args.glob : args.file_glob) || args.file_glob || args.glob || '').trim();
+        const normalizedSourceDirectoryArg = String(directoryArg || '.').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+        if (normalizedSourceDirectoryArg === 'src' || normalizedSourceDirectoryArg.startsWith('src/') || normalizedSourceDirectoryArg === 'web-ui' || normalizedSourceDirectoryArg.startsWith('web-ui/')) {
+          const sourceIsWebUi = normalizedSourceDirectoryArg === 'web-ui' || normalizedSourceDirectoryArg.startsWith('web-ui/');
+          const delegatedTool = sourceIsWebUi ? 'grep_webui_source' : 'grep_source';
+          const sourcePath = sourceIsWebUi
+            ? normalizedSourceDirectoryArg.replace(/^web-ui\/?/, '')
+            : normalizedSourceDirectoryArg.replace(/^src\/?/, '');
+          return executeTool(delegatedTool, {
+            pattern,
+            path: sourcePath,
+            glob: sourceSearchRawGlob,
+            case_insensitive: args.case_insensitive,
+            context: args.context ?? args.context_lines,
+            max_results: args.max_results,
+          }, workspacePath, deps, sessionId);
+        }
         let resolvedDir: { absPath: string; normalizedRel: string; displayPath: string };
         try {
           resolvedDir = resolveAllowedWorkspacePath(String(directoryArg), { requireDirectory: true, allowEmpty: true });
@@ -4808,10 +4984,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch {
           return { name, args, result: `Invalid regex pattern: ${pattern}`, error: true };
         }
-        const rawGlob = String((name === 'grep_files' ? args.glob : args.file_glob) || args.file_glob || args.glob || '').trim().toLowerCase();
+        const rawGlob = sourceSearchRawGlob.toLowerCase();
         const globs = rawGlob ? rawGlob.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
-        const contextLines = Math.max(0, Math.min(5, Math.floor(Number(args.context ?? args.context_lines) || 0)));
-        const maxResults = Math.max(1, Math.min(500, Math.floor(Number(args.max_results) || 100)));
+        const requestedMaxResults = Math.floor(Number(args.max_results) || 50);
+        const contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context ?? args.context_lines) || 0)));
+        const maxResults = Math.max(1, Math.min(80, requestedMaxResults));
+        const trimLine = (line: string, max = 500): string => {
+          const value = String(line || '');
+          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
+        };
         const matches: Array<{ file: string; line_number: number; line: string; context_before?: string[]; context_after?: string[] }> = [];
         const matchesGlob = (filename: string): boolean => {
           if (!globs.length) return true;
@@ -4842,10 +5023,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
             for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
               regex.lastIndex = 0;
               if (!regex.test(lines[i])) continue;
-              const item = { file: rel, line_number: i + 1, line: lines[i], context_before: undefined as string[] | undefined, context_after: undefined as string[] | undefined };
+              const item = { file: rel, line_number: i + 1, line: trimLine(lines[i]), context_before: undefined as string[] | undefined, context_after: undefined as string[] | undefined };
               if (contextLines > 0) {
-                item.context_before = lines.slice(Math.max(0, i - contextLines), i);
-                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines));
+                item.context_before = lines.slice(Math.max(0, i - contextLines), i).map((line) => trimLine(line, 260));
+                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines)).map((line) => trimLine(line, 260));
               }
               matches.push(item);
             }
@@ -4856,9 +5037,103 @@ export async function executeTool(name: string, args: any, workspacePath: string
           directory: resolvedDir.displayPath,
           pattern,
           match_count: matches.length,
+          returned_count: matches.length,
+          result_limit: {
+            requested: requestedMaxResults,
+            applied: maxResults,
+            context_lines: contextLines,
+            limit_reached: matches.length >= maxResults,
+            note: 'Result payloads are hard-clamped. Narrow directory, glob, or pattern to inspect more matches.',
+          },
           matches,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
+      }
+
+      case 'apply_workspace_patchset': {
+        const patchEdits = Array.isArray(args.edits) ? args.edits : [];
+        if (!patchEdits.length) return { name, args, result: 'edits array is required and must not be empty', error: true };
+        const patchResults: Array<{ filename: string; op: string; ok: boolean; error?: string }> = [];
+        for (const edit of patchEdits) {
+          const pFilename = edit?.filename;
+          const pOp = String(edit?.op || '');
+          if (!pFilename || !pOp) { patchResults.push({ filename: String(pFilename || ''), op: pOp, ok: false, error: 'filename and op are required' }); continue; }
+          try {
+            const resolvedPOp = pOp === 'find_replace' ? 'find_replace' : pOp === 'replace_lines' ? 'replace_lines' : pOp === 'insert_after' ? 'insert_after' : pOp === 'delete_lines' ? 'delete_lines' : pOp === 'write_file' ? 'write_file' : pOp === 'rename_file' ? 'rename_file' : 'create_file';
+            const r = await executeTool(resolvedPOp, { filename: pFilename, old_path: pFilename, ...edit }, workspacePath, deps, sessionId);
+            patchResults.push({ filename: pFilename, op: pOp, ok: !r.error, error: r.error ? r.result : undefined });
+          } catch (err: any) {
+            patchResults.push({ filename: pFilename, op: pOp, ok: false, error: err?.message || String(err) });
+          }
+        }
+        const allOk = patchResults.every(r => r.ok);
+        return { name, args, result: JSON.stringify({ applied: patchResults.filter(r => r.ok).length, failed: patchResults.filter(r => !r.ok).length, results: patchResults }, null, 2), error: !allOk };
+      }
+
+      case 'file_tree': {
+        const ftRootArg = String(args.path || args.directory || '.').trim() || '.';
+        let ftResolved: { absPath: string; displayPath: string };
+        const ftResolveSourceTree = (): { absPath: string; displayPath: string } | null => {
+          const normalized = ftRootArg.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+          if (!(normalized === 'src' || normalized.startsWith('src/') || normalized === 'web-ui' || normalized.startsWith('web-ui/'))) return null;
+          const projectRoot = resolveProjectRootForSourceAccess();
+          const isWebUi = normalized === 'web-ui' || normalized.startsWith('web-ui/');
+          const label = isWebUi ? 'web-ui' : 'src';
+          const root = path.join(projectRoot, label);
+          const subPath = normalized.replace(new RegExp(`^${label}/?`), '');
+          const absPath = path.resolve(root, subPath);
+          if (absPath !== root && !absPath.startsWith(root + path.sep)) throw new Error(`Path escapes ${label}/ directory.`);
+          if (!fs.existsSync(absPath)) throw new Error(`${label}/${subPath} not found.`);
+          const stat = fs.statSync(absPath);
+          if (!stat.isDirectory()) throw new Error(`${label}/${subPath} is not a directory.`);
+          return { absPath, displayPath: subPath ? `${label}/${subPath}` : label };
+        };
+        try {
+          ftResolved = ftResolveSourceTree() ?? resolveAllowedWorkspacePath(ftRootArg, { requireDirectory: true, allowEmpty: true });
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+        const ftMaxDepth = Math.max(1, Math.min(8, Math.floor(Number(args.max_depth) || 3)));
+        const ftGlobs = String(args.glob || '').trim().toLowerCase().split(',').map((g: string) => g.trim()).filter(Boolean);
+        const ftDefaultExclude = ['node_modules', '.git', 'dist', '.prometheus'];
+        const ftExclude = new Set<string>([
+          ...ftDefaultExclude,
+          ...String(args.exclude || '').split(',').map((e: string) => e.trim()).filter(Boolean),
+        ]);
+        const ftMatchesGlob = (filename: string): boolean => {
+          if (!ftGlobs.length) return true;
+          const lower = filename.toLowerCase();
+          return ftGlobs.some((g: string) => {
+            if (g.startsWith('*.')) return lower.endsWith(g.slice(1));
+            return lower.includes(g.replace(/\*/g, ''));
+          });
+        };
+        const ftLines: string[] = [];
+        const ftWalk = (dir: string, depth: number, prefix: string): void => {
+          if (depth > ftMaxDepth) return;
+          let entries: fs.Dirent[];
+          try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+          entries.sort((a, b) => {
+            if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+            return a.name.localeCompare(b.name);
+          });
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (ftExclude.has(entry.name)) continue;
+            const isLast = i === entries.length - 1;
+            const connector = isLast ? '└── ' : '├── ';
+            const childPrefix = isLast ? prefix + '    ' : prefix + '│   ';
+            if (entry.isDirectory()) {
+              ftLines.push(`${prefix}${connector}${entry.name}/`);
+              ftWalk(path.join(dir, entry.name), depth + 1, childPrefix);
+            } else if (ftMatchesGlob(entry.name)) {
+              ftLines.push(`${prefix}${connector}${entry.name}`);
+            }
+          }
+        };
+        ftLines.push(ftResolved.displayPath || '.');
+        ftWalk(ftResolved.absPath, 1, '');
+        return { name, args, result: ftLines.join('\n'), error: false };
       }
 
       case 'grep_webui_source':
@@ -4881,8 +5156,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch {
           return { name, args, result: `Invalid regex pattern: ${gs_pattern}`, error: true };
         }
-        const gs_contextLines = Math.max(0, Math.min(10, Math.floor(Number(args.context || 0))));
-        const gs_maxResults = Math.max(1, Math.min(500, Math.floor(Number(args.max_results) || 100)));
+        const gs_requestedMaxResults = Math.floor(Number(args.max_results) || 50);
+        const gs_contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context || 0))));
+        const gs_maxResults = Math.max(1, Math.min(80, gs_requestedMaxResults));
+        const gs_trimLine = (line: string, max = 500): string => {
+          const value = String(line || '');
+          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
+        };
         const gs_matchesGlob = (filename: string): boolean => {
           if (!gs_globs.length) return true;
           const lower = filename.toLowerCase();
@@ -4914,10 +5194,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
             for (let i = 0; i < lines.length && gs_matches.length < gs_maxResults; i++) {
               gs_regex.lastIndex = 0;
               if (!gs_regex.test(lines[i])) continue;
-              const item: GrepMatch = { file: relPath, line_number: i + 1, line: lines[i] };
+              const item: GrepMatch = { file: relPath, line_number: i + 1, line: gs_trimLine(lines[i]) };
               if (gs_contextLines > 0) {
-                item.context_before = lines.slice(Math.max(0, i - gs_contextLines), i);
-                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + gs_contextLines));
+                item.context_before = lines.slice(Math.max(0, i - gs_contextLines), i).map((line) => gs_trimLine(line, 260));
+                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + gs_contextLines)).map((line) => gs_trimLine(line, 260));
               }
               gs_matches.push(item);
             }
@@ -4937,7 +5217,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
           gs_walkDir(gs_webUiSubdir, gs_webUiRoot, 'web-ui');
         }
         const gs_searchedLabel = gs_searchBoth ? 'src/ + web-ui/' : (gs_useSrc ? 'src/' + (gs_rawPath ? gs_rawPath : '') : 'web-ui/' + (gs_rawPath ? gs_rawPath : ''));
-        const gs_payload = { searched: gs_searchedLabel, pattern: gs_pattern, match_count: gs_matches.length, matches: gs_matches };
+        const gs_payload = {
+          searched: gs_searchedLabel,
+          pattern: gs_pattern,
+          match_count: gs_matches.length,
+          returned_count: gs_matches.length,
+          result_limit: {
+            requested: gs_requestedMaxResults,
+            applied: gs_maxResults,
+            context_lines: gs_contextLines,
+            limit_reached: gs_matches.length >= gs_maxResults,
+            note: 'Result payloads are hard-clamped. Narrow root/path/glob/pattern or rerun a targeted read_source/read_webui_source for exact code.',
+          },
+          matches: gs_matches,
+        };
         return { name, args, result: JSON.stringify(gs_payload, null, 2), error: false };
       }
 
@@ -4965,8 +5258,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!gp_rootStat.isDirectory()) {
           return { name, args, result: `"${gp_resolved.normalizedRel || '.'}" is not a directory`, error: true };
         }
-        const gp_contextLines = Math.max(0, Math.min(10, Math.floor(Number(args.context || 0))));
-        const gp_maxResults = Math.max(1, Math.min(500, Math.floor(Number(args.max_results) || 100)));
+        const gp_requestedMaxResults = Math.floor(Number(args.max_results) || 50);
+        const gp_contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context || 0))));
+        const gp_maxResults = Math.max(1, Math.min(80, gp_requestedMaxResults));
+        const gp_trimLine = (line: string, max = 500): string => {
+          const value = String(line || '');
+          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
+        };
         const gp_rawGlob = String(args.glob || '').trim().toLowerCase();
         const gp_globs = gp_rawGlob ? gp_rawGlob.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
         const gp_matchesGlob = (filename: string): boolean => {
@@ -5001,26 +5299,41 @@ export async function executeTool(name: string, args: any, workspacePath: string
             for (let i = 0; i < lines.length && gp_matches.length < gp_maxResults; i++) {
               gp_regex.lastIndex = 0;
               if (!gp_regex.test(lines[i])) continue;
-              const item: PromGrepMatch = { file: relFromRoot || '.', line_number: i + 1, line: lines[i] };
+              const item: PromGrepMatch = { file: relFromRoot || '.', line_number: i + 1, line: gp_trimLine(lines[i]) };
               if (gp_contextLines > 0) {
-                item.context_before = lines.slice(Math.max(0, i - gp_contextLines), i);
-                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + gp_contextLines));
+                item.context_before = lines.slice(Math.max(0, i - gp_contextLines), i).map((line) => gp_trimLine(line, 260));
+                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + gp_contextLines)).map((line) => gp_trimLine(line, 260));
               }
               gp_matches.push(item);
             }
           }
         };
         gp_walkDir(gp_resolved.absPath);
-        const gp_payload = { searched: gp_resolved.normalizedRel || '.', pattern: gp_pattern, match_count: gp_matches.length, matches: gp_matches };
+        const gp_payload = {
+          searched: gp_resolved.normalizedRel || '.',
+          pattern: gp_pattern,
+          match_count: gp_matches.length,
+          returned_count: gp_matches.length,
+          result_limit: {
+            requested: gp_requestedMaxResults,
+            applied: gp_maxResults,
+            context_lines: gp_contextLines,
+            limit_reached: gp_matches.length >= gp_maxResults,
+            note: 'Result payloads are hard-clamped. Narrow path/glob/pattern or rerun a targeted read_prom_file for exact content.',
+          },
+          matches: gp_matches,
+        };
         return { name, args, result: JSON.stringify(gp_payload, null, 2), error: false };
       }
       case 'read_dev_sources': {
         const files = Array.isArray(args.files) ? args.files : [];
         if (!files.length) return { name, args, result: 'ERROR: files[] is required.', error: true };
+        const maxFiles = Math.max(1, Math.min(12, Math.floor(Number(args.max_files) || 8)));
+        const defaultLines = Math.max(1, Math.min(480, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || 220)));
         const results: string[] = [];
         let sawError = false;
         const normalizeDevSourcePath = (entry: any): string => String(entry?.file || entry?.path || '').replace(/\\/g, '/').replace(/^\.\//, '');
-        for (let i = 0; i < files.length; i++) {
+        for (let i = 0; i < files.slice(0, maxFiles).length; i++) {
           const entry = files[i] || {};
           const requested = normalizeDevSourcePath(entry);
           if (!requested) {
@@ -5045,14 +5358,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }, workspacePath, deps, sessionId);
           } else {
             delegatedTool = isWebUi ? 'read_webui_source' : 'read_source';
-            const readArgs: any = { file: sourceFile };
-            for (const key of ['start_line', 'num_lines', 'head', 'tail']) {
+            const readArgs: any = { file: sourceFile, max_lines: defaultLines };
+            for (const key of ['start_line', 'num_lines', 'head', 'tail', 'full', 'allow_large']) {
               if (entry?.[key] !== undefined) readArgs[key] = entry[key];
+            }
+            if (readArgs.num_lines === undefined && readArgs.head === undefined && readArgs.tail === undefined) {
+              readArgs.num_lines = defaultLines;
             }
             result = await executeTool(delegatedTool, readArgs, workspacePath, deps, sessionId);
           }
           if (result.error) sawError = true;
           results.push(`--- ${requested} via ${delegatedTool} ---\n${result.result}`);
+        }
+        if (files.length > maxFiles) {
+          results.push(`--- read_dev_sources truncated ---\nOnly first ${maxFiles} files read. Re-run with remaining files if needed.`);
         }
         return { name, args, result: results.join('\n\n'), error: sawError };
       }
@@ -5152,13 +5471,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           if (result.error) return { name, args, result: results.join('\n\n'), error: true };
           touched.add(target.display);
         }
-        const payload = {
-          ok: true,
-          edit_count: edits.length,
-          touched_files: Array.from(touched),
-          results,
-        };
-        return { name, args, result: JSON.stringify(payload, null, 2), error: false };
+        return { name, args, result: JSON.stringify({ ok: true, edit_count: edits.length, touched_files: Array.from(touched) }, null, 2), error: false };
       }
 
       // ── read_source: read a file from src/ only ───────────────────────────────
@@ -9521,6 +9834,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
 		      case 'web_fetch': {
+		        const batchUrls = Array.isArray(args.urls) ? args.urls.map((item: any) => String(item || '').trim()).filter(Boolean) : [];
+		        if (batchUrls.length > 0) {
+		          const batchResult = await executeWebFetchBatch({
+		            urls: batchUrls,
+		            max_chars: args.max_chars != null ? Number(args.max_chars) : undefined,
+		            concurrency: args.concurrency != null ? Number(args.concurrency) : undefined,
+		          });
+		          return {
+		            name,
+		            args,
+		            result: batchResult.stdout || batchResult.error || 'Batch fetch completed without output.',
+		            error: batchResult.success !== true,
+		            data: batchResult.data,
+		          };
+		        }
 		        const url = args.url || '';
 		        {
 		          let extractionAction = 'Extracting Media';
@@ -9605,6 +9933,27 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          result: toolResult.success
 	            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'download_url complete' }, null, 2)
 	            : `ERROR: ${toolResult.error || 'download_url failed'}`,
+	          error: toolResult.success !== true,
+	        };
+	      }
+
+	      case 'clone_repo': {
+	        const { executeCloneRepo } = await import('../../tools/repo-tools.js');
+	        const toolResult = await executeCloneRepo({
+	          repo: String(args.repo || ''),
+	          dest: args.dest != null ? String(args.dest) : undefined,
+	          ref: args.ref != null ? String(args.ref) : undefined,
+	          branch: args.branch != null ? String(args.branch) : undefined,
+	          depth: args.depth != null ? Number(args.depth) : undefined,
+	          paths: Array.isArray(args.paths) ? args.paths.map((p: any) => String(p)) : (args.paths != null ? String(args.paths) : undefined),
+	          overwrite: args.overwrite === true,
+	        });
+	        return {
+	          name,
+	          args,
+	          result: toolResult.success
+	            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'clone_repo complete' }, null, 2)
+	            : `ERROR: ${toolResult.error || 'clone_repo failed'}`,
 	          error: toolResult.success !== true,
 	        };
 	      }
@@ -9979,7 +10328,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           const dir = args.path ? resolveAllowedWorkspacePath(String(args.path), { requireDirectory: true }).absPath : workspacePath;
           const minBytes = Math.max(1, Number(args.min_bytes || 5_000_000));
-          const maxResults = Math.max(1, Math.min(1000, Number(args.max_results || 100)));
+          const maxResults = Math.max(1, Math.min(1000, Number(args.max_results || 50)));
           const files = walkFiles(dir, { maxFiles: 20000, maxBytes: Number.MAX_SAFE_INTEGER })
             .filter(f => f.size >= minBytes)
             .sort((a, b) => b.size - a.size)
@@ -9997,7 +10346,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const files = stat?.isFile()
             ? [{ absPath: target.absPath, relPath: target.displayPath, size: stat.size }]
             : walkFiles(target.absPath, { maxFiles: 10000, maxBytes: 80_000_000 });
-          const maxResults = Math.max(1, Math.min(1000, Number(args.max_results || 100)));
+          const maxResults = Math.max(1, Math.min(1000, Number(args.max_results || 50)));
           const patterns = [
             { type: 'openai_key', re: /sk-[A-Za-z0-9_-]{20,}/g },
             { type: 'github_token', re: /gh[pousr]_[A-Za-z0-9_]{20,}/g },
@@ -10067,7 +10416,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'get_symbols': {
         try {
           const dir = args.path ? resolveAllowedWorkspacePath(String(args.path), { requireDirectory: true }).absPath : workspacePath;
-          const symbols = await collectCodeSymbols(dir, String(args.query || ''), Math.max(1, Math.min(1000, Number(args.max_results || 100))));
+          const symbols = await collectCodeSymbols(dir, String(args.query || ''), Math.max(1, Math.min(1000, Number(args.max_results || 50))));
           return { name, args, result: JSON.stringify({ symbols, count: symbols.length }, null, 2), error: false };
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
@@ -10124,6 +10473,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
         const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
         if (commandBoundary.blocked) return commandBoundary.blocked;
+        const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
+        if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
         if (commandBoundary.requiresExplicitApproval) {
           return {
             name,
@@ -10131,9 +10482,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
             result: `start_process requires an explicit outside-workspace approval for this command (${commandBoundary.scope}): ${commandBoundary.reason || rawCmd}`,
             error: true,
           };
-        }
-        if (!deps.isAllowedShellCommand(normalizedCmd)) {
-          return { name, args, result: `Blocked: shell command is not allowed by policy: "${rawCmd}"`, error: true };
         }
         let commandCwd: { cwd: string; displayCwd: string };
         try {
@@ -10229,15 +10577,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
             error: true,
           };
         }
-        // Check blocked patterns
-        const blockedPattern = commandContainsBlockedPattern(cmd, deps.BLOCKED_PATTERNS);
-        if (blockedPattern) {
-          return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blockedPattern}"`, error: true };
-        }
-
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
         const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
         if (commandBoundary.blocked) return commandBoundary.blocked;
+        const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
+        if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
         const wantVisible = args.visible === true || args.window === true;
         let commandCwd: { cwd: string; displayCwd: string };
         try {
@@ -10312,16 +10656,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
             execCmd = normalizedCmd;
           }
         }
-        // 9. Fallback: allow broader shell commands when they pass shell allowlist checks.
+        // 9. Fallback: in default terminal mode, broader commands may run after normal command approval.
+        // Lite mode already enforced the shell token allowlist above.
         else {
-          if (!deps.isAllowedShellCommand(normalizedCmd)) {
-            return {
-              name,
-              args,
-              result: `Blocked: shell command is not allowed by policy: "${rawCmd}"`,
-              error: true,
-            };
-          }
           if (!wantVisible) {
             try {
               const captured = await deps.runCommandCaptured(normalizedCmd, commandCwd.cwd, Number(args.timeoutMs || args.timeout_ms || 120_000), {
@@ -12885,7 +13222,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             schedule: a.schedule || null,
           }));
           const lines = agentSummaries.map((a: any) =>
-            `- ${a.id}${a.default ? ' (default)' : ''}: ${a.description}${a.executionWorkspace ? ` [cwd: ${a.executionWorkspace}]` : ''}${a.allowedWorkPaths?.length ? ` [allowed: ${a.allowedWorkPaths.join(', ')}]` : ''}${a.schedule ? ` [scheduled: ${a.schedule}]` : ''}`
+            `- ${a.name} (id: ${a.id})${a.default ? ' (default)' : ''}: ${a.description}${a.executionWorkspace ? ` [cwd: ${a.executionWorkspace}]` : ''}${a.allowedWorkPaths?.length ? ` [allowed: ${a.allowedWorkPaths.join(', ')}]` : ''}${a.schedule ? ` [scheduled: ${a.schedule}]` : ''}`
           );
           return { name, args, result: `${agentSummaries.length} agent(s) configured:\n${lines.join('\n')}`, error: false };
         } catch (err: any) {
@@ -13296,13 +13633,43 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (all.length === 0) {
           return { name, args, result: 'No skills installed yet. Use skill_create to save a new one.', error: false };
         }
-        const slLines = all.map((s: any) => {
-          const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
-          return `${s.id}${status} - ${s.description || '(no description)'}`;
-        }).join('\n');
+        const query = String(args?.query || args?.q || '').trim().toLowerCase();
+        const includeDescriptions = args?.include_descriptions === true || args?.includeDescriptions === true;
+        const requestedLimit = Math.floor(Number(args?.limit) || 24);
+        const limit = Math.max(1, Math.min(80, requestedLimit));
+        const haystackFor = (s: any): string => [
+          s?.id,
+          s?.name,
+          s?.description,
+          ...(Array.isArray(s?.triggers) ? s.triggers : []),
+          ...(Array.isArray(s?.categories) ? s.categories : []),
+          ...(Array.isArray(s?.requiredTools) ? s.requiredTools : []),
+        ].map((v) => String(v || '')).join(' ').toLowerCase();
+        const matched = query ? all.filter((s: any) => haystackFor(s).includes(query)) : all;
+        const rows = matched.slice(0, limit).map((s: any) => {
+          const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? String(s.eligibility.status || '') : undefined;
+          const row: any = {
+            id: String(s.id || ''),
+            name: String(s.name || s.id || ''),
+          };
+          if (status) row.status = status;
+          if (Array.isArray(s.categories) && s.categories.length) row.categories = s.categories.slice(0, 4);
+          if (Array.isArray(s.requiredTools) && s.requiredTools.length) row.requiredTools = s.requiredTools.slice(0, 6);
+          if (includeDescriptions) row.description = String(s.description || '').slice(0, 180);
+          return row;
+        });
         return {
           name, args,
-          result: `${all.length} skill${all.length !== 1 ? 's' : ''} available. Call skill_read(id) to load one.\n\n${slLines}`,
+          result: JSON.stringify({
+            totalInstalled: all.length,
+            query: query || undefined,
+            matchedCount: matched.length,
+            returnedCount: rows.length,
+            truncated: matched.length > rows.length,
+            compact: !includeDescriptions,
+            note: 'Compact skill discovery. Use query to narrow, include_descriptions:true only when descriptions are needed, then call skill_read(id) for one relevant skill.',
+            skills: rows,
+          }, null, 2),
           error: false,
         };
       }
@@ -13567,6 +13934,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             id: scId,
             name: scName,
             description: args.description ? String(args.description).trim() : '',
+            triggers: splitCsv(args.triggers),
             instructions: scInstructions,
           });
           return {
@@ -13606,7 +13974,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!skill) return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
         const manifest = buildMetadataManifest(skill, args);
         if (!manifest) {
-          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, categories, requiredTools, lifecycle, or name).`, error: true };
+          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, or name).`, error: true };
         }
         try {
           const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {
@@ -15848,6 +16216,72 @@ export async function executeTool(name: string, args: any, workspacePath: string
             ttlMs: args?.ttl_ms || args?.ttlMs,
           });
 
+          // Under /goal autonomous mode, route through the judge instead of blindly approving.
+          // The judge evaluates whether this final action is aligned with the active goal,
+          // then either grants or rejects with a redirect directive for the worker.
+          if (isGoalAutonomousApprovalBypass) {
+            let judgeResult: import('../main-chat-goals').GoalApprovalJudgeResult;
+            try {
+              judgeResult = await judgeGoalApprovalRequest(sessionId, 'final_action', {
+                summary: scope.summary || `${scope.actionKind} on ${scope.targetLabel}`,
+                actionKind: scope.actionKind,
+                targetLabel: scope.targetLabel,
+                reason: scope.summary,
+              });
+            } catch (err: any) {
+              judgeResult = { approved: true, reason: `Judge threw unexpectedly: ${String(err?.message || err).slice(0, 120)}`, redirectDirective: '' };
+            }
+            if (!judgeResult.approved) {
+              try {
+                appendAuditEntry({
+                  timestamp: new Date().toISOString(),
+                  sessionId,
+                  agentId: inferAgentIdFromSession(sessionId, args),
+                  actionType: 'approval_resolved',
+                  toolName: name,
+                  toolArgs: { action_kind: scope.actionKind, target_label: scope.targetLabel, summary: scope.summary },
+                  policyTier: 'commit',
+                  approvalStatus: 'rejected',
+                  resultSummary: `Goal judge rejected final action approval: ${judgeResult.reason}`,
+                });
+              } catch {}
+              return {
+                name,
+                args,
+                result:
+                  `[GOAL JUDGE REJECTED] Final ${scope.actionKind} action "${scope.targetLabel}" was rejected by the goal judge.\n` +
+                  `Reason: ${judgeResult.reason}\n` +
+                  `What to do instead: ${judgeResult.redirectDirective || 'Re-evaluate whether this action is needed for the goal.'}`,
+                error: true,
+              };
+            }
+            const autoApprovalId = `goal_judge_final_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
+            grantFinalActionApproval(sessionId, autoApprovalId, scope, 'goal_autonomous');
+            try {
+              appendAuditEntry({
+                timestamp: new Date().toISOString(),
+                sessionId,
+                agentId: inferAgentIdFromSession(sessionId, args),
+                actionType: 'approval_resolved',
+                toolName: name,
+                toolArgs: { action_kind: scope.actionKind, target_label: scope.targetLabel, summary: scope.summary },
+                policyTier: 'commit',
+                approvalStatus: 'approved',
+                resultSummary: `Goal judge approved final action: ${scope.targetLabel} — ${judgeResult.reason}`,
+              });
+            } catch {}
+            return {
+              name,
+              args,
+              result:
+                `[GOAL JUDGE APPROVED] Final ${scope.actionKind} action "${scope.targetLabel}" was approved by the goal judge. ` +
+                `Judge reason: ${judgeResult.reason} ` +
+                `Use final_action_approval_id="${autoApprovalId}" on the exact next ${scope.nextToolName || 'desktop/browser action'} call. This approval is one-shot.`,
+              data: { final_action_approval_id: autoApprovalId, next_tool_name: scope.nextToolName || '' },
+              error: false,
+            };
+          }
+
           const approvalQueue = getApprovalQueue();
           const activeTask = resolveTaskForSession(sessionId);
           const activeTaskId = String(activeTask?.id || '').trim() || undefined;
@@ -16012,6 +16446,99 @@ export async function executeTool(name: string, args: any, workspacePath: string
               name,
               args,
               result: `Dev source edit scope is already approved for this session: ${scope.allowedFiles.join(', ')}; workspace docs: ${scope.allowedDirs.join(', ')}`,
+              error: false,
+            };
+          }
+
+          // Under /goal autonomous mode, route through the judge instead of blindly approving.
+          // The judge evaluates whether this dev source edit is aligned with the active goal,
+          // then either grants the scope or rejects with a redirect directive for the worker.
+          if (isGoalAutonomousApprovalBypass) {
+            let judgeResult: import('../main-chat-goals').GoalApprovalJudgeResult;
+            try {
+              judgeResult = await judgeGoalApprovalRequest(sessionId, 'dev_source_edit', {
+                summary: scope.reason || `Edit Prometheus source: ${scope.allowedFiles.join(', ')}`,
+                files: scope.allowedFiles,
+                reason: scope.reason,
+                plan: scope.plan as Record<string, any> | undefined,
+              });
+            } catch (err: any) {
+              judgeResult = { approved: true, reason: `Judge threw unexpectedly: ${String(err?.message || err).slice(0, 120)}`, redirectDirective: '' };
+            }
+            if (!judgeResult.approved) {
+              try {
+                appendAuditEntry({
+                  timestamp: new Date().toISOString(),
+                  sessionId,
+                  agentId: inferAgentIdFromSession(sessionId, args),
+                  actionType: 'approval_resolved',
+                  toolName: name,
+                  toolArgs: { files: scope.allowedFiles, reason: scope.reason },
+                  policyTier: 'commit',
+                  approvalStatus: 'rejected',
+                  resultSummary: `Goal judge rejected dev source edit: ${judgeResult.reason}`,
+                });
+              } catch {}
+              return {
+                name,
+                args,
+                result:
+                  `[GOAL JUDGE REJECTED] Dev source edit for [${scope.allowedFiles.join(', ')}] was rejected by the goal judge.\n` +
+                  `Reason: ${judgeResult.reason}\n` +
+                  `What to do instead: ${judgeResult.redirectDirective || 'Re-evaluate whether this source edit is needed for the goal.'}`,
+                error: true,
+              };
+            }
+            try {
+              grantDevSourceEditApproval(sessionId, scope, 'goal_autonomous');
+            } catch (err: any) {
+              return { name, args, result: `goal judge-approved dev source edit grant failed: ${err.message || err}`, error: true };
+            }
+            try {
+              appendAuditEntry({
+                timestamp: new Date().toISOString(),
+                sessionId,
+                agentId: inferAgentIdFromSession(sessionId, args),
+                actionType: 'approval_resolved',
+                toolName: name,
+                toolArgs: { files: scope.allowedFiles, reason: scope.reason },
+                policyTier: 'commit',
+                approvalStatus: 'approved',
+                resultSummary: `Goal judge approved dev source edit: ${scope.allowedFiles.join(', ')} — ${judgeResult.reason}`,
+              });
+            } catch {}
+            return {
+              name,
+              args,
+              result:
+                `[GOAL JUDGE APPROVED] Dev source edit scope granted: ${scope.allowedFiles.join(', ')}.\n` +
+                `Judge reason: ${judgeResult.reason}\n` +
+                `Approved workspace self-doc scope: ${scope.allowedDirs.join(', ')}.\n` +
+                `Approved plan hash: ${scope.planHash || 'none'}; dev_edit_id: ${scope.devEditId}.\n` +
+                `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are complete, finalize through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Goal autonomous dev source edits', 'apply_live', scope.devEditId)}. ` +
+                `After apply_live/reload succeeds, write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" to complete the dev edit plan.`,
+              data: {
+                devSourceEdit: {
+                  devEditId: scope.devEditId,
+                  allowedFiles: scope.allowedFiles,
+                  allowedDirs: scope.allowedDirs,
+                  plan: scope.plan,
+                  planHash: scope.planHash,
+                  verificationProfiles: scope.verificationProfiles,
+                  completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
+                },
+              },
+              extra: {
+                devSourceEdit: {
+                  devEditId: scope.devEditId,
+                  allowedFiles: scope.allowedFiles,
+                  allowedDirs: scope.allowedDirs,
+                  plan: scope.plan,
+                  planHash: scope.planHash,
+                  verificationProfiles: scope.verificationProfiles,
+                  completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
+                },
+              },
               error: false,
             };
           }
@@ -16396,6 +16923,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const categoryArgs = normalizeToolArgsForTool(name, args);
 	          const rawCategory = String(categoryArgs?.category || '').trim().toLowerCase();
 	          const requestedCategory = normalizeToolCategory(rawCategory);
+          const rawScope = String(categoryArgs?.scope || 'turn').trim().toLowerCase();
+          const requestedScope = rawScope === 'session' || rawScope === 'next_turn' || rawScope === 'ttl' || rawScope === 'turn'
+            ? rawScope
+            : 'turn';
+          const requestedTurns = Math.max(1, Math.min(12, Math.floor(Number(categoryArgs?.turns) || 1)));
 	          const runtimeCategories = getRuntimeToolCategories();
           if (!rawCategory) {
             return { name, args, result: `request_tool_category requires category. Valid: ${runtimeCategories.join(', ')}`, error: true };
@@ -16411,13 +16943,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	              error: true,
 	            };
 	          }
-	          activateToolCategory(sessionId, requestedCategory);
+	          activateToolCategory(sessionId, requestedCategory, {
+            scope: requestedScope,
+            turns: requestedScope === 'ttl' ? requestedTurns : undefined,
+          });
           // For connectors category: also return connected connector status
           if (requestedCategory === 'external_apps') {
             const status = buildConnectorStatus();
-            return { name, args, result: `Tool category "external_apps" activated for session ${sessionId}.\n\n${status}`, error: false };
+            return { name, args, result: `Tool category "external_apps" activated for ${requestedScope} scope in session ${sessionId}.\n\n${status}`, error: false };
           }
-          return { name, args, result: `Tool category "${requestedCategory}" activated for session ${sessionId}.`, error: false };
+          const suffix = requestedScope === 'ttl' ? ` (${requestedTurns} user turns)` : '';
+          return { name, args, result: `Tool category "${requestedCategory}" activated with ${requestedScope} scope${suffix} in session ${sessionId}.`, error: false };
         }
 
         // ── Composite management and dynamic dispatch ─────────────────────

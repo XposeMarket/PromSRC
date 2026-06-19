@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when creating, editing, formatting, or exporting Excel/XLSX spreadsheets, workbooks, trackers, tables, budgets, models, reports, CSV conversions, or spreadsheet deliverables.",
+  "triggers": [
+    "create XLSX",
+    "make spreadsheet",
+    "Excel workbook",
+    "spreadsheet tracker",
+    "budget spreadsheet",
+    "format Excel",
+    "export to XLSX",
+    "create table in Excel",
+    "workbook file",
+    "spreadsheet report",
+    "CSV to XLSX",
+    "edit spreadsheet",
+    "generate Excel file",
+    "financial spreadsheet",
+    "tracking sheet",
+    "add formulas"
+  ],
+  "categories": [
+    "spreadsheets",
+    "excel",
+    "writing",
+    "data"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "XLSX Writer",
+  "id": "xlsx-writer"
+}

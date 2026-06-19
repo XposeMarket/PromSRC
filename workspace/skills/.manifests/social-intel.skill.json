@@ -1,23 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for social intelligence, audience research, creator/account analysis, social profile strategy, content opportunity discovery, competitor social analysis, engagement review, or recommendations for X, LinkedIn, Instagram, TikTok, Reddit, or similar platforms.",
+  "description": "Use this skill when researching social platforms, audiences, creators, accounts, content opportunities, competitor social strategy, profile positioning, engagement patterns, or social growth insights.",
   "triggers": [
     "social intelligence",
-    "social intel",
     "audience research",
-    "social profile analysis",
-    "content strategy",
-    "competitor social analysis",
-    "engagement analysis",
-    "X account analysis",
-    "Twitter strategy",
-    "LinkedIn strategy",
-    "Instagram research",
-    "TikTok research",
-    "social growth",
     "creator analysis",
-    "content opportunities"
+    "analyze this profile",
+    "social profile strategy",
+    "content opportunity",
+    "competitor social analysis",
+    "social growth insights",
+    "account positioning",
+    "engagement patterns",
+    "profile audit",
+    "what should I post",
+    "social strategy research",
+    "creator research",
+    "social listening"
   ],
   "categories": [
     "social",
@@ -26,9 +26,9 @@
   ],
   "requiredTools": [
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "social_intelligence"
   ],
   "lifecycle": "active",
-  "name": "Social Intel",
   "id": "social-intel"
 }

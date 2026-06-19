@@ -410,7 +410,8 @@ export interface EphemeralBackgroundWaitResult {
 interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   promise: Promise<void>;
   spawnerSessionId?: string;
-  abortSignal?: { aborted: boolean };
+  abortSignal?: { aborted: boolean; signal?: AbortSignal };
+  abortController?: AbortController;
   promptPreview?: string;
   fileChanges?: any;
 }
@@ -535,8 +536,11 @@ function createBackgroundPrompt(prompt: string): any[] {
 
 function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: string): Promise<void> {
   return (async () => {
+    const abortController = new AbortController();
     const abortSignal = record.abortSignal || { aborted: false };
+    abortSignal.signal = abortController.signal;
     record.abortSignal = abortSignal;
+    record.abortController = abortController;
     const runtimeSessionId = `background_${record.id}`;
     const runtimeId = registerLiveRuntime({
       kind: 'background_agent',
@@ -547,6 +551,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       detail: String(prompt || '').slice(0, 160),
       abortSignal,
       onAbort: () => {
+        abortController.abort();
         if (!isBackgroundTerminal(record)) {
           record.state = 'failed';
           record.error = 'Aborted by operator.';
@@ -779,6 +784,7 @@ export function backgroundAbort(backgroundId: string): { ok: boolean; status?: E
     return { ok: false, status: statusFromRecord(rec), error: `Background agent is already ${rec.state}.` };
   }
   if (rec.abortSignal) rec.abortSignal.aborted = true;
+  rec.abortController?.abort();
   rec.state = 'failed';
   rec.error = 'Aborted by operator.';
   rec.completedAt = Date.now();
@@ -787,6 +793,17 @@ export function backgroundAbort(backgroundId: string): { ok: boolean; status?: E
 
 function isBackgroundTerminal(rec: EphemeralBackgroundRecord): boolean {
   return rec.state === 'completed' || rec.state === 'failed' || rec.state === 'timed_out';
+}
+
+// Background agents/tasks that are still running and were spawned by the given
+// chat session — used so the main chat abort/stop-now can cancel everything it
+// spawned, not just the foreground turn.
+export function listActiveBackgroundIdsForSession(spawnerSessionId: string): string[] {
+  const sid = String(spawnerSessionId || '').trim();
+  if (!sid) return [];
+  return Array.from(_ephemeralBackgroundRuns.values())
+    .filter((rec) => rec.spawnerSessionId === sid && !isBackgroundTerminal(rec))
+    .map((rec) => rec.id);
 }
 
 function listBackgroundRecordsForWait(input: {

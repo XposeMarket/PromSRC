@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when reading, summarizing, searching, or analyzing Excel/XLSX spreadsheets, including sheets, formulas, tables, pivots, CSV-like data, budgets, exports, and workbook structure.",
+  "triggers": [
+    "read this XLSX",
+    "Excel file analysis",
+    "spreadsheet summary",
+    "inspect workbook",
+    "parse Excel",
+    "spreadsheet formulas",
+    "summarize spreadsheet",
+    "xlsx table",
+    "sheet names",
+    "analyze budget spreadsheet",
+    "Excel export",
+    "read workbook",
+    "pivot table",
+    "spreadsheet data",
+    "search Excel file",
+    "convert XLSX"
+  ],
+  "categories": [
+    "spreadsheets",
+    "excel",
+    "reading",
+    "data"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "XLSX Reader",
+  "id": "xlsx-reader"
+}

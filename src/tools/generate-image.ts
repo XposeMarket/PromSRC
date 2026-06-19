@@ -85,7 +85,7 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
 
 export const generateImageTool = {
   name: 'generate_image',
-  description: 'Generate one or more raster images from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. For separate options/variations, set count > 1 and ask for separate standalone images, not a collage. Use count=1 only when the user wants one image or explicitly wants a single collage/grid/contact sheet.',
+  description: 'Generate one or more raster images from a prompt or references using the configured image provider. Use count > 1 for separate standalone variations.',
   execute: executeGenerateImage,
   schema: {
     prompt: 'Text prompt describing the image to generate',
@@ -101,12 +101,12 @@ export const generateImageTool = {
     type: 'object',
     required: ['prompt'],
     properties: {
-      prompt: { type: 'string', description: 'Text prompt describing the image(s) to generate. For count > 1, say each output must be a separate standalone image and must not be a collage, grid, contact sheet, split-screen, or multi-panel image.' },
+      prompt: { type: 'string', description: 'Image prompt. For count > 1, request separate standalone outputs, not a collage/grid.' },
       reference_images: {
         type: 'array',
         items: { type: 'string' },
         maxItems: 16,
-        description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs. These are sent as actual image inputs for gpt-image-2 reference/edit generation.',
+        description: 'Optional local/workspace paths, HTTPS URLs, or data URLs used as image references.',
       },
       aspect_ratio: {
         type: 'string',
@@ -117,12 +117,12 @@ export const generateImageTool = {
         type: 'integer',
         minimum: 1,
         maximum: 4,
-        description: 'How many separate image outputs to generate at once. Use values greater than 1 for options, variations, sets, or several standalone images; do not use count > 1 for a single collage/grid image.',
+        description: 'Number of separate image outputs, 1-4.',
       },
       provider: {
         type: 'string',
         enum: ['auto', 'openai', 'openai_codex', 'xai'],
-        description: 'Image generation provider override. openai may use either direct OpenAI API credentials or saved OpenAI OAuth/Codex auth.',
+        description: 'Provider override.',
       },
       model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
       output_dir: { type: 'string', description: 'Workspace-relative parent output directory. Each generation run is saved in a new child folder.' },

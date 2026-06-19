@@ -1,32 +1,40 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks Codex or Prometheus to inspect, implement, debug, or hand off frontend/UI work, especially vanilla JS, web-ui, mobile UI, styling, layout, browser smoke tests, or visible app behavior. It emphasizes repo-grounded frontend changes and verification.",
+  "description": "Use this skill when building, editing, reviewing, or repairing web/mobile UI, responsive layouts, frontend state, dashboards, interaction polish, visual QA, CSS/JS frontend behavior, or Prometheus web-ui surfaces.",
   "triggers": [
-    "frontend engineer",
-    "Codex frontend",
-    "UI bug",
     "fix the UI",
-    "web-ui",
-    "mobile UI",
+    "update the frontend",
+    "build this web page",
+    "mobile layout bug",
+    "responsive layout",
     "CSS issue",
-    "layout bug",
-    "browser smoke test",
-    "frontend implementation",
-    "vanilla JS UI",
-    "app.js",
-    "visual bug",
-    "responsive UI",
-    "inspect frontend"
+    "JavaScript UI bug",
+    "dashboard UI",
+    "polish this screen",
+    "frontend component",
+    "visual QA",
+    "web-ui change",
+    "mobile drawer",
+    "hamburger menu",
+    "make this button work",
+    "improve the layout",
+    "fix spacing",
+    "fix overflow",
+    "frontend engineer",
+    "browser UI bug"
   ],
   "categories": [
-    "engineering",
     "frontend",
-    "dev-handoff"
+    "web-ui",
+    "mobile-ui",
+    "visual-qa"
   ],
   "requiredTools": [
-    "desktop_automation",
-    "workspace_write"
+    "workspace_write",
+    "browser_automation",
+    "prometheus_source_read",
+    "prometheus_source_write"
   ],
   "lifecycle": "active",
   "id": "codex-frontend-engineer"

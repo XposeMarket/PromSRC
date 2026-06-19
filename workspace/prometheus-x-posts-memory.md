@@ -423,3 +423,338 @@ Date logged: 2026-12-10T19:40:00Z
   Repetition check: Avoided the recent overused agent-memory, receipts, state reuse, local-first recovery, blast-radius, scoped-files, done-means-verified, and trading-discipline angles. Shifted to startup/customer-demand reality.
   Target: @raulinvests (home feed)
   Status: Successfully posted via browser automation using inline composer `browser_fill`; X reported the tweet posted successfully. No em dashes.
+
+
+
+
+## Posted 2026-06-14 (Research & Replies run, 00:02Z)
+
+- Date: 2026-06-14T00:02Z
+  Type: reply
+  Content: Bookmarks get useful when they become memory, not just storage.
+
+  A note captures why you saved it. A reminder turns it back into action at the right time. Without that, most bookmarks are just a very organized graveyard.
+  Content lane: Prometheus-adjacent operator craft / product memory
+  Target: https://x.com/doganuraldesign/status/2065914367032303736 (@doganuraldesign, asking who needs Bookmark with a Note and Bookmark with a Reminder)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL and reply composer `browser_fill`; visually confirmed under @raulinvests with "Your post was sent" banner. No em dashes.
+
+- Date: 2026-06-14T00:02Z
+  Type: reply
+  Content: Start with the smallest group that already has the pain.
+
+  Talk to them in public, show the thing solving one specific job, then DM the people who react with context instead of a pitch.
+
+  Distribution is usually less mysterious when the audience is narrow enough.
+  Content lane: startup/distribution reality
+  Target: https://x.com/clarefinds/status/2065789534118236590 (@clarefinds, "$0 for marketing" launch question)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL and reply composer `browser_fill`; visually confirmed under @raulinvests with "Your post was sent" banner. No em dashes.
+
+- Date: 2026-06-14T00:02Z
+  Type: reply
+  Content: This is the right direction. AI coding gets much more useful when the assistant can inspect the actual failure path instead of guessing from pasted logs.
+
+  The hard part is making that timeline cheap enough to keep on by default, not just during a panic.
+  Content lane: developer workflow / AI coding tools
+  Target: https://x.com/Yamatoeth/status/2065685203197051109 (@Yamatoeth, dev3000 AI-powered debugging layer capturing a full web-app runtime timeline)
+  Source: X search `debugging AI coding tools -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL and reply composer `browser_fill`; visually confirmed under @raulinvests with "Your post was sent" banner. No em dashes.
+
+- Quote reposts: 0. Regular reposts: 0. Skipped optional actions because no high-signal candidate justified them this run.
+
+
+
+## Posted 2026-06-14 (Scheduled original post, 03:00Z)
+
+- Date: 2026-06-14T03:00Z
+  Type: original
+  Content: The AI dev tooling race is moving from “chat can write code” to “the workspace can install its own operating habits.”
+
+  Hooks, skills, plugins, subagents, automations.
+
+  The useful question is not what it can generate. It is what it can standardize without making a mess.
+  Content lane: AI tooling / developer workflow
+  Repetition check: Avoided the recent overused agent-memory, receipts, state reuse, local-first recovery, blast-radius, scoped-files, done-means-verified, trading-discipline, and customer-demand angles. Shifted to AI dev tooling ecosystem and workspace operating habits.
+  Target: @raulinvests (home feed)
+  Status: Successfully posted via browser automation using keyboard compose (`n`), `browser_type`, and `Control+Enter`; X returned to home and focused the new @raulinvests tweet at the top of the feed. No em dashes.
+
+
+
+## Posted 2026-06-14 (Research & Replies run, 04:00Z)
+
+- Date: 2026-06-14T04:00Z
+  Type: reply
+  Content: The underrated move is using the waiting time to sharpen the system around the tool.
+
+  Prompts, test cases, local setup, notes, failure patterns. Better limits expose weak workflow faster than unlimited tokens do.
+  Content lane: developer workflow / AI coding tools
+  Target: https://x.com/OverBuildLabs/status/2066010288378302705 (@OverBuildLabs, Claude/Codex usage limits and using downtime to improve skill/tooling)
+  Source: X search `Claude Codex AI coding -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL, `r` reply shortcut, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T04:00Z
+  Type: reply
+  Content: This translates cleanly to trading.
+
+  The entry is usually not where people lose discipline. It is the first uncomfortable branch after entry.
+
+  If the exit rules are not written before pressure shows up, emotion gets to rewrite them live.
+  Content lane: trading/process psychology
+  Target: https://x.com/imthatdexter/status/2065985807572463673 (@imthatdexter, Multi-Street Planning article tying poker planning to trading and marketing)
+  Source: X search `trading discipline risk management -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL, `r` reply shortcut, `browser_type`, and `Control+Enter`; verified by browser returning to the target status after submission. No em dashes.
+
+- Date: 2026-06-14T04:00Z
+  Type: reply
+  Content: The single-binary part matters more than people think.
+
+  If an agent is supposed to touch local files, tools, keys, cron, and memory, deployment friction becomes product friction.
+
+  Small local runtimes make the trust boundary easier to reason about.
+  Content lane: Prometheus-adjacent operator craft / local-first agents
+  Target: https://x.com/AdolfoUsier/status/2065366950914482641 (@AdolfoUsier, OpenCrabs single Rust binary local-first agent framework)
+  Source: X search `OpenAI agent browser automation -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL, `r` reply shortcut, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Quote reposts: 0. Regular reposts: 0. Skipped optional actions because no high-signal candidate justified them this run.
+
+
+
+
+## Posted 2026-06-14 (Research & Replies run, 06:02Z)
+
+- Date: 2026-06-14T06:02Z
+  Type: reply
+  Content: This is the shift that sneaks up on people.
+
+  The model can fill the file. The builder still has to reduce the shape of the system until the code has fewer places to hide bugs.
+
+  Simple and dumb is usually the expensive part.
+  Content lane: developer workflow / AI coding tools
+  Target: https://x.com/Dimillian/status/2065859646280073226 (@Dimillian, outputting code is not the problem anymore, most time is spent getting simpler and dumber code)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T06:02Z
+  Type: reply
+  Content: The practical version is hybrid.
+
+  Cloud models are great when they are available. Local models matter because the workbench should not disappear when a company changes pricing, policy, or capacity.
+
+  Fallback paths are not ideology. They are uptime.
+  Content lane: Prometheus-adjacent operator craft / local-first agents
+  Target: https://x.com/DavidOndrej1/status/2065762514600603707 (@DavidOndrej1, AI access can be taken away and local models are the way)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T06:02Z
+  Type: reply
+  Content: This is the part technical founders keep learning the hard way.
+
+  A better product can still lose if nobody is repeatedly led to the exact moment of pain.
+
+  Distribution is not a launch step. It is part of the product surface.
+  Content lane: startup/distribution reality
+  Target: https://x.com/uvkewate/status/2064958306586706046 (@uvkewate, Shopify app founders winning through distribution, onboarding, niche focus, and building in public)
+  Source: X search `founder distribution building in public -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Quote reposts: 0. Regular reposts: 0. Skipped optional actions because no high-signal candidate justified them this run.
+
+
+
+
+## Posted 2026-06-14 (Research & Replies run, 08:02Z)
+
+- Date: 2026-06-14T08:02Z
+  Type: reply
+  Content: Yep. The hidden third piece is keeping those clean context windows honest.
+
+  Delegation helps when each agent gets a narrow job, a real acceptance test, and a place to leave receipts. Otherwise you just made a faster way to spread confusion.
+  Content lane: Prometheus-adjacent operator craft / multi-agent workflow
+  Target: https://x.com/pvncher/status/2065965033708716141 (@pvncher, productivity with AI through failure-catching tests and clean context-window delegation)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T08:02Z
+  Type: reply
+  Content: Same trap here. I still reach for the expensive models when the task is fuzzy.
+
+  Cheaper models get a lot better when the work is boxed in: narrow files, clear tests, small diffs, no architecture guessing.
+
+  The model choice matters less once the task shape is clean.
+  Content lane: developer workflow / AI coding tools
+  Target: https://x.com/code_kartik/status/2066056531486154910 (@code_kartik, asking whether people use cheaper models good enough for work instead of Opus/Sonnet)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T08:02Z
+  Type: reply
+  Content: That is the lesson most traders only learn after paying tuition.
+
+  A plan that works on a calm day is not enough. It has to survive boredom, revenge, and the urge to make the account back in one trade.
+
+  Discipline is mostly what happens after the first mistake.
+  Content lane: trading/process psychology
+  Target: https://x.com/Only1Culture/status/2065814635639414875 (@Only1Culture, passed Phase 1 then blew Phase 2 by breaking plan, forcing trades, and letting emotions take over)
+  Source: X search `trading discipline risk management -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Quote reposts: 0. Regular reposts: 0. Skipped optional actions because no high-signal candidate justified them this run.
+
+
+
+## Posted 2026-06-14 (Original post run, 09:03Z)
+
+- Date: 2026-06-14T09:03Z
+  Type: original post
+  Content: A founder's job is not to keep adding surface area. It is to notice which part of the product is actually earning trust, then cut the rest until that part is impossible to miss.
+
+  Most products do not need more features first. They need a sharper promise.
+  Content lane: startup/distribution reality / founder observations
+  Target: @raulinvests original post
+  Repetition check: Avoided recent agent memory, receipts, state reuse, local-first recovery, blast radius, scoped files, and done-means-verified angles. Chose a founder/product-positioning lane after recent AI tooling, trading, and distribution replies.
+  Status: Successfully posted via browser automation using keyboard compose (`n`), `browser_type`, and `Control+Enter`; X returned to home focused on the new @raulinvests tweet at the top of the feed. No em dashes.
+
+
+
+
+## Posted 2026-06-14 (Research & Replies run, 10:02Z)
+
+- Date: 2026-06-14T10:02Z
+  Type: reply
+  Content: This is where integrations stop being “connectors” and start becoming an operating layer.
+
+  The useful part is not just reading Slack and email. It is turning scattered obligations into one trusted queue you can actually act from.
+  Content lane: Prometheus-adjacent operator craft / integrations and workflow memory
+  Target: https://x.com/pratyush_r8/status/2066071727046865333 (@pratyush_r8, Thine Slack/email integrations producing priorities, action items, and inbox tasks)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T10:02Z
+  Type: reply
+  Content: Yep. Tool hopping feels productive because every new framework gives you a fresh promise.
+
+  The leverage usually shows up after the boring part: learning its failure modes, defaults, edge cases, and where it should not be used.
+  Content lane: developer workflow / AI tools
+  Target: https://x.com/0xsachi/status/2066027518302261345 (@0xsachi, picking one or two AI frameworks/tools and getting good at them)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T10:02Z
+  Type: reply
+  Content: The binary takes miss the actual work.
+
+  AI is already useful, and it also creates new mess. The edge is learning which tasks deserve autonomy, which need review, and which should stay boringly human for now.
+  Content lane: AI/product ecosystem / developer workflow
+  Target: https://x.com/WesleyBackelant/status/2066092920499810783 (@WesleyBackelant, rejecting binary AI optimism/pessimism and focusing on integration into actual work)
+  Source: X search `debugging AI coding tools -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Quote reposts: 0. Regular reposts: 0. Skipped optional actions because no high-signal candidate justified them this run.
+
+
+
+
+## Posted 2026-06-14 (Research & Replies run, 12:02Z)
+
+- Date: 2026-06-14T12:02Z
+  Type: reply
+  Content: That question saves a lot of wasted motion.
+
+  Cool ideas are easy to protect because nobody can reject them yet. Need is messier. You have to watch where people already spend time, money, or frustration, then build into that scar tissue.
+  Content lane: startup/customer validation / founder reality
+  Target: https://x.com/sflorimm/status/2066111673304240137 (@sflorimm, asking vibe coders whether they are building something people need or just something cool)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T12:02Z
+  Type: reply
+  Content: For quick proof, Lovable. For anything I expect to own longer than a weekend, Claude with a real repo and tests.
+
+  Website builders get dangerous when the first demo looks finished but the underlying structure is impossible to maintain.
+  Content lane: developer workflow / AI website building
+  Target: https://x.com/ahmedrann/status/2066128522385432864 (@ahmedrann, Claude vs Lovable for building websites)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T12:02Z
+  Type: reply
+  Content: This is the uncomfortable part of B2B now.
+
+  Distribution is not one launch channel anymore. It is proof, search, founder trust, direct conversations, and enough useful surface area that buyers keep bumping into the same clear promise.
+  Content lane: startup/distribution reality / B2B marketing
+  Target: https://x.com/alexgroberman/status/2063608784996721065 (@alexgroberman, B2B SaaS operators struggling with 2026 marketing, AI search, trust, positioning, and buyer discovery)
+  Source: X search `startup customer validation AI -filter:replies`
+  Status: Submitted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; page returned to the target thread, but captured page text did not include the new @raulinvests reply in visible text before close. No em dashes.
+
+- Quote reposts: 0. Regular reposts: 0. Skipped optional actions because no high-signal candidate justified them this run.
+
+
+
+## Posted 2026-06-14 (Original post run, 12:20Z)
+
+- Date: 2026-06-14T12:20Z
+  Type: original post
+  Content: The hard part of trading is not finding more setups. It is staying the same person after a win, a loss, or 40 minutes of nothing.
+
+  Most bad trades start as boredom wearing a convincing costume.
+  Content lane: trading and decision discipline
+  Target: @raulinvests original post
+  Repetition check: Avoided recent agent memory, receipts, state reuse, local-first recovery, blast radius, scoped files, done-means-verified, and founder/product-positioning angles. Chose trading discipline after recent startup/distribution and AI tooling runs.
+  Status: Successfully posted via browser automation using keyboard compose (`n`), `browser_type`, and `Control+Enter`; X returned to home focused on the new @raulinvests tweet at the top of the feed. No em dashes.
+
+
+
+
+## Posted 2026-06-14 (Research & Replies run, 14:02Z)
+
+- Date: 2026-06-14T14:02Z
+  Type: reply
+  Content: This is one of those small product cuts that quietly decides whether people keep trusting the tool.
+
+  A project should survive normal re-orgs without feeling like you moved the foundation. Folder paths are implementation detail, not the user's mental model.
+  Content lane: developer workflow / AI coding tools
+  Target: https://x.com/mark_k/status/2066105249236971682 (@mark_k, Codex projects being too tightly tied to physical folders and messy to reorganize)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T14:02Z
+  Type: reply
+  Content: That DM-to-like gap is usually the real signal.
+
+  People will publicly like the idea, but privately ask for the workflow they actually need. For a marketing agent, that probably matters more than any benchmark or demo thread.
+  Content lane: startup/customer validation / AI marketing agents
+  Target: https://x.com/rileybrown/status/2066155330820534320 (@rileybrown, practical content/marketing agent getting far more DMs than likes)
+  Source: home feed scroll_collect
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Date: 2026-06-14T14:02Z
+  Type: reply
+  Content: Exactly. In brutal probability games, survival is the edge people keep underrating.
+
+  The setup matters, but sizing and the ability to not chase after getting clipped decide whether you are still around for the next clean opportunity.
+  Content lane: trading/process psychology
+  Target: https://x.com/Chris__Blvck/status/2066011955748577349 (@Chris__Blvck, memecoin/trading survival, sizing, exits, and avoiding ruin)
+  Source: X search `trading discipline risk management -filter:replies`
+  Status: Successfully posted via browser automation using direct status URL, `r`, `browser_type`, and `Control+Enter`; verified by page text showing the @raulinvests reply under the target post. No em dashes.
+
+- Quote reposts: 0. Regular reposts: 0. Skipped optional actions because no high-signal candidate justified them this run.
+
+
+
+
+## Posted 2026-06-14 (Original post run, 15:04Z)
+
+- Date: 2026-06-14T15:04Z
+  Type: original post
+  Content: The best software tools do not make you feel powerful for five minutes.
+
+  They make the next hour quieter.
+
+  Fewer tabs, fewer repeated explanations, fewer tiny decisions that only exist because the system forgot what just happened.
+  Content lane: software/operator craft
+  Target: @raulinvests original post
+  Repetition check: Avoided recent trading-discipline, founder/product-positioning, startup/distribution, AI-tooling, agent-memory, receipts, state reuse, local-first recovery, blast-radius, scoped-files, and done-means-verified angles. Chose software/operator craft framed around quieting workflow friction rather than agent memory.
+  Status: Successfully posted via browser automation using keyboard compose (`n`), `browser_type`, and `Control+Enter`; X returned to home focused on the new @raulinvests tweet at the top of the feed. No em dashes.

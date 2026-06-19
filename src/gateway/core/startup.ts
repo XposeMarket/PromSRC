@@ -243,11 +243,12 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       if (!template?.defaults) return;
       const keys = [
         'main_chat', 'proposal_executor_high_risk', 'proposal_executor_low_risk',
-        'manager', 'team_manager', 'subagent', 'team_subagent', 'background_task',
+        'manager', 'team_manager', 'subagent', 'team_subagent', 'background_task', 'background_agent',
         'subagent_planner', 'subagent_orchestrator', 'subagent_researcher', 'subagent_analyst',
         'subagent_builder', 'subagent_operator', 'subagent_verifier',
         'switch_model_low', 'switch_model_medium', 'coordinator',
       ];
+
       const defaults: Record<string, string> = {};
       for (const key of keys) {
         const val = typeof template.defaults[key] === 'string' ? template.defaults[key].trim() : '';

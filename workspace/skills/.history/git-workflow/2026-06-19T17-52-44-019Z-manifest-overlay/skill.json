@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "git-workflow",
+  "name": "Git Workflow",
+  "description": "Prometheus-safe Git and GitHub CLI workflow reference for inspecting status, diffs, branches, commits, remotes, pulls, pushes, PRs, submodules, and token-safe GitHub authentication without guessing commands.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "git status",
+    "git diff",
+    "git commit",
+    "git branch",
+    "git checkout",
+    "git switch",
+    "git pull",
+    "git push",
+    "merge conflict",
+    "resolve conflict",
+    "github cli",
+    "gh pr",
+    "open pull request",
+    "create pull request",
+    "repo sync",
+    "submodule",
+    "git remote",
+    "git log",
+    "revert commit",
+    "stash changes",
+    "tag release",
+    "GitHub token setup"
+  ],
+  "categories": [
+    "git",
+    "github",
+    "version-control",
+    "repo-operations"
+  ],
+  "requiredTools": [
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_branch",
+    "git_commit",
+    "git_push"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": true
+  },
+  "resources": [
+    {
+      "path": "notes/github-cli-full-access-setup-2026-05-16.md",
+      "type": "doc",
+      "description": "Guardrail for safely setting up full local GitHub CLI access without leaking tokens."
+    }
+  ]
+}

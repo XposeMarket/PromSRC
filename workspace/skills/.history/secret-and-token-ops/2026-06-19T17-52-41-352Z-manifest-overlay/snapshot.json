@@ -1,0 +1,12 @@
+{
+  "skillId": "secret-and-token-ops",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:52:41.356Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\secret-and-token-ops",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "79582eee387a3562"
+}

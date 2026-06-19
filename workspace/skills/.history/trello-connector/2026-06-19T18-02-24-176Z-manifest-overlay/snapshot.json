@@ -1,0 +1,12 @@
+{
+  "skillId": "trello-connector",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T18:02:24.179Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\trello-connector",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "29736df96081b5ed"
+}

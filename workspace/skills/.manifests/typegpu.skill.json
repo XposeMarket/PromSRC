@@ -1,23 +1,22 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for TypeGPU, WebGPU, GPU pipelines, shader compute/render experiments, browser GPU graphics, high-performance canvas visuals, or GPU-backed creative effects. It guides capability checks, fallback planning, and visual validation.",
+  "description": "Use this skill when working with TypeGPU, WebGPU, GPU pipelines, shader compute/render experiments, high-performance browser graphics, or GPU-backed creative visuals.",
   "triggers": [
     "TypeGPU",
     "WebGPU",
-    "GPU rendering",
-    "shader pipeline",
+    "GPU pipeline",
     "compute shader",
-    "GPU graphics",
-    "browser GPU",
-    "high performance canvas",
-    "WebGPU demo",
-    "GPU effect",
-    "WGSL",
-    "render pipeline",
-    "GPU animation",
-    "typegpu example",
-    "hardware accelerated visual"
+    "render shader",
+    "browser GPU graphics",
+    "GPU-backed visuals",
+    "high-performance canvas",
+    "WebGPU experiment",
+    "shader compute",
+    "GPU render pipeline",
+    "TypeGPU docs",
+    "graphics pipeline",
+    "GPU creative visual"
   ],
   "categories": [
     "creative",
@@ -25,10 +24,10 @@
     "graphics"
   ],
   "requiredTools": [
-    "creative_mode",
-    "media_quality"
+    "creative_basic",
+    "workspace_write",
+    "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "TypeGPU",
   "id": "typegpu"
 }

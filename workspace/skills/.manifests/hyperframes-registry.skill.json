@@ -1,33 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to inspect, search, use, debug, or update the HyperFrames registry, component registry, template registry, clip registry, or catalog metadata. It helps map registry entries to usable Creative Video components and verify actual render output.",
+  "description": "Use this skill when registering, indexing, finding, updating, or maintaining reusable HyperFrames templates, clips, scenes, assets, project metadata, or export records.",
   "triggers": [
     "HyperFrames registry",
-    "component registry",
-    "template registry",
-    "clip registry",
-    "registry metadata",
-    "search registry",
-    "inspect registry",
-    "update registry",
-    "registry component",
-    "video catalog registry",
-    "HyperFrames template",
-    "catalog metadata",
-    "registry debug",
-    "registry entry",
-    "use registry clip"
+    "register template",
+    "find HyperFrames project",
+    "index video templates",
+    "reusable clip registry",
+    "update motion registry",
+    "HyperFrames metadata",
+    "catalog a scene",
+    "saved video template",
+    "motion project index",
+    "register clip",
+    "export record",
+    "find previous promo video"
   ],
   "categories": [
     "creative",
-    "video",
-    "registry"
+    "hyperframes",
+    "registry",
+    "assets"
   ],
   "requiredTools": [
-    "creative_mode",
+    "creative_hyperframes",
     "workspace_write"
   ],
   "lifecycle": "active",
+  "name": "HyperFrames Registry",
   "id": "hyperframes-registry"
 }

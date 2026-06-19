@@ -743,7 +743,7 @@ export class CronScheduler {
   private store: CronStore;
   private deps: SchedulerDeps;
   private tickInterval: NodeJS.Timeout | null = null;
-  private runningJobId: string | null = null;
+  private runningJobIds: Set<string> = new Set(); // job IDs currently executing (parallel)
   private interruptedTasksBySchedule: Map<string, string[]> = new Map(); // scheduleId -> [taskIds]
   private pendingRunHistoryCompactions: Map<string, NodeJS.Timeout> = new Map();
 
@@ -1012,8 +1012,8 @@ export class CronScheduler {
       console.log(`[CronScheduler] runJobNow ignored for legacy heartbeat job "${job.name}"`);
       return;
     }
-    if (this.runningJobId) {
-      throw new Error(`Another schedule is already running (${this.runningJobId}). Try again after it finishes.`);
+    if (this.runningJobIds.has(id)) {
+      throw new Error(`Schedule "${job.name}" is already running.`);
     }
     if (job.status === 'running') {
       throw new Error(`Schedule "${job.name}" is already running.`);
@@ -1088,7 +1088,6 @@ export class CronScheduler {
     const hasEnabledJobs = this.store.jobs.some(j => j.enabled && j.type !== 'heartbeat');
     if (!hasEnabledJobs && !this.store.heartbeat.enabled) return;
     
-    if (this.runningJobId) return; // one at a time
     // Active hours only gates the heartbeat — NOT explicit cron jobs.
     // If a user scheduled "daily at 9:59 PM", that fires regardless of active hours.
     // We only apply the active hours check when the ONLY pending work is heartbeat.
@@ -1126,18 +1125,33 @@ export class CronScheduler {
       return;
     }
 
-    const job = overdue[0];
-    console.log(`[CronScheduler] Tick — running job "${job.name}"`);
-    // Fire async but don't await — tick returns immediately
-    this.executeJob(job).catch(err =>
-      console.error(`[CronScheduler] Job "${job.name}" crashed:`, err.message)
-    );
+    // Fire ALL overdue jobs in parallel. Independent jobs must not block each other;
+    // a job already executing (in runningJobIds) is skipped so it can't double-fire.
+    const toRun = overdue.filter(j => !this.runningJobIds.has(j.id));
+    if (toRun.length === 0) return;
+    for (const job of toRun) {
+      console.log(`[CronScheduler] Tick — running job "${job.name}"`);
+      // Fire async but don't await — tick returns immediately
+      this.executeJob(job).catch(err =>
+        console.error(`[CronScheduler] Job "${job.name}" crashed:`, err?.message || err)
+      );
+    }
   }
 
   // ─── Job Execution ────────────────────────────────────────────────────────────
 
   private async executeJob(job: CronJob): Promise<void> {
-    this.runningJobId = job.id;
+    // Per-job lock so independent jobs run in parallel; ALWAYS released in finally
+    // so a crashed job can never wedge the scheduler for everything else.
+    this.runningJobIds.add(job.id);
+    try {
+      await this.executeJobInner(job);
+    } finally {
+      this.runningJobIds.delete(job.id);
+    }
+  }
+
+  private async executeJobInner(job: CronJob): Promise<void> {
     const start = Date.now();
 
     // Mark as running
@@ -2085,7 +2099,6 @@ export class CronScheduler {
       // Isolated cron runs should not retain conversation context after completion.
       clearHistory(targetSessionId);
     }
-    this.runningJobId = null;
 
     // After schedule completes, resume any tasks that were interrupted by this schedule
     const tasksToResume = this.interruptedTasksBySchedule.get(job.id);
@@ -2185,7 +2198,7 @@ export class CronScheduler {
     let changed = false;
     for (const job of this.store.jobs) {
       if (job.status !== 'running') continue;
-      if (this.runningJobId === job.id) continue;
+      if (this.runningJobIds.has(job.id)) continue;
       job.status = 'scheduled';
       job.pausedReason = undefined;
       changed = true;

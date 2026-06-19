@@ -1,0 +1,12 @@
+{
+  "skillId": "connector-recipe-library",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:09.825Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\connector-recipe-library",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "928d6ed60be278ef"
+}

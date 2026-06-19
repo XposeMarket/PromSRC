@@ -1,33 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to use the HyperFrames CLI, inspect local HyperFrames packages, run init/add/lint/inspect/render commands, debug HyperFrames project output, or verify catalog behavior from the command line. It guides safe CLI-driven HyperFrames workflows.",
+  "description": "Use this skill when using the HyperFrames CLI to render, preview, export, debug, or validate HTML motion/video projects from command line workflows.",
   "triggers": [
     "HyperFrames CLI",
-    "npx hyperframes",
-    "hyperframes init",
-    "hyperframes add",
-    "hyperframes lint",
-    "hyperframes inspect",
-    "hyperframes render",
-    "local HyperFrames",
-    "debug HyperFrames CLI",
-    "video CLI",
-    "catalog CLI",
-    "render clip",
-    "inspect clip",
-    "HyperFrames command",
-    "CLI workflow"
+    "render HyperFrames",
+    "export video from CLI",
+    "preview motion project",
+    "HyperFrames render failed",
+    "debug video render",
+    "CLI video export",
+    "render HTML motion",
+    "validate HyperFrames project",
+    "ffmpeg render",
+    "export mp4",
+    "command line HyperFrames",
+    "render frames"
   ],
   "categories": [
     "creative",
-    "video",
-    "cli"
+    "hyperframes",
+    "cli",
+    "video"
   ],
   "requiredTools": [
     "workspace_write",
-    "creative_mode"
+    "creative_hyperframes"
   ],
   "lifecycle": "active",
+  "name": "HyperFrames CLI",
   "id": "hyperframes-cli"
 }

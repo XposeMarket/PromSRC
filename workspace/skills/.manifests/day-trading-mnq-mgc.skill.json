@@ -1,34 +1,40 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Raul asks for MNQ, MGC, futures trading, trading discipline, premarket planning, trade review, risk sizing, emotional pressure, day-trading rules, or after-hours trading guardrails. It supports structured trading reflection without pretending to provide guaranteed financial outcomes.",
+  "description": "Use this skill when Raul asks for trading preparation, futures context, MNQ/MGC/NQ/Gold levels, trading psychology guardrails, open-session reminders, bias/execution review, or post-trade analysis.",
   "triggers": [
-    "MNQ",
-    "MGC",
-    "futures trading",
-    "day trading",
+    "morning trading brief",
+    "MNQ levels",
+    "MGC levels",
+    "NQ bias",
+    "gold futures",
     "trading plan",
-    "trade review",
-    "premarket",
-    "risk sizing",
-    "emotional trading",
-    "trading discipline",
-    "after hours trading",
-    "don't let me trade",
-    "futures setup",
-    "trade journal",
-    "market open plan"
+    "market open reminder",
+    "no trades first 15 minutes",
+    "review my trades",
+    "trading psychology",
+    "execution state",
+    "revenge scalp",
+    "futures open",
+    "NY open",
+    "premarket levels",
+    "daily bias",
+    "hold time collapse",
+    "stop trading reminder",
+    "trader discipline"
   ],
   "categories": [
     "trading",
-    "coaching",
-    "finance"
+    "futures",
+    "psychology",
+    "markets"
   ],
   "requiredTools": [
     "web_search",
-    "show_stocks",
-    "show_market"
+    "web_fetch",
+    "show_ui_card"
   ],
   "lifecycle": "active",
+  "name": "Day Trading MNQ & MGC",
   "id": "day-trading-mnq-mgc"
 }

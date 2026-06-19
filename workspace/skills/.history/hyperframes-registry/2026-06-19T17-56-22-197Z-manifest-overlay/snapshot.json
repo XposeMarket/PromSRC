@@ -1,0 +1,12 @@
+{
+  "skillId": "hyperframes-registry",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:22.201Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hyperframes-registry",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "3625d33f86a0f7dc"
+}

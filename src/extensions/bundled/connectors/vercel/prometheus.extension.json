@@ -8,7 +8,8 @@
   "docsUrl": "https://vercel.com/account/tokens",
   "tags": ["vercel", "deployments", "api key"],
   "runtime": {
-    "binding": "integrations/vercel"
+    "binding": "integrations/connectors/vercel",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#111111",
@@ -19,15 +20,24 @@
     ]
   },
   "ownership": {
-    "toolNamespaces": ["vercel"],
-    "capabilities": ["deployments", "hosting"],
-    "tools": ["vercel_deploy", "vercel_env"]
+    "toolNamespaces": ["connector_vercel"],
+    "capabilities": ["deployments", "hosting", "projects", "environment"],
+    "tools": [
+      "connector_vercel_status",
+      "connector_vercel_list_teams",
+      "connector_vercel_list_projects",
+      "connector_vercel_list_deployments",
+      "connector_vercel_get_deployment",
+      "connector_vercel_redeploy",
+      "connector_vercel_env",
+      "connector_vercel_domains"
+    ]
   },
   "setup": {
     "authType": "api_key",
     "statusMode": "generic",
     "docsUrl": "https://vercel.com/account/tokens",
-    "docsHint": "Vercel -> Account Settings -> Tokens. Project ID and Team ID are optional.",
+    "docsHint": "Vercel -> Account Settings -> Tokens. Project ID is optional; omit it for account/team-wide tools. Team ID is optional and scopes team-owned resources.",
     "fields": [
       {
         "key": "apiKey",
@@ -41,12 +51,14 @@
         "key": "projectId",
         "label": "Project ID",
         "input": "text",
+        "required": false,
         "placeholder": "prj_..."
       },
       {
         "key": "teamId",
         "label": "Team ID",
         "input": "text",
+        "required": false,
         "placeholder": "team_..."
       }
     ]

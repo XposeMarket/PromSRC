@@ -187,6 +187,8 @@ PTT caveat: gating the shared mic via `micTrack.enabled` also pauses the visuali
 
 Also still true (session config): the backend `/api/voice-agent/realtime-bootstrap` bakes `server_vad` for ALL modes (it never receives `listenMode`); clients MUST re-assert per-mode `session.update` after the data channel opens (always_listening → server_vad with `create_response`; push_to_talk → `turn_detection: null` + manual commit/response on release). Do NOT bake session-level `output_modalities` into the mint.
 
+2026-06-19 mic-restore note: mobile realtime WebSocket providers (`xai` and OpenAI WS fallback) must gate outbound audio with the capture `sending` flag during assistant playback, not by setting the shared `micTrack.enabled = false`. The warm mic powers both capture and the voice-wave analyser; muting the physical shared track can leave the UI showing "listening" while the waves stop reacting and Safari may not resume cleanly after a response. `_suspendMobileRealtimeInputForOutput()` now keeps WS/shared tracks live, and a restore watchdog calls `_restoreMobileRealtimeInputAfterOutput(...)` if the expected response-done restore is missed after playback quiets down.
+
 ## 12A-3) Mobile Realtime camera/video visual inputs (2026-06-05)
 
 Mobile camera capture is an in-app visual-input feature for the PWA, not a native "save a photo to the phone" workflow. The PWA opens a camera preview with `getUserMedia`, captures the current video frame to a canvas, and turns that frame into a JPEG/data URL attachment. Tap captures a still image. Hold records a short clip in the same preview; the clip is sampled into sequential JPEG frames so the voice agent can treat it as a short visual sequence without live video streaming.
@@ -233,6 +235,7 @@ xAI/Grok Realtime visual note:
 
 - xAI Realtime does not share the same native `input_image` path in this implementation.
 - xAI image/video visual context is handled by a side vision-summary workflow (`/api/voice-agent/xai-vision-summary`) and injected into the xAI Realtime conversation as text.
+- The sidecar tries xAI/Grok vision first (`XAI_VISION_MODEL`, default `grok-4.3`) and falls back by default to OpenAI vision (`XAI_VISION_FALLBACK_MODEL` / `OPENAI_VISION_FALLBACK_MODEL`, default `gpt-5.4-mini`) when Grok is quota-limited, unavailable, or returns no summary.
 - Do not send OpenAI-style `input_image` events to xAI unless the xAI Realtime API path has been reverified; prior attempts produced invalid-event/404-style failures.
 
 ## 12B) Voice Agent, Mobile Dictation Handoff, and Live Worker Steering

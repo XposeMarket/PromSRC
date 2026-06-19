@@ -1,0 +1,12 @@
+{
+  "skillId": "x-larp-posting-guidelines",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:52:45.658Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\x-larp-posting-guidelines",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "54779e52fc1df07e"
+}

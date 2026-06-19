@@ -1,33 +1,32 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to design, document, use, or expand connector recipes for Gmail, Slack, GitHub, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, X, LinkedIn, or other integrations. It captures repeatable connector workflows and required auth checks.",
+  "description": "Use this skill when documenting, using, or extending reusable connector recipes, integration patterns, setup instructions, troubleshooting notes, or service-specific connector playbooks.",
   "triggers": [
     "connector recipe",
     "integration recipe",
-    "connector workflow",
-    "Gmail workflow",
-    "Slack workflow",
-    "GitHub connector",
-    "Notion connector",
-    "Drive connector",
-    "HubSpot recipe",
-    "Salesforce workflow",
-    "Stripe connector",
-    "GA4 integration",
     "connector playbook",
-    "external app workflow",
-    "integration catalog"
+    "add recipe for connector",
+    "document connector setup",
+    "reusable integration pattern",
+    "connector troubleshooting",
+    "service setup recipe",
+    "connector library",
+    "integration cookbook",
+    "connected app recipe",
+    "connector runbook",
+    "setup guide for integration",
+    "connector examples"
   ],
   "categories": [
-    "integrations",
-    "documentation",
-    "automation"
+    "prometheus",
+    "connectors",
+    "docs",
+    "integrations"
   ],
   "requiredTools": [
-    "connector_list",
-    "external_apps",
-    "integration_admin"
+    "workspace_write",
+    "skills"
   ],
   "lifecycle": "active",
   "id": "connector-recipe-library"

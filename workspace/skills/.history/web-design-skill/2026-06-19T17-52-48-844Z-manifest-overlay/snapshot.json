@@ -1,0 +1,11 @@
+{
+  "skillId": "web-design-skill",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:52:48.847Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\web-design-skill",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "eb50a825e9b44037"
+}

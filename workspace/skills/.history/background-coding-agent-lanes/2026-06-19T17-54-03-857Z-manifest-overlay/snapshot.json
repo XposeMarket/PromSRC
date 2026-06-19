@@ -1,0 +1,12 @@
+{
+  "skillId": "background-coding-agent-lanes",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:03.861Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\background-coding-agent-lanes",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "47af12e3c7a596e9"
+}

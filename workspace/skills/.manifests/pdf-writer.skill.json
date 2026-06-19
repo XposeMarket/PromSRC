@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when creating, formatting, exporting, or editing PDF deliverables such as reports, invoices, proposals, one-pagers, brochures, handouts, contracts, or polished printable documents.",
+  "triggers": [
+    "create PDF",
+    "export to PDF",
+    "PDF report",
+    "make a PDF",
+    "invoice PDF",
+    "proposal PDF",
+    "one-pager PDF",
+    "brochure PDF",
+    "handout PDF",
+    "formatted PDF",
+    "printable document",
+    "PDF deliverable",
+    "generate PDF file",
+    "PDF layout",
+    "save as PDF",
+    "contract PDF"
+  ],
+  "categories": [
+    "documents",
+    "pdf",
+    "writing",
+    "design"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "PDF Writer",
+  "id": "pdf-writer"
+}

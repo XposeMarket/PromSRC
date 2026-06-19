@@ -1,0 +1,11 @@
+{
+  "skillId": "data-pipeline",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:02.466Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\data-pipeline",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "08323a5d500db74b"
+}

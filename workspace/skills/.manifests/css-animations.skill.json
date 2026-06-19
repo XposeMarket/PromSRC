@@ -1,34 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for CSS-only animations, keyframes, transitions, hover effects, loading states, microinteractions, scroll effects, or lightweight motion without JavaScript animation libraries. It guides performant, readable, accessible CSS animation patterns.",
+  "description": "Use this skill when building or polishing CSS-only animations, transitions, keyframes, hover effects, loaders, responsive motion, reduced-motion handling, or lightweight web UI animation without JavaScript libraries.",
   "triggers": [
     "CSS animation",
     "keyframes",
-    "transitions",
-    "hover effect",
-    "loading animation",
-    "microinteraction",
-    "CSS motion",
-    "scroll animation",
-    "animation timing",
-    "animated UI",
-    "CSS-only animation",
-    "transform animation",
     "transition effect",
-    "motion design CSS",
-    "pulse animation"
+    "hover animation",
+    "loading spinner CSS",
+    "animate with CSS",
+    "reduced motion",
+    "CSS motion",
+    "button hover effect",
+    "page entrance animation",
+    "pure CSS animation",
+    "smooth transition",
+    "animation timing",
+    "CSS keyframe loop",
+    "microinteraction",
+    "responsive animation"
   ],
   "categories": [
-    "creative",
+    "css",
+    "animation",
     "frontend",
-    "animation"
+    "creative"
   ],
   "requiredTools": [
     "workspace_write",
-    "creative_mode"
+    "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "CSS Animations",
   "id": "css-animations"
 }

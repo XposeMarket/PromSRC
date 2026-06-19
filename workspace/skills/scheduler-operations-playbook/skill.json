@@ -122,6 +122,11 @@
     {
       "path": "examples/update-delete-patterns.md",
       "type": "example"
+    },
+    {
+      "path": "references/workflows/scheduler-operations-playbook-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to scheduler-operations-playbook"
     }
   ],
   "status": "ready",

@@ -11,7 +11,8 @@
 
 import path from 'path';
 import fs from 'fs';
-import { getConfig } from '../../config/config';
+import { getAgentById, getConfig } from '../../config/config';
+import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import { getProcessSupervisor } from '../process/supervisor';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, getActivatedToolCategories } from '../session';
 import { hookBus } from '../hooks';
@@ -533,7 +534,7 @@ export async function buildPersonalityContext(
   historyLength: number,
   skillsManager: any,
   extraCats?: Set<string>,
-  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' },
+  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent'; excludedSkillIds?: string[] },
 ): Promise<string> {
   return _buildPersonalityContext(
     sessionId,
@@ -580,17 +581,15 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
     files: 'workspace_write',
     memory: 'advanced_memory',
     media: 'media_assets',
-    media_quality: 'media_quality',
     automations: 'automations',
     schedule: 'automations',
     external_apps: 'external_apps',
-    creative_mode: 'creative_mode',
     // 'schedule' → not needed; schedule_job is now core
     // 'source_write' requires explicit activation (code editing)
   };
   for (const [detectedCat, toolCat] of Object.entries(catMap)) {
     if (cats.has(detectedCat) && toolCat) {
-      activateToolCategory(sessionId, toolCat);
+      activateToolCategory(sessionId, toolCat, { scope: 'turn' });
     }
   }
 }
@@ -636,6 +635,13 @@ export async function _dispatchToAgent(
   parentSessionId: string,
 ): Promise<{ task_id: string; agent_id: string; status: string }> {
   const fullPrompt = context ? `${message}\n\n[CONTEXT]\n${context}` : message;
+  const agent = getAgentById(agentId);
+  const executorModel = agent
+    ? resolveConfiguredAgentModel(getConfig().getConfig(), agent, {
+      agentType: 'subagent',
+      fallbackToPrimary: false,
+    }).model
+    : '';
   const task = createTask({
     title: `[Dispatch] ${agentId}: ${message.slice(0, 60)}`,
     prompt: fullPrompt,
@@ -643,6 +649,7 @@ export async function _dispatchToAgent(
     channel: 'web',
     subagentProfile: agentId,
     parentTaskId: undefined,
+    executorProvider: executorModel || undefined,
     plan: [
       { index: 0, description: `Execute dispatched task for agent ${agentId}`, status: 'pending' },
       { index: 1, description: 'Return results', status: 'pending' },
@@ -972,12 +979,13 @@ export function buildDesktopScreenshotContent(
   }
 
   const packet = getDesktopAdvisorPacket(sessionId);
+  const hasVisionImage = primarySupportsVision() && !!packet?.screenshotBase64;
 
   return [
     toolResult.result,
-    packet?.ocrText ? `\nFull OCR text from screen:\n${packet.ocrText.slice(0, 4000)}` : '',
-    primarySupportsVision() && packet?.screenshotBase64
-      ? '\n[Screenshot image attached — you can see the current screen state above.]'
+    !hasVisionImage && packet?.ocrText ? `\nFull OCR text from screen:\n${packet.ocrText.slice(0, 4000)}` : '',
+    hasVisionImage
+      ? '\n[Screenshot image attached — use it as the source of truth for current screen state.]'
       : '',
     goalReminder,
   ].join('');

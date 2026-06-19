@@ -1,0 +1,131 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "scheduler-operations-playbook",
+  "name": "Scheduler Operations Playbook",
+  "description": "Modern runbook for managing Prometheus scheduled jobs, schedule-owner subagents, expected outputs, run history, stuck-state recovery, delivery verification, model routing, internal watches, and heartbeat-driven automation.",
+  "emoji": "🧩",
+  "version": "2.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "scheduler operations",
+    "scheduled job",
+    "schedule job",
+    "cron job",
+    "run now",
+    "pause job",
+    "resume job",
+    "job failed",
+    "job stuck",
+    "expected outputs",
+    "delivery verification",
+    "heartbeat diagnostics"
+  ],
+  "categories": [
+    "automation",
+    "scheduler",
+    "operations",
+    "runbook"
+  ],
+  "requiredTools": [
+    "schedule_job",
+    "schedule_job_detail",
+    "schedule_job_history",
+    "schedule_job_log_search",
+    "schedule_job_patch",
+    "schedule_job_outputs",
+    "schedule_job_stuck_control",
+    "automation_dashboard",
+    "task_control",
+    "internal_watch",
+    "parse_schedule_pattern",
+    "update_heartbeat"
+  ],
+  "requires": {
+    "tools": [
+      "schedule_job",
+      "schedule_job_detail",
+      "schedule_job_history",
+      "schedule_job_log_search",
+      "schedule_job_patch",
+      "schedule_job_outputs",
+      "schedule_job_stuck_control",
+      "automation_dashboard",
+      "task_control",
+      "internal_watch",
+      "parse_schedule_pattern",
+      "update_heartbeat",
+      "write_note"
+    ],
+    "toolCategories": [
+      "automations"
+    ],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": []
+  },
+  "toolBinding": {
+    "requiredTools": [
+      "schedule_job",
+      "schedule_job_detail",
+      "schedule_job_patch",
+      "schedule_job_outputs",
+      "schedule_job_stuck_control",
+      "automation_dashboard",
+      "task_control",
+      "internal_watch"
+    ],
+    "recommendedToolCategories": [
+      "automations"
+    ],
+    "defaultWorkflow": [
+      "Inspect job inventory with schedule_job list or automation_dashboard.",
+      "Open target schedule_job_detail before mutating.",
+      "Use schedule_job_patch preview/apply for supported field changes; use schedule_job update only for unsupported fields.",
+      "Run now when safe, then verify detail/history, linked task status, expected outputs, and actual delivery payloads.",
+      "Create bounded internal_watch for asynchronous completion when the result may arrive after the current turn.",
+      "Write a continuity note for meaningful fixes, blockers, or operational discoveries."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/non-vision-scheduled-job-recovery-2026-05-11.md",
+      "type": "doc",
+      "description": "Scheduler recovery note for non-vision model/image-input failures and output verification after model patches."
+    },
+    {
+      "path": "notes/failure-looking-success-results-2026-05-18.md",
+      "type": "doc",
+      "description": "Guardrail for scheduled jobs whose run status says success but final output is a tool/error string or missing report artifact."
+    },
+    {
+      "path": "notes/managed-team-schedule-idle-or-quota-false-success-2026-05-20.md",
+      "type": "doc",
+      "description": "Guardrail for managed-team scheduled jobs whose cron status succeeds while manager output is idle, a greeting, or embedded provider quota error."
+    },
+    {
+      "path": "notes/repeated-no-activity-scheduled-job-failures-2026-05-21.md",
+      "type": "doc",
+      "description": "Guardrail for scheduled jobs repeatedly failing with openai_codex no-activity timeouts."
+    },
+    {
+      "path": "examples/create-job-with-fallbacks.md",
+      "type": "example"
+    },
+    {
+      "path": "examples/confirm-gate-workarounds.md",
+      "type": "example"
+    },
+    {
+      "path": "examples/update-delete-patterns.md",
+      "type": "example"
+    }
+  ],
+  "status": "ready",
+  "lifecycle": "active",
+  "ownership": "local",
+  "executionEnabled": true
+}

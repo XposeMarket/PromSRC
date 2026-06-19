@@ -8,7 +8,7 @@ import {
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderCreativePage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=liquid-glass-v20';
+} from './mobile-pages.js?v=voice-mic-restore-v1';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
@@ -60,18 +60,61 @@ function _pairCodeFromUrl() {
   } catch { return ''; }
 }
 
+function normalizeMobileRouteParts(parts) {
+  const clean = Array.isArray(parts) ? parts.map(p => String(p || '').trim()).filter(Boolean) : [];
+  if (clean[0] === 'm') clean[0] = 'mobile';
+  if (clean[0] !== 'mobile') clean.unshift('mobile');
+  let page = clean[1] || 'chat';
+  let arg = clean[2] || null;
+  let extra = clean.slice(3);
+
+  const aliases = {
+    c: 'chat',
+    v: 'voice',
+    task: 'tasks',
+    jobs: 'schedule',
+    job: 'schedule',
+    team: 'teams',
+    agent: 'subagents',
+    subagent: 'subagents',
+    proposal: 'proposals',
+    prop: 'proposals',
+    approvals: 'proposals',
+  };
+  page = aliases[page] || page;
+  if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'creative', 'subagents', 'proposals', 'more', 'pair'].includes(page)) {
+    extra = [arg, ...extra].filter(Boolean);
+    arg = page || null;
+    page = 'chat';
+  }
+  return { page, arg, extra };
+}
+
 export function mobileRouteFromLocation() {
   let raw = (window.location.hash || '').replace(/^#/, '');
   if (!raw && (window.location.pathname || '').startsWith('/mobile')) {
     raw = window.location.pathname.replace(/^\//, '');
   }
-  if (!raw.startsWith('mobile')) raw = 'mobile/chat';
-  const parts = raw.split('/').filter(Boolean);
-  // parts[0] = 'mobile'
-  const page = parts[1] || 'chat';
-  const arg  = parts[2] || null;
-  const extra = parts.slice(3);
-  return { page, arg, extra };
+  if (!raw) {
+    try {
+      const q = new URLSearchParams(window.location.search || '');
+      const route = q.get('mobile') || q.get('pm_route') || q.get('route') || '';
+      if (route) raw = route.replace(/^#?\/?/, '');
+    } catch {}
+  }
+  return normalizeMobileRouteParts(String(raw || 'mobile/chat').split('/'));
+}
+
+export function mobileDeepLink(route = 'chat', arg = '', extra = [], opts = {}) {
+  const cleanRoute = String(route || 'chat').replace(/^#?\/?mobile\/?/, '').replace(/^\/+/, '') || 'chat';
+  const parts = ['mobile', cleanRoute, arg, ...(Array.isArray(extra) ? extra : [extra])]
+    .map(p => String(p || '').trim())
+    .filter(Boolean)
+    .map((p, i) => i <= 1 ? p.replace(/^\/+|\/+$/g, '') : encodeURIComponent(p));
+  const suffix = parts.join('/');
+  if (opts.path === true) return `/?source=pwa#${suffix}`;
+  if (opts.absolute === true) return `${window.location.origin}/?source=pwa#${suffix}`;
+  return `#${suffix}`;
 }
 
 export function mobileNavigate(route) {
@@ -130,6 +173,11 @@ const TAB_FOR_PAGE = {
 };
 
 function render() {
+  try {
+    navigator.serviceWorker?.controller?.postMessage('pm-clear-badge');
+    navigator.clearAppBadge?.();
+  } catch {}
+
   if (typeof window.__pmMobileCleanup === 'function') {
     try { window.__pmMobileCleanup(); } catch {}
     window.__pmMobileCleanup = null;
@@ -236,7 +284,7 @@ function render() {
     case 'teams':
       if (arg) return renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return renderTeamsPage(slot, { navigate: mobileNavigate });
-    case 'tasks':     return renderTasksPage(slot, { navigate: mobileNavigate });
+    case 'tasks':     return renderTasksPage(slot, { navigate: mobileNavigate, taskId: arg ? decodeURIComponent(arg) : '' });
     case 'settings':
       // Deep links like #mobile/settings or #mobile/settings/models open the
       // full desktop Settings modal over a chat base, so closing it lands the

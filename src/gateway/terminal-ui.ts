@@ -3714,6 +3714,7 @@ function prettify(name: string): string {
     memory_search:      'Searching memory',
     memory_read_record: 'Reading memory',
     // Shell / commands
+    terminal:           'Running terminal',
     run_command:        'Running command',
     shell:              'Running shell',
     write_note:         'Writing note',

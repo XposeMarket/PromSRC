@@ -1,0 +1,12 @@
+{
+  "skillId": "connector-builder",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:09.157Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\connector-builder",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c4ffda380067342e"
+}

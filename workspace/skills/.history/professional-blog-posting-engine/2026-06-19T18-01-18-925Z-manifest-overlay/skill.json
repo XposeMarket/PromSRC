@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "professional-blog-posting-engine",
+  "name": "Professional Blog Posting Engine",
+  "description": "Prometheus editorial workflow for producing publication-ready business blog posts, SEO articles, local SEO posts, thought-leadership pieces, comparison articles, how-to guides, internal-linking plans, schema suggestions, social promotion assets, and QA reports.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "write a blog post",
+    "create a blog post",
+    "create an SEO article",
+    "SEO blog post",
+    "turn this keyword into an article",
+    "write a local SEO post",
+    "make a ranking-quality article",
+    "draft a blog for my company",
+    "create a thought leadership article",
+    "write a comparison post",
+    "create a how-to article",
+    "turn notes into a publishable article",
+    "write a blog for my business",
+    "make a blog post for my SaaS",
+    "create a blog article",
+    "publishable blog",
+    "blog content strategy",
+    "SEO package",
+    "internal linking plan",
+    "featured image brief"
+  ],
+  "categories": [
+    "writing",
+    "seo",
+    "content-marketing",
+    "blogging"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "examples/repo-backed-blog-agent-verification-2026-06-03.md",
+      "type": "example",
+      "description": "Observed example for verifying an existing website blog repo/content model before creating an ongoing blog-poster agent or staging posts."
+    }
+  ]
+}

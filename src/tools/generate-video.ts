@@ -77,7 +77,7 @@ export async function executeGenerateVideo(args: GenerateVideoArgs): Promise<Too
 
 export const generateVideoTool = {
   name: 'generate_video',
-  description: 'Generate a short raster video using a configured AI video provider such as xAI Grok Imagine Video. Use this for one-shot text-to-video, image-to-video, reference-to-video, video editing, or video extension when the user wants an AI-generated MP4 rather than an editable timeline project.',
+  description: 'Generate, edit, or extend a short AI video/MP4 from text, image, video, or references.',
   execute: executeGenerateVideo,
   schema: {
     prompt: 'Text prompt describing the video to generate, edit, or extend',
@@ -99,15 +99,15 @@ export const generateVideoTool = {
     type: 'object',
     required: ['prompt'],
     properties: {
-      prompt: { type: 'string', description: 'Text prompt describing the video to generate, edit, or extend' },
-      image: { type: 'string', description: 'Optional source image path, URL, or data URL for image-to-video' },
+      prompt: { type: 'string', description: 'Video prompt for generate/edit/extend.' },
+      image: { type: 'string', description: 'Optional source image path, URL, or data URL.' },
       reference_images: {
         type: 'array',
         items: { type: 'string' },
         maxItems: 7,
-        description: 'Optional reference images as local/workspace paths, HTTPS URLs, or data URLs for reference-to-video',
+        description: 'Optional reference image paths, URLs, or data URLs.',
       },
-      video: { type: 'string', description: 'Optional source video path, URL, or data URL for edit/extend modes' },
+      video: { type: 'string', description: 'Optional source video path, URL, or data URL.' },
       mode: {
         type: 'string',
         enum: ['generate', 'edit', 'extend'],

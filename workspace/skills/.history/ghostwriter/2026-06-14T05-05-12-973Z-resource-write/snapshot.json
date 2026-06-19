@@ -1,0 +1,11 @@
+{
+  "skillId": "ghostwriter",
+  "reason": "resource-write",
+  "createdAt": "2026-06-14T05:05:12.976Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\ghostwriter",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "5e5c11dda7c3f265"
+}

@@ -1,33 +1,32 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the scheduled @raulinvests X/Twitter research, reply, quote-repost, or live AI-topic engagement workflow needs to gather feed/search signals, avoid duplicate angles, use hook-library, post only with browser automation, avoid em dashes, log every action, and close the browser. Use it for prompts like X research replies, scheduled research posting, Mara reply run, quote-repost AI agent posts, or find AI agent conversations on X.",
+  "description": "Use this skill when Mara or a scheduled/delegated @raulinvests workflow researches X/Twitter, finds reply/repost/quote opportunities, drafts engagement, or monitors AI/trading conversations for growth.",
   "triggers": [
-    "x research",
-    "research replies",
-    "ai agent memory",
-    "autonomous research posting",
-    "scheduled research",
     "X research replies",
-    "Mara reply run",
-    "quote-repost AI posts",
-    "reply to AI agent posts",
-    "browser-first X research",
-    "@raulinvests engagement",
-    "search X for AI agents",
-    "scheduled X replies"
+    "Mara reply workflow",
+    "find reply opportunities",
+    "X engagement workflow",
+    "research posts to reply to",
+    "quote repost candidates",
+    "regular repost workflow",
+    "@raulinvests replies",
+    "X growth replies",
+    "scheduled X research",
+    "monitor X conversations",
+    "draft X replies",
+    "reply target list",
+    "engagement packet"
   ],
   "categories": [
     "social",
-    "X/Twitter",
-    "research",
-    "scheduled workflow",
-    "browser automation",
-    "content"
+    "x",
+    "automation",
+    "scheduled-jobs"
   ],
   "requiredTools": [
     "browser_automation",
-    "file_ops",
+    "workspace_write",
     "skills"
   ],
   "lifecycle": "active",

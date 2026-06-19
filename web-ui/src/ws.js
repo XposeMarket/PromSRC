@@ -64,10 +64,60 @@ function buildWsUrl() {
   return url.toString();
 }
 
+// ─── Reconnect state (exponential backoff + online awareness) ──
+const _WS_BACKOFF_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000]; // ms, capped at 30s
+let _wsBackoffIdx = 0;
+let _wsReconnectTimer = null;
+let _wsWaitingForOnline = false;
+let _wsConnecting = false;
+
+function _wsNextDelay() {
+  const d = _WS_BACKOFF_DELAYS[Math.min(_wsBackoffIdx, _WS_BACKOFF_DELAYS.length - 1)];
+  _wsBackoffIdx = Math.min(_wsBackoffIdx + 1, _WS_BACKOFF_DELAYS.length - 1);
+  return d;
+}
+
+function _wsResetBackoff() {
+  _wsBackoffIdx = 0;
+}
+
+function _wsScheduleReconnect() {
+  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+  if (_wsWaitingForOnline) return; // already waiting for network
+
+  // If the browser reports offline, wait for the 'online' event instead of
+  // hammering the server with failed reconnects every few seconds.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    _wsWaitingForOnline = true;
+    wsEventBus._dispatch({ type: 'ws:waiting_for_network', timestamp: Date.now() });
+    const onOnline = () => {
+      window.removeEventListener('online', onOnline);
+      _wsWaitingForOnline = false;
+      _wsBackoffIdx = 0; // fresh start when network comes back
+      connectWS();
+    };
+    window.addEventListener('online', onOnline);
+    return;
+  }
+
+  const delay = _wsNextDelay();
+  wsEventBus._dispatch({ type: 'ws:reconnecting', timestamp: Date.now(), delayMs: delay, attempt: _wsBackoffIdx });
+  _wsReconnectTimer = setTimeout(() => {
+    _wsReconnectTimer = null;
+    if (!_wsConnecting) connectWS();
+  }, delay);
+}
+
 export function connectWS() {
+  if (_wsConnecting) return; // prevent double-connect races
+  _wsConnecting = true;
+  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+
   window.ws = new WebSocket(buildWsUrl());
 
   window.ws.onopen = () => {
+    _wsConnecting = false;
+    _wsResetBackoff();
     wsEventBus._dispatch({ type: 'ws:open', timestamp: Date.now() });
   };
 
@@ -81,12 +131,15 @@ export function connectWS() {
   };
 
   window.ws.onclose = (event) => {
+    _wsConnecting = false;
     wsEventBus._dispatch({ type: 'ws:close', timestamp: Date.now(), code: event?.code, reason: event?.reason || '' });
-    setTimeout(connectWS, 2000);
+    _wsScheduleReconnect();
   };
+
   window.ws.onerror = (event) => {
+    _wsConnecting = false;
     wsEventBus._dispatch({ type: 'ws:error', timestamp: Date.now(), message: event?.message || 'WebSocket error' });
-    window.ws.close();
+    // onclose fires after onerror for WebSockets — no need to close manually.
   };
 }
 

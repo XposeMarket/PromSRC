@@ -1,0 +1,11 @@
+{
+  "skillId": "hr-recruiter",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:19.606Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hr-recruiter",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "c71e51707f498f42"
+}

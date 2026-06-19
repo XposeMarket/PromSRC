@@ -33,16 +33,15 @@
 
 ## 3A) Account/Auth Gate and Router Mounting
 
-The gateway now mounts almost all application routes behind both gateway auth and account entitlement checks in `src/gateway/server-v2.ts`.
+The gateway now mounts almost all application routes behind both gateway auth and account-login checks in `src/gateway/server-v2.ts`.
 
 Account facts from `src/gateway/routes/account.router.ts`:
 
 - Supabase sessions are kept in memory and persisted encrypted through the vault key `account.supabase.session`
 - legacy `auth-session.json` is migrated into the vault and removed
-- access requires either `subscriptionActive` or `isAdmin`
-- subscription checks look for Supabase subscription statuses `active` or `trialing`
-- cached subscription state has a five-minute refresh TTL
-- `/api/account/status?strict=1` performs a blocking verification/refresh path
+- Prometheus is free to use; access requires a valid Supabase-authenticated account session, not Stripe or a subscription row
+- `subscriptionActive`, `purchaseActive`, and `accessActive` remain as backward-compatible response fields and are true for any verified account session
+- `/api/account/status?strict=1` performs a blocking account verification/refresh path
 - expired sessions with refresh tokens are refreshed optimistically in normal status checks
 
 Account routes currently include:
@@ -54,13 +53,12 @@ Account routes currently include:
 - `POST /api/account/logout`
 - `POST /api/account/refresh`
 
-WebSocket connections are also closed with policy code `1008` when the account is not logged in or lacks an active subscription/admin entitlement.
+WebSocket connections are closed with policy code `1008` when the account is not logged in. They no longer require subscription/admin entitlement.
 
-Account-entitled router mounts currently include:
+Account-gated router mounts currently include:
 
 - skills, tasks, channels, teams, settings, goals, proposals, audit log, connections, extensions
 - canvas, projects, memory, Obsidian, Hub, migration, processes, coding, chat, onboarding
-
 ## 3B) Mobile Pairing, QR Codes, HTTPS, and Tailscale Remote Access
 
 Mobile pairing is implemented as a desktop-approved device enrollment flow, not as a shared browser login.
@@ -99,7 +97,7 @@ Important auth/mounting behavior:
 - `src/gateway/gateway-auth.ts` intentionally lets these account bootstrap routes through without a gateway token: `GET /api/account/config`, `GET /api/account/status`, `POST /api/account/login`, and `POST /api/account/login/password`.
 - `gateway-auth.ts` verifies `X-Pairing-Token` and `?pt=` before checking the configured gateway token. This lets approved mobile devices work over LAN or Tailscale even when `gateway.auth.token` is absent.
 - Non-loopback, unpaired API access is still blocked when no gateway auth token is configured.
-- `POST /api/pairing/claim` also checks the server-side Prometheus account session via `getSessionStatus()` and requires `authenticated && (subscriptionActive || isAdmin)`. Pairing is therefore "phone logs into Prometheus account, then desktop approves the device."
+- `POST /api/pairing/claim` also checks the server-side Prometheus account session via `getSessionStatus()` and requires `authenticated`. Pairing is therefore "phone logs into a free Prometheus account, then desktop approves the device."
 
 iOS/Safari/PWA behavior that drove the dual route:
 

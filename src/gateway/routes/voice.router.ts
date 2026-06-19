@@ -365,7 +365,7 @@ async function synthesizeXai(text: string, voiceId?: string, language?: string, 
     voice_id: voice,
     language: language || process.env.XAI_TTS_LANGUAGE || 'en',
   };
-  if (Number.isFinite(normalizedSpeed)) body.speed = Math.max(0.5, Math.min(2, normalizedSpeed));
+  if (Number.isFinite(normalizedSpeed)) body.speed = Math.max(0.7, Math.min(1.5, normalizedSpeed));
   const url = `${xaiBaseUrl()}/tts`;
   const userAgent = process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0';
   const result = await fetchBinary(url, {

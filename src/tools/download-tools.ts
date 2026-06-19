@@ -80,6 +80,47 @@ function parseContentDispositionFilename(contentDisposition: string | null): str
   return plainMatch?.[1]?.trim() || '';
 }
 
+/**
+ * Rewrite human-facing GitHub URLs into direct raw asset URLs so download_url
+ * saves the actual file instead of the rendered HTML viewer page.
+ *   github.com/owner/repo/blob/<ref>/<path>  → raw.githubusercontent.com/owner/repo/<ref>/<path>
+ *   github.com/owner/repo/raw/<ref>/<path>   → raw.githubusercontent.com/owner/repo/<ref>/<path>
+ * Returns the rewritten URL plus an optional note, or a hardError when the URL
+ * points at a whole repo/tree (which clone_repo should handle instead).
+ */
+export function normalizeDownloadUrl(url: string): { url: string; note?: string; hardError?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { url };
+  }
+  if (!/(^|\.)github\.com$/i.test(parsed.hostname)) return { url };
+
+  const parts = parsed.pathname.replace(/^\/+/, '').split('/');
+  const [owner, repo, kind, ref, ...rest] = parts;
+  if (!owner || !repo) return { url };
+
+  if ((kind === 'blob' || kind === 'raw') && ref && rest.length) {
+    const filePath = rest.join('/');
+    return {
+      url: `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filePath}`,
+      note: 'Rewrote GitHub blob URL to raw.githubusercontent.com for direct file download.',
+    };
+  }
+
+  // Whole repo or a directory tree — download_url cannot fetch these as a file.
+  if (!kind || kind === 'tree') {
+    return {
+      url,
+      hardError:
+        'This is a GitHub repository or directory URL, not a single file. Use clone_repo(repo, paths?) to pull the repo or specific files into the workspace.',
+    };
+  }
+
+  return { url };
+}
+
 function inferFilenameFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -112,8 +153,12 @@ type DownloadUrlArgs = {
 
 export async function executeDownloadUrl(args: DownloadUrlArgs): Promise<ToolResult> {
   const workspaceRoot = getWorkspaceRoot();
-  const url = String(args?.url || '').trim();
-  if (!url) return { success: false, error: 'url is required' };
+  const rawUrl = String(args?.url || '').trim();
+  if (!rawUrl) return { success: false, error: 'url is required' };
+
+  const normalized = normalizeDownloadUrl(rawUrl);
+  if (normalized.hardError) return { success: false, error: normalized.hardError };
+  const url = normalized.url;
 
   try {
     const { absDir } = ensureOutputDir(workspaceRoot, args.output_dir);
@@ -149,9 +194,11 @@ export async function executeDownloadUrl(args: DownloadUrlArgs): Promise<ToolRes
     const relPath = path.relative(workspaceRoot, absPath).replace(/\\/g, '/');
     return {
       success: true,
-      stdout: `Downloaded URL to ${relPath} (${buffer.length} bytes).`,
+      stdout: `Downloaded URL to ${relPath} (${buffer.length} bytes).${normalized.note ? ' ' + normalized.note : ''}`,
       data: {
         url,
+        requested_url: rawUrl !== url ? rawUrl : undefined,
+        note: normalized.note,
         final_url: response.url,
         path: absPath,
         rel_path: relPath,

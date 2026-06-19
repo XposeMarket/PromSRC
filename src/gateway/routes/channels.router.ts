@@ -625,6 +625,22 @@ function _sanitizeAgentId(value: any): string {
     .replace(/^-+|-+$/g, '');
 }
 
+function normalizeAgentVoiceProfile(raw: any): any | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const normalized: any = {};
+  const mode = String(raw.mode || raw.voiceMode || '').trim();
+  const provider = String(raw.provider || raw.voiceProvider || '').trim();
+  const voice = String(raw.voice || raw.voiceId || '').trim();
+  const fallbackProvider = String(raw.fallbackProvider || raw.fallback_provider || '').trim();
+  const fallbackVoice = String(raw.fallbackVoice || raw.fallback_voice || '').trim();
+  if (mode) normalized.mode = mode;
+  if (provider) normalized.provider = provider;
+  if (voice) normalized.voice = voice;
+  if (fallbackProvider) normalized.fallbackProvider = fallbackProvider;
+  if (fallbackVoice) normalized.fallbackVoice = fallbackVoice;
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
 function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   const id = _sanitizeAgentId(raw?.id || fallbackId || '');
   const normalized: any = {
@@ -639,6 +655,10 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   if (raw?.teamAssignment !== undefined) normalized.teamAssignment = String(raw.teamAssignment || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
   if (raw?.model !== undefined) normalized.model = String(raw.model || '').trim();
+  if (raw?.voice !== undefined) {
+    const voice = normalizeAgentVoiceProfile(raw.voice);
+    if (voice) normalized.voice = voice;
+  }
   if (Array.isArray(raw?.skillIds)) {
     normalized.skillIds = Array.from(new Set(raw.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean)));
   }

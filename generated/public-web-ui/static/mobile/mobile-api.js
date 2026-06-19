@@ -87,6 +87,86 @@ export async function mobileGatewayTextFetch(path, opts = {}) {
   return text;
 }
 
+function _urlBase64ToUint8Array(value) {
+  const padding = '='.repeat((4 - String(value || '').length % 4) % 4);
+  const base64 = String(value || '').replace(/-/g, '+').replace(/_/g, '/') + padding;
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+export async function getMobilePushStatus() {
+  const browserSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  let permission = 'unsupported';
+  try { permission = browserSupported ? Notification.permission : 'unsupported'; } catch {}
+  let subscription = null;
+  if (browserSupported) {
+    try {
+      const currentReg = await navigator.serviceWorker.getRegistration();
+      await currentReg?.update?.();
+      const reg = await navigator.serviceWorker.ready;
+      subscription = await reg.pushManager.getSubscription();
+    } catch {}
+  }
+  const server = await mfetch('/api/push/status').catch(() => null);
+  return {
+    browserSupported,
+    permission,
+    subscribed: !!subscription,
+    subscriptionCount: Number(server?.subscriptionCount || 0),
+    server,
+  };
+}
+
+export async function enableMobileChatPushNotifications() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    throw new Error('Push notifications are not supported on this browser.');
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Notification permission was not granted.');
+  const reg = await navigator.serviceWorker.ready;
+  try { await reg.update?.(); } catch {}
+  let subscription = await reg.pushManager.getSubscription();
+  if (!subscription) {
+    const key = await mfetch('/api/push/public-key');
+    const publicKey = String(key?.publicKey || '').trim();
+    if (!publicKey) throw new Error('Push public key unavailable.');
+    subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: _urlBase64ToUint8Array(publicKey),
+    });
+  }
+  const deviceName = navigator.userAgent.includes('iPhone') ? 'iPhone PWA' : navigator.userAgent.includes('iPad') ? 'iPad PWA' : 'Mobile PWA';
+  const saved = await mfetch('/api/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({
+      subscription: subscription.toJSON ? subscription.toJSON() : subscription,
+      deviceId: getDeviceToken(),
+      deviceName,
+    }),
+  });
+  await mfetch('/api/push/test', { method: 'POST', body: JSON.stringify({}) }).catch(() => null);
+  return saved;
+}
+
+export async function disableMobileChatPushNotifications() {
+  let endpoint = '';
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const subscription = await reg.pushManager.getSubscription();
+    endpoint = subscription?.endpoint || '';
+    if (subscription) await subscription.unsubscribe();
+  } catch {}
+  if (endpoint) {
+    return mfetch('/api/push/unsubscribe', {
+      method: 'POST',
+      body: JSON.stringify({ endpoint }),
+    });
+  }
+  return { success: true, removed: false };
+}
+
 export async function loadMobileApprovals(status = 'pending') {
   const qs = status ? `?status=${encodeURIComponent(status)}` : '';
   const r = await mfetch(`/api/approvals${qs}`);
@@ -640,6 +720,7 @@ export async function loadMobileSubagents() {
       lastRunAt: a.lastRun?.finishedAt || a.lastRun?.startedAt || null,
       isTeamMember: a.isTeamMember === true,
       cronSchedule: a.cronSchedule || null,
+      voice: (a.voice && typeof a.voice === 'object') ? a.voice : null,
       tools: Array.isArray(a.allowed_tools) ? a.allowed_tools : [],
       mcpServers: Array.isArray(a.mcp_servers) ? a.mcp_servers : [],
       raw: a,
@@ -1208,11 +1289,43 @@ export async function loadLatestUsableSession() {
     .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || 0))[0] || null;
 }
 
-export async function loadMobileChatSession(sessionId) {
+// ── Session cache (30s TTL, invalidated on history writes) ────────────────────
+const _sessionCache = new Map(); // sessionId → { session, expiresAt }
+const _SESSION_CACHE_TTL = 30_000; // ms
+
+function _sessionCacheGet(sid) {
+  const entry = _sessionCache.get(sid);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { _sessionCache.delete(sid); return null; }
+  return entry.session;
+}
+
+function _sessionCacheSet(sid, session) {
+  _sessionCache.set(sid, { session, expiresAt: Date.now() + _SESSION_CACHE_TTL });
+  // Evict oldest entries if cache grows large (keep ≤ 20)
+  if (_sessionCache.size > 20) {
+    const oldest = _sessionCache.keys().next().value;
+    _sessionCache.delete(oldest);
+  }
+}
+
+export function invalidateMobileChatSessionCache(sessionId) {
+  if (sessionId) _sessionCache.delete(String(sessionId));
+  else _sessionCache.clear();
+}
+
+export async function loadMobileChatSession(sessionId, { force = false } = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
-  const r = await mfetch(`/api/sessions/${encodeURIComponent(sid)}?historyLimit=300&processLimit=500&includeToolLog=0`);
-  return r?.session || null;
+  if (!force) {
+    const cached = _sessionCacheGet(sid);
+    if (cached) return cached;
+  }
+  const historyLimit = force ? 300 : 80;
+  const r = await mfetch(`/api/sessions/${encodeURIComponent(sid)}?historyLimit=${historyLimit}&processLimit=500&includeToolLog=0${force ? '&_fresh=1' : ''}`);
+  const session = r?.session || null;
+  if (session) _sessionCacheSet(sid, session);
+  return session;
 }
 
 
@@ -1238,6 +1351,7 @@ export async function loadMobileChatRunStatus(sessionId) {
 export async function updateMobileChatSessionHistory(sessionId, history = [], options = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid) throw new Error('Session id required');
+  invalidateMobileChatSessionCache(sid); // stale after write
   return mfetch(`/api/sessions/${encodeURIComponent(sid)}/history`, {
     method: 'POST',
     body: JSON.stringify({
@@ -1435,7 +1549,7 @@ export async function restartMobileGateway({ rebuild = false, sessionId = '', or
  *
  * Returns an { abort } controller.
  */
-export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId }, handlers = {}) {
+export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds }, handlers = {}) {
   const ctrl = new AbortController();
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
 
@@ -1477,6 +1591,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
           attachments: Array.isArray(attachments) && attachments.length ? attachments : undefined,
           attachmentPreviews: Array.isArray(attachmentPreviews) && attachmentPreviews.length ? attachmentPreviews : undefined,
           callerContext: typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
+          excludedSkillIds: Array.isArray(excludedSkillIds) && excludedSkillIds.length ? excludedSkillIds : undefined,
         }),
         signal: ctrl.signal,
       });
@@ -1529,6 +1644,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
               break;
             case 'model_switched':
             case 'main_model_changed':
+            case 'model_reverted':
               cb('onModelEvent', evt);
               break;
             case 'final':         gotFinal = true; cb('onFinal', String(evt.text || ''), evt); break;

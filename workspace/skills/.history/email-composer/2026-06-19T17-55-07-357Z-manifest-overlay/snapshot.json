@@ -1,0 +1,11 @@
+{
+  "skillId": "email-composer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:07.364Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\email-composer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "4d92f2981ec821f4"
+}

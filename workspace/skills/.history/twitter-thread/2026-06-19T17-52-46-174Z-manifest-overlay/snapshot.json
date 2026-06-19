@@ -1,0 +1,11 @@
+{
+  "skillId": "twitter-thread",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:52:46.177Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\twitter-thread",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "dc3fc94cc6a5f832"
+}

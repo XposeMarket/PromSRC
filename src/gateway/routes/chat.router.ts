@@ -64,7 +64,7 @@ import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { findProjectBySessionId, removeSessionFromProject } from '../projects/project-store.js';
-import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin } from '../tasks/task-runner';
+import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundAbort, listActiveBackgroundIdsForSession } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
 import { getVerificationFlowManager, getApprovalQueue } from '../verification-flow';
@@ -166,6 +166,8 @@ import { TelegramChannel } from '../comms/telegram-channel';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import { executeXaiImageVisionSummary } from '../tools/handlers/xai-handlers.js';
 import { executeWebSearch, executeWebFetch } from '../../tools/web';
+import { executeGenerateImage } from '../../tools/generate-image.js';
+import { executeGenerateVideo } from '../../tools/generate-video.js';
 import { executeWriteNote } from '../../tools/write-note';
 import { searchMemoryIndexAsync, readMemoryRecord } from '../memory-index/index';
 import {
@@ -415,6 +417,8 @@ const FILE_MUTATION_TOOL_NAMES = new Set([
   'insert_after_prom',
   'delete_lines_prom',
   'delete_prom_file',
+  'skill_manifest_write',
+  'skill_update_metadata',
   'skill_resource_write',
   'skill_resource_delete',
   'prom_apply_dev_changes',
@@ -679,7 +683,7 @@ type MainChatStreamState = {
 };
 
 const mainChatStreams = new Map<string, MainChatStreamState>();
-const MAIN_CHAT_STREAM_MAX_EVENTS = 800;
+const MAIN_CHAT_STREAM_MAX_EVENTS = 1600;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
 
 function getMainChatStream(sessionId: string): MainChatStreamState | null {
@@ -974,6 +978,13 @@ import {
   normalizeWhatsAppConfig,
 } from '../comms/broadcaster';
 import { notifyChatCompletion } from '../notifications/completion-bridge';
+import {
+  getWebPushPublicKey,
+  listWebPushSubscriptions,
+  removeWebPushSubscription,
+  sendWebPushToAll,
+  upsertWebPushSubscription,
+} from '../notifications/web-push';
 
 import {
   getSessionSkillWindows,
@@ -1130,6 +1141,7 @@ import {
   readMemoryCategories,
   readMemorySnippets,
   buildPersonalityContext as _buildPersonalityContext,
+  buildToolsContext,
   TOOL_BLOCKS,
   TOOL_TO_MEMORY_CATS,
   type SkillWindow,
@@ -1196,6 +1208,9 @@ type ReasoningOptions = {
 const ROLLING_COMPACTION_SUMMARY_PREFIX = '[Rolling context summary]';
 const LEGACY_COMPACTION_SUMMARY_PREFIX = '[Compacted context summary]';
 const CONTEXT_COMPACTION_TOOL_NAME = 'context_compaction';
+
+const COMPACTION_REASONING_TRAIL_MAX_CHARS = 10000;
+
 
 function shouldUseSessionWorkspace(
   executionMode: ExecutionMode,
@@ -1313,16 +1328,79 @@ function formatCompactionToolResults(sessionId: string, toolResults: ToolResult[
     includeHeader: false,
     maxChars: 14000,
     maxObservations: maxResults,
+    includeTelemetry: true,
   });
 }
 
-const MODEL_TOOL_RESULT_MAX_CHARS = 24000;
-const MODEL_TOOL_RESULT_HEAD_CHARS = 17000;
-const MODEL_TOOL_RESULT_TAIL_CHARS = 5000;
+function formatCompactionReasoningTrail(reasoningTrail: string, maxChars = COMPACTION_REASONING_TRAIL_MAX_CHARS): string {
+  const clean = String(reasoningTrail || '').trim();
+  if (!clean) return '';
+  const limit = Math.max(1000, Math.min(20000, Math.floor(Number(maxChars) || COMPACTION_REASONING_TRAIL_MAX_CHARS)));
+  if (clean.length <= limit) return clean;
+  const headChars = Math.max(500, Math.floor(limit * 0.35));
+  const tailChars = Math.max(500, limit - headChars);
+  const omitted = clean.length - headChars - tailChars;
+  return [
+    clean.slice(0, headChars).trimEnd(),
+    '',
+    `[...${omitted.toLocaleString('en-US')} chars omitted from reasoning/thinking trail; preserve conclusions from visible portions and recover raw details from tool observations if needed...]`,
+    '',
+    clean.slice(-tailChars).trimStart(),
+  ].join('\n');
+}
+
+
+const MODEL_TOOL_RESULT_MAX_CHARS = 12000;
+const MODEL_TOOL_RESULT_HEAD_CHARS = 7000;
+const MODEL_TOOL_RESULT_TAIL_CHARS = 2500;
+
+function summarizeLargeJsonToolResultForModel(value: string, toolName: string, maxChars: number): string | null {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const matches = Array.isArray(parsed.matches) ? parsed.matches : null;
+  if (!matches) return null;
+  const fileCounts = new Map<string, number>();
+  for (const match of matches) {
+    const file = String(match?.file || match?.path || parsed.file || parsed.path || '(unknown)');
+    fileCounts.set(file, (fileCounts.get(file) || 0) + 1);
+  }
+  const topFiles = [...fileCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 20)
+    .map(([file, count]) => ({ file, count }));
+  const compactMatches = matches.slice(0, 24).map((match: any) => ({
+    file: match?.file || match?.path || parsed.file || parsed.path,
+    line_number: match?.line_number,
+    line: String(match?.line || '').slice(0, 260),
+  }));
+  const summary = {
+    summarized_tool_result: true,
+    tool: toolName || 'tool',
+    searched: parsed.searched || parsed.directory || parsed.file || parsed.path,
+    pattern: parsed.pattern,
+    match_count: parsed.match_count ?? matches.length,
+    returned_count: parsed.returned_count ?? matches.length,
+    result_limit: parsed.result_limit,
+    top_files: topFiles,
+    first_matches: compactMatches,
+    omitted_matches: Math.max(0, matches.length - compactMatches.length),
+    note: 'Large search result was summarized before reinjection into model context. Raw/full output remains in tool logs/raw storage. Narrow with path/glob/pattern or read a targeted file window for exact code.',
+  };
+  const text = JSON.stringify(summary, null, 2);
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n[...large ${toolName || 'tool'} summary truncated]`;
+}
 
 function boundToolTextForModelContext(text: string, toolName: string, maxChars = MODEL_TOOL_RESULT_MAX_CHARS): string {
   const value = String(text || '');
   if (!value || value.length <= maxChars) return value;
+  const summarized = summarizeLargeJsonToolResultForModel(value, toolName, maxChars);
+  if (summarized) return summarized;
   const headChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_HEAD_CHARS, Math.floor(maxChars * 0.75)));
   const tailChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_TAIL_CHARS, maxChars - headChars));
   const omitted = value.length - headChars - tailChars;
@@ -1444,6 +1522,7 @@ interface ContextCompactorRunInput {
   previousSummary: string;
   recentMessagesBlock: string;
   recentToolLogsBlock: string;
+  reasoningTrailBlock: string;
   artifactPathsBlock: string;
   recentWindow: Array<any>;
   numCtx: number;
@@ -1463,7 +1542,8 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput): string {
     modeDescription,
     'This summary will be injected into a future model context so it can continue the same work after older messages are dropped.',
     'Write it like a handoff/resume note, not like a user-facing recap.',
-    'Preserve concrete implementation state, decisions, file paths, function/class names, command/test results, blockers, approvals/pending waits, user preferences, and the newest user request.',
+    'Preserve concrete implementation state, decisions, eliminated branches, file paths, function/class names, command/test results, blockers, approvals/pending waits, user preferences, and the newest user request.',
+    'When a reasoning/thinking trail is provided, use it to capture durable analysis: hypotheses tested, files or searches ruled out, planned next steps, and conclusions reached from tool results. Do not copy raw stream-of-consciousness verbatim.',
     'Keep the order below and include every section. Use concise bullets under each section. If a section has no known details, write "Unknown" or "None yet."',
     'Do not invent details. Do not include generic advice. Output plain text only.',
     '',
@@ -1491,6 +1571,9 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput): string {
     '',
     '[RECENT_TOOL_OBSERVATIONS newest->oldest]',
     input.recentToolLogsBlock || '(none)',
+    '',
+    '[RECENT_REASONING_AND_DECISIONS]',
+    input.reasoningTrailBlock || '(none)',
   ];
   return promptLines.join('\n');
 }
@@ -1571,6 +1654,7 @@ async function maybeRunRollingCompaction(
     recentMessagesBlock: formatCompactionMessages(recentWindow),
     recentToolLogsBlock: getRecentToolObservationsForContext(sessionId, policy.toolTurns, 12000)
       || formatCompactionToolLogs(recentWindow, policy.toolTurns),
+    reasoningTrailBlock: '',
     artifactPathsBlock: formatCompactionArtifactPaths(sessionId),
     recentWindow,
     numCtx: resolveCompactionNumCtx(),
@@ -1589,6 +1673,7 @@ async function maybeRunMidWorkflowCompaction(input: {
   sessionId: string;
   messages: Array<any>;
   toolResults: ToolResult[];
+  reasoningTrail?: string;
   sendSSE: (event: string, data: any) => void;
   abortSignal?: { aborted: boolean; signal?: AbortSignal };
   reasonHint?: string;
@@ -1604,6 +1689,7 @@ async function maybeRunMidWorkflowCompaction(input: {
   const projectedBreakdown = estimateMessageTokenBreakdownForModel(input.messages, profile);
   const projectedTokens = Math.round(projectedBreakdown.totalTokens * calibrationFactor);
   const recentToolText = formatCompactionToolResults(input.sessionId, input.toolResults, 8);
+  const reasoningTrailText = formatCompactionReasoningTrail(input.reasoningTrail || '');
   const recentToolTokens = Math.round(estimateTextTokensForModel(recentToolText, profile.tokenizer) * calibrationFactor);
   const shouldCompact = projectedTokens >= budget.compactionTriggerTokens
     || recentToolTokens >= budget.toolContextBudgetTokens;
@@ -1652,6 +1738,7 @@ async function maybeRunMidWorkflowCompaction(input: {
       previousSummary,
       recentMessagesBlock: formatCompactionMessages(recentWindow),
       recentToolLogsBlock: recentToolText,
+      reasoningTrailBlock: reasoningTrailText,
       artifactPathsBlock: formatCompactionArtifactPaths(input.sessionId),
       recentWindow,
       numCtx: Math.min(profile.contextWindowTokens, Math.max(4096, budget.inputBudgetTokens)),
@@ -1667,6 +1754,7 @@ async function maybeRunMidWorkflowCompaction(input: {
         provider: profile.providerId,
         model: profile.model,
         tool_result_count: input.toolResults.length,
+        reasoning_trail_chars: reasoningTrailText.length,
         summary_max_words: summaryMaxWords,
       },
     });
@@ -1752,11 +1840,14 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean },
+  runtimeOptions?: { directSubagentChat?: boolean; excludedSkillIds?: string[] },
 ): Promise<HandleChatResult> {
   try {
   const ollama = getOllamaClient();
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
+  const excludedSkillIds = Array.isArray(runtimeOptions?.excludedSkillIds)
+    ? runtimeOptions.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
   const isBootStartupTurn = /\bBOOT\.md\b/i.test(String(callerContext || ''));
   const isHotRestartTurn = /\[HOT RESTART CONTEXT\]/i.test(String(callerContext || ''));
   const bootAllowedTools = new Set(['list_files', 'read_file']);
@@ -2306,7 +2397,7 @@ async function handleChat(
     const modeKeys = executionMode === 'interactive'
       ? ['main_chat']
       : executionMode === 'background_agent'
-        ? ['main_chat']
+        ? ['background_spawn', 'main_chat']
         : executionMode === 'team_manager'
           ? ['team_manager', 'manager']
           : executionMode === 'team_subagent'
@@ -2463,12 +2554,23 @@ async function handleChat(
   const SETUP_OR_SCOUT_TOOLS = new Set([
     'skill_list', 'skill_read', 'request_tool_category', 'business_context_mode',
     'list_files', 'list_directory', 'read_file', 'read_files_batch', 'read_dev_sources',
-    'path_exists', 'mkdir', 'copy_file', 'file_stats',
+    'path_exists', 'file_stats',
   ]);
 
   const SUBSTANTIVE_FILE_MUTATION_TOOLS = new Set([
     'create_file', 'write', 'write_file', 'replace_lines', 'find_replace', 'insert_after',
     'delete_lines', 'delete_file', 'apply_patchset', 'request_dev_source_edit',
+    // Real build steps and deliverable-producing tools — not setup/scouting.
+    // mkdir/copy_file create real artifacts; creative/generation/present/artifact
+    // tools produce the actual deliverable (e.g. a demo site, image, video, report card).
+    // Including them here stops the setup-finalization guard from misreading a
+    // partial or creative build as "setup-only" and forcing a false continuation loop.
+    'mkdir', 'copy_file',
+    'generate_image', 'generate_video', 'present_file',
+    'switch_creative_mode', 'creative_apply_ops', 'creative_add_element',
+    'creative_set_canvas', 'creative_create_project', 'creative_import_asset',
+    'creative_generate_image_shot', 'creative_generate_video_shot',
+    'show_chart', 'show_comparison', 'show_sources', 'show_product_carousel',
   ]);
 
   const isSetupOrScoutTool = (name: unknown): boolean => SETUP_OR_SCOUT_TOOLS.has(String(name || '').trim());
@@ -2841,6 +2943,55 @@ async function handleChat(
     if (repeats >= loopWarningThreshold) return { state: 'warn', repeats };
     return { state: 'ok', repeats };
   };
+  const attachUniversalToolTelemetry = (toolResult: ToolResult, toolName: string, toolArgs: any, startedAt: number, finishedAt = Date.now()): ToolResult => {
+    const argsText = (() => { try { return JSON.stringify(toolArgs || {}); } catch { return String(toolArgs || ''); } })();
+    const resultText = String(toolResult?.result ?? '');
+    const existingTelemetry = toolResult.extra?.telemetry || toolResult.data?.telemetry || {};
+    const argsTokens = Number.isFinite(Number(existingTelemetry.argsTokens))
+      ? Number(existingTelemetry.argsTokens)
+      : estimateTextTokensForModel(argsText, 'openai');
+    const resultTokens = Number.isFinite(Number(existingTelemetry.resultTokens))
+      ? Number(existingTelemetry.resultTokens)
+      : estimateTextTokensForModel(resultText, 'openai');
+    const telemetry = {
+      ...existingTelemetry,
+      startedAt: Number.isFinite(Number(existingTelemetry.startedAt)) ? Number(existingTelemetry.startedAt) : startedAt,
+      finishedAt: Number.isFinite(Number(existingTelemetry.finishedAt)) ? Number(existingTelemetry.finishedAt) : finishedAt,
+      durationMs: Number.isFinite(Number(existingTelemetry.durationMs)) ? Number(existingTelemetry.durationMs) : Math.max(0, finishedAt - startedAt),
+      argsChars: Number.isFinite(Number(existingTelemetry.argsChars)) ? Number(existingTelemetry.argsChars) : argsText.length,
+      resultChars: Number.isFinite(Number(existingTelemetry.resultChars)) ? Number(existingTelemetry.resultChars) : resultText.length,
+      resultBytes: Number.isFinite(Number(existingTelemetry.resultBytes)) ? Number(existingTelemetry.resultBytes) : Buffer.byteLength(resultText, 'utf8'),
+      argsTokens,
+      resultTokens,
+      totalTokens: Number.isFinite(Number(existingTelemetry.totalTokens)) ? Number(existingTelemetry.totalTokens) : argsTokens + resultTokens,
+    };
+    return {
+      ...toolResult,
+      name: toolResult.name || toolName,
+      args: toolResult.args ?? toolArgs,
+      extra: { ...(toolResult.extra || {}), telemetry },
+    };
+  };
+
+  const makeInstrumentedToolResult = (toolName: string, toolArgs: any, result: string, error: boolean, startedAt = Date.now(), extra?: any): ToolResult =>
+    attachUniversalToolTelemetry({ name: toolName, args: toolArgs, result, error, extra }, toolName, toolArgs, startedAt, Date.now());
+
+  const executeToolWithTelemetry = async (toolName: string, toolArgs: any): Promise<ToolResult> => {
+    const startedAt = Date.now();
+    try {
+      const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(), sessionId);
+      return attachUniversalToolTelemetry(toolResult, toolName, toolArgs, startedAt);
+    } catch (err: any) {
+      return makeInstrumentedToolResult(
+        toolName,
+        toolArgs,
+        `Tool execution failed: ${String(err?.message || err || 'Unknown error')}`,
+        true,
+        startedAt,
+      );
+    }
+  };
+
   const orchestrationState = new OrchestrationTriggerState();
   const orchestrationLog: string[] = [];
   const orchestrationStats = getOrchestrationSessionStats(sessionId);
@@ -2953,7 +3104,7 @@ async function handleChat(
       const toolArgs = call.args || {};
       markProgressStepStart(toolName);
       sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, synthetic: true, actor: 'secondary' });
-      const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(), sessionId);
+      const toolResult = await executeToolWithTelemetry(toolName, toolArgs);
       allToolResults.push(toolResult);
       logToolCall(workspacePath, toolName, toolArgs, toolResult.result, toolResult.error);
       trackFileOpMutation(toolName, toolArgs, toolResult, 'secondary');
@@ -3040,8 +3191,8 @@ async function handleChat(
     // browserVisionModeActive is declared higher in handleChat's closure scope.
     browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
     teachModeActive
-      ? { profile: 'teach_mode' }
-      : (isLocalPrimary ? { profile: 'local_llm' } : undefined),
+      ? { profile: 'teach_mode', excludedSkillIds }
+      : (isLocalPrimary ? { profile: 'local_llm', excludedSkillIds } : (excludedSkillIds.length ? { excludedSkillIds } : undefined)),
   );
   htime('after buildPersonalityContext');
   let switchModelPersonalityCtx: string | null = null;
@@ -4718,9 +4869,16 @@ RULES:
   const injectPendingChatSteers = (): number => {
     const steers = consumePendingRuntimeSteersForSession(sessionId, 4);
     if (!steers.length) return 0;
+    const cfg = getConfig().getConfig() as any;
+    const _steerActiveProvider = String(cfg?.llm?.provider || '').trim().toLowerCase();
+    const _steerProviderId = String(providerOverride || _steerActiveProvider || '').trim().toLowerCase();
+    const _steerIsAnthropic = _steerProviderId === 'anthropic';
     for (const steer of steers) {
       messages.push({ role: 'user', content: buildChatSteerContextBlock(steer) });
-      messages.push({ role: 'assistant', content: 'Understood. I will steer the current run with this correction.' });
+      // Anthropic does not support assistant prefill — skip trailing assistant ack for that provider
+      if (!_steerIsAnthropic) {
+        messages.push({ role: 'assistant', content: 'Understood. I will steer the current run with this correction.' });
+      }
       sendSSE('steer_applied', {
         eventId: steer.id,
         message: steer.message.slice(0, 500),
@@ -4786,7 +4944,7 @@ RULES:
         sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, synthetic: true });
 
         const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
-        const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(), sessionId);
+        const toolResult = await executeToolWithTelemetry(toolName, toolArgs);
         allToolResults.push(toolResult);
         logToolCall(workspacePath, toolName, toolArgs, toolResult.result, toolResult.error);
         trackFileOpMutation(toolName, toolArgs, toolResult, 'secondary');
@@ -5078,7 +5236,7 @@ RULES:
             history.length,
             _skillsManager,
             browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-            teachModeActive ? { profile: 'teach_mode' } : { profile: 'switch_model' },
+            teachModeActive ? { profile: 'teach_mode', excludedSkillIds } : { profile: 'switch_model', excludedSkillIds },
           );
         }
         if (messages[0]?.role === 'system') messages[0].content = isLocalPrimary
@@ -5303,8 +5461,14 @@ RULES:
       const browserAutomationRequest = isBrowserAutomationRequest(message);
       const desktopAutomationRequest = isDesktopAutomationRequest(message);
       const looksLikeRefusal = looksLikeSafetyRefusal(content);
-      if (queryNeedsTools && (looksLikeReasoning || looksLikeRefusal)) {
-        console.log(`[v2] AUTO-RECOVER: Model dumped ${content.length} chars of reasoning instead of calling tools. Re-prompting...`);
+      // Only the browser/desktop automation paths and an actual refusal should force a
+      // retry. Pure reasoning (e.g. "there is nothing to search here") and resumed
+      // write_note finalization after a restart must fall through to normal handling so
+      // the model's answer is delivered and not hijacked into a forced web_search.
+      const shouldForceToolRetry = queryNeedsTools
+        && (browserAutomationRequest || desktopAutomationRequest || looksLikeRefusal);
+      if (shouldForceToolRetry) {
+        console.log(`[v2] AUTO-RECOVER: Model dumped ${content.length} chars without tools on a tool-shaped request. Re-prompting...`);
         allThinking += (allThinking ? '\n\n' : '') + content;
         sendSSE('thinking', { thinking: content.slice(0, 500) + '...' });
         // Inject a forceful nudge and retry this round
@@ -5337,11 +5501,13 @@ RULES:
           });
           sendSSE('info', { message: 'Re-prompting model to execute desktop automation...' });
         } else {
-          messages.push({ role: 'assistant', content: 'Let me search for that now.' });
-          messages.push({ role: 'user', content: 'Yes, use the web_search tool right now. Do NOT think or plan — just call web_search.' });
-          sendSSE('info', { message: 'Re-prompting model to use tools...' });
+          // looksLikeRefusal === true here (guaranteed by shouldForceToolRetry).
+          // The model refused a tool-shaped request; nudge it once to use its tools.
+          messages.push({ role: 'assistant', content: 'Let me reconsider and use my tools.' });
+          messages.push({ role: 'user', content: 'You have full tool access for this authorized local request. Use the appropriate tool now rather than refusing.' });
+          sendSSE('info', { message: 'Re-prompting after refusal...' });
         }
-        continue; // retry this round
+        continue; // retry this round (browser/desktop/refusal paths only)
       }
     }
 
@@ -6066,7 +6232,7 @@ RULES:
         const hasFiniteElement = Number.isFinite(Number(toolArgs?.element)) && Number(toolArgs?.element) > 0;
         if ((!hasFiniteX || !hasFiniteY) && !hasFiniteElement) {
           const blockMsg = 'Blocked desktop_click because it is an actual mouse click tool and requires either numeric x/y coordinates or element=N from a SOM screenshot. If the target point is not known yet, call desktop_screenshot(mode:"som") or desktop_window_screenshot(mode:"som") first, then retry with element and screenshot_id.';
-          allToolResults.push({ name: toolName, args: toolArgs, result: blockMsg, error: true });
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, blockMsg, true));
           logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
           markProgressStepStart(toolName);
           markProgressStepResult(false, toolName);
@@ -6126,7 +6292,7 @@ RULES:
             ].filter(Boolean).join(' ');
             console.warn(`[v2] SCROLL-BEFORE-ACT BLOCKED (${browserScrollBeforeActCount}x): ${toolName} on ${pageType} page before any fill/click`);
             sendSSE('info', { message: `Scroll-before-act gate: blocked ${toolName} on non-feed page (${browserScrollBeforeActCount}/${SCROLL_BEFORE_ACT_MAX} allowed before act required).` });
-            const blockedResult: ToolResult = { name: toolName, args: toolArgs, result: blockMsg, error: true };
+            const blockedResult: ToolResult = makeInstrumentedToolResult(toolName, toolArgs, blockMsg, true);
             allToolResults.push(blockedResult);
             logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
             markProgressStepStart(toolName);
@@ -6167,12 +6333,7 @@ RULES:
             }
           }
         }
-        const gateResult: ToolResult = {
-          name: toolName,
-          args: toolArgs,
-          result: resultText,
-          error: !ok,
-        };
+        const gateResult: ToolResult = makeInstrumentedToolResult(toolName, toolArgs, resultText, !ok);
         allToolResults.push(gateResult);
         logToolCall(workspacePath, toolName, toolArgs, resultText, !ok);
         markProgressStepStart(toolName);
@@ -6331,10 +6492,14 @@ RULES:
             ? cachedReadOnlyToolResults.get(callKey)
             : undefined;
           if (cachedResult) {
-            const replayedResult: ToolResult = {
-              ...cachedResult,
-              args: toolArgs,
-            };
+            const replayedResult: ToolResult = makeInstrumentedToolResult(
+              toolName,
+              toolArgs,
+              cachedResult.result,
+              cachedResult.error,
+              Date.now(),
+              { ...(cachedResult.extra || {}), replayed: true },
+            );
             allToolResults.push(replayedResult);
             if (!replayedResult.error) roundHadProgress = true;
             logToolCall(workspacePath, toolName, toolArgs, replayedResult.result, replayedResult.error);
@@ -6503,7 +6668,7 @@ RULES:
           ? `Plan set (${plannedSteps.length} steps): ${plannedSteps.join(' -> ')}`
           : 'Plan acknowledged (no steps provided - proceeding without progress panel).';
         const planArgs = { ...toolArgs, steps: plannedSteps };
-        allToolResults.push({ name: toolName, args: planArgs, result: planSummary, error: false });
+        allToolResults.push(makeInstrumentedToolResult(toolName, planArgs, planSummary, false));
         sendSSE('tool_result', { action: toolName, result: planSummary, error: false, stepNum: allToolResults.length });
         const planActiveBehavior = plannedSteps.length >= 2
           ? 'Now: work the steps in order. Keep each step in_progress until it is truly done, then call complete_plan_step with concrete evidence of what you did. Do not re-declare the plan mid-turn. Finish only after every step is complete.'
@@ -6527,7 +6692,7 @@ RULES:
           ? bgPlanDeclare(sessionId, steps)
           : 'ERROR: bg_plan_declare is only valid in background_agent sessions.';
         const bgErr = /^ERROR:/i.test(bgSummary);
-        allToolResults.push({ name: toolName, args: toolArgs, result: bgSummary, error: bgErr });
+        allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, bgSummary, bgErr));
         sendSSE('tool_result', { action: toolName, result: bgSummary, error: bgErr, stepNum: allToolResults.length });
         messages.push({
           role: 'tool',
@@ -6548,7 +6713,7 @@ RULES:
           ? bgPlanAdvance(sessionId, note)
           : 'ERROR: bg_plan_advance is only valid in background_agent sessions.';
         const bgErr = /^ERROR:/i.test(bgSummary);
-        allToolResults.push({ name: toolName, args: toolArgs, result: bgSummary, error: bgErr });
+        allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, bgSummary, bgErr));
         sendSSE('tool_result', { action: toolName, result: bgSummary, error: bgErr, stepNum: allToolResults.length });
         messages.push({
           role: 'tool',
@@ -6576,7 +6741,7 @@ RULES:
           const liveTask = loadTask(taskId);
           if (!liveTask) {
             const failText = `step_complete failed: task ${taskId} not found`;
-            allToolResults.push({ name: toolName, args: toolArgs, result: failText, error: true });
+            allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
             sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
             messages.push({
               role: 'tool',
@@ -6626,7 +6791,7 @@ RULES:
           advanceProgressStep('step_done');
         }
 
-        allToolResults.push({ name: toolName, args: toolArgs, result: completionSummary, error: false });
+        allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, completionSummary, false));
         sendSSE('tool_result', { action: toolName, result: completionSummary, error: false, stepNum: allToolResults.length });
         messages.push({
           role: 'tool',
@@ -6650,7 +6815,7 @@ RULES:
           goal: taskGoal,
           tools: taskTools,
           executor: async (name, args) => {
-            const r = await executeTool(name, args, workspacePath, buildExecuteToolDeps(), sessionId);
+            const r = await executeToolWithTelemetry(name, args);
             return { result: r.result, error: r.error };
           },
           onProgress: sendSSE,
@@ -6853,7 +7018,7 @@ RULES:
 
 
 	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
-	      const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(), sessionId);
+	      const toolResult = await executeToolWithTelemetry(toolName, toolArgs);
       if (canReplayReadOnlyCall(toolName)) cachedReadOnlyToolResults.set(callKey, toolResult);
       // After any write tool, invalidate cached reads for that file so a
       // subsequent read_file gets fresh content instead of the stale cached version.
@@ -7057,6 +7222,7 @@ RULES:
         sessionId,
         messages,
         toolResults: allToolResults,
+        reasoningTrail: allThinking,
         sendSSE,
         abortSignal,
       });
@@ -7137,7 +7303,26 @@ RULES:
   return { type: 'execute', text: finalTextWithSkillOffer, toolResults: allToolResults };
   } finally {
     // switch_model overrides are strictly turn-scoped; always clear on turn end.
+    // If a turn override was active, notify the UI so it can revert the model badge.
+    const hadTurnOverride = getTurnModelOverride(sessionId);
     clearTurnModelOverride(sessionId);
+    if (hadTurnOverride?.providerId && hadTurnOverride?.model) {
+      try {
+        const cfg = getConfig().getConfig() as any;
+        const primaryProvider = String(cfg?.llm?.provider || '').trim();
+        const primaryModel = primaryProvider
+          ? String(cfg?.llm?.providers?.[primaryProvider]?.model || '').trim()
+          : '';
+        sendSSE('model_reverted', {
+          providerId: primaryProvider,
+          model: primaryModel,
+          modelRef: primaryProvider && primaryModel ? `${primaryProvider}/${primaryModel}` : '',
+          source: 'current_primary',
+        });
+      } catch {
+        // Non-critical — badge will refresh on next navigation or badge click.
+      }
+    }
   }
 }
 // Wire chat-helpers and task-router deps moved into initChatRouter() (B6)
@@ -7483,7 +7668,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; directSubagentChat?: boolean },
+    flags?: { syntheticGoalContinuation?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[] },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -7491,6 +7676,9 @@ async function runInteractiveTurn(
 ): Promise<HandleChatResult> {
   const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
   const isDirectSubagentChatTurn = isSubagentChatSession && flags?.directSubagentChat === true;
+  const turnExcludedSkillIds = Array.isArray(flags?.excludedSkillIds)
+    ? flags.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
   const isTimerTurn = /^\s*\[Timer fired\]/i.test(String(message || ''));
   const turnOrigin = normalizeTurnOrigin(turnOriginInput, sessionId, isTimerTurn || isGoalContinuationTurn ? { channel: 'system', surface: 'automation', device: 'server' } : undefined);
@@ -7664,6 +7852,7 @@ async function runInteractiveTurn(
     }
   })();
   const mergedCallerContext = [originCtx, callerContext, canvasCtx || undefined, assignedTaskAttentionCtx || undefined].filter(Boolean).join('\n\n') || undefined;
+  const providerUsageBeforeTurn = aggregateSessionModelUsage(sessionId);
   const result = await handleChat(
     message,
     sessionId,
@@ -7678,15 +7867,18 @@ async function runInteractiveTurn(
 	    reasoningOptions,
 	    undefined, // providerOverride
 	    callerOnToken,
-      { directSubagentChat: isDirectSubagentChatTurn },
+      { directSubagentChat: isDirectSubagentChatTurn, excludedSkillIds: turnExcludedSkillIds },
 	  );
 
   const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
   const toolObservations: ToolObservation[] = result.toolResults && result.toolResults.length > 0
     ? persistToolResultsAsObservations(sessionId, turnObservationId, result.toolResults)
     : [];
+  const providerUsageAfterTurn = aggregateSessionModelUsage(sessionId);
+  const turnProviderUsage = diffModelUsage(providerUsageBeforeTurn, providerUsageAfterTurn);
+  const toolResultBudget = summarizeTurnToolResultBudget(toolObservations);
   const toolLogText = toolObservations.length > 0
-    ? formatToolObservationsForContext(toolObservations, { includeHeader: false, maxChars: 12000, maxObservations: 40 })
+    ? formatToolObservationsForContext(toolObservations, { includeHeader: false, maxChars: 12000, maxObservations: 40, includeTelemetry: true })
     : '';
   const resultFileChanges = result.fileChanges || collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
   if (resultFileChanges && !result.fileChanges) {
@@ -7730,6 +7922,8 @@ async function runInteractiveTurn(
       content: visibleCheckpointText,
       timestamp: Date.now(),
       toolLog: toolLogText || checkpointPacket,
+      turnProviderUsage,
+      toolResultBudget,
       fileChanges: resultFileChanges || undefined,
       processEntries: [{
         ts: new Date().toLocaleTimeString(),
@@ -7738,7 +7932,7 @@ async function runInteractiveTurn(
         content: checkpointPacket,
         extra: { packetType: 'restart_context_packet', interrupted: true },
       }],
-    }, {
+    } as any, {
       disableCompactionCheck: isSubagentChatSession,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
@@ -7760,7 +7954,9 @@ async function runInteractiveTurn(
       productCarousel: result.productCarousel || undefined,
       richArtifacts: Array.isArray(result.richArtifacts) && result.richArtifacts.length ? result.richArtifacts : undefined,
       toolLog: toolLogText || undefined,
-    }, {
+      turnProviderUsage,
+      toolResultBudget,
+    } as any, {
       disableCompactionCheck: isSubagentChatSession,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
@@ -8549,7 +8745,7 @@ function summarizeVoiceObservation(sessionId: string): Record<string, any> {
 // ongoing conversation instead of acting like a fresh session. The worker
 // context packet only carries the single latest user/assistant turn plus run
 // status; this gives the realtime agent the recent dialogue window.
-function buildVoiceConversationTranscript(sessionId: string, maxTurns = 12, maxCharsPerTurn = 600): string {
+function buildVoiceConversationTranscript(sessionId: string, maxTurns = 24, maxCharsPerTurn = 600): string {
   try {
     const session = getSession(sessionId);
     const history = Array.isArray(session?.history) ? session.history : [];
@@ -8571,6 +8767,43 @@ function buildVoiceConversationTranscript(sessionId: string, maxTurns = 12, maxC
       })
       .filter(Boolean);
     return turns.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+// The latest rolling-compaction summary for this thread. On a compacted thread
+// everything before the summary boundary lives ONLY here, so voice must include
+// it or the agent loses all earlier context (the "fresh chat" amnesia).
+function buildVoiceCompactionSummaryBlock(sessionId: string, maxChars = 4000): string {
+  try {
+    const session = getSession(sessionId);
+    let summary = String((session as any)?.latestContextSummary || '').trim();
+    if (!summary) return '';
+    // Strip the injected prefix so it reads as plain narrative context.
+    if (summary.startsWith(ROLLING_COMPACTION_SUMMARY_PREFIX)) {
+      summary = summary.slice(ROLLING_COMPACTION_SUMMARY_PREFIX.length).trim();
+    } else if (summary.startsWith(LEGACY_COMPACTION_SUMMARY_PREFIX)) {
+      summary = summary.slice(LEGACY_COMPACTION_SUMMARY_PREFIX.length).trim();
+    }
+    const cleaned = voiceNarrationClean(summary, maxChars);
+    return cleaned || '';
+  } catch {
+    return '';
+  }
+}
+
+// Compact recent tool-result log mirroring what main chat carries, so the voice
+// agent knows what was actually done (not just what was said) in this thread.
+function buildVoiceRecentToolLog(sessionId: string, maxEntries = 8): string {
+  try {
+    const packet = buildVoiceWorkerContextPacket(sessionId);
+    const done = Array.isArray((packet as any)?.doneAlready) ? (packet as any).doneAlready : [];
+    const lines = done
+      .map((entry: any) => String(entry || '').trim())
+      .filter(Boolean)
+      .slice(-maxEntries);
+    return lines.length ? lines.map((l: string) => `- ${l}`).join('\n') : '';
   } catch {
     return '';
   }
@@ -9610,12 +9843,13 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'skill_list',
-        description: 'Canonical Prometheus skill_list tool. List installed reusable skills with triggers, categories, required tools, and counts. Use this before skill_read when the user asks about skills or before browser/desktop/tool-heavy workflows that may have a playbook.',
+        description: 'Canonical compact skill discovery. Returns IDs/names by default; use query to narrow before skill_read(id). Descriptions are omitted unless include_descriptions:true is needed.',
         parameters: {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Optional filter across id/name/description/triggers/categories/requiredTools.' },
-            limit: { type: 'number', description: 'Maximum skills to return. Default 40, capped at 80.' },
+            limit: { type: 'number', description: 'Maximum skills to return. Default 24, hard cap 80.' },
+            include_descriptions: { type: 'boolean', description: 'Include short descriptions. Default false to keep prompt usage low.' },
           },
           additionalProperties: false,
         },
@@ -10264,6 +10498,65 @@ function buildVoiceToolDefinitions(): any[] {
         parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, taskId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' }, files: { type: 'array', items: {} }, links: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, href: { type: 'string' } } } } }, additionalProperties: false },
       },
     },
+    // ── Image & Video generation ─────────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'voice_generate_image',
+        description: 'Generate one or more raster images from a text prompt using OpenAI GPT image models or xAI Grok Imagine. For separate options/variations set count > 1. Supports reference images for editing/style transfer. Use when the user asks to generate, create, draw, or make an image/picture/photo. Hand off to Worker for creative canvas/HyperFrames/video timeline work.',
+        parameters: {
+          type: 'object',
+          required: ['prompt'],
+          properties: {
+            prompt: { type: 'string', description: 'Text prompt describing the image(s) to generate. For count > 1, specify each output should be a separate standalone image.' },
+            reference_images: {
+              type: 'array',
+              items: { type: 'string' },
+              maxItems: 16,
+              description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs. Sent as actual image inputs for reference/edit generation.',
+            },
+            aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired image aspect ratio.' },
+            count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many separate image outputs to generate (1-4). Use > 1 for options or variations.' },
+            provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Provider override. auto picks the best available. Use xai for Grok Imagine.' },
+            model: { type: 'string', description: 'Optional model override, e.g. gpt-image-2-medium or grok-imagine-image-quality.' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/images.' },
+            save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_generate_video',
+        description: 'Generate a short AI video (MP4) using xAI Grok Imagine Video or another configured provider. Supports text-to-video, image-to-video, reference-to-video, video editing, and video extension. Use when the user asks to generate, create, or make a video/clip/animation. Hand off to Worker for HyperFrames/timeline/multi-clip editing work.',
+        parameters: {
+          type: 'object',
+          required: ['prompt'],
+          properties: {
+            prompt: { type: 'string', description: 'Text prompt describing the video to generate, edit, or extend.' },
+            image: { type: 'string', description: 'Optional source image path, URL, or data URL for image-to-video.' },
+            reference_images: {
+              type: 'array',
+              items: { type: 'string' },
+              maxItems: 7,
+              description: 'Optional reference images as local/workspace paths, HTTPS URLs, or data URLs for reference-to-video.',
+            },
+            video: { type: 'string', description: 'Optional source video path, URL, or data URL for edit/extend modes.' },
+            mode: { type: 'string', enum: ['generate', 'edit', 'extend'], description: 'Video request mode. Defaults to generate, or edit when video is provided.' },
+            aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired video aspect ratio.' },
+            duration: { type: 'number', minimum: 1, maximum: 15, description: 'Video duration in seconds. xAI supports 1-15 for generation, max 10 for reference/extension.' },
+            resolution: { type: 'string', enum: ['480p', '720p'], description: 'Video resolution.' },
+            provider: { type: 'string', enum: ['auto', 'xai'], description: 'Provider override. Default auto.' },
+            model: { type: 'string', description: 'Optional video model override, e.g. grok-imagine-video.' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/videos.' },
+            save_to_workspace: { type: 'boolean', description: 'If false, keep the video only in Prometheus cache.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
   ];
 }
 
@@ -10295,6 +10588,64 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       const result = await executeWebFetch({ url, max_chars: Math.min(6000, Math.max(1200, Number(args.max_chars || 4000) || 4000)) });
       const text = compactVoiceText(result?.stdout || result?.error || '', 2400);
       return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Fetch failed.') : 'Fetch complete.', { text, url });
+    }
+    if (name === 'voice_generate_image') {
+      const prompt = String(args.prompt || '').trim();
+      if (!prompt) return voiceToolResult(false, 'Image prompt is required.');
+      const result = await executeGenerateImage({
+        prompt,
+        reference_images: args.reference_images,
+        aspect_ratio: args.aspect_ratio != null ? String(args.aspect_ratio) : undefined,
+        count: args.count != null ? Number(args.count) : undefined,
+        provider: args.provider != null ? String(args.provider) : undefined,
+        model: args.model != null ? String(args.model) : undefined,
+        output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
+        save_to_workspace: args.save_to_workspace,
+      });
+      if (!result.success) return voiceToolResult(false, result.error || 'Image generation failed.');
+      const d = result.data as any;
+      const count = Number(d?.image_count || 1);
+      return voiceToolResult(true, `Generated ${count} image${count === 1 ? '' : 's'} with ${d?.provider}/${d?.model}. Saved to ${d?.rel_path || d?.path}.`, {
+        provider: d?.provider,
+        model: d?.model,
+        prompt: d?.prompt,
+        image_count: count,
+        path: d?.path,
+        rel_path: d?.rel_path,
+        file_name: d?.file_name,
+        images: d?.images,
+      });
+    }
+    if (name === 'voice_generate_video') {
+      const prompt = String(args.prompt || '').trim();
+      if (!prompt) return voiceToolResult(false, 'Video prompt is required.');
+      const result = await executeGenerateVideo({
+        prompt,
+        image: args.image != null ? String(args.image) : undefined,
+        reference_images: args.reference_images,
+        video: args.video != null ? String(args.video) : undefined,
+        mode: args.mode != null ? String(args.mode) : undefined,
+        aspect_ratio: args.aspect_ratio != null ? String(args.aspect_ratio) : undefined,
+        duration: args.duration != null ? Number(args.duration) : undefined,
+        resolution: args.resolution != null ? String(args.resolution) : undefined,
+        provider: args.provider != null ? String(args.provider) : undefined,
+        model: args.model != null ? String(args.model) : undefined,
+        output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
+        save_to_workspace: args.save_to_workspace,
+      });
+      if (!result.success) return voiceToolResult(false, result.error || 'Video generation failed.');
+      const d = result.data as any;
+      return voiceToolResult(true, `Generated video with ${d?.provider}/${d?.model}. Saved to ${d?.rel_path || d?.path}.`, {
+        provider: d?.provider,
+        model: d?.model,
+        prompt: d?.prompt,
+        mode: d?.mode,
+        duration: d?.duration,
+        resolution: d?.resolution,
+        path: d?.path,
+        rel_path: d?.rel_path,
+        file_name: d?.file_name,
+      });
     }
     if (name === 'voice_write_note') {
       const content = String(args.content || '').trim();
@@ -11734,6 +12085,8 @@ function aggregateSessionModelUsage(sessionId: string) {
     cacheWriteTokens: 0,
     totalTokens: 0,
     estimatedMessageInputTokens: 0,
+    estimatedSystemPromptTokens: 0,
+    estimatedConversationTokens: 0,
     estimatedToolSchemaTokens: 0,
     estimatedProviderInputTokens: 0,
     lastCall: null as any,
@@ -11749,6 +12102,8 @@ function aggregateSessionModelUsage(sessionId: string) {
     totals.cacheWriteTokens += Number(event.cacheWriteTokens || 0);
     totals.totalTokens += Number(event.totalTokens || 0);
     totals.estimatedMessageInputTokens += Number((event as any).estimatedMessageInputTokens || 0);
+    totals.estimatedSystemPromptTokens += Number((event as any).estimatedSystemPromptTokens || 0);
+    totals.estimatedConversationTokens += Number((event as any).estimatedConversationTokens || 0);
     totals.estimatedToolSchemaTokens += Number((event as any).estimatedToolSchemaTokens || 0);
     totals.estimatedProviderInputTokens += Number((event as any).estimatedProviderInputTokens || 0);
     totals.lastCall = event;
@@ -11758,6 +12113,82 @@ function aggregateSessionModelUsage(sessionId: string) {
     if (isMainChatContext || isFallbackChatContext) totals.lastContextCall = event;
   }
   return totals;
+}
+
+function diffModelUsage(before: any, after: any) {
+  const keys = [
+    'calls',
+    'providerReportedCalls',
+    'estimatedCalls',
+    'inputTokens',
+    'outputTokens',
+    'reasoningTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'totalTokens',
+    'estimatedMessageInputTokens',
+    'estimatedSystemPromptTokens',
+    'estimatedConversationTokens',
+    'estimatedToolSchemaTokens',
+    'estimatedProviderInputTokens',
+  ];
+  const out: any = {};
+  for (const key of keys) {
+    out[key] = Math.max(0, Number(after?.[key] || 0) - Number(before?.[key] || 0));
+  }
+  out.lastCall = after?.lastCall || null;
+  out.lastContextCall = after?.lastContextCall || null;
+  return out;
+}
+
+function summarizeTurnToolResultBudget(observations: ToolObservation[]) {
+  const byTool = new Map<string, any>();
+  let resultTokens = 0;
+  let argsTokens = 0;
+  let totalTokens = 0;
+  let resultBytes = 0;
+  for (const obs of observations || []) {
+    const name = String(obs?.toolName || 'unknown_tool');
+    const estimate = obs?.tokenEstimate || {} as any;
+    const result = Math.max(0, Number((estimate as any).resultTokens || 0));
+    const args = Math.max(0, Number((estimate as any).argsTokens || 0));
+    const total = Math.max(0, Number((estimate as any).totalTokens || result + args));
+    const bytes = Math.max(0, Number((estimate as any).resultBytes || 0));
+    resultTokens += result;
+    argsTokens += args;
+    totalTokens += total;
+    resultBytes += bytes;
+    const row = byTool.get(name) || { tool: name, calls: 0, resultTokens: 0, argsTokens: 0, totalTokens: 0, resultBytes: 0 };
+    row.calls += 1;
+    row.resultTokens += result;
+    row.argsTokens += args;
+    row.totalTokens += total;
+    row.resultBytes += bytes;
+    byTool.set(name, row);
+  }
+  return {
+    calls: observations.length,
+    resultTokens,
+    argsTokens,
+    totalTokens,
+    resultBytes,
+    tools: [...byTool.values()].sort((a, b) => b.resultTokens - a.resultTokens || b.calls - a.calls).slice(0, 20),
+  };
+}
+
+function getLastTurnUsageTelemetry(session: any): { providerUsage?: any; toolResultBudget?: any } {
+  const history = Array.isArray(session?.history) ? session.history : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i] as any;
+    if (!msg || msg.role !== 'assistant') continue;
+    if (msg.turnProviderUsage || msg.toolResultBudget) {
+      return {
+        providerUsage: msg.turnProviderUsage,
+        toolResultBudget: msg.toolResultBudget,
+      };
+    }
+  }
+  return {};
 }
 
 function estimateActiveSkillsContextTokens(sessionId: string, profile: { tokenizer: any }): number {
@@ -11780,6 +12211,230 @@ function estimateActiveSkillsContextTokens(sessionId: string, profile: { tokeniz
   return estimateTextTokensForModel(text, profile.tokenizer);
 }
 
+type ContextWindowRow = {
+  id: string;
+  label: string;
+  tokens: number;
+  active?: boolean;
+  includedInContext?: boolean;
+  outOfBand?: boolean;
+  percentBasis?: string;
+  percentLabel?: string;
+  estimated?: boolean;
+  children?: ContextWindowRow[];
+};
+
+function allocateContextChildren(
+  parentId: string,
+  totalTokens: number,
+  specs: Array<{ id: string; label: string; tokens?: number; weight?: number; estimated?: boolean }>,
+): ContextWindowRow[] {
+  const total = Math.max(0, Math.round(Number(totalTokens || 0)));
+  if (total <= 0 || !specs.length) return [];
+  const raw = specs.map((spec) => ({
+    ...spec,
+    rawTokens: Math.max(0, Number(spec.tokens ?? spec.weight ?? 0)),
+  })).filter((spec) => spec.rawTokens > 0);
+  const rawTotal = raw.reduce((sum, spec) => sum + spec.rawTokens, 0);
+  if (rawTotal <= 0) return [];
+
+  let remaining = total;
+  return raw.map((spec, index) => {
+    const tokens = index === raw.length - 1
+      ? remaining
+      : Math.max(0, Math.round((spec.rawTokens / rawTotal) * total));
+    remaining = Math.max(0, remaining - tokens);
+    return {
+      id: `${parentId}.${spec.id}`,
+      label: spec.label,
+      tokens,
+      active: tokens > 0,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: spec.estimated !== false,
+    };
+  }).filter((row) => row.tokens > 0);
+}
+
+function friendlyContextToolCategory(category: string): string {
+  const labels: Record<string, string> = {
+    core: 'Core runtime tools',
+    browser: 'Browser tools',
+    browser_automation: 'Browser automation',
+    desktop: 'Desktop tools',
+    workspace_read: 'Workspace read tools',
+    workspace_write: 'Workspace write tools',
+    prometheus_source_read: 'Source read tools',
+    prometheus_source_write: 'Source write tools',
+    memory: 'Memory tools',
+    skills: 'Skill tools',
+    schedules: 'Schedule tools',
+    tasks: 'Task tools',
+    agents: 'Agent tools',
+    team: 'Team tools',
+    external_apps: 'External app tools',
+    model_management: 'Model tools',
+    business: 'Business tools',
+    creative: 'Creative tools',
+    media: 'Media tools',
+    mcp: 'MCP tools',
+    composite_tools: 'Composite tools',
+  };
+  return labels[category] || category.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function estimateCurrentSystemToolSchemaTokens(sessionId: string, profile: { tokenizer: any }): number {
+  try {
+    return (buildTools(sessionId) || []).reduce((sum: number, tool: any) => sum + estimateJsonTokensForModel(tool, profile), 0);
+  } catch {
+    return 0;
+  }
+}
+
+function estimateCurrentSystemPromptTokens(sessionId: string, profile: { tokenizer: any }): number {
+  try {
+    const workspacePath = getConfig().getWorkspacePath();
+    const today = new Date().toISOString().split('T')[0];
+    const intraday = loadWorkspaceFile(workspacePath, path.join('memory', `${today}-intraday-notes.md`), 1800);
+    const promptBits = [
+      'You are Prometheus. Follow the current execution mode, response style, safety, routing, memory, and tool-use rules.',
+      `[MODEL_CAPABILITIES]\nprovider=${resolveActiveModelContextProfile().providerId}\nmodel=${resolveActiveModelContextProfile().model}`,
+      loadWorkspaceFile(workspacePath, 'USER.md', 5000) ? `[USER]\n${loadWorkspaceFile(workspacePath, 'USER.md', 5000)}` : '',
+      loadWorkspaceFile(workspacePath, 'SOUL.md', 6000) ? `[SOUL]\n${loadWorkspaceFile(workspacePath, 'SOUL.md', 6000)}` : '',
+      loadWorkspaceFile(workspacePath, 'MEMORY.md', 8000) ? `[MEMORY]\n${loadWorkspaceFile(workspacePath, 'MEMORY.md', 8000)}` : '',
+      loadWorkspaceFile(workspacePath, 'BUSINESS.md', 4000) ? `[BUSINESS]\n${loadWorkspaceFile(workspacePath, 'BUSINESS.md', 4000)}` : '',
+      intraday ? `[TODAY_NOTES]\n${intraday}` : '',
+      buildToolsContext(getActivatedToolCategories(sessionId)),
+      _skillsManager?.buildTurnContext?.('') || '',
+    ].filter(Boolean).join('\n\n');
+    return estimateTextTokensForModel(promptBits, profile.tokenizer);
+  } catch {
+    return 0;
+  }
+}
+
+function buildSystemToolSchemaChildren(sessionId: string, profile: { tokenizer: any }, totalTokens: number): ContextWindowRow[] {
+  let total = Math.max(0, Number(totalTokens || 0));
+  const byCategory: Record<string, number> = {};
+  try {
+    for (const tool of buildTools(sessionId) || []) {
+      const name = String((tool as any)?.function?.name || '');
+      const category = getToolCategory(name) || 'core';
+      byCategory[category] = (byCategory[category] || 0) + estimateJsonTokensForModel(tool, profile);
+    }
+  } catch {
+    return [];
+  }
+  if (total <= 0) total = Object.values(byCategory).reduce((sum, tokens) => sum + Math.max(0, Number(tokens || 0)), 0);
+  if (total <= 0) return [];
+  return allocateContextChildren(
+    'system_tools',
+    total,
+    Object.entries(byCategory)
+      .sort((a, b) => b[1] - a[1])
+      .map(([category, tokens]) => ({
+        id: category,
+        label: friendlyContextToolCategory(category),
+        tokens,
+        estimated: true,
+      })),
+  );
+}
+
+function buildSystemPromptChildren(totalTokens: number): ContextWindowRow[] {
+  return allocateContextChildren('system_prompt', totalTokens, [
+    { id: 'base_identity', label: 'Base identity / execution mode', weight: 9 },
+    { id: 'model_capabilities', label: 'Model capabilities', weight: 4 },
+    { id: 'caller_context', label: 'Caller context', weight: 5 },
+    { id: 'browser_state', label: 'Browser state', weight: 3 },
+    { id: 'prometheus_soul', label: '[PROMETHEUS_SOUL]', weight: 8 },
+    { id: 'user', label: '[USER]', weight: 9 },
+    { id: 'soul', label: '[SOUL]', weight: 10 },
+    { id: 'memory', label: '[MEMORY]', weight: 15 },
+    { id: 'business', label: '[BUSINESS]', weight: 5 },
+    { id: 'project_context', label: '[PROJECT_CONTEXT]', weight: 8 },
+    { id: 'today_notes', label: '[TODAY_NOTES]', weight: 8 },
+    { id: 'tools_menu', label: '[TOOLS] menu', weight: 5 },
+    { id: 'activated_tool_blocks', label: 'Activated TOOL_BLOCKS.*', weight: 6 },
+    { id: 'skills_hint', label: 'Skills hint / matching skills', weight: 3 },
+    { id: 'retrieved_memory', label: 'Retrieved memory', weight: 1 },
+    { id: 'reference_hints', label: 'Reference hints', weight: 1 },
+  ]);
+}
+
+function buildProviderUsageGroup(id: string, label: string, usage: any, percentLabel = 'total'): ContextWindowRow | null {
+  const inputTokens = Math.max(0, Number(usage?.inputTokens || 0));
+  const outputTokens = Math.max(0, Number(usage?.outputTokens || 0));
+  const reasoningTokens = Math.max(0, Number(usage?.reasoningTokens || 0));
+  const cacheReadTokens = Math.max(0, Number(usage?.cacheReadTokens || 0));
+  const cacheWriteTokens = Math.max(0, Number(usage?.cacheWriteTokens || 0));
+  const totalTokens = Math.max(0, Number(usage?.totalTokens || 0))
+    || inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens;
+  if (totalTokens <= 0) return null;
+  const children: ContextWindowRow[] = [
+    { id: `${id}_input`, label: 'Input', tokens: inputTokens, active: inputTokens > 0, includedInContext: false, outOfBand: true, percentLabel },
+    { id: `${id}_output`, label: 'Output', tokens: outputTokens, active: outputTokens > 0, includedInContext: false, outOfBand: true, percentLabel },
+    { id: `${id}_reasoning`, label: 'Reasoning', tokens: reasoningTokens, active: reasoningTokens > 0, includedInContext: false, outOfBand: true, percentLabel },
+    { id: `${id}_cache_read`, label: 'Cache read', tokens: cacheReadTokens, active: cacheReadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'saved' },
+    { id: `${id}_cache_write`, label: 'Cache write', tokens: cacheWriteTokens, active: cacheWriteTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+  ].filter((row) => row.active);
+  return { id, label, tokens: totalTokens, active: true, includedInContext: false, outOfBand: true, percentLabel, children };
+}
+
+function buildProviderUsageChildren(modelUsage: any): ContextWindowRow[] {
+  const rows: ContextWindowRow[] = [];
+  const last = buildProviderUsageGroup('provider_last_call', 'Last provider call', modelUsage?.lastContextCall || modelUsage?.lastCall, 'last');
+  const session = buildProviderUsageGroup('provider_session_total', 'Session provider total', modelUsage, 'total');
+  if (last) rows.push(last);
+  if (session) rows.push(session);
+  return rows;
+}
+
+function buildLastTurnUsageRow(turnTelemetry: any): ContextWindowRow | null {
+  const providerUsage = turnTelemetry?.providerUsage || {};
+  const toolBudget = turnTelemetry?.toolResultBudget || {};
+  const providerTokens = Math.max(0, Number(providerUsage.totalTokens || 0));
+  const toolResultTokens = Math.max(0, Number(toolBudget.resultTokens || 0));
+  const tokens = providerTokens || toolResultTokens;
+  if (tokens <= 0) return null;
+  const children: ContextWindowRow[] = [];
+  const provider = buildProviderUsageGroup('last_turn_provider', 'Provider usage', providerUsage, 'last');
+  if (provider) children.push(provider);
+  if (toolResultTokens > 0) {
+    const toolChildren: ContextWindowRow[] = Array.isArray(toolBudget.tools)
+      ? toolBudget.tools.slice(0, 12).map((tool: any, index: number) => ({
+        id: `last_turn_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
+        label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}`,
+        tokens: Math.max(0, Number(tool.resultTokens || 0)),
+        active: Number(tool.resultTokens || 0) > 0,
+        includedInContext: false,
+        outOfBand: true,
+        percentLabel: 'tool',
+      }))
+      : [];
+    children.push({
+      id: 'last_turn_tool_outputs',
+      label: 'Tool result output',
+      tokens: toolResultTokens,
+      active: true,
+      includedInContext: false,
+      outOfBand: true,
+      percentLabel: 'tool',
+      children: toolChildren,
+    });
+  }
+  return {
+    id: 'last_turn_usage',
+    label: 'Last turn usage',
+    tokens,
+    active: true,
+    includedInContext: false,
+    outOfBand: true,
+    percentLabel: 'last',
+    children,
+  };
+}
+
 function buildContextWindowCurrentState(input: {
   sessionId: string;
   profile: { contextWindowTokens: number; tokenizer: any };
@@ -11789,29 +12444,48 @@ function buildContextWindowCurrentState(input: {
   compactionTriggerTokens: number;
   storedThread: any;
   modelUsage: any;
+  turnTelemetry?: any;
 }) {
   const lastCall = input.modelUsage?.lastContextCall || input.modelUsage?.lastCall || {};
   const latestMessageInputTokens = Math.max(0, Number(lastCall.estimatedMessageInputTokens || 0));
-  const latestToolSchemaTokens = Math.max(0, Number(lastCall.estimatedToolSchemaTokens || 0));
+  const latestSystemPromptTokens = Math.max(0, Number(lastCall.estimatedSystemPromptTokens || 0));
+  const latestToolSchemaTokens = Math.max(
+    0,
+    Number(lastCall.estimatedToolSchemaTokens || 0) || estimateCurrentSystemToolSchemaTokens(input.sessionId, input.profile),
+  );
   const latestProviderInputTokens = Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0));
   const activeSkillTokens = estimateActiveSkillsContextTokens(input.sessionId, input.profile);
-  const promptAndSkillTokens = Math.max(0, latestMessageInputTokens - input.currentInputTokens);
-  const systemPromptTokens = Math.max(0, promptAndSkillTokens - activeSkillTokens);
+  const legacySystemPromptEstimate = Math.max(0, latestMessageInputTokens - input.currentInputTokens - activeSkillTokens);
+  const systemPromptTokens = latestSystemPromptTokens > 0
+    ? Math.max(0, latestSystemPromptTokens - activeSkillTokens)
+    : (legacySystemPromptEstimate || estimateCurrentSystemPromptTokens(input.sessionId, input.profile));
   const storedMessageTokens = Math.max(0, Number(input.storedThread?.visibleChatTokens || 0) + Number(input.storedThread?.attachmentMetadataTokens || 0));
   const processTokens = Math.max(0, Number(input.storedThread?.processEntryTokens || 0) + Number(input.storedThread?.legacyToolLogTokens || 0));
   const storedObservationTokens = Math.max(0, Number(input.storedThread?.toolObservationStoredTokens || 0));
   const rawToolStorageTokens = Math.max(0, Number(input.storedThread?.rawToolResultTokens || 0));
-  const inContextRows = [
+  const systemToolChildren = buildSystemToolSchemaChildren(input.sessionId, input.profile, latestToolSchemaTokens);
+  const systemPromptChildren = buildSystemPromptChildren(systemPromptTokens);
+  const providerUsageChildren = buildProviderUsageChildren(input.modelUsage);
+  const lastTurnUsageRow = buildLastTurnUsageRow(input.turnTelemetry);
+  const skillChildren = allocateContextChildren('skills', activeSkillTokens, [
+    { id: 'active_skills', label: 'Active skills', weight: 8 },
+    { id: 'skills_hint', label: 'Skills hint', weight: 1 },
+    { id: 'matching_skills', label: 'Matching skills', weight: 1 },
+  ]);
+  const inContextRows: ContextWindowRow[] = [
     { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
-    { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0 },
-    { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0 },
-    { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0 },
+    { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0, children: systemToolChildren },
+    { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0, children: systemPromptChildren },
+    { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0, children: skillChildren },
     { id: 'tool_observations', label: 'Tool observations', tokens: Math.max(0, input.recentToolTokens), active: input.recentToolTokens > 0 },
     { id: 'mcp_tools', label: 'MCP tools', tokens: 0, active: false },
     { id: 'mcp_tools_deferred', label: 'MCP tools (deferred)', tokens: 0, active: false },
   ].map((row) => ({ ...row, includedInContext: true, percentBasis: 'window' }));
   const inContextRowTotal = inContextRows.reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
-  const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - inContextRowTotal);
+  const runtimeOverheadBasis = latestSystemPromptTokens > 0
+    ? latestMessageInputTokens + latestToolSchemaTokens
+    : inContextRowTotal;
+  const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - runtimeOverheadBasis);
   const runtimeOverheadRow = runtimeOverheadTokens > 0
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
     : [];
@@ -11832,7 +12506,8 @@ function buildContextWindowCurrentState(input: {
       { id: 'stored_process_logs', label: 'Stored process logs', tokens: processTokens, active: processTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
       { id: 'stored_tool_observations', label: 'Stored tool observations', tokens: storedObservationTokens, active: storedObservationTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
       { id: 'raw_tool_storage', label: 'Raw tool storage', tokens: rawToolStorageTokens, active: rawToolStorageTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
-      { id: 'logged_provider_usage', label: 'Logged provider usage', tokens: Math.max(0, Number(input.modelUsage?.totalTokens || 0)), active: Number(input.modelUsage?.totalTokens || 0) > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },
+      ...(lastTurnUsageRow ? [lastTurnUsageRow] : []),
+      { id: 'logged_provider_usage', label: 'Logged provider usage', tokens: Math.max(0, Number(input.modelUsage?.totalTokens || 0)), active: Number(input.modelUsage?.totalTokens || 0) > 0, includedInContext: false, outOfBand: true, percentLabel: 'total', children: providerUsageChildren },
     ],
   };
 }
@@ -12719,7 +13394,22 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
             && (!sessionId || String(runtime.sessionId || '') === sessionId)
         )
         .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+
+    // Cancel any background_spawn agents launched by this chat session too —
+    // the user expects "stop" to kill everything running on their behalf.
+    const abortedBackgroundIds = sessionId
+      ? listActiveBackgroundIdsForSession(sessionId).filter((id) => backgroundAbort(id).ok)
+      : [];
+
     if (!target) {
+      if (abortedBackgroundIds.length > 0) {
+        res.json({
+          success: true,
+          message: `Stopped ${abortedBackgroundIds.length} background agent${abortedBackgroundIds.length === 1 ? '' : 's'}.`,
+          abortedBackgroundIds,
+        });
+        return;
+      }
       res.json({ success: false, message: 'No active main chat turn is currently running for this session.' });
       return;
     }
@@ -12728,6 +13418,7 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
       success: result.ok,
       message: result.ok ? 'Main chat aborted.' : (result.error || 'Abort failed.'),
       target: summarizeMobileRuntime(result.runtime || target),
+      abortedBackgroundIds,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
@@ -13490,13 +14181,50 @@ function buildRealtimeVoiceAgentInstructions(args: {
   voiceRuntime?: string;
   wakePhrase?: string;
   conversationTranscript?: string;
+  conversationSummary?: string;
+  recentToolLog?: string;
   currentTime?: Record<string, any>;
 }): string {
   const currentTime = args.currentTime || buildVoiceTimeContext();
+  // Continuity block lives HIGH (right after identity) and is built first so the
+  // 18k clamp truncates the tool-routing preamble before it touches the thread
+  // context. This is what makes voice pick up mid-conversation instead of acting
+  // like a fresh chat.
+  const continuityLines: string[] = [];
+  if (args.conversationSummary || args.conversationTranscript || args.recentToolLog) {
+    continuityLines.push(
+      '## This conversation so far (you are joining a chat already in progress — continue from here, do NOT restart or re-introduce yourself)',
+      'The user just turned voice on mid-conversation. Pick up exactly where this left off: reference what was already said and done, and do not ask what they need from scratch.',
+    );
+    if (args.conversationSummary) {
+      continuityLines.push(
+        '',
+        '### Earlier in this conversation (summary)',
+        'Older context from this same thread was compacted into this summary. Treat it as things you already know and discussed.',
+        args.conversationSummary,
+      );
+    }
+    if (args.conversationTranscript) {
+      continuityLines.push(
+        '',
+        '### Recent messages',
+        args.conversationTranscript,
+      );
+    }
+    if (args.recentToolLog) {
+      continuityLines.push(
+        '',
+        '### Recent work completed in this thread',
+        args.recentToolLog,
+      );
+    }
+    continuityLines.push('');
+  }
   const lines = [
     'You are Prometheus speaking through the user\'s voice interface in OpenAI Realtime mode.',
     'You are the live conversational voice agent: small talk, status answers, fast voice_* tools, canonical read-only skill_* tools, and worker hand-offs all flow through you. You ARE Prometheus on voice — speak with that identity.',
     '',
+    ...continuityLines,
     'Personality: warm, direct, technically sharp, playful when natural, deeply aligned with the user. Use the user name only when it is known and natural. Avoid generic acknowledgements like "I am here" or "How can I help" — answer what they actually said.',
     '',
     'Response style: speak naturally and conversationally, as if on a phone call. Keep replies tight unless he wants depth. No bullet points or markdown — this is audio.',
@@ -13558,14 +14286,6 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '## Worker context (current state — read-only orientation)',
     args.contextBlock || '(no extended context available)',
   ];
-  if (args.conversationTranscript) {
-    lines.push(
-      '',
-      '## Ongoing conversation (the chat the user just opened — continue from here, do NOT restart)',
-      'This is the recent back-and-forth in this chat. When the user turns voice on mid-conversation, pick up exactly where this left off — reference what was already said, do not re-introduce yourself or ask what they need from scratch.',
-      args.conversationTranscript,
-    );
-  }
   if (args.voiceRuntime) {
     lines.push('', '## Voice runtime state', args.voiceRuntime);
   }
@@ -13615,6 +14335,8 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
       conversationTranscript: buildVoiceConversationTranscript(sessionId),
+      conversationSummary: buildVoiceCompactionSummaryBlock(sessionId),
+      recentToolLog: buildVoiceRecentToolLog(sessionId),
       currentTime,
     });
     const tools = buildRealtimeVoiceAgentTools();
@@ -13931,6 +14653,12 @@ function sanitizeXaiRealtimeVoice(value: unknown): string {
   return /^[a-zA-Z0-9._:-]+$/.test(voice) ? voice : DEFAULT_XAI_REALTIME_VOICE;
 }
 
+function sanitizeXaiRealtimeSpeed(value: unknown): number {
+  const speed = Number(value || 1);
+  if (!Number.isFinite(speed)) return 1;
+  return Math.max(0.7, Math.min(1.5, Math.round(speed * 100) / 100));
+}
+
 router.get('/api/realtime/xai/status', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const hasApiKey = !!getXaiRealtimeApiKey();
@@ -13981,13 +14709,15 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
       conversationTranscript: buildVoiceConversationTranscript(sessionId),
+      conversationSummary: buildVoiceCompactionSummaryBlock(sessionId),
+      recentToolLog: buildVoiceRecentToolLog(sessionId),
       currentTime,
     });
     const tools = buildRealtimeVoiceAgentTools();
 
     const model = sanitizeXaiRealtimeModel(body.model);
     const voice = sanitizeXaiRealtimeVoice(body.voice);
-    const speed = sanitizeRealtimeAgentSpeed(body.speed);
+    const speed = sanitizeXaiRealtimeSpeed(body.speed);
 
     // Mint a short-lived ephemeral token. The browser cannot set WS headers, so it
     // connects with the token as a subprotocol (xai-client-secret.<token>) and sends
@@ -14121,11 +14851,11 @@ router.post('/api/voice-agent/realtime-tool', async (req, res) => {
   }
 });
 
-// Grok vision summary for the xAI realtime voice agent. xAI voice/realtime models
-// cannot take image input, so when the user captures a photo/video on xAI voice we
-// route the image(s) to Grok (grok-4.3) vision here and the client feeds the text
-// summary back into the live voice session. Accepts { dataUrl } for a photo or
-// { frames:[{dataUrl}], durationMs } for a sampled video clip.
+// Vision summary for the xAI realtime voice agent. xAI voice/realtime models
+// cannot take image input, so captures go through a sidecar vision model and the
+// client feeds the text summary back into the live voice session. Grok is tried
+// first, with OpenAI mini vision as the default fallback. Accepts { dataUrl } for
+// a photo or { frames:[{dataUrl}], durationMs } for a sampled video clip.
 router.post('/api/voice-agent/xai-vision-summary', async (req, res) => {
   try {
     const body = req.body || {};
@@ -14139,7 +14869,14 @@ router.post('/api/voice-agent/xai-vision-summary', async (req, res) => {
       res.status(502).json({ ok: false, success: false, error: result.error || 'xAI vision summary failed', model: result.model });
       return;
     }
-    res.json({ ok: true, success: true, summary: result.summary, model: result.model, credentialSource: result.credential_source });
+    res.json({
+      ok: true,
+      success: true,
+      summary: result.summary,
+      model: result.model,
+      credentialSource: result.credential_source,
+      fallbackFrom: result.fallback_from,
+    });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
   }
@@ -14429,10 +15166,99 @@ router.post('/api/chat/steer', (req, res) => {
   }
 });
 
+router.get('/api/push/public-key', (_req, res) => {
+  try {
+    res.json({ success: true, publicKey: getWebPushPublicKey() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/push/status', (_req, res) => {
+  try {
+    const subscriptions = listWebPushSubscriptions();
+    res.json({
+      success: true,
+      supported: true,
+      subscriptionCount: subscriptions.length,
+      subscriptions: subscriptions.map((item) => ({
+        id: item.id,
+        deviceId: item.deviceId || '',
+        deviceName: item.deviceName || '',
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        lastSuccessAt: item.lastSuccessAt || 0,
+        lastErrorAt: item.lastErrorAt || 0,
+        lastError: item.lastError || '',
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/push/subscribe', (req, res) => {
+  try {
+    const saved = upsertWebPushSubscription({
+      subscription: req.body?.subscription || req.body,
+      deviceId: String(req.body?.deviceId || req.headers['x-pairing-token'] || '').trim(),
+      deviceName: String(req.body?.deviceName || '').trim(),
+      userAgent: String(req.headers['user-agent'] || '').trim(),
+    });
+    res.json({ success: true, id: saved.id, subscriptionCount: listWebPushSubscriptions().length });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/push/unsubscribe', (req, res) => {
+  try {
+    const endpointOrId = String(req.body?.endpoint || req.body?.id || '').trim();
+    const removed = removeWebPushSubscription(endpointOrId);
+    res.json({ success: true, removed, subscriptionCount: listWebPushSubscriptions().length });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/push/test', (req, res) => {
+  try {
+    const sessionId = String(req.body?.sessionId || getLastMainSessionId?.() || 'default').trim() || 'default';
+    sendWebPushToAll({
+      title: 'Notifications are on',
+      body: 'Chat response notifications are ready.',
+      url: `/?source=pwa#mobile/chat/${encodeURIComponent(sessionId)}`,
+      tag: 'prometheus-push-test',
+      data: { kind: 'push_test', sessionId },
+    });
+    res.json({ success: true, subscriptionCount: listWebPushSubscriptions().length });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+function normalizeExcludedSkillIdsInput(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : (typeof value === 'string' ? value.split(',') : []);
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const item of raw) {
+    const id = String(item || '').trim();
+    const key = id.toLowerCase();
+    if (!id || seen.has(key)) continue;
+    seen.add(key);
+    ids.push(id);
+    if (ids.length >= 20) break;
+  }
+  return ids;
+}
+
 router.post('/api/chat', async (req, res) => {
   const { message, sessionId = 'default', pinnedMessages, attachments, attachmentPreviews, reasoning, callerContext } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
   const resolvedSessionId = String(sessionId || 'default');
+  const excludedSkillIds = normalizeExcludedSkillIdsInput(req.body?.excludedSkillIds || req.body?.excludedMatchingSkillIds);
   const clientRequestId = normalizeClientRequestId(req.body?.clientRequestId || req.headers['x-client-request-id']);
   setLastMainSessionId(resolvedSessionId);
   const turnOrigin = normalizeTurnOrigin(req.body?.origin, resolvedSessionId, {
@@ -14578,24 +15404,22 @@ router.post('/api/chat', async (req, res) => {
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          undefined,
+          excludedSkillIds.length ? { excludedSkillIds } : undefined,
           turnOrigin,
           { clientRequestId },
 			    );
         attachRuntimeProcessEntriesToLatestAssistant(resolvedSessionId, runtimeProcessEntries);
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
-          if (turnOrigin.channel === 'mobile' || turnOrigin.channel === 'web') {
-            const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
-            const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-            notifyChatCompletion({
-              sessionId: resolvedSessionId,
-              source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',
-              finalText: result.text,
-              requestOrigin: host ? `${proto}://${host}` : undefined,
-              clientRequestId,
-            });
-          }
+          const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
+          const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+          notifyChatCompletion({
+            sessionId: resolvedSessionId,
+            source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',
+            finalText: result.text,
+            requestOrigin: host ? `${proto}://${host}` : undefined,
+            clientRequestId,
+          });
 	      sendSSE('final', {
         text: result.text,
         artifacts: result.artifacts,
@@ -14903,6 +15727,7 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
     const session = getSession(id);
     const storedThread = estimateStoredThreadFootprint(id, session, profile);
     const modelUsage = aggregateSessionModelUsage(id);
+    const turnTelemetry = getLastTurnUsageTelemetry(session);
     const currentState = buildContextWindowCurrentState({
       sessionId: id,
       profile,
@@ -14912,6 +15737,7 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
       compactionTriggerTokens: budget.compactionTriggerTokens,
       storedThread,
       modelUsage,
+      turnTelemetry,
     });
     res.json({
       success: true,
@@ -14927,6 +15753,7 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
       toolObservationTokens: toolTokens,
       storedThread,
       modelUsage,
+      turnTelemetry,
       calibration,
       contextWindowTokens: profile.contextWindowTokens,
       inputBudgetTokens: budget.inputBudgetTokens,

@@ -1,0 +1,12 @@
+{
+  "skillId": "context-pack-builder",
+  "reason": "resource-write",
+  "createdAt": "2026-06-14T05:05:12.215Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\context-pack-builder",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "ab179300b7be557c"
+}

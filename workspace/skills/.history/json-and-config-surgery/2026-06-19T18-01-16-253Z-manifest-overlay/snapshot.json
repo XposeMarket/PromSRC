@@ -1,0 +1,12 @@
+{
+  "skillId": "json-and-config-surgery",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T18:01:16.262Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\json-and-config-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "25efed7d7bb72b49"
+}

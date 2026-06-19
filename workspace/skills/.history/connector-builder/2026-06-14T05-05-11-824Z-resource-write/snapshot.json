@@ -1,0 +1,12 @@
+{
+  "skillId": "connector-builder",
+  "reason": "resource-write",
+  "createdAt": "2026-06-14T05:05:11.828Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\connector-builder",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "8033ce1205880ff4"
+}

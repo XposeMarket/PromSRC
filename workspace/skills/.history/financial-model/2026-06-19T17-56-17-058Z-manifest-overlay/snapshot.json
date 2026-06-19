@@ -1,0 +1,11 @@
+{
+  "skillId": "financial-model",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:17.061Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\financial-model",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "597ba69875e2a43e"
+}

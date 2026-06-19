@@ -73,6 +73,7 @@ import {
   registerLiveRuntime,
   updateLiveRuntimeCheckpoint,
 } from '../live-runtime-registry';
+import { notifyTaskWebPush } from '../notifications/task-events';
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 const pauseRequests = new Set<string>();
@@ -448,6 +449,7 @@ export class BackgroundTaskRunner {
     }
     updateTaskStatus(taskId, 'failed', { finalSummary: reason });
     appendJournal(taskId, { type: 'status_push', content: reason });
+    notifyTaskWebPush(loadTask(taskId) || task, 'failed', reason);
     console.log(`[Background Task] Cancel requested for ${taskId}: ${reason}`);
     return true;
   }
@@ -477,6 +479,7 @@ export class BackgroundTaskRunner {
       shouldResumeAfterSchedule: true,
     });
     pauseRequests.add(taskId);
+    notifyTaskWebPush(loadTask(taskId) || task, 'paused', `Interrupted by scheduled task ${scheduleId}.`);
     console.log(`[Background Task] Task ${taskId} interrupted by schedule ${scheduleId}`);
     return true;
   }
@@ -1944,6 +1947,7 @@ export class BackgroundTaskRunner {
           : 'Paused by user request.';
         appendJournal(taskId, { type: 'pause', content: pauseMsg });
         this._broadcast('task_paused', { taskId, reason: pauseReason, scheduleId });
+        notifyTaskWebPush(loadTask(taskId) || task, 'paused', pauseMsg);
         flushSession(sessionId);
         return;
       }
@@ -1968,6 +1972,7 @@ export class BackgroundTaskRunner {
               const reason = buildObsoleteBrandBlockMessage('Scheduled task final output');
               appendJournal(taskId, { type: 'error', content: reason });
               updateTaskStatus(taskId, 'failed', { finalSummary: reason });
+              notifyTaskWebPush(loadTask(taskId) || task, 'failed', reason);
               flushSession(sessionId);
               return;
             }
@@ -2006,6 +2011,7 @@ export class BackgroundTaskRunner {
         }
         appendJournal(taskId, { type: 'status_push', content: 'Task complete.' });
         this._broadcast('task_complete', { taskId, summary: finalMsg });
+        notifyTaskWebPush(loadTask(taskId) || task, 'complete', finalMsg);
         await this._deliverToChannel(task, finalMsg);
         this._persistResumeContextSnapshot(taskId, sessionId);
         flushSession(sessionId);
@@ -2277,6 +2283,7 @@ export class BackgroundTaskRunner {
     appendJournal(task.id, { type: 'pause', content: `Task paused — waiting for clarification: ${question.slice(0, 200)}` });
     this._broadcast('task_awaiting_input', { taskId: task.id, question });
     this._broadcast('task_paused', { taskId: task.id, reason: 'awaiting_user_input' });
+    notifyTaskWebPush(freshTask || task, 'awaiting_user_input', question);
     const analysisMessage = await this._preparePauseRecoveryMessage(freshTask || task, 'clarification');
     await this._deliverToChannel(freshTask || task, analysisMessage || question);
 	    if (!task.proposalExecution?.teamExecution && this.telegramChannel && task.channel !== 'telegram') {
@@ -2319,6 +2326,7 @@ export class BackgroundTaskRunner {
 
     this._broadcast('task_paused', { taskId: task.id, reason: 'needs_assistance' });
     this._broadcast('task_needs_assistance', { taskId: task.id, title: task.title, reason, detail: detail || '' });
+    notifyTaskWebPush(pausedTask, 'needs_assistance', detail ? `${reason}\n${detail}` : reason);
 
     const fallbackMessage = [
       `Task paused and needs input: ${task.title}`,

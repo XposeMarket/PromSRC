@@ -95,6 +95,40 @@ export function isRuntimeRecoverableAfterRestart(runtime: Pick<LiveRuntimeSnapsh
   return runtime.status === 'running' || runtime.status === 'interrupted';
 }
 
+// The epoch (ms timestamp) of the most recent shutdown that interrupted live
+// runtimes in THIS process. Stamped onto each runtime it interrupts so post-restart
+// recovery can distinguish "interrupted by this restart" from stale runtimes left
+// over from an earlier crash that were never marked recovered, and from work that
+// was already paused/failed before the restart ever happened.
+let _restartInterruptEpoch = 0;
+
+export function getRestartInterruptEpoch(): number {
+  return _restartInterruptEpoch;
+}
+
+// True only when the runtime was actively interrupted by a gateway restart and has
+// not yet been recovered. Optionally require the interruption to belong to a
+// specific restart epoch (e.g. the one persisted in this process's ledger), which
+// excludes pre-paused/pre-failed work and stale records from older crashes.
+export function isInterruptedByRestart(
+  runtime: Pick<LiveRuntimeSnapshot, 'status' | 'checkpoint' | 'completedAt' | 'recoveryData' | 'interruptReason' | 'interruptedAt'> | null | undefined,
+  sinceEpoch = 0,
+): boolean {
+  if (!runtime) return false;
+  if (hasTerminalRuntimeCheckpoint(runtime)) return false;
+  const recoveryData = runtime.recoveryData || {};
+  if (recoveryData.recoveredAt || recoveryData.recovery) return false;
+  // Must have actually been marked interrupted (not merely 'running' left dangling).
+  if (runtime.status !== 'interrupted') return false;
+  const epoch = Number(recoveryData.restartEpoch || 0);
+  if (sinceEpoch > 0) {
+    // Only accept runtimes stamped by this exact restart epoch (or newer).
+    return epoch >= sinceEpoch;
+  }
+  // No epoch filter requested: any runtime carrying a restart epoch stamp qualifies.
+  return epoch > 0;
+}
+
 interface LiveRuntimeRecord extends LiveRuntimeSnapshot {
   abortSignal?: { aborted: boolean };
   onAbort?: () => void;
@@ -336,6 +370,37 @@ export function abortLiveRuntime(id: string): { ok: boolean; runtime?: LiveRunti
     };
   }
 
+  // Aborting the turn must also cancel any pending Prometheus question for this
+  // session. Otherwise the question card has no live waiter, never resolves, and
+  // re-renders as pending forever. Cancel + broadcast so the UI flips it to
+  // cancelled (mirrors the /api/questions/:id/cancel path).
+  try {
+    const sessionId = String(record.sessionId || '').trim();
+    if (sessionId) {
+      const { getPrometheusQuestionQueue, serializePrometheusQuestionForClient } = require('./prometheus-questions');
+      const queue = getPrometheusQuestionQueue();
+      const pending = queue.listPending().filter((q: any) => String(q.sessionId || '') === sessionId);
+      if (pending.length) {
+        const { broadcastWS } = require('./comms/broadcaster');
+        for (const q of pending) {
+          const cancelled = queue.cancel(q.id, 'abort');
+          if (!cancelled) continue;
+          try {
+            broadcastWS({
+              type: 'question_cancelled',
+              sessionId: cancelled.sessionId,
+              taskId: cancelled.taskId,
+              questionId: cancelled.id,
+              question: serializePrometheusQuestionForClient(cancelled),
+            });
+          } catch {}
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[live-runtime] Failed to cancel pending questions on abort:', err?.message || err);
+  }
+
   persistRuntime(toSnapshot(record), 'abort_requested');
   return { ok: true, runtime: toSnapshot(record) };
 }
@@ -444,6 +509,11 @@ export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<strin
 
 export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): LiveRuntimeSnapshot[] {
   const interrupted: LiveRuntimeSnapshot[] = [];
+  // Stamp a single epoch for this shutdown so every runtime interrupted in this
+  // pass shares it. Post-restart recovery uses this to carry forward ONLY work that
+  // this restart actually interrupted, not pre-paused/failed or stale-crash records.
+  const restartEpoch = Date.now();
+  _restartInterruptEpoch = restartEpoch;
   for (const record of activeRuntimes.values()) {
     if (!isRuntimeRecoverableAfterRestart(record)) {
       if (record.status === 'running') {
@@ -459,9 +529,12 @@ export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): Live
     }
 
     record.status = 'interrupted';
-    record.interruptedAt = Date.now();
+    record.interruptedAt = restartEpoch;
     record.interruptReason = reason;
     record.updatedAt = Date.now();
+    // Persist the restart epoch onto recoveryData so it survives in the durable
+    // ledger and the post-restart process can match "interrupted by this restart".
+    record.recoveryData = { ...(record.recoveryData || {}), restartEpoch, interruptReason: reason };
     if (record.abortSignal) record.abortSignal.aborted = true;
     const snapshot = toSnapshot(record);
     interrupted.push(snapshot);

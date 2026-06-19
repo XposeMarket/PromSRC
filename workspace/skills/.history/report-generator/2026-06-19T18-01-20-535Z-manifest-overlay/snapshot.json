@@ -1,0 +1,11 @@
+{
+  "skillId": "report-generator",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T18:01:20.537Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\report-generator",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "3b926118c02a579f"
+}

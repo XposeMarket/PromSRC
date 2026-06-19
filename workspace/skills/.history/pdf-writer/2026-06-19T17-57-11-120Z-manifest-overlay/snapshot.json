@@ -1,0 +1,11 @@
+{
+  "skillId": "pdf-writer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:57:11.123Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\pdf-writer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "a728ece7a94cf93f"
+}

@@ -118,11 +118,11 @@ const GENERIC_REPEAT_THRESHOLD = 3;
 
 const SKILL_RUNTIME_GUIDE = `
 SKILLS:
-- Skill tools are core tools: skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create.
+- Skill tools are core tools: skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_update_metadata, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create.
 - For greetings, small talk, quick Q&A, or confirmations, respond directly without skill_list.
 - Before browser/desktop automation, file edits, or other execution-heavy work, call skill_list first.
 - If a relevant skill exists, call skill_read(id) and follow it before acting.
-- Treat skills as living workflow playbooks: after real work, notice missing triggers, clearer steps, better tool order, reusable examples/templates/resources, and guardrails that would make the skill better next time.
+- Treat skills as living workflow playbooks: after real work, notice missing triggers, clearer steps, better tool order, reusable examples/templates/resources, and guardrails that would make the skill better next time. Use skill_update_metadata({ id, addTriggers }) for trigger-only fixes so existing trigger metadata is preserved.
 - If a completed workflow is reusable but no skill fit, briefly offer to turn it into a skill or add it to an existing skill; skip this for casual conversation.
 - For bundled templates/examples/schemas/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed.
 - Use skill_inspect(id) for normalized metadata/provenance.
@@ -310,6 +310,7 @@ export async function runNodeCallSandbox(
   sandbox.skill_resource_read = (args: any = {}) => runSkillTool('skill_resource_read', args);
   sandbox.skill_import_bundle = (args: any = {}) => runSkillTool('skill_import_bundle', args);
   sandbox.skill_inspect = (args: any = {}) => runSkillTool('skill_inspect', args);
+  sandbox.skill_update_metadata = (args: any = {}) => runSkillTool('skill_update_metadata', args);
   sandbox.skill_manifest_write = (args: any = {}) => runSkillTool('skill_manifest_write', args);
   sandbox.skill_create_bundle = (args: any = {}) => runSkillTool('skill_create_bundle', args);
   sandbox.skill_resource_write = (args: any = {}) => runSkillTool('skill_resource_write', args);

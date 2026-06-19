@@ -190,8 +190,10 @@ function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: s
       'HOT RESTART DEV-EDIT FOLLOW-UP:',
       'A hot restart/reload just completed after an approved Prometheus dev source edit.',
       'Use the restart context, approved dev-edit plan, recent conversation, and recent tool observations as factual memory.',
-      `Required next tool call: write_note({"tag":"${tag}","dev_edit_id":"${devEdit.id}","content":"<brief summary of files changed, verification, and live status>"}).`,
-      'This note completes the declared dev-edit plan. After the note succeeds, respond to the user with the usual concise edit summary.',
+      'Your FIRST action this turn MUST be a real write_note TOOL CALL — actually invoke the tool, do not print or describe the call as text.',
+      `Invoke write_note with these fields: tag set to "${tag}", dev_edit_id set to "${devEdit.id}", and content as a brief summary of files changed, verification, and live status.`,
+      'Never output the write_note call as a literal string or code block; emit it through the tool mechanism so the dev-edit plan completes.',
+      'After the write_note tool call succeeds, respond to the user with the usual concise edit summary.',
       'Do not redo the source edits unless the context shows apply_live failed.',
       'If the recovery summary shows the main chat was interrupted at gateway_restart or a dev/apply tool, treat that checkpoint as the expected restart boundary from this same chat. Do not describe it as an unexpected interruption and do not ask whether to resume solely because of that checkpoint.',
       lastUserRequest
@@ -291,17 +293,6 @@ function buildHotRestartFallbackMessage(lastUserRequest: string, lastAssistantRe
   return 'Hey - the restart was successful. I am back in the same thread and ready to continue where we left off.';
 }
 
-function appendRecoverySummaryToHotRestartMessage(text: string, recoverySummary: string): string {
-  const summary = String(recoverySummary || '').trim();
-  if (!summary || summary.startsWith('(No interrupted runtime records')) return text;
-  if (/planned restart boundary|expected hot-restart boundary|self-triggered from this chat/i.test(summary)) return text;
-  if (/interrupted|paused|checkpoint|resume/i.test(text)) return text;
-  return [
-    text,
-    '',
-    'I also found interrupted work from the restart and saved checkpoints for it. Would you like me to continue the main chat or resume any paused task/subagent from the recovery list?',
-  ].join('\n');
-}
 
 function sanitizeIdPart(value: string): string {
   const cleaned = String(value || '')
@@ -467,7 +458,6 @@ export async function runBootMd(
       if (!finalText) {
         finalText = buildHotRestartFallbackMessage(lastUserRequest, lastAssistantResponse);
       }
-      finalText = appendRecoverySummaryToHotRestartMessage(finalText, target.recoverySummary);
 
       console.log(`[boot-md] Hot restart complete for ${target.sessionId}: ${finalText.slice(0, 120)}`);
       try {
@@ -602,3 +592,4 @@ export async function runBootMd(
     return { status: 'failed', reason };
   }
 }
+

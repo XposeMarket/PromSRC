@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when fetching, reading, analyzing, downloading, or summarizing a specific X/Twitter post and its attached images, videos, alt text, quoted posts, or reply context.",
+  "triggers": [
+    "fetch this tweet",
+    "read this X post",
+    "download tweet media",
+    "analyze this tweet image",
+    "summarize this X thread",
+    "get tweet video",
+    "inspect quoted tweet",
+    "pull X post text",
+    "X status URL",
+    "twitter.com status",
+    "x.com post",
+    "save tweet image",
+    "read tweet replies",
+    "get media from X",
+    "analyze attached media"
+  ],
+  "categories": [
+    "x",
+    "twitter",
+    "media",
+    "research"
+  ],
+  "requiredTools": [
+    "web_fetch",
+    "media_assets",
+    "browser_automation"
+  ],
+  "lifecycle": "active",
+  "name": "X Post Fetch and Media",
+  "id": "x-post-fetch-and-media"
+}

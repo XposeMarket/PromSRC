@@ -49,6 +49,30 @@ router.get('/api/skills', async (req, res) => {
   res.json({ success: true, skills, skillsDir: _sm.getSkillsDir() });
 });
 
+// Unified skill-trigger matcher. The SAME matcher that feeds matching skills to
+// the AI at runtime also powers the mobile composer skill-trigger pill, so the
+// two can never drift. Pass the composer/message text as ?q=...
+router.get('/api/skills/match', (req, res) => {
+  recoverSkillsIfEmpty();
+  const q = String(req.query.q || '').trim();
+  if (!q) { res.json({ success: true, matches: [] }); return; }
+  const ids = _sm.findMatchingSkillsForMessage(q);
+  const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 8));
+  const matches = ids.slice(0, limit).map((id) => {
+    const s = _sm.get(id);
+    if (!s) return null;
+    return {
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      triggers: s.triggers,
+      categories: s.categories,
+      requiredTools: s.requiredTools,
+    };
+  }).filter(Boolean);
+  res.json({ success: true, matches });
+});
+
 router.get('/api/skills/:id', (req, res) => {
   const skill = _sm.get(req.params.id);
   if (!skill) { res.status(404).json({ success: false, error: 'Skill not found' }); return; }

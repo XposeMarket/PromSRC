@@ -1,0 +1,12 @@
+{
+  "skillId": "connector-smoke-test-harness",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:10.319Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\connector-smoke-test-harness",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "06d97f2326840d7e"
+}

@@ -116,6 +116,7 @@ function formatFriendlyToolAction(toolNameRaw: string, args: any = {}): string {
     shopping_search_products: withSubject('Searching Products', pickArg(args, ['query', 'q'])),
     web_search: withSubject('Searching the Web', pickArg(args, ['query', 'q'])),
     web_fetch: withSubject('Fetching URL', pickArg(args, ['url'])),
+    terminal: withParens('Running Terminal', pickArg(args, ['command'], 180)),
     run_command: withParens('Running Command', pickArg(args, ['command'], 180)),
     shell: withParens('Running Shell Command', pickArg(args, ['command'], 180)),
     skill_list: 'Searching Skills...',

@@ -68,7 +68,7 @@
 <link rel="stylesheet" href="static/styles/pages.css?v=generated-image-modal-v3">
 <link rel="stylesheet" href="static/styles/projects.css">
 <link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="static/styles/mobile.css?v=liquid-glass-v20">
+<link rel="stylesheet" href="static/styles/mobile.css?v=voice-mic-restore-v1">
 <link rel="stylesheet" href="static/styles/themes.css?v=blue-theme-1">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
@@ -4094,6 +4094,25 @@
             </select>
           </div>
 
+	          <!-- Background Spawn -->
+          <div style="margin-bottom:16px">
+            <div data-settings-icon-label="bolt" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Background Spawn</div>
+            <select id="amd-background-spawn-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('background-spawn')">
+              <option value="">use primary</option>
+                <option value="ollama">Ollama (local)</option>
+                <option value="llama_cpp">llama.cpp (local)</option>
+                <option value="lm_studio">LM Studio (local)</option>
+                <option value="openai">OpenAI</option>
+                <option value="openai_codex">OpenAI Codex / ChatGPT</option>
+                <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
+            </select>
+            <select id="amd-background-spawn-model" class="settings-input" style="width:100%">
+              <option value="">select provider first</option>
+            </select>
+          </div>
+
           <!-- Subagent Role Defaults -->
           <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Subagent Role Defaults</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Per-role model defaults. Leave blank to inherit from the primary model.</div>
@@ -4416,6 +4435,24 @@
                   <button onclick="loadAgentModelOptions()" title="Refresh models for selected provider" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;white-space:nowrap">&#8635;</button>
                 </div>
                 <div id="agent-model-status" style="font-size:10px;color:var(--muted);margin-top:3px"></div>
+              </div>
+              <div style="grid-column:1/-1">
+                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Voice Agent <span style="color:var(--muted);font-weight:400">(provider / voice)</span></label>
+                <div style="display:grid;grid-template-columns:1fr 1fr .55fr auto;gap:6px;align-items:center">
+                  <select id="agent-edit-voice-provider" onchange="loadAgentVoiceOptions()" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
+                    <option value="">use global voice default</option>
+                    <option value="openai_realtime">OpenAI Realtime</option>
+                    <option value="xai">xAI Realtime</option>
+                    <option value="openai">OpenAI TTS</option>
+                    <option value="browser">Browser</option>
+                  </select>
+                  <select id="agent-edit-voice-voice" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
+                    <option value="">use provider default</option>
+                  </select>
+                  <input id="agent-edit-voice-speed" type="number" min="0.25" max="2" step="0.05" value="1" title="Voice speed" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;background:var(--panel);color:var(--text);width:100%;box-sizing:border-box" />
+                  <button onclick="loadAgentVoiceOptions(true)" title="Refresh voices for selected provider" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;white-space:nowrap">&#8635;</button>
+                </div>
+                <div id="agent-voice-status" style="font-size:10px;color:var(--muted);margin-top:3px"></div>
               </div>
               <div>
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Max Steps</label>
@@ -6453,7 +6490,8 @@ const AMD_SLOTS = {
   'proposal-high':   'proposal_executor_high_risk',
   'proposal-low':    'proposal_executor_low_risk',
   'manager':         'manager',
-  'background-task': 'background_task',
+  'background-task':  'background_task',
+  'background-spawn': 'background_spawn',
 };
 
 // Static model fallbacks (mirrors what loadAgentModelOptions uses)

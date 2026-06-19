@@ -1,32 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks Prometheus to control the desktop, click visible UI, focus apps, inspect on-screen content, operate Codex/Claude/Chrome/Edge, scroll, type into apps, or send screenshots. It enforces screenshot-grounded, coordinate-based desktop automation.",
+  "description": "Use this skill when Prometheus needs to operate local desktop apps or Windows UI with screenshots, coordinate clicks, scrolling, typing, window focus, OCR/UI Automation, or visible app verification.",
   "triggers": [
+    "use my desktop",
+    "click on my screen",
     "desktop automation",
-    "desktop click",
-    "screenshot",
-    "focus app",
-    "control my desktop",
-    "Codex app",
-    "Claude app",
-    "scroll up",
-    "click the button",
-    "use my computer",
-    "desktop screenshot",
+    "focus the app",
+    "take a desktop screenshot",
+    "operate Windows",
+    "click that button",
+    "scroll in the app",
+    "type into the desktop app",
+    "open local app",
+    "use Codex desktop",
+    "use Claude desktop",
+    "read the screen",
+    "inspect active window",
+    "window screenshot",
     "coordinate click",
-    "operate app",
-    "window focus",
-    "send screenshot"
+    "move the mouse",
+    "verify desktop UI"
   ],
   "categories": [
-    "automation",
     "desktop",
-    "ui"
+    "automation",
+    "windows",
+    "qa"
   ],
   "requiredTools": [
-    "desktop_automation",
-    "delivery_send_screenshot"
+    "desktop_automation"
   ],
   "lifecycle": "active",
   "id": "desktop-automation-playbook"

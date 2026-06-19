@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when building or reviewing spreadsheets, forecasts, budgets, projections, pricing models, scenarios, revenue models, cash-flow models, or investment/ROI models.",
+  "triggers": [
+    "build a financial model",
+    "forecast revenue",
+    "budget model",
+    "cash flow projection",
+    "pricing model",
+    "scenario analysis",
+    "ROI model",
+    "spreadsheet model",
+    "sales forecast",
+    "expense forecast",
+    "break-even model",
+    "unit economics model",
+    "SaaS model",
+    "pro forma",
+    "financial projection",
+    "model assumptions",
+    "sensitivity analysis"
+  ],
+  "categories": [
+    "finance",
+    "spreadsheets",
+    "modeling",
+    "business"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "show_ui_card"
+  ],
+  "lifecycle": "active",
+  "name": "Financial Model",
+  "id": "financial-model"
+}

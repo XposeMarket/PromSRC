@@ -6,7 +6,7 @@ import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
 } from './mobile-shell.js?v=liquid-glass-v20';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
-import { attachMobileButtonHaptic } from './mobile-model-badge.js';
+import { attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule,
@@ -14,7 +14,7 @@ import {
   startTeamRun, pauseTeam, resumeTeam, triggerTeamReview, deleteTeam,
   saveTeamContextReference, invalidateTeamsCache,
   streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession,
-  loadGatewayStatus, loadLatestUsableSession, loadMobileChatSession, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay,
+  loadGatewayStatus, loadLatestUsableSession, loadMobileChatSession, invalidateMobileChatSessionCache, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay,
   updateMobileChatSessionHistory, markMobileEditRerunReset, markMobileChatSessionRead,
   loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState, streamTeamChat, loadTeamChatStreamReplay,
   claimPairing, pollPairing, verifyPairingMe,
@@ -37,10 +37,21 @@ import {
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentHeartbeat,
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
+  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications,
 } from './mobile-api.js';
 import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/account.js';
 import { renderMd } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
+import {
+  renderAgentModelPicker as _renderAgentModelPicker,
+  agentModelPickerHydrate,
+  registerAgentModelPickerOnSaved,
+} from '../components/agent-model-picker.js';
+import {
+  renderAgentVoicePicker as _renderAgentVoicePicker,
+  agentVoicePickerHydrate,
+  registerAgentVoicePickerOnSaved,
+} from '../components/agent-voice-picker.js';
 
 // ---------- tiny toast ----------
 function pmToast(msg, kind = 'info') {
@@ -108,10 +119,60 @@ function _notifyMobileChatVoiceUpdate(sessionId, detail = {}) {
 
 /* ---------------- CHAT ---------------- */
 
+async function _refreshMobileChatPushButton() {
+  const btn = document.getElementById('pm-chat-push-btn');
+  if (!btn) return;
+  try {
+    const status = await getMobilePushStatus();
+    const on = status.browserSupported && status.permission === 'granted' && status.subscribed;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.setAttribute('title', on ? 'Notifications on' : 'Enable notifications');
+    btn.setAttribute('aria-label', on ? 'Disable notifications' : 'Enable notifications');
+    btn.style.color = on ? 'var(--pm-orange)' : '';
+    btn.dataset.pushState = on ? 'on' : status.permission || 'off';
+  } catch {
+    btn.dataset.pushState = 'unknown';
+  }
+}
+
+async function _toggleMobileChatPushNotifications() {
+  const btn = document.getElementById('pm-chat-push-btn');
+  if (btn?.dataset.busy === '1') return;
+  if (btn) btn.dataset.busy = '1';
+  try {
+    const browserSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    if (!browserSupported) {
+      pmToast('Push is only available from the installed iOS Home Screen app.', 'error');
+      return;
+    }
+    if (Notification.permission !== 'granted') {
+      await enableMobileChatPushNotifications();
+      pmToast('Notifications on', 'success');
+      return;
+    }
+    const status = await getMobilePushStatus();
+    if (status.permission === 'granted' && status.subscribed) {
+      await disableMobileChatPushNotifications();
+      pmToast('Notifications off', 'success');
+    } else {
+      await enableMobileChatPushNotifications();
+      pmToast('Notifications on', 'success');
+    }
+  } catch (err) {
+    pmToast(String(err?.message || err || 'Could not update notifications'), 'error');
+  } finally {
+    if (btn) btn.dataset.busy = '0';
+    _refreshMobileChatPushButton().catch(() => {});
+  }
+}
+
 // Persistent in-tab thread. Survives navigation between mobile pages.
 const PM_MOBILE_ACTIVE_RUN_KEY = 'pm_mobile_active_chat_run';
 const PM_MOBILE_ACTIVE_RUNS_KEY = 'pm_mobile_active_chat_runs';
 const PM_MOBILE_LAST_CHAT_SESSION_KEY = 'pm_mobile_last_chat_session';
+const PM_MOBILE_THREAD_CACHE_KEY = 'pm_mobile_thread_cache_v1';
+const PM_MOBILE_THREAD_CACHE_MAX = 30; // messages to persist per session
 const PM_MOBILE_SIDE_CHAT_LINKS_KEY = 'prometheus_side_chat_links_v1';
 
 const __pmChat = (window.__pmChat = window.__pmChat || {
@@ -169,6 +230,57 @@ function _readMobileLastChatSession() {
 
 function _clearMobileLastChatSession() {
   try { localStorage.removeItem(PM_MOBILE_LAST_CHAT_SESSION_KEY); } catch {}
+}
+
+// ── Thread skeleton cache (instant cold-open render) ─────────────────────────
+// Persists the last N non-streaming messages per session to localStorage so
+// reopening the app shows content immediately instead of a blank spinner.
+function _saveMobileThreadCache(sessionId, thread) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID) return;
+  try {
+    const safe = (Array.isArray(thread) ? thread : [])
+      .filter((m) => !m.streaming)
+      .slice(-PM_MOBILE_THREAD_CACHE_MAX)
+      .map((m) => ({
+        role: m.role,
+        content: m.content || m.body?.text || '',
+        timestamp: m.timestamp,
+        body: m.body ? { text: m.body.text || '', sender: m.body.sender || '' } : undefined,
+        attachmentPreviews: Array.isArray(m.attachmentPreviews) && m.attachmentPreviews.length ? m.attachmentPreviews.slice(0, 4) : undefined,
+      }));
+    const store = _readMobileThreadCacheStore();
+    store[sid] = { thread: safe, savedAt: Date.now() };
+    // Evict oldest entries if store is growing (keep ≤ 10 sessions)
+    const keys = Object.keys(store).filter((k) => k !== sid);
+    if (keys.length >= 10) {
+      const sorted = keys.sort((a, b) => (store[a]?.savedAt || 0) - (store[b]?.savedAt || 0));
+      sorted.slice(0, keys.length - 9).forEach((k) => delete store[k]);
+    }
+    localStorage.setItem(PM_MOBILE_THREAD_CACHE_KEY, JSON.stringify(store));
+  } catch {}
+}
+
+function _readMobileThreadCacheStore() {
+  try {
+    const raw = localStorage.getItem(PM_MOBILE_THREAD_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+}
+
+function _loadMobileThreadCache(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID) return [];
+  try {
+    const store = _readMobileThreadCacheStore();
+    const entry = store[sid];
+    if (!entry || !Array.isArray(entry.thread)) return [];
+    // Discard cache older than 24h — stale enough to be confusing
+    if (Date.now() - Number(entry.savedAt || 0) > 86_400_000) return [];
+    return entry.thread;
+  } catch { return []; }
 }
 
 function _markMobileSessionRunning(sessionId, running) {
@@ -391,6 +503,7 @@ function _mapServerMessageToMobile(m, index = -1) {
     channelLabel: String(m?.channelLabel || ''),
     workflowLabel: String(m?.workflowLabel || ''),
     processEntries: Array.isArray(m?.processEntries) ? m.processEntries.map(_normalizeMobileProcessEntry).filter(Boolean) : [],
+    liveTraceEntries: Array.isArray(m?.liveTraceEntries) && m.liveTraceEntries.length ? m.liveTraceEntries : undefined,
   };
 }
 
@@ -480,6 +593,7 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
       attachmentPreviews: Array.isArray(msg.attachmentPreviews)
         ? msg.attachmentPreviews.map(_sanitizeMobileAttachmentPreviewForServer)
         : (Array.isArray(msg.body?.attachments) ? msg.body.attachments.map(_sanitizeMobileAttachmentPreviewForServer) : undefined),
+      liveTraceEntries: Array.isArray(msg.liveTraceEntries) && msg.liveTraceEntries.length ? msg.liveTraceEntries : undefined,
     }))
     .filter((msg) => msg.content.trim())
     .map((msg, index) => ({ ...msg, sourceIndex: index }));
@@ -740,11 +854,12 @@ function _getMobileQueuedPrompts(sessionId = '') {
   return __pmChat.queuedPrompts[sid];
 }
 
-function _makeMobileQueuedPrompt(message, files = []) {
+function _makeMobileQueuedPrompt(message, files = [], options = {}) {
   return {
     id: `mq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     message: String(message || '').trim(),
     files: Array.isArray(files) ? files.slice() : [],
+    excludedSkillIds: Array.isArray(options.excludedSkillIds) ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
     createdAt: Date.now(),
   };
 }
@@ -882,6 +997,7 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
   if (!queue.length) {
     panel.hidden = true;
     panel.innerHTML = '';
+    try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
     return;
   }
   panel.hidden = false;
@@ -919,6 +1035,7 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
       }
     });
   });
+  try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
 }
 
 function _findLatestAssistantTurn(thread) {
@@ -1065,7 +1182,7 @@ function _mobileAssistantWorkStartedAt(msg) {
   return Number.isFinite(ts) && ts > 0 ? ts : 0;
 }
 
-function _renderMobileWorkTimer(msg) {
+function _renderMobileWorkTimer(msg, opts = {}) {
   if (!_isMobileAssistantMessage(msg)) return '';
   const startedAt = _mobileAssistantWorkStartedAt(msg);
   if (!startedAt) return '';
@@ -1076,7 +1193,16 @@ function _renderMobileWorkTimer(msg) {
     : (Number.isFinite(Number(msg?.workDurationMs)) && Number(msg.workDurationMs) >= 0
       ? Number(msg.workDurationMs)
       : ((Number.isFinite(endedAt) && endedAt > 0 ? endedAt : Number(msg?.timestamp || Date.now())) - startedAt));
-  return `<div class="pm-work-timer">${active ? 'Working for' : 'Worked for'} ${escapeHtml(_formatMobileWorkDuration(duration))}</div>`;
+  const label = `${active ? 'Working for' : 'Worked for'} ${escapeHtml(_formatMobileWorkDuration(duration))}`;
+  const hasTrace = !active && _mobileWorkflowTraceEntriesForMessage(msg).length > 0;
+  if (hasTrace) {
+    const expanded = opts.expanded ? ' expanded' : '';
+    return `<div class="pm-work-timer pm-work-timer--expandable${expanded}" data-expandable="trace">
+      <svg class="pm-work-timer-chevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      ${label}
+    </div>`;
+  }
+  return `<div class="pm-work-timer">${label}</div>`;
 }
 
 function _renderMobileMarkdown(text) {
@@ -1366,6 +1492,34 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
   return liveEntries.length ? [...liveEntries, ...out] : out;
 }
 
+function _mobileWorkflowTraceEntriesForMessage(message) {
+  const out = [];
+  const seen = new Set();
+  const add = (entry, fallbackType = 'info') => {
+    if (!entry || typeof entry !== 'object') return;
+    const type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
+    const text = String(entry.text || entry.content || entry.message || '').trim();
+    const preview = entry.preview && typeof entry.preview === 'object' ? entry.preview : null;
+    const previewData = String(preview?.dataUrl || entry.dataUrl || '').trim();
+    if (!text && !previewData) return;
+    if (text && _isMobileStartupStatusText(text)) return;
+    const key = `${type}|${text.replace(/\s+/g, ' ')}|${previewData.slice(0, 120)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      ...entry,
+      type,
+      text,
+      time: String(entry.time || entry.ts || entry.timestamp || _nowTime()),
+    });
+  };
+  (Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : []).forEach((entry) => add(entry, 'info'));
+  (Array.isArray(message?.processEntries) ? message.processEntries : []).forEach((entry) => add(entry, 'process'));
+  const bodyEntries = Array.isArray(message?.body?.processEntries) ? message.body.processEntries : [];
+  bodyEntries.forEach((entry) => add(entry, 'process'));
+  return out;
+}
+
 function _moveMobilePreToolAnswerIntoPreamble(message) {
   if (!message || message.toolActivityStarted) return;
   const text = String(message.body?.text || message.content || '').trim();
@@ -1374,6 +1528,12 @@ function _moveMobilePreToolAnswerIntoPreamble(message) {
   if (message.body) message.body.text = '';
   message.content = '';
   message.finalResponseStarted = false;
+}
+
+function _shouldRouteMobileTokenToLiveTrace(message) {
+  if (!message || message.finalResponseStarted) return false;
+  const mode = String(message.agentExecutionMode || '').trim();
+  return mode !== 'chat';
 }
 
 function _renderMobileLiveTracePreview(entry) {
@@ -1630,6 +1790,7 @@ function _clearMobileLiveRunForSession(sessionId) {
 async function _applyMobileHotRestartNotification(msg = {}) {
   const sid = String(msg.previousSessionId || msg.sessionId || '').trim();
   if (!sid) return;
+  const restartText = String(msg.text || '').trim();
   _clearMobileLiveRunForSession(sid);
   const session = await loadMobileChatSession(sid).catch(() => null);
   const history = Array.isArray(session?.history) ? session.history : [];
@@ -1653,13 +1814,13 @@ async function _applyMobileHotRestartNotification(msg = {}) {
       });
     }
   }
-  if (!__pmChat.threads[sid].some((item) => _mobileMessageCopyText(item) === String(msg.text || '')) && String(msg.text || '').trim()) {
+  if (!__pmChat.threads[sid].some((item) => _mobileMessageCopyText(item) === restartText) && restartText) {
     __pmChat.threads[sid].push({
       role: 'ai',
       timestamp: Date.now(),
       time: _nowTime(),
-      body: { sender: 'Prometheus', text: String(msg.text || '') },
-      content: String(msg.text || ''),
+      body: { sender: 'Prometheus', text: restartText },
+      content: restartText,
       _isRestartNotification: true,
     });
   }
@@ -1676,6 +1837,19 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   }
   if (_isMobileChatSessionVisibleToUser(sid)) {
     markMobileChatSessionRead(sid, Date.now()).catch(() => {});
+  }
+  if (restartText && __pmRealtimeAgent?.conn?.dc?.readyState === 'open') {
+    const realtimeSid = String(__pmRealtimeAgent.conn.sessionId || __pmVoice?.targetSessionId || __pmChat.activeSessionId || '').trim();
+    const shouldSpeakForSession = realtimeSid === sid || String(__pmVoice?.targetSessionId || '').trim() === sid;
+    const notificationKey = String(msg.notificationId || `${sid}:${restartText.length}:${restartText.slice(0, 120)}`);
+    if (shouldSpeakForSession && __pmRealtimeAgent.lastHotRestartSummaryKey !== notificationKey) {
+      const spoke = _requestMobileRealtimeAgentFinalSummary(restartText);
+      if (spoke) {
+        __pmRealtimeAgent.lastHotRestartSummaryKey = notificationKey;
+        _setOrbState('speaking');
+        _setStatus('Speaking response', 'Realtime agent is summarizing the restart result');
+      }
+    }
   }
   if (msg.notificationId) {
     try { wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId) }); } catch {}
@@ -1798,11 +1972,23 @@ function _mobileHasPendingImageGeneration(message) {
     ...(Array.isArray(message.processEntries) ? message.processEntries : []),
     ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
   ];
-  const text = entries
+  // Only entries that are NOT completed tool results / errors can signal "still generating"
+  const activeEntries = entries.filter((entry) => {
+    const t = String(entry?.type || '').toLowerCase();
+    return t !== 'result' && t !== 'error';
+  });
+  const activeText = activeEntries
     .map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase())
     .join('\n');
-  return /\b(generate_image|generate image|generating image|image generation|i am generating the image|preparing generate image|prepared generate image)\b/.test(text)
-    && !/\b(generate_image complete|generate image complete|generated image|generated images|failed|error)\b/.test(text);
+  // All entries (including results) — used for the "already done" guard
+  const allText = entries
+    .map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase())
+    .join('\n');
+  // Positive: generate_image tool call is in the active (non-result) entries
+  const hasPending = /\b(generate_image|generate image|generating image|image generation|i am generating the image|preparing generate image|prepared generate image)\b/.test(activeText);
+  // Negative: any entry (including results) signals completion
+  const isDone = /\b(generate_image complete|generate image complete|generated image|generated images|failed|error)\b/.test(allText);
+  return hasPending && !isDone;
 }
 
 function _isMobileImageGenerationStreamEntry(entry) {
@@ -2181,19 +2367,23 @@ function _renderMobileVariantNav(index) {
 function _renderMobileMessageActions(m, index) {
   if (m?.streaming || index < 0) return '';
   const isUser = m?.role === 'user';
-  const secondary = isUser
-    ? `<button type="button" class="pm-msg-action" data-msg-action="edit" data-msg-index="${index}" title="Edit" aria-label="Edit">${ICONS.wand}</button>`
-    : `<button type="button" class="pm-msg-action" data-msg-action="fork" data-msg-index="${index}" title="Fork" aria-label="Fork">${ICONS.fork || ICONS.chev}</button>`;
+  // User messages: no inline action bar — long-press the bubble opens the popover instead.
+  if (isUser) {
+    const variantNav = _renderMobileVariantNav(index);
+    return variantNav ? `<div class="pm-msg-actions pm-msg-actions-user-variants">${variantNav}</div>` : '';
+  }
+  const secondary = `<button type="button" class="pm-msg-action" data-msg-action="fork" data-msg-index="${index}" title="Fork" aria-label="Fork">${ICONS.fork || ICONS.chev}</button>`;
   return `<div class="pm-msg-actions">
     <button type="button" class="pm-msg-action" data-msg-action="copy" data-msg-index="${index}" title="Copy" aria-label="Copy">${ICONS.clipboard}</button>
     ${secondary}
-    ${isUser ? _renderMobileVariantNav(index) : ''}
   </div>`;
 }
 
 function _renderMobileUserEditComposer(m, index, attachmentHtml = '') {
   const value = escapeHtml(String(m?._editingDraft ?? m?.body?.text ?? m?.content ?? ''));
-  return `<div class="pm-mobile-edit-composer" data-msg-edit-index="${index}" onclick="event.stopPropagation()">
+  // Only stop propagation for non-action targets (e.g. tapping the textarea) so
+  // the Cancel/Send buttons still reach the delegated threadEl click handler.
+  return `<div class="pm-mobile-edit-composer" data-msg-edit-index="${index}" onclick="if(!event.target.closest('[data-msg-action]'))event.stopPropagation()">
     <textarea class="pm-mobile-edit-input" rows="4" data-msg-edit-input="${index}">${value}</textarea>
     ${attachmentHtml}
     <div class="pm-mobile-edit-actions">
@@ -2882,7 +3072,12 @@ function _renderMobileQuestionCard(item) {
   const q = _normalizeMobileQuestion(item);
   if (!q.id || !q.questions.length) return '';
   const pending = q.status === 'pending';
-  const idJson = JSON.stringify(q.id);
+  // Escape the inline JS id arg for use inside a double-quoted onclick attribute.
+  // Raw JSON.stringify yields a value wrapped in double quotes which terminates
+  // the onclick="" attribute early, breaking Submit/Cancel entirely. escapeHtml
+  // turns the quotes into &quot; so the browser decodes a valid JS string literal
+  // (mirrors the desktop encodeInlineJsString pattern in ChatPage.js).
+  const idJson = escapeHtml(JSON.stringify(q.id));
   const answerMap = new Map((q.answers || []).map((a) => [String(a?.id || ''), a || {}]));
   const blocks = q.questions.map((qq) => {
     const ans = answerMap.get(qq.id) || {};
@@ -2917,9 +3112,12 @@ function _renderMobileQuestionCard(item) {
 function _mobileQuestionToggleOption(btn, mode) {
   if (!btn) return;
   if (mode === 'single_select') {
+    // Reclicking the already-selected option deselects it (so the user can
+    // clear a single-select answer); otherwise select this one and clear siblings.
+    const wasSelected = btn.classList.contains('selected');
     const wrap = btn.parentElement;
-    if (wrap) wrap.querySelectorAll('.pm-q-opt.selected').forEach((el) => { if (el !== btn) el.classList.remove('selected'); });
-    btn.classList.add('selected');
+    if (wrap) wrap.querySelectorAll('.pm-q-opt.selected').forEach((el) => el.classList.remove('selected'));
+    if (!wasSelected) btn.classList.add('selected');
   } else {
     btn.classList.toggle('selected');
   }
@@ -2928,6 +3126,108 @@ function _mobileQuestionToggleOther(btn) {
   const ta = btn?.parentElement?.querySelector('[data-pm-q-other]') || btn?.nextElementSibling;
   if (!ta) return;
   if (ta.hasAttribute('hidden')) { ta.removeAttribute('hidden'); ta.focus(); } else { ta.setAttribute('hidden', ''); }
+}
+
+// Preserve in-progress answers in pending question cards across the full
+// innerHTML rebuild that _renderThread does every streaming tick. Without this,
+// a re-render a few seconds after the user taps an option / types wipes their
+// selections + typed text + focus, so they can only type one letter at a time
+// and Submit ends up sending empty answers. Mirrors the desktop card behavior.
+function _captureMobileQuestionDraftState(root) {
+  const out = {};
+  if (!root) return out;
+  try {
+    root.querySelectorAll('[data-pm-q-card]').forEach((card) => {
+      if (!card.classList || !card.classList.contains('pm-question-card')) return;
+      const qid = card.getAttribute('data-pm-q-card');
+      if (!qid) return;
+      const state = { selected: {}, texts: {}, others: {}, general: '', focus: null };
+      card.querySelectorAll('[data-pm-q]').forEach((block) => {
+        const bid = block.getAttribute('data-pm-q') || '';
+        state.selected[bid] = Array.from(block.querySelectorAll('.pm-q-opt.selected'))
+          .map((el) => el.getAttribute('data-pm-q-opt') || '').filter(Boolean);
+        const textEl = block.querySelector('[data-pm-q-text]');
+        if (textEl) state.texts[bid] = textEl.value || '';
+        const otherEl = block.querySelector('[data-pm-q-other]');
+        if (otherEl) state.others[bid] = { value: otherEl.value || '', hidden: otherEl.hasAttribute('hidden') };
+      });
+      const gen = card.querySelector('[data-pm-q-general]');
+      if (gen) state.general = gen.value || '';
+      try {
+        const active = document.activeElement;
+        if (active && card.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
+          let kind = '', key = '';
+          if (active.hasAttribute('data-pm-q-general')) { kind = 'general'; }
+          else {
+            const block = active.closest('[data-pm-q]');
+            key = block ? (block.getAttribute('data-pm-q') || '') : '';
+            if (active.hasAttribute('data-pm-q-text')) kind = 'text';
+            else if (active.hasAttribute('data-pm-q-other')) kind = 'other';
+          }
+          if (kind) {
+            state.focus = {
+              kind,
+              key,
+              selStart: typeof active.selectionStart === 'number' ? active.selectionStart : null,
+              selEnd: typeof active.selectionEnd === 'number' ? active.selectionEnd : null,
+            };
+          }
+        }
+      } catch {}
+      out[qid] = state;
+    });
+  } catch {}
+  return out;
+}
+function _restoreMobileQuestionDraftState(root, map) {
+  if (!root || !map) return;
+  try {
+    Object.keys(map).forEach((qid) => {
+      const card = root.querySelector(`[data-pm-q-card="${_pmCssEscape(qid)}"]`);
+      if (!card || !card.classList || !card.classList.contains('pm-question-card')) return;
+      const state = map[qid];
+      Object.entries(state.selected || {}).forEach(([bid, vals]) => {
+        const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
+        if (!block || !Array.isArray(vals) || !vals.length) return;
+        const want = new Set(vals);
+        block.querySelectorAll('.pm-q-opt').forEach((el) => {
+          if (want.has(el.getAttribute('data-pm-q-opt') || '')) el.classList.add('selected');
+        });
+      });
+      Object.entries(state.texts || {}).forEach(([bid, val]) => {
+        const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
+        const el = block?.querySelector('[data-pm-q-text]');
+        if (el) el.value = val;
+      });
+      Object.entries(state.others || {}).forEach(([bid, info]) => {
+        const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
+        const el = block?.querySelector('[data-pm-q-other]');
+        if (el) { el.value = info.value || ''; if (!info.hidden) el.removeAttribute('hidden'); }
+      });
+      const gen = card.querySelector('[data-pm-q-general]');
+      if (gen) gen.value = state.general || '';
+      try {
+        if (state.focus && state.focus.kind) {
+          let el = null;
+          if (state.focus.kind === 'general') {
+            el = gen;
+          } else {
+            const block = card.querySelector(`[data-pm-q="${_pmCssEscape(state.focus.key)}"]`);
+            el = state.focus.kind === 'text'
+              ? block?.querySelector('[data-pm-q-text]')
+              : block?.querySelector('[data-pm-q-other]');
+          }
+          if (el && !el.hasAttribute('hidden') && document.activeElement !== el) {
+            el.focus({ preventScroll: true });
+            const len = el.value ? el.value.length : 0;
+            const s = state.focus.selStart == null ? len : Math.min(state.focus.selStart, len);
+            const e = state.focus.selEnd == null ? len : Math.min(state.focus.selEnd, len);
+            if (typeof el.setSelectionRange === 'function') el.setSelectionRange(s, e);
+          }
+        }
+      } catch {}
+    });
+  } catch {}
 }
 function _collectMobileQuestionAnswers(q) {
   const card = document.querySelector(`[data-pm-q-card="${(window.CSS && CSS.escape) ? CSS.escape(q.id) : q.id}"]`);
@@ -2942,15 +3242,61 @@ function _collectMobileQuestionAnswers(q) {
   const generalOther = String(card.querySelector('[data-pm-q-general]')?.value || '').trim();
   return { answers, generalOther };
 }
+// Most-recent pending question for a session — docked inside the live streaming
+// bubble (below the tool stream) so it reads as part of the active blocked turn.
+function _getPendingQuestionForSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const thread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const q = thread[i]?.questionRequest;
+    if (q && String(q.status || 'pending').toLowerCase() === 'pending') return q;
+  }
+  return null;
+}
+function _findMobileQuestionRecord(qid) {
+  const id = String(qid || '').trim();
+  if (!id) return null;
+  const sessions = __pmChat.threads || {};
+  for (const sid of Object.keys(sessions)) {
+    const thread = sessions[sid];
+    if (!Array.isArray(thread)) continue;
+    const msg = thread.find((m) => String(m?.questionRequest?.id || '') === id);
+    if (msg?.questionRequest) return msg.questionRequest;
+  }
+  return null;
+}
 async function _submitMobileQuestion(id) {
   const qid = String(id || '').trim();
-  let record = null;
-  try { const data = await window.api('/api/questions?status=all'); record = (data.questions || []).find((it) => String(it.id || '') === qid) || null; } catch {}
+  // Prefer the locally-rendered question record (already in the thread) so a
+  // slow/failed /api/questions fetch can't strand Submit with an empty question
+  // shape and silently send no answers. Network is only a fallback.
+  let record = _findMobileQuestionRecord(qid);
+  if (!record) {
+    try { const data = await window.api('/api/questions?status=all'); record = (data.questions || []).find((it) => String(it.id || '') === qid) || null; } catch {}
+  }
   const q = _normalizeMobileQuestion(record || { id: qid, questions: [] });
   const payload = _collectMobileQuestionAnswers(q);
   try {
     const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/submit`, { method: 'POST', body: JSON.stringify(payload) });
     _updateMobileQuestionStatus({ questionId: qid, sessionId: result?.question?.sessionId, question: result?.question }, 'answered');
+    // When there was no live waiter (the normal async case on mobile, since the
+    // original turn already ended), the backend returns a resumePrompt so the
+    // agent can be continued with the answers. Mirror the approval-resume flow:
+    // re-fire the chat in the right session so the agent actually responds.
+    const resumePrompt = String(result?.resumePrompt || '').trim();
+    if (resumePrompt) {
+      const resumeSid = String(result?.question?.sessionId || result?.question?.sourceSessionId || __pmChat.activeSessionId || '').trim();
+      if (resumeSid) __pmChat.activeSessionId = resumeSid;
+      if (typeof window.__pmMobileSendMessage === 'function') {
+        setTimeout(() => window.__pmMobileSendMessage(resumePrompt, { fromQuestionResume: true }), 100);
+      } else {
+        const queue = _getMobileQueuedPrompts(resumeSid);
+        queue.push(_makeMobileQueuedPrompt(resumePrompt));
+        if (queue.length > PM_MOBILE_MAX_QUEUED_PROMPTS) queue.splice(0, queue.length - PM_MOBILE_MAX_QUEUED_PROMPTS);
+        _renderMobileQueuedPromptsPanel(resumeSid);
+        pmToast('Answer queued a resume message', 'info');
+      }
+    }
   } catch (err) { pmToast?.(`Question submit failed: ${err?.message || err}`, 'error'); }
 }
 async function _cancelMobileQuestion(id) {
@@ -3009,31 +3355,50 @@ function _renderChatMessageHtml(m, index = -1) {
   const revealTime = m.time ? `<span class="pm-reveal-time" aria-hidden="true">${escapeHtml(m.time)}</span>` : '';
   if (m.role === 'user') {
     const isWorkerHandoff = _isMobileVoiceAgentWorkerHandoff(m);
-    const bodyHtml = __pmChat.editingMessageIndex === msgIndex
+    const isEditing = __pmChat.editingMessageIndex === msgIndex;
+    // While editing, render the composer in place of the bubble (NOT nested
+    // inside .pm-bubble) so it reads as an editable message, not an inner panel.
+    const contentHtml = isEditing
       ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
-      : `${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileMarkdown(m.body.text)}</div>${attachmentHtml}`;
-    return `<div class="pm-msg from-user${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
+      : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileMarkdown(m.body.text)}</div>${attachmentHtml}</div>`;
+    return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
       ${m.workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
-      <div class="pm-bubble">${bodyHtml}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
+      ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
   }
   const b = m.body || {};
+  const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
   let inner = _renderMobileWorkTimer(m);
   if (m.approvalRequest) {
     inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
   }
   if (m.questionRequest) {
-    inner += _renderMobileQuestionCard(m.questionRequest);
+    // While the turn is live, the pending question is docked into the streaming
+    // bubble below (mirrors desktop). Suppress the standalone history copy so it
+    // isn't shown twice; a question-only message then renders nothing here.
+    const qPending = String(m.questionRequest.status || 'pending').toLowerCase() === 'pending';
+    const threadStreaming = (__pmChat.threads?.[__pmChat.activeSessionId] || []).some((x) => _isMobileAssistantMessage(x) && x.streaming === true);
+    const dockElsewhere = qPending && threadStreaming;
+    if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
+    if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
   }
-  const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
   const hasLiveTrace = m.streaming && !answerStarted && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length;
+  const completedTraceEntries = !m.streaming ? _mobileWorkflowTraceEntriesForMessage(m) : [];
+  const hasCompletedTrace = completedTraceEntries.length > 0;
   const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
   if (hasLiveTrace) {
     inner += _renderMobileLiveTrace(m.liveTraceEntries);
+  } else if (hasCompletedTrace) {
+    // Completed turn — trace hidden in collapsible drawer behind the work timer
+    inner += `<div class="pm-trace-drawer">${_renderMobileLiveTrace(completedTraceEntries)}</div>`;
   } else if (m.streaming && !answerStarted && !hasPendingImageGeneration) {
     inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
   }
   if (hasPendingImageGeneration) {
     inner += _renderMobileGeneratedImageLoadingCard();
+  }
+  if (m.streaming) {
+    const dockedQuestion = _getPendingQuestionForSession(__pmChat.activeSessionId);
+    if (dockedQuestion) inner += `<div class="pm-streaming-question-dock">${_renderMobileQuestionCard(dockedQuestion)}</div>`;
   }
   if (b.text) {
     inner += `<div class="markdown-body">${_renderMobileMarkdown(b.text)}</div>`;
@@ -3083,7 +3448,7 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
   inner += _renderMobileFileChanges(m.fileChanges);
-  inner += _renderMobileProcess(_mobileProcessEntriesWithLiveTrace(m, m.processEntries || b.processEntries), { collapsed: m.streaming && answerStarted });
+  inner += _renderMobileProcess(_mobileProcessEntriesWithLiveTrace(m, m.processEntries || b.processEntries), { collapsed: answerStarted });
   return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
     ${m.workflowLabel ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
     <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
@@ -3139,7 +3504,16 @@ function _collectMediaFromToolEvent(message, evt) {
     if (Array.isArray(source.videos)) _addMobileMedia(message, 'generatedVideos', source.videos, 'video');
     if (source.video && typeof source.video === 'object' && (source.video.path || source.video.rel_path || source.video.url)) _addMobileMedia(message, 'generatedVideos', source.video, 'video');
     if (Array.isArray(source.canvasFiles)) _mergeMobileMediaIntoMessage(message, source.canvasFiles.map((path) => ({ path })));
-    if (Array.isArray(source.files)) _mergeMobileMediaIntoMessage(message, source.files);
+    if (Array.isArray(source.files)) {
+      // Guard: skip plain-string arrays (e.g. list_files / list_directory return `files: string[]`)
+      // Only merge items that are actual media objects (have path/kind/dataUrl/base64 as object fields)
+      const action = String(evt?.action || evt?.name || evt?.toolName || '').trim();
+      const isFileListingTool = action === 'list_files' || action === 'list_directory';
+      if (!isFileListingTool) {
+        const mediaFiles = source.files.filter((f) => f && typeof f === 'object');
+        if (mediaFiles.length) _mergeMobileMediaIntoMessage(message, mediaFiles);
+      }
+    }
     if (Array.isArray(source.artifacts)) _mergeMobileMediaIntoMessage(message, source.artifacts);
     if (source.productCarousel && typeof source.productCarousel === 'object') _mergeMobileProductCarouselIntoMessage(message, source.productCarousel);
     if (Array.isArray(source.results)) {
@@ -3307,6 +3681,7 @@ function _renderThread(threadEl) {
   const closedProc = new Set();
   const openTerminals = {};
   const approvalDetails = _captureMobileApprovalDetailsState(threadEl);
+  const questionDrafts = _captureMobileQuestionDraftState(threadEl);
   try {
     threadEl.querySelectorAll('details.pm-process-stream').forEach((d) => {
       const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
@@ -3347,6 +3722,7 @@ function _renderThread(threadEl) {
       if (d) d.removeAttribute('open');
     });
     _restoreMobileApprovalDetailsState(threadEl, approvalDetails);
+    _restoreMobileQuestionDraftState(threadEl, questionDrafts);
     Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
       const nextHost = threadEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
       if (!nextHost || !snapshot?.host) return;
@@ -3385,6 +3761,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     const openTerminals = {};
     const stableVisionPreviews = {};
     const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
+    const questionDrafts = _captureMobileQuestionDraftState(currentEl);
     try {
       currentEl.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
@@ -3432,6 +3809,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
         }
       });
       _restoreMobileApprovalDetailsState(currentEl, approvalDetails);
+      _restoreMobileQuestionDraftState(currentEl, questionDrafts);
       Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
         const nextHost = currentEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
         if (!nextHost || !snapshot?.host) return;
@@ -3497,7 +3875,7 @@ function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
   }
 }
 
-function _installMobileTimestampReveal(threadEl) {
+function _installMobileTimestampReveal(threadEl, onMessageAction) {
   if (!threadEl || threadEl.dataset.pmTimestampRevealInstalled === '1') return;
   threadEl.dataset.pmTimestampRevealInstalled = '1';
 
@@ -3513,6 +3891,20 @@ function _installMobileTimestampReveal(threadEl) {
   const isInteractiveTarget = (target) => !!target?.closest?.(
     'button,a,input,textarea,select,summary,details,[data-msg-action],[data-pm-command-action],[data-pm-file-change-path],.pm-media-card,.pm-generated-file,.pm-product-carousel,.pm-product-track,.pm-product-card'
   );
+
+  // ── Expandable work timer → toggle trace drawer ──────────────────────────
+  threadEl.addEventListener('click', (event) => {
+    const timerEl = event.target?.closest?.('[data-expandable="trace"]');
+    if (!timerEl) return;
+    const bubble = timerEl.closest('.pm-bubble');
+    if (!bubble) return;
+    const drawer = bubble.querySelector('.pm-trace-drawer');
+    if (!drawer) return;
+    const isExpanded = timerEl.classList.contains('expanded');
+    timerEl.classList.toggle('expanded', !isExpanded);
+    drawer.classList.toggle('open', !isExpanded);
+    event.stopPropagation();
+  });
 
   const beginReveal = (clientX, clientY, id, inputType = '') => {
     startX = clientX;
@@ -3596,6 +3988,200 @@ function _installMobileTimestampReveal(threadEl) {
 
   threadEl.addEventListener('touchend', finishTouchReveal);
   threadEl.addEventListener('touchcancel', finishTouchReveal);
+
+  // ── Long-press on user bubble → show copy/edit popover ──────────────────
+  let _lpTimer = null;
+  let _lpTarget = null;
+
+  const _dismissLongPressPopover = () => {
+    const existing = document.getElementById('pm-msg-lp-popover');
+    if (existing) existing.remove();
+    const clone = document.getElementById('pm-msg-lp-bubble-clone');
+    if (clone) clone.remove();
+    const backdrop = document.getElementById('pm-msg-lp-backdrop');
+    if (backdrop) {
+      backdrop.classList.remove('pm-msg-lp-backdrop--in');
+      setTimeout(() => backdrop.remove(), 200);
+    }
+    // Restore visibility of any source bubble we hid while a clone was lifted
+    document.querySelectorAll('.pm-bubble--lp-source').forEach(el => {
+      el.classList.remove('pm-bubble--lp-source');
+      el.style.visibility = '';
+    });
+  };
+
+  const _showLongPressPopover = (bubbleEl, msgEl, msgIndex) => {
+    _dismissLongPressPopover();
+    const rect = bubbleEl.getBoundingClientRect();
+
+    // Full-screen blur backdrop so the lifted bubble stands out
+    const backdrop = document.createElement('div');
+    backdrop.id = 'pm-msg-lp-backdrop';
+    backdrop.className = 'pm-msg-lp-backdrop';
+    document.body.appendChild(backdrop);
+    // Force reflow then add the active class so the blur/fade transitions in
+    void backdrop.offsetWidth;
+    backdrop.classList.add('pm-msg-lp-backdrop--in');
+    backdrop.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      _dismissLongPressPopover();
+    });
+
+    // Lift a CLONE of the bubble into a body-level overlay. Applying
+    // position:fixed to the real bubble does NOT escape ancestor transforms /
+    // backdrop-filters (the chat container), so the real bubble would stay
+    // trapped inside the blurred layer. A clone appended to <body> truly
+    // escapes every ancestor stacking/transform context and stays sharp
+    // ABOVE the backdrop. The original bubble is hidden (space preserved).
+    const clone = bubbleEl.cloneNode(true);
+    clone.id = 'pm-msg-lp-bubble-clone';
+    clone.classList.add('pm-bubble--lifted');
+    clone.classList.remove('pm-bubble--lp-source');
+    clone.style.top = `${rect.top}px`;
+    clone.style.left = `${rect.left}px`;
+    clone.style.width = `${rect.width}px`;
+    clone.style.height = `${rect.height}px`;
+    // Strip any nested haptic helper from the clone
+    clone.querySelectorAll('.pm-bubble-haptic-switch').forEach(el => el.remove());
+    document.body.appendChild(clone);
+    // Hide the source bubble so only the lifted clone is visible
+    bubbleEl.classList.add('pm-bubble--lp-source');
+    bubbleEl.style.visibility = 'hidden';
+
+    // Haptic — fire a REAL click on an on-screen native iOS switch, exactly the
+    // mechanism the tab bar uses (pmHaptic's programmatic toggle does not buzz
+    // from inside a setTimeout outside a user gesture). The switch must be
+    // on-screen + non-zero size or iOS skips the haptic.
+    try {
+      const hsw = document.createElement('input');
+      hsw.type = 'checkbox';
+      hsw.setAttribute('switch', '');
+      hsw.setAttribute('aria-hidden', 'true');
+      hsw.tabIndex = -1;
+      hsw.className = 'pm-bubble-haptic-switch';
+      hsw.addEventListener('click', () => { try { pmHaptic(18); } catch {} });
+      clone.appendChild(hsw);
+      hsw.click();
+    } catch {}
+    // Android fallback
+    try { pmHaptic(18); } catch {}
+
+    // Timestamp
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const isToday = now.toDateString() === new Date().toDateString();
+    const dateStr = isToday ? 'Today' : now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+    const pop = document.createElement('div');
+    pop.id = 'pm-msg-lp-popover';
+    pop.className = 'pm-msg-lp-popover';
+    pop.style.visibility = 'hidden'; // hide until rAF positions it
+    pop.innerHTML = `
+      <div class="pm-msg-lp-time">${dateStr}, ${timeStr}</div>
+      <div class="pm-msg-lp-actions">
+        <button type="button" class="pm-msg-lp-btn" data-lp-action="copy" data-lp-index="${msgIndex}">
+          ${ICONS.clipboard}<span>Copy</span>
+        </button>
+        <div class="pm-msg-lp-divider"></div>
+        <button type="button" class="pm-msg-lp-btn" data-lp-action="edit" data-lp-index="${msgIndex}">
+          ${ICONS.wand}<span>Edit</span>
+        </button>
+      </div>
+    `;
+    document.body.appendChild(pop);
+
+    // Position after layout so offsetHeight is real
+    const popW = 168;
+    const margin = 10;
+    requestAnimationFrame(() => {
+      const popH = pop.offsetHeight || 100;
+      const nearBottom = rect.bottom > window.innerHeight * 0.67;
+      let top, origin;
+      if (nearBottom) {
+        top = rect.top - popH - margin;
+        origin = 'bottom right';
+        pop.classList.add('pm-msg-lp-above');
+      } else {
+        top = rect.bottom + margin;
+        origin = 'top right';
+      }
+      let left = rect.right - popW;
+      if (left < margin) left = margin;
+      if (left + popW > window.innerWidth - margin) left = window.innerWidth - popW - margin;
+      if (top < margin) top = margin;
+      if (top + popH > window.innerHeight - margin) top = window.innerHeight - popH - margin;
+      pop.style.top = `${top}px`;
+      pop.style.left = `${left}px`;
+      pop.style.transformOrigin = origin;
+      pop.style.visibility = 'visible';
+    });
+
+    // Dismiss on outside tap
+    const onOutside = (e) => {
+      if (!pop.contains(e.target)) {
+        _dismissLongPressPopover();
+        document.removeEventListener('pointerdown', onOutside, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 80);
+
+    // Button actions — bind to CLICK (a trusted user gesture) and run the action
+    // BEFORE dismissing, so the clipboard write for Copy stays inside the gesture.
+    pop.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-lp-action]');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const action = btn.getAttribute('data-lp-action');
+      document.removeEventListener('pointerdown', onOutside, true);
+      // Call the real action handler via a lightweight button-like shim so the
+      // exact same code path the inline buttons use runs (copy / edit).
+      try {
+        if (typeof onMessageAction === 'function') {
+          onMessageAction({
+            getAttribute: (name) =>
+              name === 'data-msg-action' ? action :
+              name === 'data-msg-index' ? String(msgIndex) : null,
+          });
+        }
+      } catch {}
+      _dismissLongPressPopover();
+    });
+  };
+
+  threadEl.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const bubble = touch.target.closest?.('.pm-msg.from-user .pm-bubble');
+    if (!bubble) return;
+    const msgEl = bubble.closest('[data-msg-index]');
+    if (!msgEl) return;
+    // Stop the swipe-reveal system from consuming this touch
+    e.stopImmediatePropagation();
+    _lpTarget = { bubble, msgEl, index: Number(msgEl.getAttribute('data-msg-index')), startX: touch.clientX, startY: touch.clientY };
+    clearTimeout(_lpTimer);
+    _lpTimer = setTimeout(() => {
+      const target = _lpTarget;
+      _lpTarget = null;
+      if (!target) return;
+      _showLongPressPopover(target.bubble, target.msgEl, target.index);
+    }, 500);
+  }, { passive: true });
+
+  threadEl.addEventListener('touchmove', (e) => {
+    if (!_lpTarget) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - _lpTarget.startX) > 10 || Math.abs(t.clientY - _lpTarget.startY) > 10) {
+      clearTimeout(_lpTimer);
+      _lpTarget = null;
+    }
+  }, { passive: true });
+
+  threadEl.addEventListener('touchend', (e) => {
+    // Only cancel if the timer hasn't fired yet; if it already fired _lpTarget is null
+    if (_lpTarget) { clearTimeout(_lpTimer); _lpTarget = null; }
+  }, { passive: true });
+  threadEl.addEventListener('touchcancel', () => { clearTimeout(_lpTimer); _lpTarget = null; }, { passive: true });
 }
 
 function _mobileChatScrollSnapshot(bodyEl, threshold = 72) {
@@ -3710,6 +4296,7 @@ let pmSlashCommandSelectionIndex = 0;
 let pmSkillTriggerExpanded = false;
 let pmSkillTriggerSelectedId = '';
 let pmSkillTriggerLastKey = '';
+let pmSkillTriggerExcludedIds = new Set();
 
 const PM_SKILL_TRIGGER_STOPWORDS = new Set([
   'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
@@ -3750,14 +4337,83 @@ function _pmSkillTriggerMatchesText(trigger, rawText, words) {
   });
 }
 
+// Unified matcher: the pill now uses the SAME backend matcher that surfaces
+// "matching skills" to the AI (GET /api/skills/match), instead of a duplicate
+// client-side matcher that could drift. We keep a tiny cache of the last query
+// result so render can stay synchronous; _pmFetchComposerSkillMatches refreshes
+// it asynchronously (debounced) and re-renders when results change.
+let _pmSkillMatchCacheQuery = '';
+let _pmSkillMatchCacheResult = [];
+let _pmSkillMatchInflight = '';
+let _pmSkillMatchDebounce = null;
+
+function _pmSkillTriggerExclusionKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function _pmSkillTriggerIdentity(skill) {
+  return String(skill?.id || skill?.name || '').trim();
+}
+
+function _pmGetExcludedSkillIds() {
+  return Array.from(pmSkillTriggerExcludedIds || []).filter(Boolean);
+}
+
+function _pmClearSkillExclusions() {
+  pmSkillTriggerExcludedIds = new Set();
+}
+
+function _pmIsSkillExcluded(skill) {
+  const key = _pmSkillTriggerExclusionKey(_pmSkillTriggerIdentity(skill));
+  return !!key && pmSkillTriggerExcludedIds.has(key);
+}
+
 function _pmComposerSkillMatches(value) {
-  const text = String(value || '').toLowerCase();
-  if (!text.trim()) return [];
-  const words = text.split(/\W+/).filter((word) => word.length > 2);
-  return (Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [])
-    .filter((skill) => Array.isArray(skill?.triggers) && skill.triggers.length)
-    .filter((skill) => skill.triggers.some((trigger) => _pmSkillTriggerMatchesText(trigger, text, words)))
-    .slice(0, 8);
+  const text = String(value || '').toLowerCase().trim();
+  if (!text) return [];
+  const filterExcluded = (matches) => (Array.isArray(matches) ? matches : []).filter((skill) => !_pmIsSkillExcluded(skill));
+  // Return the cached result for the current query if available.
+  if (text === _pmSkillMatchCacheQuery) return filterExcluded(_pmSkillMatchCacheResult);
+  return filterExcluded(_pmSkillMatchCacheResult);
+}
+
+function _pmFetchComposerSkillMatches(value, page) {
+  const text = String(value || '').toLowerCase().trim();
+  if (!text) { _pmSkillMatchCacheQuery = ''; _pmSkillMatchCacheResult = []; return; }
+  if (text === _pmSkillMatchCacheQuery || text === _pmSkillMatchInflight) return;
+  if (_pmSkillMatchDebounce) clearTimeout(_pmSkillMatchDebounce);
+  _pmSkillMatchDebounce = setTimeout(() => {
+    _pmSkillMatchInflight = text;
+    mobileGatewayFetch('/api/skills/match?q=' + encodeURIComponent(text) + '&limit=8')
+      .then((data) => {
+        // Ignore stale responses if the composer text changed since.
+        if (_pmSkillMatchInflight !== text) return;
+        _pmSkillMatchCacheQuery = text;
+        _pmSkillMatchCacheResult = Array.isArray(data?.matches) ? data.matches : [];
+        const input = page?.querySelector?.('.pm-composer textarea, .pm-composer input[type="text"]');
+        if (input && String(input.value || '').toLowerCase().trim() === text) {
+          _pmRenderSkillTriggerPill(page, input);
+        }
+      })
+      .catch((err) => console.warn('[mobile skills] match fetch failed:', err))
+      .finally(() => { if (_pmSkillMatchInflight === text) _pmSkillMatchInflight = ''; });
+  }, 140);
+}
+
+let _pmSkillCacheLoadPromise = null;
+function _pmEnsureSkillTriggerCacheLoaded() {
+  if (Array.isArray(window.prometheusSkillsCache) && window.prometheusSkillsCache.length) return;
+  if (_pmSkillCacheLoadPromise) return;
+  // Always use the mobile-authenticated fetch. The desktop loadInstalledSkills()
+  // uses the desktop api() helper + #skills-list DOM and fails silently on mobile,
+  // leaving window.prometheusSkillsCache empty so the trigger pill never renders.
+  _pmSkillCacheLoadPromise = mobileGatewayFetch('/api/skills')
+    .then((data) => {
+      window.prometheusSkillsCache = Array.isArray(data?.skills) ? data.skills : [];
+      window.dispatchEvent(new CustomEvent('prometheus:skills-cache-updated', { detail: { skills: window.prometheusSkillsCache } }));
+    })
+    .catch((err) => console.warn('[mobile skills] trigger cache load failed:', err))
+    .finally(() => { _pmSkillCacheLoadPromise = null; });
 }
 
 function _pmSkillTriggerIcon() {
@@ -3775,9 +4431,21 @@ function _pmHideSkillTriggerPill(page) {
   pmSkillTriggerLastKey = '';
 }
 
+function _pmRemoveComposerSkillMatch(page, input, id) {
+  const key = _pmSkillTriggerExclusionKey(id);
+  if (!key) return;
+  pmSkillTriggerExcludedIds.add(key);
+  if (_pmSkillTriggerExclusionKey(pmSkillTriggerSelectedId) === key) pmSkillTriggerSelectedId = '';
+  _pmRenderSkillTriggerPill(page, input);
+  pmToast('Skill removed from this message', 'info');
+}
+
 function _pmRenderSkillTriggerPill(page, input) {
   const pill = page?.querySelector?.('#pm-skill-trigger-pill');
   if (!pill) return;
+  if (!String(input?.value || '').trim()) _pmClearSkillExclusions();
+  _pmEnsureSkillTriggerCacheLoaded();
+  _pmFetchComposerSkillMatches(input?.value || '', page);
   const matches = _pmComposerSkillMatches(input?.value || '');
   if (!matches.length) {
     _pmHideSkillTriggerPill(page);
@@ -3812,8 +4480,11 @@ function _pmRenderSkillTriggerPill(page, input) {
       </div>
       <div class="pm-skill-trigger-desc">
         ${selectedSkill ? `
-          <strong>${escapeHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
-          <span>${escapeHtml(selectedSkill.description || 'No description available.')}</span>
+          <div class="pm-skill-trigger-desc-copy">
+            <strong>${escapeHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
+            <span>${escapeHtml(selectedSkill.description || 'No description available.')}</span>
+          </div>
+          <button type="button" class="pm-skill-trigger-remove" data-skill-id="${escapeHtml(_pmSkillTriggerIdentity(selectedSkill))}">Remove</button>
         ` : '<span>Select a skill to preview its description.</span>'}
       </div>
     ` : ''}
@@ -3829,12 +4500,16 @@ function _pmRenderSkillTriggerPill(page, input) {
     _pmHideSkillTriggerPill(page);
   });
   pill.querySelectorAll('.pm-skill-trigger-item').forEach((button) => {
-    button.addEventListener('pointerdown', (event) => {
+    button.addEventListener('click', (event) => {
       event.preventDefault();
       pmSkillTriggerExpanded = true;
       pmSkillTriggerSelectedId = button.getAttribute('data-skill-id') || '';
       _pmRenderSkillTriggerPill(page, input);
     });
+  });
+  pill.querySelector('.pm-skill-trigger-remove')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    _pmRemoveComposerSkillMatch(page, input, event.currentTarget?.getAttribute('data-skill-id') || '');
   });
   pill.hidden = false;
   if (shouldPop) {
@@ -4011,7 +4686,7 @@ function _openMobileMediaViewer({ kind, src, download, name }) {
   });
 }
 
-function _openMobileMediaTarget({ kind, src, download, name, path }) {
+function _openMobileMediaTarget({ kind, src, download, name, path, openMode }) {
   const safeKind = String(kind || 'file').toLowerCase();
   const mediaPath = String(path || '').trim();
   const mediaSrc = String(src || '').trim();
@@ -4023,6 +4698,7 @@ function _openMobileMediaTarget({ kind, src, download, name, path }) {
       path: mediaPath,
       src: mediaSrc || (mediaPath ? _mobileMediaUrl({ path: mediaPath }, 'inline') : ''),
       download: String(download || '') || (mediaPath ? _mobileMediaUrl({ path: mediaPath }, 'download') : mediaSrc),
+      openMode: String(openMode || '') || undefined,
     });
     return;
   }
@@ -4063,6 +4739,7 @@ function _wireMobileFileChangeRows(root = document) {
         kind,
         path,
         name,
+        openMode: 'diff',
         src: path ? _mobileMediaUrl({ path }, 'inline') : '',
         download: path ? _mobileMediaUrl({ path }, 'download') : '',
       });
@@ -4086,7 +4763,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     online: true,
     hideTitle: true,
     hideBrand: true,
-    rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.plus}</button>`,
+    rightActions: `
+      <button class="pm-icon-btn" id="pm-chat-push-btn" type="button" aria-label="Enable notifications" aria-pressed="false">${ICONS.bell}</button>
+      <button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.plus}</button>
+    `,
   });
   page.innerHTML = `
     ${header}
@@ -4177,6 +4857,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   wireHeaderActions(page, {
     onNewChat: () => _startMobileNewChat(navigate),
   });
+  page.querySelector('#pm-chat-push-btn')?.addEventListener('click', () => {
+    _toggleMobileChatPushNotifications().catch(() => {});
+  });
+  _refreshMobileChatPushButton().catch(() => {});
   wireMobileContextWindow(page, { getSessionId: () => __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
 
   const body     = page.querySelector('#pm-chat-body');
@@ -4225,13 +4909,18 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   };
 
   _pmRefreshSlashChrome(page, input);
-  _installMobileTimestampReveal(threadEl);
+  _installMobileTimestampReveal(threadEl, handleMobileMessageAction);
   const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
+  const previousQueuedPromptsBridge = window.__pmMobileQueuedPromptsChanged;
   const currentBackgroundDockBridge = () => {
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
     updateChatComposerSpace();
   };
+  const currentQueuedPromptsBridge = () => {
+    updateChatComposerSpace();
+  };
   window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
+  window.__pmMobileQueuedPromptsChanged = currentQueuedPromptsBridge;
   _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
 
   const resizeComposerInput = () => {
@@ -4247,6 +4936,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     input.value = '';
     input.style.height = '';
     input.style.overflowY = 'hidden';
+    _pmClearSkillExclusions();
     _pmHideSkillTriggerPill(page);
     requestAnimationFrame(resizeComposerInput);
   };
@@ -4994,7 +5684,16 @@ void main() {
   __pmChat.statusTimer = setInterval(updateOnlineStatus, 7000);
 
   if (!__pmChat.threads[requestedSession]?.length && requestedSession !== MOBILE_CHAT_SESSION_ID) {
-    threadEl.innerHTML = '<div class="pm-chat-loading">Loading chat...</div>';
+    // Render localStorage skeleton immediately so the user sees content at once
+    const cachedThread = _loadMobileThreadCache(requestedSession);
+    if (cachedThread.length) {
+      __pmChat.threads[requestedSession] = cachedThread;
+      _activeMobileThread();
+      _renderThread(threadEl);
+      _scrollChat(body);
+    } else {
+      threadEl.innerHTML = '<div class="pm-chat-loading">Loading chat...</div>';
+    }
     loadMobileChatSession(requestedSession)
       .then((session) => {
         if (__pmChat.activeSessionId !== requestedSession) return;
@@ -5007,18 +5706,31 @@ void main() {
         _activeMobileThread();
         _renderThread(threadEl);
         _scrollChat(body);
-        refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: true });
+        // Persist this fresh render to localStorage for the next cold open
+        _saveMobileThreadCache(requestedSession, __pmChat.threads[requestedSession] || []);
+        // Session was just freshly loaded — skip the redundant re-fetch in
+        // refreshMobileRunRecovery by using fullRefresh:false. The run status
+        // check still fires to detect active runs and replay missed events.
+        refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: false });
       })
       .catch((err) => {
         if (__pmChat.activeSessionId !== requestedSession) return;
-        threadEl.innerHTML = `<div class="pm-chat-loading error">Could not load chat: ${escapeHtml(err.message || 'Unknown error')}</div>`;
+        if (!__pmChat.threads[requestedSession]?.length) {
+          threadEl.innerHTML = `<div class="pm-chat-loading error">Could not load chat: ${escapeHtml(err.message || 'Unknown error')}</div>`;
+        } else {
+          pmToast('Showing cached chat while Prometheus reconnects.', 'info');
+        }
       });
   }
 
   async function refreshMobileRunRecovery({ silent = false, force = false, fullRefresh = false } = {}) {
     const remembered = _readMobileActiveRun(requestedSession);
     try {
-      const status = await loadMobileChatRunStatus(requestedSession);
+      // ── Parallel batch 1: run-status + session history (independent) ──────────
+      const [status, prefetchedSession] = await Promise.all([
+        loadMobileChatRunStatus(requestedSession),
+        (fullRefresh || force) ? loadMobileChatSession(requestedSession, { force: true }).catch(() => null) : Promise.resolve(null),
+      ]);
       if (!force && !remembered && !status?.active) return;
       // Draft new-chat session has no server-side history — skip even when force=true
       if (requestedSession === MOBILE_CHAT_SESSION_ID && !remembered && !status?.active) return;
@@ -5026,25 +5738,34 @@ void main() {
 
       let recoveredSessionProcessLog = [];
       if (fullRefresh || force) {
-        const session = await loadMobileChatSession(requestedSession).catch(() => null);
+        const session = prefetchedSession;
         const history = Array.isArray(session?.history) ? session.history : [];
         recoveredSessionProcessLog = Array.isArray(session?.processLog) ? session.processLog : [];
-        const localThread = __pmChat.threads[requestedSession] || [];
-        if (history.length) {
+        // CRITICAL: do NOT replace the thread with server history while a run is
+        // still active. Server history never includes the in-progress streaming turn,
+        // so merging it here destroys the live aiTurn before hasLocalLiveHistory is
+        // evaluated — making hasLocalLiveHistory always false and forcing a full
+        // seq=0 replay that wipes and reloads the entire tool stream on every
+        // reconnect. Defer the history merge to after active-run recovery.
+        if (history.length && !status?.active) {
+          const localThread = __pmChat.threads[requestedSession] || [];
           __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
             _mapServerHistoryToMobile(history),
             localThread,
           );
           _activeMobileThread();
         }
-        const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
+        // ── Parallel batch 2: approvals + questions (independent) ────────────────
+        const [pendingApprovals, pendingQuestions] = await Promise.all([
+          loadMobileApprovals('pending').catch(() => []),
+          loadMobileQuestions('pending').catch(() => []),
+        ]);
         (Array.isArray(pendingApprovals) ? pendingApprovals : [])
           .filter((approval) => {
             const sid = String(approval?.sessionId || approval?.sourceSessionId || '').trim();
             return !sid || sid === requestedSession;
           })
           .forEach((approval) => _upsertMobilePendingApproval(approval));
-        const pendingQuestions = await loadMobileQuestions('pending').catch(() => []);
         (Array.isArray(pendingQuestions) ? pendingQuestions : [])
           .filter((q) => {
             const sid = String(q?.sessionId || q?.sourceSessionId || '').trim();
@@ -5084,15 +5805,55 @@ void main() {
           Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
           Number(remembered?.lastSeq || 0) || 0,
         );
-        const lastSeq = (fullRefresh || force) && !hasLocalLiveHistory ? 0 : rememberedLastSeq;
-        if ((fullRefresh || force) && !hasLocalLiveHistory && __pmChat.activeRuns?.[requestedSession]) {
-          __pmChat.activeRuns[requestedSession] = { ...__pmChat.activeRuns[requestedSession], lastSeq: 0, streamId: '' };
+        // Two distinct recovery scenarios with different correct behavior:
+        //
+        // 1. COLD REOPEN (app was closed/backgrounded and reopened):
+        //    remembered.disconnected === true. User wants to see the FULL tool
+        //    stream from the beginning of the turn. Always replay from seq=0
+        //    and reset the live aiTurn regardless of hasLocalLiveHistory. Stale
+        //    local entries from before the disconnect are incomplete — rebuild.
+        //
+        // 2. MID-STREAM RECONNECT (WS blip, brief focus loss, gateway restart):
+        //    No disconnected flag. Preserve existing live entries and only
+        //    append missed frames after rememberedLastSeq to avoid flickering.
+        //
+        // Previous bug: !hasLocalLiveHistory blocked full replay on cold reopen
+        // whenever the aiTurn had even 1 stale process entry — so replayAfter
+        // was set to e.g. seq 47 and only the tail of the stream ever showed.
+        const isColdReopen = remembered?.disconnected === true;
+        let shouldResetForReplay = isColdReopen
+          || (!hasLocalLiveHistory && (fullRefresh || force));
+        // On cold reopen also clear the in-memory lastSeq so replayAfter=0
+        if (isColdReopen && __pmChat.activeRuns?.[requestedSession]) {
+          __pmChat.activeRuns[requestedSession] = {
+            ...__pmChat.activeRuns[requestedSession],
+            lastSeq: 0,
+            streamId: '',
+          };
         }
-        const replay = await loadMobileChatStreamReplay(requestedSession, lastSeq).catch(() => null);
-        const events = Array.isArray(replay?.events) ? replay.events : [];
-        if (fullRefresh || force) {
-          const fullReplay = lastSeq === 0 ? replay : await loadMobileChatStreamReplay(requestedSession, 0).catch(() => null);
-          _mergeMobileProcessEntries(aiTurn, processEntriesFromReplayFrames(fullReplay?.events || []));
+        let replayAfter = shouldResetForReplay ? 0 : rememberedLastSeq;
+        let replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => null);
+        let events = Array.isArray(replay?.events) ? replay.events : [];
+        const firstSeq = Math.max(0, Math.floor(Number(replay?.stream?.firstSeq || 0)) || 0);
+        const replayGap = !shouldResetForReplay
+          && rememberedLastSeq > 0
+          && firstSeq > 0
+          && firstSeq > rememberedLastSeq + 1;
+        if (replayGap) {
+          shouldResetForReplay = true;
+          replayAfter = 0;
+          if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+          const run = __pmChat.activeRuns[requestedSession] || {};
+          __pmChat.activeRuns[requestedSession] = { ...run, lastSeq: 0, streamId: '' };
+          replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => replay);
+          events = Array.isArray(replay?.events) ? replay.events : [];
+        }
+        if (shouldResetForReplay && events.length) {
+          _resetMobileLiveAiTurnForReplay(aiTurn, {
+            startedAt: Number(replay?.stream?.startedAt || status?.run?.startedAt || remembered?.startedAt || aiTurn.workStartedAt || aiTurn.timestamp || 0),
+            clientRequestId: aiTurn._clientRequestId,
+          });
+          _mergeMobileProcessEntries(aiTurn, recoveredSessionProcessLog);
         }
         let terminal = '';
         for (const frame of events) {
@@ -5113,7 +5874,11 @@ void main() {
           startedAt: status.run?.startedAt || remembered?.startedAt,
           disconnected: true,
           streamId: replay?.stream?.streamId || remembered?.streamId || '',
-          lastSeq: replay?.stream?.lastSeq || remembered?.lastSeq || 0,
+          lastSeq: Math.max(
+            Number(replay?.stream?.lastSeq || 0) || 0,
+            Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
+            Number(remembered?.lastSeq || 0) || 0,
+          ),
         });
         renderThreadNow();
         setBusy(true);
@@ -5139,7 +5904,7 @@ void main() {
       if (queue.length) {
         const next = queue.shift();
         _renderMobileQueuedPromptsPanel(requestedSession);
-        setTimeout(() => sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [] }), 0);
+        setTimeout(() => sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [] }), 0);
       }
     } catch (err) {
       if (_readMobileActiveRun(requestedSession)?.disconnected) scheduleMobileRunRecovery(2500, { fullRefresh });
@@ -5256,11 +6021,16 @@ void main() {
       if (!body || !form) return;
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
       const height = Math.ceil(form.getBoundingClientRect?.().height || 0);
+      const queuedPanel = page?.querySelector?.('#pm-mobile-queued-prompts');
+      const queuedHeight = queuedPanel && !queuedPanel.hidden
+        ? Math.ceil(queuedPanel.getBoundingClientRect?.().height || 0)
+        : 0;
       page?.style?.setProperty?.('--pm-composer-live-height', `${height}px`);
+      page?.style?.setProperty?.('--pm-queued-live-height', `${queuedHeight}px`);
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
-      const space = Math.max(170, height + dockHeight + (dockHeight ? 42 : 28));
+      const space = Math.max(170, height + queuedHeight + dockHeight + (dockHeight ? 54 : 40));
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
       if (form.classList.contains('is-voice-active') && chatVoiceShell && !chatVoiceShell.hidden) {
         const bodyRect = body.getBoundingClientRect?.();
@@ -5422,7 +6192,7 @@ void main() {
       case 'token':
         if (evt.text) {
           const chunk = String(evt.text);
-          if (aiTurn.agentExecutionMode === 'execute' && !aiTurn.finalResponseStarted) {
+          if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
             _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
           } else {
             aiTurn.finalResponseStarted = true;
@@ -6145,6 +6915,32 @@ void main() {
     return entries;
   }
 
+  function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
+    if (!aiTurn) return;
+    const startedAtRaw = Number(options.startedAt || 0);
+    const startedAt = Number.isFinite(startedAtRaw) && startedAtRaw > 0
+      ? startedAtRaw
+      : Number(aiTurn.workStartedAt || aiTurn.timestamp || Date.now()) || Date.now();
+    aiTurn.streaming = true;
+    aiTurn.time = '';
+    aiTurn.timestamp = startedAt;
+    aiTurn.workStartedAt = startedAt;
+    aiTurn.workEndedAt = 0;
+    aiTurn.workDurationMs = 0;
+    aiTurn.body = { ...(aiTurn.body || {}), sender: '', text: '' };
+    aiTurn.content = '';
+    aiTurn.processEntries = [];
+    aiTurn.liveTraceEntries = [];
+    aiTurn.finalResponseStarted = false;
+    aiTurn.toolActivityStarted = false;
+    aiTurn.agentExecutionMode = '';
+    if (options.clientRequestId) aiTurn._clientRequestId = options.clientRequestId;
+    delete aiTurn.fileChanges;
+    delete aiTurn.productCarousel;
+    delete aiTurn.richArtifacts;
+  }
+
+
   function applyMobileChatStreamEvent(aiTurn, evt) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || !evt?.type) return '';
@@ -6153,7 +6949,7 @@ void main() {
       case 'token':
         if (evt.text) {
           const chunk = String(evt.text);
-          if (aiTurn.agentExecutionMode === 'execute' && !aiTurn.finalResponseStarted) {
+          if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
             _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
           } else {
             aiTurn.finalResponseStarted = true;
@@ -6267,6 +7063,13 @@ void main() {
         const model = detail?.modelRef || detail?.model || evt.model || evt.modelRef || evt.providerId || 'model';
         _appendMobileProcess(aiTurn, 'info', `Model: ${model}`, evt);
         renderThreadSoon();
+        return 'streaming';
+      }
+      case 'model_reverted': {
+        // switch_model is turn-scoped; gateway emits this at turn end to revert the badge.
+        import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => {
+          refreshMobileModelBadge(true, null).catch(() => {});
+        }).catch(() => {});
         return 'streaming';
       }
       case 'session_title':
@@ -6651,13 +7454,16 @@ void main() {
       : getPendingAttachments().slice().concat(stagedVoiceImages);
     if (!msg && files.length === 0) return;
     const fromQueue = options.fromQueue === true;
+    const excludedSkillIds = fromQueue && Array.isArray(options.excludedSkillIds)
+      ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : _pmGetExcludedSkillIds();
     if (!fromQueue && (__pmChat.activeRuns?.[busySessionId]?.busy || __pmChat.activeRuns?.[requestedSession]?.busy)) {
       const queue = _getMobileQueuedPrompts(busySessionId);
       if (queue.length >= PM_MOBILE_MAX_QUEUED_PROMPTS) {
         pmToast(`Queue full (${PM_MOBILE_MAX_QUEUED_PROMPTS}). Wait for Prometheus to finish.`, 'warn');
         return;
       }
-      queue.push(_makeMobileQueuedPrompt(msg || 'Attached file(s)', files));
+      queue.push(_makeMobileQueuedPrompt(msg || 'Attached file(s)', files, { excludedSkillIds }));
       if (!Array.isArray(options.attachments)) {
         __pmChat.attachments[busySessionId] = [];
         renderPendingAttachments();
@@ -6795,7 +7601,7 @@ void main() {
       _renderMobileQueuedPromptsPanel(actualSessionId);
       pmToast(queue.length ? `Running queued prompt (${queue.length} remaining).` : 'Running queued prompt.', 'info');
       setTimeout(() => {
-        sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [] });
+        sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [] });
       }, 0);
     };
 
@@ -6805,6 +7611,7 @@ void main() {
       attachments: visionAttachments,
       attachmentPreviews: files.map(_sanitizeMobileAttachmentPreviewForServer),
       clientRequestId,
+      excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined,
     }, {
       onEvent: (evt) => {
         const applied = applyMobileChatStreamEvent(aiTurn, evt);
@@ -7067,6 +7874,24 @@ void main() {
       updateMobileChatSessionHistory(requestedSession, _mobileHistoryForServer(_activeMobileThread())).catch(() => {});
     }
   };
+  // Stamp disconnected:true whenever the app is hidden/closed while a run is active.
+  // This is the ONLY reliable way to detect a cold reopen on iOS — the app dies
+  // silently without firing a WS error, so disconnected never gets set otherwise.
+  // On next open, isColdReopen=true → replayAfter=0 → full tool stream from seq=0.
+  const onAppHide = () => {
+    const sid = String(requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
+    if (!sid) return;
+    const run = __pmChat.activeRuns?.[sid];
+    if (run?.busy || run?.lastSeq > 0) {
+      _rememberMobileActiveRun(sid, { disconnected: true });
+    }
+  };
+  const onAppHideVisibility = () => {
+    if (document.hidden) onAppHide();
+  };
+  window.addEventListener('pagehide', onAppHide, { capture: true });
+  document.addEventListener('visibilitychange', onAppHideVisibility, { capture: true });
+
   window.addEventListener('focus', runRecoveryOnReturn);
   document.addEventListener('visibilitychange', runRecoveryOnVisibility);
   wsEventBus?.on?.('ws:open', runRecoveryOnWsOpen);
@@ -7080,6 +7905,8 @@ void main() {
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
+    window.removeEventListener('pagehide', onAppHide, { capture: true });
+    document.removeEventListener('visibilitychange', onAppHideVisibility, { capture: true });
     window.removeEventListener('focus', runRecoveryOnReturn);
     window.removeEventListener('prometheus:skills-cache-updated', refreshSkillTriggerPill);
     wsEventBus?.off?.('ws:open', runRecoveryOnWsOpen);
@@ -7092,6 +7919,9 @@ void main() {
     wsEventBus?.off?.('bg_agent_done', onBackgroundSpawnDone);
     if (window.__pmMobileBackgroundSpawnDockChanged === currentBackgroundDockBridge) {
       window.__pmMobileBackgroundSpawnDockChanged = previousBackgroundDockBridge;
+    }
+    if (window.__pmMobileQueuedPromptsChanged === currentQueuedPromptsBridge) {
+      window.__pmMobileQueuedPromptsChanged = previousQueuedPromptsBridge;
     }
     if (__pmChat.workTimer) {
       clearInterval(__pmChat.workTimer);
@@ -7212,6 +8042,7 @@ void main() {
       });
       return;
     }
+
     // Existing: command action buttons
     const button = event.target.closest?.('[data-pm-command-action]');
     if (!button) return;
@@ -7594,11 +8425,15 @@ function _sendMobileRealtimeAgentSessionUpdateFromSettings(reason = 'settings_li
   _syncMobileRealtimeAgentQuietFromSettings?.();
   try {
     if (conn.provider === 'xai') {
+      const speed = Number(settings.xaiSpeed || 1.0);
       dc.send(JSON.stringify({
         type: 'session.update',
         session: {
           voice: _mobileXaiVoice(settings.serverVoice || settings.realtimeVoice),
-          speed: Number(settings.xaiSpeed || 1.0),
+          speed,
+          audio: {
+            output: { speed },
+          },
           input_audio_format: 'pcm16',
           output_audio_format: 'pcm16',
           turn_detection: turnDetection,
@@ -8869,6 +9704,7 @@ async function _ensureRealtimeSpeechConnection() {
       headers: _gatewayJsonHeaders(),
       body: JSON.stringify({
         voice: __pmVoice.settings?.realtimeVoice || __pmVoice.provider?.voice || 'marin',
+        model: __pmVoice.settings?.realtimeModel || undefined,
         speed: Number(__pmVoice.settings?.realtimeSpeed || __pmVoice.provider?.speed || 1.05),
         instructions: 'Speak the supplied Prometheus response verbatim. Do not add extra commentary.',
       }),
@@ -8983,6 +9819,7 @@ const __pmRealtimeAgent = {
   quiet: { active: false, wakePhrase: '', wakeNormalized: '', pendingActivate: false, suppressResponse: false },
   contextRefreshTimer: null,
   pendingCreateResponse: null,
+  outputGuard: { suspended: false, restoreSending: null, restoreTrackEnabled: null, until: 0, restoreTimer: null },
   // Camera/photo staging: a captured image is held here (NOT sent to the model)
   // and shown in the chat bubble. It is flushed to the model as an attachment to
   // the user's NEXT spoken turn (flush on speech_started / PTT release), so the
@@ -9312,7 +10149,8 @@ function _requestMobileRealtimeAgentFinalSummary(text) {
           text: [
             '[WORKER_FINAL_RESPONSE]',
             'The Prometheus worker has finished. Give the user one natural spoken wrap-up in your own realtime voice.',
-            'Do not read this verbatim. Do not repeat the full worker answer. Summarize the result, outcome, or next useful thing conversationally.',
+            'Do not read this verbatim. Do not repeat the full worker answer. Do not preserve the worker wording or sentence order.',
+            'Summarize the result, outcome, or next useful thing conversationally. Quote only tiny names, paths, or labels when needed.',
             'Keep it concise unless the result genuinely needs detail.',
             '',
             content.slice(0, 5000),
@@ -9329,7 +10167,7 @@ function _requestMobileRealtimeAgentFinalSummary(text) {
           'You are Prometheus in live realtime voice mode.',
           'Summarize the completed worker result for the user in your own words.',
           'Do not say you are reading or repeating a message.',
-          'Do not duplicate the worker text verbatim.',
+          'Do not duplicate the worker text verbatim, preserve its sentence order, or read whole sentences unchanged.',
           'Speak naturally and briefly.',
         ].join('\n'),
       },
@@ -9477,6 +10315,7 @@ function _cancelMobileRealtimeAgentResponseForDispatch() {
   __pmRealtimeAgent.activeResponse = false;
   __pmRealtimeAgent.narrationPending = false;
   __pmRealtimeAgent.lastResponseEndedAt = Date.now();
+  _restoreMobileRealtimeInputAfterOutput('response_cancelled_for_dispatch');
   __pmVoice.realtimeSpeechActiveResponse = '';
   __pmVoice.speaking = false;
 }
@@ -9522,6 +10361,7 @@ function _activateMobileRealtimeAgentQuietMode(options = {}) {
   try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
   __pmRealtimeAgent.activeResponse = false;
   __pmVoice.realtimeSpeechActiveResponse = false;
+  _restoreMobileRealtimeInputAfterOutput('quiet_mode_cancel');
   _sendMobileRealtimeAgentCreateResponseFlag(false);
   pmToast(phrase ? `Quiet mode — say "${phrase}" to wake` : 'Quiet mode on', 'info');
   _setStatus('Quiet mode', phrase ? `Say "${phrase}" to wake Prometheus` : 'Silent until you wake Prometheus');
@@ -9597,10 +10437,15 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'realtime_agent_bootstrap' });
   }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  const desiredModel = String(__pmVoice?.settings?.realtimeModel || '').trim();
   if (
     __pmRealtimeAgent.conn?.dc?.readyState === 'open'
     && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid
   ) {
+    const activeModel = String(__pmRealtimeAgent.conn.model || '').trim();
+    if (desiredModel && desiredModel !== activeModel) {
+      _stopMobileRealtimeAgentSession();
+    } else {
     __pmRealtimeAgent.conn.listenMode = listenMode;
     __pmRealtimeAgent.listenMode = listenMode;
     _sendMobileRealtimeAgentSessionUpdateFromSettings('realtime_agent_reuse');
@@ -9614,7 +10459,8 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       micEnabled: __pmRealtimeAgent.conn.micTrack?.enabled === true,
       micTrackState: __pmRealtimeAgent.conn.micTrack?.readyState || '',
     });
-    return __pmRealtimeAgent.conn;
+      return __pmRealtimeAgent.conn;
+    }
   }
   if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
     _mobileRealtimeAgentDisableAlwaysListening();
@@ -9632,6 +10478,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       body: JSON.stringify({
         sessionId: sid,
         voice: String(__pmVoice?.settings?.realtimeVoice || 'marin'),
+        model: desiredModel || undefined,
         speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
         voiceRuntime: wakePhrase
           ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
@@ -9800,6 +10647,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         type: 'session.update',
         session: {
           type: 'realtime',
+          model: __pmVoice?.settings?.realtimeModel || bootstrap.model || undefined,
           audio: {
             input: {
               turn_detection: _mobileRealtimeTurnDetectionForListenMode(listenMode),
@@ -9821,7 +10669,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     // the voice agent continues the conversation instead of starting fresh.
     _seedMobileRealtimeAgentConversationHistory(dc, sid);
 
-    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true };
+    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true, model: bootstrap.model || desiredModel || '' };
     if (__pmRealtimeAgent.quiet.active) _sendMobileRealtimeAgentCreateResponseFlag(false);
     const logState = (reason) => _voiceDebug('realtime-agent-pc-state', {
       sessionId: sid,
@@ -9866,6 +10714,8 @@ function _stopMobileRealtimeAgentSession() {
   try { conn?.dc?.close(); } catch {}
   try { conn?.pc?.close(); } catch {}
   try { if (conn?.audio) conn.audio.srcObject = null; } catch {}
+  try { clearTimeout(__pmRealtimeAgent.outputGuard?.restoreTimer); } catch {}
+  __pmRealtimeAgent.outputGuard = { suspended: false, restoreSending: null, restoreTrackEnabled: null, until: 0, restoreTimer: null };
   // Shared warm mic (sharedMic) must stay live for the visualizer / xAI / other
   // providers — just re-enable its track. Only fully stop a mic we exclusively own.
   try {
@@ -9894,6 +10744,91 @@ function _setMobileRealtimeAgentMicEnabled(enabled) {
   const track = conn?.micTrack;
   if (!track) return;
   track.enabled = !!enabled;
+}
+
+function _mobileRealtimeCanGateInputWithoutMutingTrack(conn) {
+  return !!(conn?.xaiCapture && (conn.provider === 'xai' || conn.provider === 'openai_ws'));
+}
+
+function _mobileRealtimePlaybackActive(conn = __pmRealtimeAgent.conn) {
+  const stats = typeof conn?.playback?.stats === 'function' ? conn.playback.stats() : null;
+  return !!(stats && (stats.playing || stats.queuedSamples > 0 || stats.currentSamplesRemaining > 0));
+}
+
+function _scheduleMobileRealtimeInputRestoreWatchdog(reason = 'assistant_output') {
+  const guard = __pmRealtimeAgent.outputGuard || (__pmRealtimeAgent.outputGuard = {});
+  try { clearTimeout(guard.restoreTimer); } catch {}
+  guard.restoreTimer = setTimeout(() => {
+    const conn = __pmRealtimeAgent.conn;
+    const stillPlaying = _mobileRealtimePlaybackActive(conn);
+    const guardExpired = Date.now() >= Number(guard.until || 0);
+    if (guard.suspended && guardExpired && !stillPlaying) {
+      _restoreMobileRealtimeInputAfterOutput(`${reason}_watchdog`);
+      return;
+    }
+    if (guard.suspended) _scheduleMobileRealtimeInputRestoreWatchdog(`${reason}_retry`);
+  }, 1400);
+}
+
+function _suspendMobileRealtimeInputForOutput(reason = 'assistant_output') {
+  const conn = __pmRealtimeAgent.conn;
+  if (!conn) return false;
+  const listenMode = conn.listenMode || __pmRealtimeAgent.listenMode;
+  const guard = __pmRealtimeAgent.outputGuard || (__pmRealtimeAgent.outputGuard = {});
+  guard.until = Date.now() + 1200;
+  if (listenMode !== 'always_listening') return false;
+  if (!guard.suspended) {
+    guard.suspended = true;
+    guard.restoreSending = conn.xaiCapture ? conn.xaiCapture.sending === true : null;
+    guard.restoreTrackEnabled = conn.micTrack ? conn.micTrack.enabled === true : null;
+  }
+  if (conn.xaiCapture) conn.xaiCapture.sending = false;
+  if (conn.micTrack && !_mobileRealtimeCanGateInputWithoutMutingTrack(conn)) conn.micTrack.enabled = false;
+  else if (conn.micTrack) conn.micTrack.enabled = true;
+  _scheduleMobileRealtimeInputRestoreWatchdog(reason);
+  _voiceDebug?.('realtime-agent-input-suspended-for-output', { reason, provider: conn.provider || 'openai_webrtc' });
+  return true;
+}
+
+function _restoreMobileRealtimeInputAfterOutput(reason = 'assistant_output_done') {
+  const conn = __pmRealtimeAgent.conn;
+  const guard = __pmRealtimeAgent.outputGuard || {};
+  if (!guard.suspended) return false;
+  const shouldListen = (conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening' && !__pmRealtimeAgent.quiet?.active;
+  const restoreSending = guard.restoreSending === true && shouldListen;
+  const restoreTrack = guard.restoreTrackEnabled === true && shouldListen;
+  if (conn?.xaiCapture) conn.xaiCapture.sending = restoreSending;
+  if (conn?.micTrack) conn.micTrack.enabled = _mobileRealtimeCanGateInputWithoutMutingTrack(conn) ? true : restoreTrack;
+  try { clearTimeout(guard.restoreTimer); } catch {}
+  guard.suspended = false;
+  guard.restoreSending = null;
+  guard.restoreTrackEnabled = null;
+  guard.until = 0;
+  guard.restoreTimer = null;
+  _voiceDebug?.('realtime-agent-input-restored-after-output', { reason, provider: conn?.provider || 'openai_webrtc', shouldListen });
+  return true;
+}
+
+function _isMobileRealtimeOutputGuardActive() {
+  const guard = __pmRealtimeAgent.outputGuard || {};
+  if (guard.suspended) return true;
+  return Date.now() < Number(guard.until || 0);
+}
+
+function _shouldIgnoreMobileRealtimeSpeechStartedDuringOutput(provider = '') {
+  const conn = __pmRealtimeAgent.conn;
+  const stats = typeof conn?.playback?.stats === 'function' ? conn.playback.stats() : null;
+  const playbackActive = _mobileRealtimePlaybackActive(conn);
+  const active = __pmRealtimeAgent.activeResponse || __pmVoice.realtimeSpeechActiveResponse || playbackActive || _isMobileRealtimeOutputGuardActive();
+  if (!active) return false;
+  _voiceDebug?.('realtime-agent-ignored-output-echo-speech-started', {
+    provider,
+    activeResponse: !!__pmRealtimeAgent.activeResponse,
+    realtimeSpeechActive: !!__pmVoice.realtimeSpeechActiveResponse,
+    playbackActive,
+    queuedSamples: stats?.queuedSamples || 0,
+  });
+  return true;
 }
 
 // --- xAI / Grok realtime (WebSocket transport) for mobile -------------------
@@ -10000,8 +10935,13 @@ function _createMobileXaiPlayback(options = {}) {
   let closed = false;
   let smoothGain = 0;
   let underruns = 0;
-  const prebufferSamples = Math.max(processorSize, Math.round(outputRate * 0.11));
-  const maxQueueSamples = Math.max(prebufferSamples * 2, Math.round(outputRate * 1.8));
+  const prebufferSamples = Math.max(processorSize * 2, Math.round(outputRate * 0.18));
+  // Memory-safety ceiling only (~60s). Realtime audio (esp. xAI/Grok) streams the full
+  // response in a fast burst over the WS, faster than realtime playback. A small cap here
+  // made trimQueue() destructively delete unplayed/in-flight audio on long messages, causing
+  // the spoken audio to skip/jump ahead of the transcript. Keep this huge so trimQueue never
+  // fires during normal speech; barge-in is handled separately by interrupt().
+  const maxQueueSamples = Math.max(prebufferSamples * 2, Math.round(outputRate * 60));
 
   const popSample = () => {
     while (!current || currentOffset >= current.length) {
@@ -10080,7 +11020,14 @@ function _createMobileXaiPlayback(options = {}) {
       try { ctx.close?.(); } catch {}
     },
     stats() {
-      return { queuedSamples, outputRate, sourceRate, underruns };
+      return {
+        queuedSamples,
+        currentSamplesRemaining: current ? Math.max(0, current.length - currentOffset) : 0,
+        outputRate,
+        sourceRate,
+        playing,
+        underruns,
+      };
     },
   };
 }
@@ -10254,6 +11201,7 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
     const type = String(event.type || '');
     if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
       if (__pmRealtimeAgent) __pmRealtimeAgent.activeResponse = true;
+      _suspendMobileRealtimeInputForOutput('openai_ws_audio_delta');
       if (__pmRealtimeAgent?.quiet?.active || __pmRealtimeAgent?.quiet?.suppressResponse) {
         __pmRealtimeAgent.quiet.suppressResponse = true;
         _voiceDebug('openai-realtime-ws-quiet-audio-suppressed', { type });
@@ -10264,7 +11212,11 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
       if (b64) { try { playback.enqueue(_mobileBase64ToInt16(b64)); } catch {} }
       return;
     }
-    if (type === 'input_audio_buffer.speech_started') { try { playback.interrupt(); } catch {} }
+    if (type === 'input_audio_buffer.speech_started') {
+      if (!_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput('openai_ws')) {
+        try { playback.interrupt(); } catch {}
+      }
+    }
     if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
       const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 300);
       _voiceDebug('openai-realtime-ws-error', { type, msg });
@@ -10322,12 +11274,18 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'xai_realtime_agent_bootstrap' });
   }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  const desiredModel = String(__pmVoice?.settings?.xaiRealtimeModel || '').trim();
   if (__pmRealtimeAgent.conn?.dc?.readyState === 'open' && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid) {
+    const activeModel = String(__pmRealtimeAgent.conn.model || '').trim();
+    if (desiredModel && desiredModel !== activeModel) {
+      _stopMobileRealtimeAgentSession();
+    } else {
     __pmRealtimeAgent.conn.listenMode = listenMode;
     __pmRealtimeAgent.listenMode = listenMode;
     _sendMobileRealtimeAgentSessionUpdateFromSettings('xai_realtime_agent_reuse');
     if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
-    return __pmRealtimeAgent.conn;
+      return __pmRealtimeAgent.conn;
+    }
   }
   if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
   __pmRealtimeAgent.listenMode = listenMode;
@@ -10403,6 +11361,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       body: JSON.stringify({
         sessionId: sid,
         voice: _mobileXaiVoice(__pmVoice?.settings?.serverVoice || __pmVoice?.settings?.realtimeVoice),
+        model: desiredModel || undefined,
         speed: Number(__pmVoice?.settings?.xaiSpeed || 1.0),
         voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true } : undefined,
         deviceTime: _mobileVoiceDeviceTimeContext(),
@@ -10442,6 +11401,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       const type = String(event.type || '');
       if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
         if (__pmRealtimeAgent) __pmRealtimeAgent.activeResponse = true;
+        _suspendMobileRealtimeInputForOutput('xai_audio_delta');
         if (__pmRealtimeAgent?.quiet?.active || __pmRealtimeAgent?.quiet?.suppressResponse) {
           __pmRealtimeAgent.quiet.suppressResponse = true;
           _voiceDebug('xai-realtime-quiet-audio-suppressed', { type });
@@ -10452,7 +11412,11 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
         if (b64) { try { playback.enqueue(_mobileBase64ToInt16(b64)); } catch {} }
         return;
       }
-      if (type === 'input_audio_buffer.speech_started') { try { playback.interrupt(); } catch {} }
+      if (type === 'input_audio_buffer.speech_started') {
+        if (!_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput('xai')) {
+          try { playback.interrupt(); } catch {}
+        }
+      }
       if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
         const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 300);
         _voiceDebug('xai-realtime-error', { type, msg });
@@ -10463,13 +11427,18 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
 
     const turnDetection = _mobileRealtimeTurnDetectionForListenMode(listenMode);
     try {
+      const speed = Number(__pmVoice?.settings?.xaiSpeed || bootstrap.speed || 1.0);
       ws.send(JSON.stringify({
         type: 'session.update',
         session: {
           modalities: ['audio', 'text'],
+          model: __pmVoice?.settings?.xaiRealtimeModel || bootstrap.model || undefined,
           instructions: bootstrap.instructions,
           voice: bootstrap.voice,
-          speed: Number(__pmVoice?.settings?.xaiSpeed || bootstrap.speed || 1.0),
+          speed,
+          audio: {
+            output: { speed },
+          },
           input_audio_format: 'pcm16',
           output_audio_format: 'pcm16',
           input_audio_transcription: { model: 'grok-stt' },
@@ -10484,7 +11453,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     } catch {}
 
     __pmRealtimeAgent.conn = {
-      provider: 'xai', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture,
+      provider: 'xai', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture, model: bootstrap.model || desiredModel || '',
       cleanup: () => {
         try { processor.disconnect(); } catch {}
         try { source.disconnect(); } catch {}
@@ -10569,6 +11538,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   });
   if (type === 'response.created') {
     __pmRealtimeAgent.activeResponse = true;
+    _suspendMobileRealtimeInputForOutput('response_created');
     if (__pmRealtimeAgent.quiet.active) {
       __pmRealtimeAgent.quiet.suppressResponse = true;
       try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
@@ -10724,6 +11694,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     __pmRealtimeAgent.narrationPending = false;
     __pmRealtimeAgent.lastResponseEndedAt = Date.now();
     __pmRealtimeAgent.turn.mobileUserTurn = null;
+    setTimeout(() => _restoreMobileRealtimeInputAfterOutput('response_done'), 450);
     if (__pmRealtimeAgent.quiet.pendingActivate) {
       __pmRealtimeAgent.quiet.pendingActivate = false;
       _activateMobileRealtimeAgentQuietMode();
@@ -10736,6 +11707,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     // speaking (server-VAD/always-listening), BEFORE the model's auto-response, so
     // the image is attached to this spoken turn.
     if (type === 'input_audio_buffer.speech_started') {
+      if (_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput(__pmRealtimeAgent.conn?.provider || 'openai_webrtc')) return;
       const autoCapture = typeof __pmRealtimeAgent.autoCaptureCameraFrames === 'function'
         ? __pmRealtimeAgent.autoCaptureCameraFrames('speech_started', { count: 2, cooldownMs: 1000 })
         : null;
@@ -10756,6 +11728,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       __pmRealtimeAgent.turn.suppressAssistantTranscript = false;
       _markVoiceSpeakingEnd();
     }
+    _restoreMobileRealtimeInputAfterOutput('response_error');
     if (_isNoActiveRealtimeCancelError(event)) {
       _voiceDebug('realtime-agent-cancel-noop', { message });
       return;
@@ -11179,8 +12152,8 @@ async function _injectRealtimeImageItemToConversation(img, label) {
 }
 
 // xAI voice/realtime models can't take image input. When the user captures media
-// on xAI voice, summarize it with Grok (grok-4.3) vision the moment it's captured
-// and inject the text summary into the live xAI voice session — so it's ready
+// on xAI voice, summarize it through the vision sidecar the moment it's captured
+// and inject the text summary into the live xAI voice session, so it's ready
 // before the user finishes speaking (no wait). One photo = one summary; a video's
 // sampled frames are summarized together as one clip.
 async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
@@ -11206,14 +12179,15 @@ async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
         role: 'user',
         content: [{
           type: 'input_text',
-          text: `[Visual context from my camera ${isVideo ? 'video clip' : 'photo'}, described by Grok vision since you can't see images directly]: ${summary}\nTreat this as what I'm showing you and keep it in mind for what I say next.`,
+          text: `[Visual context from my camera ${isVideo ? 'video clip' : 'photo'}, described by the vision sidecar since you can't see images directly]: ${summary}\nTreat this as what I'm showing you and keep it in mind for what I say next.`,
         }],
       },
     }));
     _voiceDebug('realtime-agent-xai-summary-injected', { isVideo, summaryLen: summary.length });
   } catch (err) {
-    _voiceDebug('realtime-agent-xai-summary-failed', { message: err?.message || String(err) });
-    try { pmToast('Could not summarize the image for Grok voice.', 'error'); } catch {}
+    const message = String(err?.message || err || '').trim();
+    _voiceDebug('realtime-agent-xai-summary-failed', { message });
+    try { pmToast(`Could not summarize the image for xAI voice${message ? `: ${message.slice(0, 180)}` : '.'}`, 'error'); } catch {}
   }
 }
 
@@ -11358,7 +12332,7 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
               type: 'input_text',
               text: [
                 `Mobile camera snapshot from the app: ${name}.`,
-                'xAI vision summary of the snapshot:',
+                'Vision summary for xAI voice:',
                 summary,
                 'Use this visual context in the live voice conversation. Do not claim the image was saved to the phone.',
               ].join('\n'),
@@ -11456,7 +12430,7 @@ async function _sendMobileRealtimeAgentVideoFrames(payload = {}, options = {}) {
               type: 'input_text',
               text: [
                 `Mobile camera video capture (${seconds}) sampled into ${frames.length} frame${frames.length === 1 ? '' : 's'}.`,
-                'xAI vision summary of the sampled frames:',
+                'Vision summary for xAI voice:',
                 summary,
                 'Treat this as sequential visual context from the same short in-app recording. Do not claim live video was streamed.',
               ].join('\n'),
@@ -11638,11 +12612,12 @@ function _createMobileVoiceStreamingDispatcher() {
   if (outputProvider === 'xai' || outputProvider === 'openai') {
     const ttsProvider = outputProvider;
     const xaiSpeed = Number(__pmVoice?.settings?.xaiSpeed || __pmVoice?.provider?.speed || 1.0);
-    const xaiVoice = String(__pmVoice?.settings?.serverVoice || __pmVoice?.provider?.ttsVoice || 'eve').trim();
+    const serverVoice = String(__pmVoice?.settings?.serverVoice || __pmVoice?.provider?.ttsVoice || '').trim();
+    const xaiVoice = String(serverVoice || 'eve').trim();
     const useUrl = ttsProvider === 'xai' && !_isIosSafariBrowser();
     const buildChunkBody = (chunk) => {
       const b = { provider: ttsProvider, text: chunk };
-      if (ttsProvider === 'openai' && __pmVoice?.provider?.ttsVoice) b.voice = __pmVoice.provider.ttsVoice;
+      if (ttsProvider === 'openai' && serverVoice) b.voice = serverVoice;
       if (ttsProvider === 'xai' && xaiVoice) b.voiceId = xaiVoice;
       if (ttsProvider === 'xai') b.speed = xaiSpeed;
       if (useUrl) b.delivery = 'url';
@@ -11696,7 +12671,7 @@ async function _ttsSpeak(text) {
   const mode = String(__pmVoice.settings?.voiceMode || 'default');
   const outputProvider = String(__pmVoice.settings?.ttsProvider || __pmVoice.provider?.ttsProvider || _outputProviderForMode(mode));
   _voiceDebug('tts-start', { textLen: String(text || '').length, mode, provider: outputProvider });
-  const explicitVoiceMode = outputProvider === 'openai_realtime' || outputProvider === 'xai';
+  const explicitVoiceMode = outputProvider === 'openai_realtime' || outputProvider === 'xai' || outputProvider === 'openai';
   const wantsRealtime = outputProvider === 'openai_realtime';
   let realtimeReady = !!(__pmVoice.provider?.canRealtime || _isRealtimeConnected());
   if (wantsRealtime && !realtimeReady) {
@@ -11724,21 +12699,27 @@ async function _ttsSpeak(text) {
   }
   const xaiTtsConfigured = Array.isArray(__pmVoice.voiceStatus?.ttsProviders)
     && __pmVoice.voiceStatus.ttsProviders.some(p => p?.id === 'xai' && p?.configured);
+  const openaiTtsConfigured = Array.isArray(__pmVoice.voiceStatus?.ttsProviders)
+    && __pmVoice.voiceStatus.ttsProviders.some(p => p?.id === 'openai' && p?.configured);
   const xaiDisabled = !!(typeof window !== 'undefined' && window.__pmDisableXaiTts);
   const wantsXai = outputProvider === 'xai';
-  const providersToTry = (wantsXai && xaiTtsConfigured && !xaiDisabled) ? ['xai'] : [];
-  try { console.log('[voice] xai TTS gate split-routing', { mode, outputProvider, xaiTtsConfigured, willTry: providersToTry }); } catch {}
-  _voiceDebug('tts-gate', { mode, provider: outputProvider, xaiTtsConfigured, wantsXai, providersToTry });
+  const wantsOpenaiTts = outputProvider === 'openai';
+  const providersToTry = wantsXai && xaiTtsConfigured && !xaiDisabled
+    ? ['xai']
+    : (wantsOpenaiTts && openaiTtsConfigured ? ['openai'] : []);
+  try { console.log('[voice] server TTS gate split-routing', { mode, outputProvider, xaiTtsConfigured, openaiTtsConfigured, willTry: providersToTry }); } catch {}
+  _voiceDebug('tts-gate', { mode, provider: outputProvider, xaiTtsConfigured, openaiTtsConfigured, wantsXai, wantsOpenaiTts, providersToTry });
   for (const ttsProvider of providersToTry) {
     try {
-      _voiceSetStatus('Speaking with xAI / Grok', 'Grok voice audio is generating the response');
+      _voiceSetStatus(ttsProvider === 'xai' ? 'Speaking with xAI / Grok' : 'Speaking with OpenAI', `${ttsProvider === 'xai' ? 'Grok' : 'OpenAI'} voice audio is generating the response`);
       _markVoiceSpeakingStart(text);
       const xaiSpeed = Number(__pmVoice.settings?.xaiSpeed || __pmVoice.provider?.speed || 1.0);
-      const xaiVoice = String(__pmVoice.settings?.serverVoice || __pmVoice.provider?.ttsVoice || 'eve').trim();
+      const serverVoice = String(__pmVoice.settings?.serverVoice || __pmVoice.provider?.ttsVoice || '').trim();
+      const xaiVoice = String(serverVoice || 'eve').trim();
       const useUrl = ttsProvider === 'xai' && !_isIosSafariBrowser();
       const buildChunkBody = (chunk) => {
         const b = { provider: ttsProvider, text: chunk };
-        if (ttsProvider === 'openai' && __pmVoice.provider?.ttsVoice) b.voice = __pmVoice.provider.ttsVoice;
+        if (ttsProvider === 'openai' && serverVoice) b.voice = serverVoice;
         if (ttsProvider === 'xai' && xaiVoice) b.voiceId = xaiVoice;
         if (ttsProvider === 'xai') b.speed = xaiSpeed;
         if (useUrl) b.delivery = 'url';
@@ -13605,8 +14586,8 @@ void main() {
     }
     const speedValue = outputProvider === 'xai' ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05);
     if (speedControl) speedControl.style.display = ['openai_realtime', 'xai'].includes(outputProvider) ? '' : 'none';
-    speedInput.min = outputProvider === 'xai' ? '0.5' : '0.75';
-    speedInput.max = outputProvider === 'xai' ? '2' : '1.3';
+    speedInput.min = outputProvider === 'xai' ? '0.7' : '0.75';
+    speedInput.max = outputProvider === 'xai' ? '1.5' : '1.3';
     speedInput.step = '0.05';
     speedInput.value = String(speedValue);
     speedLabel.textContent = `${Number(speedInput.value).toFixed(2)}x`;
@@ -14835,6 +15816,16 @@ void main() {
   async function _submitSpeech(text, options = {}) {
     const finalText = String(text || '').trim();
     if (!finalText) { _setStatus('Ready', 'Tap and hold the mic to speak'); _setOrbState(null); return; }
+    const subagentVoiceTarget = __pmVoice?.target?.kind === 'subagent' ? __pmVoice.target : null;
+    if (subagentVoiceTarget && typeof __pmVoice.subagentSubmit === 'function') {
+      _setOrbState('thinking');
+      _setStatus('Sending...', `Sending to ${subagentVoiceTarget.label || 'subagent'}`);
+      await __pmVoice.subagentSubmit(finalText, { target: subagentVoiceTarget, source: 'subagent_voice' });
+      __pmVoice.lastUser = finalText;
+      _setOrbState(null);
+      _setStatus('Listening...', `${subagentVoiceTarget.label || 'Subagent'} is working.`);
+      return;
+    }
     let activeVoiceRuntime = __pmVoice.activeVoiceRuntime || null;
     const voiceNewChatDraft = _isMobileNewChatDraftActiveForVoice();
     if (voiceNewChatDraft) {
@@ -15252,7 +16243,7 @@ void main() {
         _ttsStop();
         finalSpoken = true;
         const spokeWithRealtimeAgent = realtimeAgentDispatch && _requestMobileRealtimeAgentFinalSummary(aiBuf);
-        if (!spokeWithRealtimeAgent) _ttsSpeak(aiBuf);
+        if (!spokeWithRealtimeAgent && !realtimeAgentDispatch) _ttsSpeak(aiBuf);
         _setOrbState('speaking');
         _setStatus('Speaking response', realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Tap mic again to follow up');
         settleVoiceAfterFinalSpeech();
@@ -15304,7 +16295,7 @@ void main() {
           if (aiBuf) {
             finalSpoken = true;
             const spokeWithRealtimeAgent = realtimeAgentDispatch && _requestMobileRealtimeAgentFinalSummary(aiBuf);
-            if (!spokeWithRealtimeAgent) _ttsSpeak(aiBuf);
+            if (!spokeWithRealtimeAgent && !realtimeAgentDispatch) _ttsSpeak(aiBuf);
           }
           _setOrbState('speaking');
           _setStatus('Speaking response', realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Tap mic again to follow up');
@@ -16616,6 +17607,81 @@ function _renderMobileAgentChatBubble(message, options = {}) {
 
 const _mobileAgentComposerDrafts = {};
 
+function _mobileVoiceSettingsFromAgentProfile(profile = {}) {
+  const p = profile && typeof profile === 'object' ? profile : {};
+  const provider = String(p.provider || '').trim();
+  const voice = String(p.voice || '').trim();
+  const model = String(p.model || '').trim();
+  const reasoningEffort = String(p.reasoning_effort || p.reasoningEffort || '').trim();
+  const speed = Number(p.speed);
+  if (provider === 'openai_realtime') {
+    return {
+      voiceMode: 'openai_realtime',
+      sttProvider: 'openai_realtime',
+      ttsProvider: 'openai_realtime',
+      realtimeVoice: voice || undefined,
+      realtimeModel: model || undefined,
+      realtimeReasoningEffort: reasoningEffort || undefined,
+      realtimeSpeed: Number.isFinite(speed) && speed > 0 ? speed : undefined,
+      sttProviderLocked: true,
+      autoProviderDefault: '',
+      voiceAgentRealtimeAgent: true,
+    };
+  }
+  if (provider === 'xai') {
+    return {
+      voiceMode: 'xai',
+      sttProvider: 'xai',
+      ttsProvider: 'xai',
+      serverVoice: voice || undefined,
+      xaiRealtimeModel: model || undefined,
+      xaiReasoningEffort: reasoningEffort || undefined,
+      xaiSpeed: Number.isFinite(speed) && speed > 0 ? speed : undefined,
+      sttProviderLocked: true,
+      autoProviderDefault: '',
+      voiceAgentXaiRealtime: true,
+    };
+  }
+  if (provider === 'openai') {
+    return {
+      voiceMode: 'custom',
+      sttProvider: 'browser',
+      ttsProvider: 'openai',
+      serverVoice: voice || undefined,
+      voiceModel: model || undefined,
+      voiceReasoningEffort: reasoningEffort || undefined,
+      sttProviderLocked: true,
+      autoProviderDefault: '',
+    };
+  }
+  if (provider === 'browser') {
+    return {
+      voiceMode: 'default',
+      sttProvider: 'browser',
+      ttsProvider: 'browser',
+      sttProviderLocked: true,
+      autoProviderDefault: '',
+    };
+  }
+  return null;
+}
+
+function _applyTemporaryMobileSubagentVoiceProfile(profile = null) {
+  const overrides = _mobileVoiceSettingsFromAgentProfile(profile || {});
+  if (!overrides) return null;
+  const previous = { ...(__pmVoice.settings || {}) };
+  const cleanOverrides = Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined));
+  __pmVoice.settings = { ...previous, ...cleanOverrides };
+  __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
+  try { _applyVoiceSettingsLive(previous, __pmVoice.settings || {}, cleanOverrides); } catch {}
+  return () => {
+    const current = { ...(__pmVoice.settings || {}) };
+    __pmVoice.settings = previous;
+    __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
+    try { _applyVoiceSettingsLive(current, previous, previous); } catch {}
+  };
+}
+
 function _renderMobileAgentComposerHtml(prefix, placeholder) {
   const id = String(prefix || 'pm-agent-chat');
   return `
@@ -16626,17 +17692,28 @@ function _renderMobileAgentComposerHtml(prefix, placeholder) {
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn" id="${id}-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
         <textarea class="pm-composer-input" id="${id}-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+        <button type="button" class="pm-icon-btn" id="${id}-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="${id}-send-btn" aria-label="Send">${ICONS.send}</button>
+      </div>
+      <div class="pm-chat-voice-shell" id="${id}-voice-shell" hidden>
+        <button type="button" class="pm-chat-voice-camera" id="${id}-voice-camera" aria-label="Attach camera image">${ICONS.image}</button>
+        <button type="button" class="pm-chat-voice-close" id="${id}-voice-close" aria-label="Close voice mode">&times;</button>
+        <div class="pm-chat-voice-inline" id="${id}-voice-inline"></div>
       </div>
     </form>`;
 }
 
-function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubmit, onAbort, draftKey = '' }) {
+function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubmit, onAbort, draftKey = '', voiceTarget = null, onVoiceSubmit = null, openCameraCapture = null }) {
   const id = String(prefix || 'pm-agent-chat');
   const form = slot.querySelector(`#${id}-form`);
   const input = slot.querySelector(`#${id}-input`);
   const sendBtn = slot.querySelector(`#${id}-send-btn`);
   const attachBtn = slot.querySelector(`#${id}-attach-btn`);
+  const micBtn = slot.querySelector(`#${id}-mic-btn`);
+  const voiceShell = slot.querySelector(`#${id}-voice-shell`);
+  const voiceClose = slot.querySelector(`#${id}-voice-close`);
+  const voiceCamera = slot.querySelector(`#${id}-voice-camera`);
+  const voiceHost = slot.querySelector(`#${id}-voice-inline`);
   const fileInput = slot.querySelector(`#${id}-file-input`);
   const attachTray = slot.querySelector(`#${id}-attach-tray`);
   const draftId = String(draftKey || '').trim();
@@ -16655,6 +17732,49 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     input.style.height = `${Math.min(148, Math.max(30, input.scrollHeight || 30))}px`;
   };
   const hasOutbound = () => !!(String(input?.value || '').trim() || pending.length);
+  const hasVoiceTarget = () => voiceTarget && typeof onVoiceSubmit === 'function' && voiceShell && voiceHost;
+  const closeVoiceMode = () => {
+    if (!voiceShell || !voiceHost) return;
+    voiceShell.hidden = true;
+    try { voiceHost._pmCleanup?.(); } catch {}
+    voiceHost.innerHTML = '';
+    try { __pmVoice.subagentVoiceRestore?.(); } catch {}
+    __pmVoice.subagentVoiceRestore = null;
+    if (__pmVoice?.target?.kind === 'subagent' && __pmVoice.target.agentId === voiceTarget?.agentId) {
+      __pmVoice.target = null;
+      __pmVoice.subagentSubmit = null;
+    }
+  };
+  const openVoiceMode = async ({ autoStart = true } = {}) => {
+    if (!hasVoiceTarget()) {
+      pmToast('Voice mode is not available for this composer.', 'error');
+      return;
+    }
+    const target = {
+      kind: 'subagent',
+      agentId: String(voiceTarget.agentId || '').trim(),
+      label: String(voiceTarget.label || voiceTarget.name || 'Subagent').trim(),
+      voice: voiceTarget.voice && typeof voiceTarget.voice === 'object' ? voiceTarget.voice : null,
+    };
+    __pmVoice.target = target;
+    __pmVoice.targetSessionId = `subagent_chat_${target.agentId}`;
+    __pmVoice.targetSessionLabel = target.label;
+    __pmVoice.targetSessionChannel = 'subagent';
+    __pmVoice.targetSessionForced = true;
+    __pmVoice.subagentSubmit = async (text) => onVoiceSubmit({ text: String(text || '').trim(), files: [] });
+    try { __pmVoice.subagentVoiceRestore?.(); } catch {}
+    __pmVoice.subagentVoiceRestore = _applyTemporaryMobileSubagentVoiceProfile(target.voice);
+    voiceShell.hidden = false;
+    voiceHost.innerHTML = '';
+    await renderVoicePage(voiceHost, {
+      inline: true,
+      inlineChatSessionId: __pmVoice.targetSessionId,
+      inlineChatSessionLabel: target.label,
+      autoStart,
+      openCameraCapture,
+      cameraButton: voiceCamera,
+    });
+  };
   const renderAttachments = () => {
     if (!attachTray) return;
     attachTray.hidden = pending.length === 0;
@@ -16675,10 +17795,13 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     if (sendBtn) {
       sendBtn.disabled = false;
       sendBtn.classList.toggle('is-abort', abortMode);
-      sendBtn.title = abortMode ? 'Stop' : busy ? 'Queue message' : 'Send';
-      sendBtn.setAttribute('aria-label', abortMode ? 'Stop' : busy ? 'Queue message' : 'Send');
+      sendBtn.classList.toggle('is-voice', !busy && !hasOutbound() && hasVoiceTarget());
+      sendBtn.title = abortMode ? 'Stop' : (!busy && !hasOutbound() && hasVoiceTarget()) ? 'Start voice mode' : busy ? 'Queue message' : 'Send';
+      sendBtn.setAttribute('aria-label', abortMode ? 'Stop' : (!busy && !hasOutbound() && hasVoiceTarget()) ? 'Start voice mode' : busy ? 'Queue message' : 'Send');
       sendBtn.innerHTML = abortMode
         ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>`
+        : (!busy && !hasOutbound() && hasVoiceTarget())
+          ? `<img class="pm-send-voice-icon" src="${PM_CHAT_VOICE_ICON_SRC}" alt="" aria-hidden="true" />`
         : ICONS.send;
     }
   };
@@ -16716,6 +17839,15 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     update();
   });
   attachBtn?.addEventListener('click', () => fileInput?.click());
+  micBtn?.addEventListener('click', () => openVoiceMode({ autoStart: true }).catch((err) => {
+    console.warn('[mobile subagent voice] open failed:', err);
+    pmToast('Could not start voice mode.', 'error');
+  }));
+  voiceClose?.addEventListener('click', closeVoiceMode);
+  voiceCamera?.addEventListener('click', () => {
+    if (typeof openCameraCapture === 'function') openCameraCapture();
+    else fileInput?.click();
+  });
   fileInput?.addEventListener('change', async () => {
     const files = Array.from(fileInput.files || []).slice(0, 8);
     fileInput.value = '';
@@ -16733,7 +17865,10 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
       return;
     }
     const payload = consume();
-    if (!payload.text && !payload.files.length) return;
+    if (!payload.text && !payload.files.length) {
+      await openVoiceMode({ autoStart: true });
+      return;
+    }
     await onSubmit?.(payload);
     update();
   });
@@ -17068,6 +18203,19 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
 function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessionId) {
   const host = dock || document.getElementById('pm-background-spawn-dock');
   if (!host) return;
+  const previousScroll = {};
+  host.querySelectorAll('.pm-background-spawn-lane[data-bg-id]').forEach((node) => {
+    const id = String(node.getAttribute('data-bg-id') || '');
+    const panel = node.querySelector('.pm-background-spawn-panel');
+    const processFull = node.querySelector('.pm-process-full');
+    if (!id) return;
+    previousScroll[id] = {
+      panelTop: Number(panel?.scrollTop || 0),
+      panelNearBottom: panel ? ((panel.scrollHeight - panel.scrollTop - panel.clientHeight) < 6) : false,
+      processTop: Number(processFull?.scrollTop || 0),
+      processNearBottom: processFull ? ((processFull.scrollHeight - processFull.scrollTop - processFull.clientHeight) < 6) : false,
+    };
+  });
   const activeSession = String(sessionId || '').trim();
   const lanes = Object.values(_mobileBackgroundSpawnLanes())
     .filter((lane) => lane && (!lane.sessionId || lane.sessionId === activeSession))
@@ -17110,6 +18258,15 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
       _renderMobileBackgroundSpawnDock(host, sessionId);
       try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
     });
+  });
+  host.querySelectorAll('.pm-background-spawn-lane[data-bg-id]').forEach((node) => {
+    const id = String(node.getAttribute('data-bg-id') || '');
+    const saved = previousScroll[id];
+    if (!saved) return;
+    const panel = node.querySelector('.pm-background-spawn-panel');
+    const processFull = node.querySelector('.pm-process-full');
+    if (panel) panel.scrollTop = saved.panelNearBottom ? panel.scrollHeight : saved.panelTop;
+    if (processFull) processFull.scrollTop = saved.processNearBottom ? processFull.scrollHeight : saved.processTop;
   });
 }
 
@@ -19446,7 +20603,7 @@ function _pmTaskAction(task) {
   return null;
 }
 
-export async function renderTasksPage(page, { navigate }) {
+export async function renderTasksPage(page, { navigate, taskId = '' }) {
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count">...</span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Tasks', online: true, extras })}
@@ -19464,7 +20621,7 @@ export async function renderTasksPage(page, { navigate }) {
   const filterEl = page.querySelector('#pm-tasks-filter');
   let allTasks = [];
   let currentFilter = 'running';
-  let expandedId = '';
+  let expandedId = String(taskId || '').trim();
   let details = {};
   let evidence = {};
   let refreshTimer = null;
@@ -19635,6 +20792,15 @@ export async function renderTasksPage(page, { navigate }) {
   async function load({ resetExpandedDetail = false } = {}) {
     try {
       allTasks = await loadBgTasks();
+      if (expandedId) {
+        const linkedTask = allTasks.find(t => String(t.id || '') === expandedId);
+        if (linkedTask) {
+          currentFilter = _pmTaskFilter(linkedTask.status);
+          filterEl.querySelectorAll('button').forEach(x => {
+            x.classList.toggle('active', x.getAttribute('data-filter') === currentFilter);
+          });
+        }
+      }
       const activeCount = allTasks.filter(t => !['complete','failed'].includes(_pmTaskFilter(t.status))).length;
       countEl.textContent = `${activeCount} active`;
       paint();
@@ -20566,6 +21732,8 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
 
   const pill = SUBAGENT_STATUS_PILL[agent.status] || SUBAGENT_STATUS_PILL.idle;
   const tabs = ['Overview', 'Chat', 'System Prompt', 'Runs', 'Heartbeat'];
+  const modelPickerScope = `pm-sa-model-${agent.id}`;
+  const voicePickerScope = `pm-sa-voice-${agent.id}`;
 
   body.innerHTML = `
     <div class="pm-detail-head">
@@ -20612,6 +21780,9 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
         </div>
       </div>
 
+      ${_renderAgentModelPicker(agent, modelPickerScope)}
+      ${_renderAgentVoicePicker(agent, voicePickerScope)}
+
       <div class="pm-card" id="pm-subagent-ctxrefs">
         <div class="pm-card-head">${ICONS.doc} Context References</div>
         <div class="pm-card-body" id="pm-subagent-ctxrefs-body">Loading…</div>
@@ -20642,6 +21813,11 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   const tabSlot = body.querySelector('#pm-tab-slot');
 
   let currentStream = null;
+  const refreshOverview = () => renderSubagentDetailPage(page, { agentId, navigate, initialTab: 'overview' });
+  registerAgentModelPickerOnSaved(modelPickerScope, refreshOverview);
+  registerAgentVoicePickerOnSaved(voicePickerScope, refreshOverview);
+  agentModelPickerHydrate(modelPickerScope, agent);
+  agentVoicePickerHydrate(voicePickerScope, agent);
 
   async function selectTab(tabName) {
     try { tabSlot?._pmCleanup?.(); } catch {}
@@ -21118,6 +22294,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
         renderList();
       },
       onDone: async () => {
+        const finalSubagentVoiceReply = String(liveMsg?.content || liveMsg?.text || '').trim();
         if (liveMsg) {
           liveMsg._progress = '';
           liveMsg.streaming = false;
@@ -21128,6 +22305,14 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
         currentStream = null;
         composer?.update?.();
         await reconcile({ forceHistory: true });
+        if (
+          finalSubagentVoiceReply
+          && __pmVoice?.target?.kind === 'subagent'
+          && String(__pmVoice.target.agentId || '') === String(agent.id || '')
+        ) {
+          __pmVoice.lastAi = finalSubagentVoiceReply;
+          _ttsSpeak(finalSubagentVoiceReply).catch(() => {});
+        }
         drainQueueSoon();
       },
     });
@@ -21149,6 +22334,12 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       renderList();
     },
     onSubmit: startSubagentMobileSend,
+    onVoiceSubmit: startSubagentMobileSend,
+    voiceTarget: {
+      agentId: agent.id,
+      label: agent.name || agent.id || 'Subagent',
+      voice: agent.voice || agent.raw?.voice || null,
+    },
   });
   renderQueue();
 }

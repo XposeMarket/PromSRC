@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when troubleshooting MCP server operations, failed MCP tool calls, connection errors, auth/config issues, schema mismatches, server logs, or runtime health for connected MCP tools.",
+  "triggers": [
+    "MCP error",
+    "MCP tool failed",
+    "troubleshoot MCP",
+    "MCP server not connecting",
+    "MCP logs",
+    "MCP config issue",
+    "MCP schema mismatch",
+    "MCP auth problem",
+    "MCP tool unavailable",
+    "restart MCP server",
+    "MCP timeout",
+    "debug connected MCP",
+    "MCP transport failure",
+    "MCP health check"
+  ],
+  "categories": [
+    "mcp",
+    "troubleshooting",
+    "integrations",
+    "operations"
+  ],
+  "requiredTools": [
+    "integration_admin",
+    "mcp_server_tools",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "MCP Ops Troubleshooting",
+  "id": "mcp-ops-troubleshooting"
+}

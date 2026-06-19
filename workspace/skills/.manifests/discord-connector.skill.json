@@ -1,33 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to connect, configure, test, troubleshoot, or use a Discord integration, Discord bot, Discord webhook, Discord channel automation, or Discord message workflow. It covers auth checks, safe posting, and connector verification.",
+  "description": "Use this skill when adding, testing, operating, or hardening a Discord connector/bot/webhook integration for channels, messages, guilds, slash commands, notifications, or Discord auth.",
   "triggers": [
     "Discord connector",
     "Discord bot",
     "Discord webhook",
-    "Discord integration",
     "send Discord message",
-    "Discord channel automation",
-    "test Discord",
-    "connect Discord",
-    "Discord workflow",
+    "read Discord channel",
+    "Discord integration",
+    "slash command",
     "Discord auth",
+    "guild id",
+    "channel id",
+    "test Discord connector",
+    "Discord notifications",
+    "create Discord tool",
+    "Discord message history",
     "Discord API",
-    "Discord notification",
-    "post to Discord",
-    "Discord setup",
-    "Discord smoke test"
+    "connect Discord"
   ],
   "categories": [
-    "integrations",
+    "connectors",
     "discord",
-    "automation"
+    "integrations",
+    "prometheus"
   ],
   "requiredTools": [
     "connector_list",
     "external_apps",
-    "integration_admin"
+    "workspace_write"
   ],
   "lifecycle": "active",
   "id": "discord-connector"

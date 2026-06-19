@@ -1,0 +1,12 @@
+{
+  "skillId": "google-workspace-expansion",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:18.090Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\google-workspace-expansion",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "9afe6a9da7476705"
+}

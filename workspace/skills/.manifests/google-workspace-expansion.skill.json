@@ -1,28 +1,30 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to expand, configure, test, or design Google Workspace integrations such as Gmail, Google Drive, Calendar, Docs, Sheets, or Google OAuth flows. It covers connector availability checks and practical automation recipes.",
+  "description": "Use this skill when adding, extending, or operating Google Workspace integrations such as Gmail, Drive, Docs, Sheets, Calendar, OAuth scopes, file search, document export, or workspace connector behavior.",
   "triggers": [
     "Google Workspace",
-    "Gmail integration",
-    "Google Drive integration",
+    "Gmail connector",
+    "Google Drive connector",
+    "Google Docs integration",
+    "Google Sheets integration",
     "Google Calendar",
-    "Google Docs",
-    "Google Sheets",
-    "Google OAuth",
+    "search Drive files",
+    "export Google Doc",
+    "read Gmail",
+    "Google OAuth scope",
     "workspace connector",
-    "Google connector",
-    "Gmail automation",
-    "Drive workflow",
-    "Calendar automation",
-    "Sheets workflow",
-    "Google integration setup",
-    "test Google connector"
+    "connect Google account",
+    "Drive file search",
+    "Sheets API",
+    "Docs API",
+    "Calendar event integration"
   ],
   "categories": [
-    "integrations",
     "google",
-    "automation"
+    "workspace",
+    "connectors",
+    "integrations"
   ],
   "requiredTools": [
     "connector_list",

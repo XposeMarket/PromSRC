@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "taskflow-enhancement",
+  "name": "TaskFlow Enhancement",
+  "description": "Map OpenClaw-style task flows into Prometheus tasks, jobs, waits, child tasks, checkpoints, resumable summaries, and Brain-visible progress.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "taskflow",
+    "task flow",
+    "child tasks",
+    "wait for task",
+    "resumable workflow",
+    "multi step workflow"
+  ],
+  "categories": [
+    "prometheus",
+    "workflow",
+    "tasks",
+    "agents"
+  ],
+  "requiredTools": [],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  }
+}

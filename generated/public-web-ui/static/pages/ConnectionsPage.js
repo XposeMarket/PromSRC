@@ -48,7 +48,7 @@ function normalizeCredentialInfo(item) {
           label: field.label,
           placeholder: field.placeholder || '',
           secret: !!field.secret,
-          required: field.required !== false,
+          required: field.required === true,
           help: field.help || '',
         }))
       : [],

@@ -1,34 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to inspect git state, commit, push, pull, sync machines, review diffs, resolve merge conflicts, preserve dirty work, or coordinate GitHub repo changes. It emphasizes safe status/diff inspection and accurate commit messages.",
+  "description": "Use this skill when the task involves git status, diffs, branches, commits, pulls, pushes, merges, conflict resolution, repo hygiene, release tagging, or preserving unrelated dirty work.",
   "triggers": [
-    "git workflow",
     "git status",
-    "git diff",
-    "commit changes",
-    "push changes",
-    "pull repo",
-    "sync repo",
+    "check the diff",
+    "commit this",
+    "push to GitHub",
+    "pull latest",
     "merge conflict",
-    "GitHub push",
-    "repo sync",
+    "create a branch",
+    "repo dirty",
+    "git log",
+    "revert my change",
+    "stash changes",
     "preserve dirty work",
-    "commit message",
-    "review diff",
-    "working tree",
-    "branch status"
+    "sync the repo",
+    "make a commit",
+    "push the site",
+    "resolve conflicts",
+    "tag a release",
+    "compare branches",
+    "git workflow"
   ],
   "categories": [
     "git",
-    "engineering",
-    "operations"
+    "repo",
+    "version-control"
   ],
   "requiredTools": [
-    "workspace_write",
-    "prom_repo_push",
-    "prom_repo_pull",
-    "prom_repo_sync"
+    "workspace_write"
   ],
   "lifecycle": "active",
   "id": "git-workflow"

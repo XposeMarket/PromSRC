@@ -1,33 +1,37 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for HyperFrames video work, editable creative video, promo clips, launch videos, app demos, motion graphics, scene timelines, captions, transitions, or professional video exports inside Prometheus Creative Mode. It prioritizes catalog-first, QA-driven editable video.",
+  "description": "Use this skill when creating, editing, planning, or exporting HyperFrames videos, HTML motion clips, promo animations, release videos, storyboarded scenes, or code-driven video compositions.",
   "triggers": [
-    "HyperFrames",
-    "creative video",
-    "promo video",
+    "HyperFrames video",
+    "make a promo video",
+    "HTML motion clip",
+    "release video",
+    "storyboard animation",
+    "code-driven video",
+    "export HyperFrames",
+    "edit HyperFrames",
+    "create motion scenes",
     "launch video",
-    "app demo video",
-    "motion graphics",
-    "scene timeline",
-    "video export",
-    "editable video",
-    "HyperFrames clip",
-    "professional animation",
-    "captions",
-    "transitions",
-    "video QA",
-    "landscape promo"
+    "product explainer video",
+    "animated promo",
+    "video composition",
+    "HyperFrames project",
+    "landscape promo video",
+    "slow down scenes"
   ],
   "categories": [
     "creative",
     "video",
-    "hyperframes"
+    "hyperframes",
+    "motion"
   ],
   "requiredTools": [
-    "creative_mode",
-    "media_quality"
+    "creative_hyperframes",
+    "creative_video",
+    "workspace_write"
   ],
   "lifecycle": "active",
+  "name": "HyperFrames",
   "id": "hyperframes"
 }

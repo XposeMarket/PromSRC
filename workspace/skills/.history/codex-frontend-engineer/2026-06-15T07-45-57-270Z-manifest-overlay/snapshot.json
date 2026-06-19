@@ -1,0 +1,12 @@
+{
+  "skillId": "codex-frontend-engineer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-15T07:45:57.274Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\codex-frontend-engineer",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "1de3f2cff593057c"
+}

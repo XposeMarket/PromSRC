@@ -1,0 +1,12 @@
+{
+  "skillId": "prometheus-x-posts-workflow",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-13T23:49:08.484Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-x-posts-workflow",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "1f95e4c24277b94f"
+}

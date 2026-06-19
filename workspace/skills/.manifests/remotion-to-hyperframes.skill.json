@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to adapt Remotion concepts, React video components, timeline-based video logic, or existing Remotion ideas into Prometheus Creative Video or HyperFrames. It maps scenes, captions, assets, timing, and motion into editable Prometheus-native clips.",
+  "description": "Use this skill when adapting Remotion concepts, React video components, timeline-based video logic, or existing Remotion ideas into Prometheus Creative Video or HyperFrames workflows.",
   "triggers": [
     "Remotion to HyperFrames",
-    "remotion video",
-    "convert Remotion",
-    "React video",
-    "HyperFrames adaptation",
-    "video timeline",
-    "creative video port",
-    "scene timing",
-    "caption timing",
-    "editable video",
-    "Remotion component",
-    "migrate video",
-    "HyperFrames clip",
-    "convert video code",
-    "motion system adaptation"
+    "adapt Remotion",
+    "React video component",
+    "timeline video logic",
+    "port Remotion animation",
+    "Remotion concept",
+    "convert Remotion project",
+    "HyperFrames equivalent",
+    "code video component",
+    "Remotion style video",
+    "React motion video",
+    "video timeline logic"
   ],
   "categories": [
     "creative",
@@ -25,10 +22,10 @@
     "hyperframes"
   ],
   "requiredTools": [
-    "creative_mode",
-    "media_quality"
+    "creative_hyperframes",
+    "creative_video",
+    "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Remotion to HyperFrames",
   "id": "remotion-to-hyperframes"
 }

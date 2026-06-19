@@ -106,8 +106,8 @@ export function attachXaiVoiceStreaming(server: HttpServer): AttachedXaiVoiceStr
       return;
     }
     const account = getSessionStatus();
-    if (!account.authenticated || (!account.subscriptionActive && !account.isAdmin)) {
-      closeSocket(socket, 1008, 'Account login or active subscription required');
+    if (!account.authenticated) {
+      closeSocket(socket, 1008, 'Account login required');
       return;
     }
 
@@ -251,8 +251,8 @@ export function attachOpenAiRealtimeProxy(server: HttpServer): AttachedXaiVoiceS
       return;
     }
     const account = getSessionStatus();
-    if (!account.authenticated || (!account.subscriptionActive && !account.isAdmin)) {
-      closeSocket(socket, 1008, 'Account login or active subscription required');
+    if (!account.authenticated) {
+      closeSocket(socket, 1008, 'Account login required');
       return;
     }
 

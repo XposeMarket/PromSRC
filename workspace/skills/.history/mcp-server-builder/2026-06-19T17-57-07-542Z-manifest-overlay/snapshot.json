@@ -1,0 +1,12 @@
+{
+  "skillId": "mcp-server-builder",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:57:07.545Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\mcp-server-builder",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "50ced87d63e3c1ec"
+}

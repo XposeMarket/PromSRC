@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../config/config';
+import { estimateTextTokensForModel } from './context/model-context';
 
 export type ToolObservationStatus = 'ok' | 'error';
 
@@ -19,6 +20,17 @@ export interface ToolObservation {
   artifacts?: any[];
   pathsTouched?: string[];
   exitCode?: number;
+  durationMs?: number;
+  startedAt?: number;
+  finishedAt?: number;
+  tokenEstimate?: {
+    argsTokens: number;
+    resultTokens: number;
+    totalTokens: number;
+    argsChars: number;
+    resultChars: number;
+    resultBytes: number;
+  };
   createdAt: number;
 }
 
@@ -27,6 +39,7 @@ export interface ObservationContextOptions {
   maxChars?: number;
   maxObservations?: number;
   includeHeader?: boolean;
+  includeTelemetry?: boolean;
 }
 
 const SECRET_KEY_RE = /(password|token|secret|api[_-]?key|authorization|credential|private[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)/i;
@@ -75,7 +88,7 @@ function stringifyPreview(value: unknown, maxChars: number): string {
 function inferToolCategory(toolName: string): string {
   const name = String(toolName || '').trim();
   if (!name) return 'other';
-  if (/^(shell|run_command|run_command_supervised|start_process|process_)/.test(name)) return 'shell_process';
+  if (/^(terminal|shell|run_command|run_command_supervised|start_process|process_)/.test(name)) return 'shell_process';
   if (/^(read|write|edit|list|delete|rename|copy|mkdir|stat|append|apply_patch|grep_|search_files|file_|source_|webui_source_)/.test(name)) return 'file';
   if (/^(shopping_search_products|web_search|web_fetch|download_)/.test(name)) return 'web';
   if (/^browser_/.test(name)) return 'browser';
@@ -138,9 +151,19 @@ export function createToolObservation(input: {
 }): ToolObservation {
   const id = `toolobs_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
   const resultText = String(input.result || '');
+  const argsText = stringifyPreview(input.args || {}, 50_000);
   const rawRef = maybePersistRawResult(input.sessionId, id, resultText);
   const pathsTouched = [...new Set([...extractPaths(input.args), ...extractPaths(input.data), ...extractPaths(input.extra)])].slice(0, 12);
   const exitCode = Number(input.extra?.exitCode ?? input.data?.exitCode);
+  const telemetry = input.extra?.telemetry || input.data?.telemetry || {};
+  const durationMs = Number(telemetry.durationMs ?? input.extra?.durationMs ?? input.data?.durationMs);
+  const startedAt = Number(telemetry.startedAt ?? input.extra?.startedAt ?? input.data?.startedAt);
+  const finishedAt = Number(telemetry.finishedAt ?? input.extra?.finishedAt ?? input.data?.finishedAt);
+  const argsTokens = Number.isFinite(Number(telemetry.argsTokens)) ? Number(telemetry.argsTokens) : estimateTextTokensForModel(argsText, 'openai');
+  const resultTokens = Number.isFinite(Number(telemetry.resultTokens)) ? Number(telemetry.resultTokens) : estimateTextTokensForModel(resultText, 'openai');
+  const argsChars = Number.isFinite(Number(telemetry.argsChars)) ? Number(telemetry.argsChars) : argsText.length;
+  const resultChars = Number.isFinite(Number(telemetry.resultChars)) ? Number(telemetry.resultChars) : resultText.length;
+  const resultBytes = Number.isFinite(Number(telemetry.resultBytes)) ? Number(telemetry.resultBytes) : Buffer.byteLength(resultText, 'utf8');
   return {
     id,
     sessionId: input.sessionId,
@@ -155,6 +178,17 @@ export function createToolObservation(input: {
     artifacts: Array.isArray(input.artifacts) && input.artifacts.length ? input.artifacts.slice(0, 10) : undefined,
     pathsTouched: pathsTouched.length ? pathsTouched : undefined,
     exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
+    durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+    startedAt: Number.isFinite(startedAt) ? startedAt : undefined,
+    finishedAt: Number.isFinite(finishedAt) ? finishedAt : undefined,
+    tokenEstimate: {
+      argsTokens,
+      resultTokens,
+      totalTokens: argsTokens + resultTokens,
+      argsChars,
+      resultChars,
+      resultBytes,
+    },
     createdAt: Date.now(),
   };
 }
@@ -220,6 +254,7 @@ export function formatToolObservationsForContext(observations: ToolObservation[]
   const includeHeader = opts.includeHeader !== false;
   const maxChars = Number.isFinite(Number(opts.maxChars)) && Number(opts.maxChars) > 0 ? Number(opts.maxChars) : 8000;
   const maxObservations = Math.max(1, Math.min(60, Math.floor(Number(opts.maxObservations || 24))));
+  const includeTelemetry = opts.includeTelemetry === true;
   const newestTurnId = observations[observations.length - 1]?.turnId || '';
   const ranked = [...observations]
     .sort((a, b) => observationPriority(b, newestTurnId) - observationPriority(a, newestTurnId) || b.createdAt - a.createdAt)
@@ -231,6 +266,8 @@ export function formatToolObservationsForContext(observations: ToolObservation[]
       obs.pathsTouched?.length ? `paths: ${obs.pathsTouched.join(', ')}` : '',
       obs.artifacts?.length ? `artifacts: ${obs.artifacts.map((a: any) => String(a?.path || a?.url || a?.id || a).slice(0, 180)).join(', ')}` : '',
       Number.isFinite(Number(obs.exitCode)) ? `exit_code: ${obs.exitCode}` : '',
+      includeTelemetry && Number.isFinite(Number(obs.durationMs)) ? `duration_ms: ${obs.durationMs}` : '',
+      includeTelemetry && obs.tokenEstimate ? `token_estimate: args=${obs.tokenEstimate.argsTokens}, result=${obs.tokenEstimate.resultTokens}, total=${obs.tokenEstimate.totalTokens}, result_bytes=${obs.tokenEstimate.resultBytes}` : '',
       obs.argsPreview ? `args: ${obs.argsPreview}` : '',
       obs.resultPreview ? `result: ${obs.resultPreview}` : '',
       obs.resultRawRef ? `raw_ref: ${obs.resultRawRef}` : '',

@@ -28,6 +28,7 @@ import { browserPreviewScreenshot } from '../browser-tools';
 import { sessionCanvasFiles, addCanvasFile, removeCanvasFile } from './canvas-state';
 import { getVault } from '../../security/vault';
 import { evaluateGatewayRequest, resolveGatewayAuthToken } from '../gateway-auth';
+import { resolvePrometheusRoot, isPublicDistributionBuild } from '../../runtime/distribution';
 import {
   type CreativeRenderJobRecord as NormalizedCreativeRenderJobRecord,
   appendCreativeRenderJobError,
@@ -111,6 +112,32 @@ function requireGatewayAuthAllowQueryToken(req: any, res: any, next: any): void 
   next();
 }
 
+// Dev-only: in non-public builds, the canvas (e.g. end-of-turn diffs) may open
+// Prometheus's own source files, which live in the project root outside the
+// workspace. Mirror the prom-root read allowlist so src/web-ui/etc. are
+// viewable while .git/node_modules/.env/secrets stay blocked. Public builds
+// keep strict workspace-only behavior.
+const CANVAS_DEV_ROOT_ALLOWED_DIRS = new Set([
+  '.prometheus', 'scripts', 'electron', 'build', 'dist', 'src', 'web-ui', 'generated',
+]);
+const CANVAS_DEV_ROOT_DENIED_DIRS = new Set([
+  '.git', 'node_modules', '.env', '.env.local', '.env.development',
+  '.env.production', '.env.test', '.npm', '.cache', '.turbo', '.next', '.pnpm-store',
+]);
+function isCanvasDevRootAllowed(absPath: string): boolean {
+  if (isPublicDistributionBuild()) return false;
+  let projectRoot = '';
+  try { projectRoot = resolvePrometheusRoot(); } catch { return false; }
+  if (!projectRoot || !isPathInside(projectRoot, absPath)) return false;
+  const rel = path.relative(projectRoot, absPath).replace(/\\/g, '/');
+  if (!rel || rel.startsWith('..')) return false;
+  const topLevel = (rel.split('/')[0] || '').toLowerCase();
+  if (!topLevel) return false;
+  if (CANVAS_DEV_ROOT_DENIED_DIRS.has(topLevel)) return false;
+  if (topLevel.includes('secret') || topLevel.includes('credential')) return false;
+  return CANVAS_DEV_ROOT_ALLOWED_DIRS.has(topLevel);
+}
+
 function resolveCanvasPath(rawPath: string): { workspacePath: string; absPath: string; relPath: string; inWorkspace: boolean } {
   const workspacePath = getWorkspaceRoot();
   const candidatePath = path.isAbsolute(rawPath) ? rawPath : path.join(workspacePath, rawPath);
@@ -125,7 +152,7 @@ function resolveCanvasPath(rawPath: string): { workspacePath: string; absPath: s
         .map((allowed: string) => path.resolve(allowed))
     : [];
   const isAllowed = allowedPaths.some((allowed: string) => isPathInside(allowed, absPath));
-  if (!inWorkspace && !isAllowed) {
+  if (!inWorkspace && !isAllowed && !isCanvasDevRootAllowed(absPath)) {
     throw new Error('Path outside workspace or allowed directories');
   }
   return { workspacePath, absPath, relPath, inWorkspace };
@@ -4276,6 +4303,75 @@ router.get('/api/canvas/file', (req: any, res: any, next: any) => _requireGatewa
     res.json({ success: true, path: relPath, absPath, content, size: stat.size, mtime: stat.mtime });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/canvas/diff-ranges?path=<workspace-relative-path>
+// Returns the changed line ranges (1-based, against git working tree) for a file,
+// parsed from `git diff --unified=0` hunk headers. Powers the mobile canvas
+// "edited regions only" Preview for code files. Safe no-op when not a git repo.
+router.get('/api/canvas/diff-ranges', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const relPath = String(req.query.path || '').trim();
+  if (!relPath) { res.status(400).json({ success: false, error: 'path query param required' }); return; }
+  let absPath = '';
+  try {
+    absPath = resolveCanvasPath(relPath).absPath;
+  } catch {
+    res.status(403).json({ success: false, error: 'Path outside workspace' }); return;
+  }
+  const respond = (ranges: Array<{ start: number; end: number }>, extra: any = {}) =>
+    res.json({ success: true, path: relPath, ranges, hasChanges: ranges.length > 0, ...extra });
+  try {
+    if (!fs.existsSync(absPath) || fs.statSync(absPath).isDirectory()) { respond([], { reason: 'not-a-file' }); return; }
+    let gitRoot = '';
+    try {
+      gitRoot = require('child_process')
+        .execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: path.dirname(absPath), encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString().trim();
+    } catch { respond([], { reason: 'not-a-repo' }); return; }
+    if (!gitRoot) { respond([], { reason: 'not-a-repo' }); return; }
+    const repoRel = path.relative(gitRoot, absPath).replace(/\\/g, '/');
+    let diff = '';
+    try {
+      diff = require('child_process')
+        .execFileSync('git', ['diff', '--no-color', '--unified=0', '--', repoRel], { cwd: gitRoot, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024 })
+        .toString();
+    } catch { respond([], { reason: 'diff-failed' }); return; }
+    if (!diff.trim()) {
+      let isNew = false;
+      try {
+        const st = require('child_process')
+          .execFileSync('git', ['status', '--porcelain', '--', repoRel], { cwd: gitRoot, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+          .toString().trim();
+        isNew = /^\?\?/.test(st) || /^A/.test(st);
+      } catch {}
+      if (isNew) {
+        const lineCount = String(fs.readFileSync(absPath, 'utf8') || '').split(/\r?\n/).length;
+        respond([{ start: 1, end: Math.max(1, lineCount) }], { whole: true });
+        return;
+      }
+      respond([]);
+      return;
+    }
+    const ranges: Array<{ start: number; end: number }> = [];
+    const re = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(diff)) !== null) {
+      const start = Math.max(1, Number(m[1]) || 1);
+      const count = m[2] === undefined ? 1 : Number(m[2]);
+      if (count <= 0) continue;
+      ranges.push({ start, end: start + count - 1 });
+    }
+    ranges.sort((a, b) => a.start - b.start);
+    const merged: Array<{ start: number; end: number }> = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && r.start <= last.end + 1) last.end = Math.max(last.end, r.end);
+      else merged.push({ ...r });
+    }
+    respond(merged);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
   }
 });
 

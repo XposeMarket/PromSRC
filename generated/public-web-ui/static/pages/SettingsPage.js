@@ -13,6 +13,7 @@
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
+import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js';
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
 import { showTutorial } from '../onboarding/tutorial-overlay.js';
 import { renderProviderUsageCard } from './HubPage.js';
@@ -2401,6 +2402,66 @@ function ensureAgentMdEditor() {
   setTimeout(() => { if (window.agentMdEditor) window.agentMdEditor.refresh(); }, 200);
 }
 
+function getAgentVoiceFromForm() {
+  return normalizeAgentVoiceProfile({
+    provider: document.getElementById('agent-edit-voice-provider')?.value,
+    voice: document.getElementById('agent-edit-voice-voice')?.value,
+    speed: document.getElementById('agent-edit-voice-speed')?.value,
+  });
+}
+
+async function loadAgentVoiceOptions(preserveSelected = false) {
+  const providerEl = document.getElementById('agent-edit-voice-provider');
+  const voiceEl = document.getElementById('agent-edit-voice-voice');
+  const statusEl = document.getElementById('agent-voice-status');
+  if (!providerEl || !voiceEl) return;
+  const provider = String(providerEl.value || '').trim();
+  const previous = preserveSelected ? String(voiceEl.value || voiceEl.dataset.current || '').trim() : '';
+  if (!provider) {
+    voiceEl.disabled = true;
+    voiceEl.innerHTML = '<option value="">use provider default</option>';
+    if (statusEl) statusEl.textContent = 'Using the global voice settings for this agent.';
+    return;
+  }
+  voiceEl.disabled = false;
+  voiceEl.innerHTML = '<option value="">Loading...</option>';
+  const fallbacks = {
+    openai_realtime: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'],
+    openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'],
+    xai: ['eve', 'ara', 'rex', 'sal', 'leo'],
+    browser: ['default'],
+  };
+  let voices = fallbacks[provider] || [];
+  try {
+    const data = await api(`/api/voice/voices?provider=${encodeURIComponent(provider)}`, { timeoutMs: 8000 });
+    const loaded = Array.isArray(data?.voices) ? data.voices.map(v => typeof v === 'string' ? v : (v?.id || v?.name || '')).filter(Boolean) : [];
+    if (loaded.length) voices = loaded;
+  } catch {}
+  const options = Array.from(new Set([...voices, previous].filter(Boolean)));
+  voiceEl.innerHTML = `<option value="">provider default</option>${options.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('')}`;
+  if (previous && options.includes(previous)) voiceEl.value = previous;
+  if (statusEl) statusEl.textContent = provider === 'xai'
+    ? 'xAI voice uses realtime audio. Image/video summaries can still use the configured vision fallback.'
+    : '';
+}
+
+function setAgentVoiceForm(voice) {
+  const profile = normalizeAgentVoiceProfile(voice || {});
+  const providerEl = document.getElementById('agent-edit-voice-provider');
+  const voiceEl = document.getElementById('agent-edit-voice-voice');
+  const speedEl = document.getElementById('agent-edit-voice-speed');
+  if (providerEl) providerEl.value = profile.provider || '';
+  if (voiceEl) {
+    voiceEl.dataset.current = profile.voice || '';
+    voiceEl.innerHTML = profile.voice
+      ? `<option value="${escHtml(profile.voice)}">${escHtml(profile.voice)}</option>`
+      : '<option value="">use provider default</option>';
+    voiceEl.value = profile.voice || '';
+  }
+  if (speedEl) speedEl.value = Number.isFinite(Number(profile.speed)) ? String(profile.speed) : '1';
+  loadAgentVoiceOptions(true).catch(() => {});
+}
+
 function getAgentFromForm() {
   const maxStepsRaw = document.getElementById('agent-edit-max-steps').value;
   const maxSteps = Number(maxStepsRaw);
@@ -2420,6 +2481,8 @@ function getAgentFromForm() {
     })(),
     default: document.getElementById('agent-edit-id').value.trim() === 'main',
   };
+  const voice = getAgentVoiceFromForm();
+  agent.voice = Object.keys(voice).length ? voice : null;
   if (workspaceValue && !isTeamScoped) agent.workspace = workspaceValue;
   if (Number.isFinite(maxSteps) && maxSteps > 0) agent.maxSteps = Math.floor(maxSteps);
   return agent;
@@ -2455,6 +2518,7 @@ function setAgentForm(agent) {
       mdlSel.value = selectedModel || '';
     }
   })();
+  setAgentVoiceForm(a.voice || null);
   document.getElementById('agent-edit-max-steps').value = (a.maxSteps || '') + '';
   const defaultInput = document.getElementById('agent-edit-default');
   if (defaultInput) {
@@ -3413,9 +3477,9 @@ async function saveSettings() {
         security: securityPayload,
       }),
     });
-    if (window.settingsTab === 'models' || window._agentModelDefaultsLoadedToUI || window._brainModelConfigLoadedToUI) {
-      await saveModelTabLiveSettings({ showStatus: true });
-    }
+    // Always save model tab settings unconditionally — agent model defaults and brain
+    // model config must persist regardless of which tab the user is currently viewing.
+    await saveModelTabLiveSettings({ showStatus: false });
     if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
       window.applyReasoningPrefsFromProviderConfig(providerPayload, providerPayload.provider);
     }
@@ -3884,7 +3948,8 @@ const AMD_SLOTS = {
   'proposal-low':    'proposal_executor_low_risk',
   'coordinator':     'coordinator',
   'manager':         'manager',
-  'background-task': 'background_task',
+  'background-task':  'background_task',
+  'background-spawn': 'background_spawn',
   // Per-role-type subagent defaults
   'subagent-planner':       'subagent_planner',
   'subagent-orchestrator':  'subagent_orchestrator',
@@ -4113,9 +4178,25 @@ async function saveAgentModelDefaultTemplate() {
       }),
     });
     updateAgentModelTemplateCache(data);
-    if (select && data?.template?.id) select.value = data.template.id;
-    setAgentModelTemplateStatus('success', `Saved "${data?.template?.name || name}".`);
-    showToast('Model template saved', data?.template?.name || name, 'success', 3500);
+    const savedId = data?.template?.id;
+    if (select && savedId) select.value = savedId;
+    // Also pin as startup default so this template survives gateway restarts.
+    // Without this, clicking Save only snapshots the template blob but never sets
+    // default_agent_model_template, so applyDefaultModelTemplate() on startup skips it.
+    if (savedId) {
+      try {
+        const defData = await api(`/api/settings/agent-model-default-templates/${encodeURIComponent(savedId)}/set-default`, {
+          method: 'POST',
+        });
+        updateAgentModelTemplateCache(defData);
+        amdDefaultTemplateId = savedId;
+        updateApplyAsDefaultButtonState(savedId);
+      } catch (defErr) {
+        console.warn('Could not pin template as startup default:', defErr);
+      }
+    }
+    setAgentModelTemplateStatus('success', `Saved "${data?.template?.name || name}" and set as default.`);
+    showToast('Model template saved & set as default', data?.template?.name || name, 'success', 3500);
   } catch (e) {
     setAgentModelTemplateStatus('error', e.message || String(e));
   }
@@ -4318,6 +4399,7 @@ window.saveBrainModelConfig = saveBrainModelConfig;
 window.loadAgentHeartbeat = loadAgentHeartbeat;
 window.loadAgentModelDefaultTemplates = loadAgentModelDefaultTemplates;
 window.loadAgentModelOptions = loadAgentModelOptions;
+window.loadAgentVoiceOptions = loadAgentVoiceOptions;
 window.loadAgentRunHistory = loadAgentRunHistory;
 window.loadAgentsTab = loadAgentsTab;
 window.loadChannelsStatus = loadChannelsStatus;

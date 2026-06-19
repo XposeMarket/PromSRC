@@ -1,23 +1,25 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for market research, TAM/SAM/SOM sizing, customer segments, competitor landscape, category trends, ICP discovery, pricing benchmarks, demand validation, or market opportunity analysis. It guides evidence-based research, source gathering, synthesis, and concise recommendations.",
+  "description": "Use this skill when researching a market, audience, industry, customer segment, demand, competitors, trends, pricing, TAM/SAM/SOM, category dynamics, or go-to-market context.",
   "triggers": [
     "market research",
-    "market analysis",
+    "research this market",
+    "audience research",
+    "industry trends",
+    "customer segment",
+    "market size",
     "TAM SAM SOM",
-    "customer segments",
-    "competitor landscape",
-    "category trends",
-    "ICP research",
-    "demand validation",
-    "market opportunity",
-    "pricing benchmarks",
-    "target market",
-    "industry research",
-    "validate this market",
+    "category analysis",
+    "demand research",
+    "pricing research",
     "go-to-market research",
-    "business opportunity analysis"
+    "market opportunity",
+    "target customer",
+    "buyer persona research",
+    "trend analysis",
+    "industry landscape",
+    "customer pain points"
   ],
   "categories": [
     "research",
@@ -29,6 +31,5 @@
     "web_fetch"
   ],
   "lifecycle": "active",
-  "name": "Market Research",
   "id": "market-research"
 }

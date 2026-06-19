@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when analyzing images, screenshots, designs, logos, charts, visual bugs, photos, UI captures, or extracting visible details/evidence from an image.",
+  "triggers": [
+    "analyze this image",
+    "inspect this screenshot",
+    "what is in this photo",
+    "image analysis",
+    "visual QA",
+    "logo analysis",
+    "screenshot evidence",
+    "read the image",
+    "compare images",
+    "find visual issues",
+    "describe this screenshot",
+    "extract text from image",
+    "chart in image",
+    "design critique",
+    "photo details",
+    "UI screenshot review"
+  ],
+  "categories": [
+    "image",
+    "vision",
+    "analysis",
+    "visual-qa"
+  ],
+  "requiredTools": [
+    "media_assets",
+    "desktop_automation",
+    "browser_automation"
+  ],
+  "lifecycle": "active",
+  "name": "Image Analyst",
+  "id": "image-analyst"
+}

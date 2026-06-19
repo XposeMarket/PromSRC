@@ -1,24 +1,24 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to use Prometheus Creative Mode, canvas/image/video/design workspaces, editable creative artifacts, HyperFrames, HTML Motion, brand kits, mockups, visual assets, or creative workspace outputs. It routes one-shot generation versus editable creative work correctly.",
+  "description": "Use this skill when working in Prometheus Creative Mode for canvas, image, video, design workspace, editable creative artifacts, HyperFrames, HTML Motion, brand kits, mockups, or exports.",
   "triggers": [
     "Creative Mode",
-    "creative workspace",
-    "canvas",
+    "open creative workspace",
+    "canvas design",
+    "editable video",
     "image workspace",
-    "video workspace",
-    "design workspace",
-    "editable artifact",
+    "design artifact",
+    "HyperFrames project",
     "HTML Motion",
-    "HyperFrames",
     "brand kit",
     "mockup",
-    "creative output",
-    "generate visual",
-    "open creative mode",
-    "creative editor",
-    "editable design"
+    "export creative",
+    "creative canvas",
+    "generate editable asset",
+    "visual workspace",
+    "promo video workspace",
+    "create design in Prometheus"
   ],
   "categories": [
     "creative",
@@ -26,7 +26,7 @@
     "media"
   ],
   "requiredTools": [
-    "creative_mode",
+    "creative_basic",
     "generate_image",
     "generate_video"
   ],

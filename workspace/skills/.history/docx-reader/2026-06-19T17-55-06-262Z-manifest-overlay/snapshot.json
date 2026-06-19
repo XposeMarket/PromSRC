@@ -1,0 +1,11 @@
+{
+  "skillId": "docx-reader",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:06.265Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\docx-reader",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "d953d7528ffe01f1"
+}

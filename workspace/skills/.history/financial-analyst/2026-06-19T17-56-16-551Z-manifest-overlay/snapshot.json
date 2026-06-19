@@ -1,0 +1,11 @@
+{
+  "skillId": "financial-analyst",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:16.554Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\financial-analyst",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "956fc38c1c6aeb32"
+}

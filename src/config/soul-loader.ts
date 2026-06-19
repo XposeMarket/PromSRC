@@ -33,8 +33,8 @@ function intEnv(name: string, fallback: number): number {
 }
 
 const PROMPT_BUDGET_FULL = {
-  totalChars: intEnv('PROMETHEUS_PROMPT_TOTAL_CHARS', 7500),
-  soulChars: 3200,
+  totalChars: intEnv('PROMETHEUS_PROMPT_TOTAL_CHARS', 60000),
+  soulChars: intEnv('PROMETHEUS_SOUL_CHARS', 20000),
   memoryChars: 700,
   skillsTotalChars: 1400,
   skillEachChars: 900,
@@ -281,10 +281,10 @@ export function loadWorkspaceBootstrap(
 
   // Full mode: inject all bootstrap files
   const fullFiles = [
-    { label: 'SOUL.md', filename: 'SOUL.md', maxChars: 3000 },
-    { label: 'USER.md', filename: 'USER.md', maxChars: 3000 },
-    { label: 'MEMORY.md', filename: 'MEMORY.md', maxChars: 1600 },
-    { label: 'HEARTBEAT.md', filename: 'HEARTBEAT.md', maxChars: 3000 },
+    { label: 'SOUL.md', filename: 'SOUL.md', maxChars: intEnv('PROMETHEUS_WORKSPACE_SOUL_CHARS', 16000) },
+    { label: 'USER.md', filename: 'USER.md', maxChars: intEnv('PROMETHEUS_WORKSPACE_USER_CHARS', 12000) },
+    { label: 'MEMORY.md', filename: 'MEMORY.md', maxChars: intEnv('PROMETHEUS_WORKSPACE_MEMORY_CHARS', 8000) },
+    { label: 'HEARTBEAT.md', filename: 'HEARTBEAT.md', maxChars: intEnv('PROMETHEUS_WORKSPACE_HEARTBEAT_CHARS', 3000) },
   ];
 
   for (const f of fullFiles) {

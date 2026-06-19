@@ -1,0 +1,11 @@
+{
+  "skillId": "docx-writer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:06.801Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\docx-writer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "59a64db2043b95f1"
+}

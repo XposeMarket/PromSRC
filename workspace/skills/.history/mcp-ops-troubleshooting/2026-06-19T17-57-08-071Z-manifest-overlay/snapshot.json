@@ -1,0 +1,11 @@
+{
+  "skillId": "mcp-ops-troubleshooting",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:57:08.074Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\mcp-ops-troubleshooting",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "c3df8a3d28882c9f"
+}

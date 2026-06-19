@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when ingesting documents into memory/search/context systems, chunking files, extracting metadata, indexing PDFs/DOCX/TXT/HTML, deduplicating docs, or preparing documents for retrieval.",
+  "triggers": [
+    "ingest documents",
+    "index these docs",
+    "document ingestion",
+    "chunk this file",
+    "extract document metadata",
+    "add docs to search",
+    "upload docs to memory",
+    "parse document folder",
+    "dedupe documents",
+    "retrieval corpus",
+    "prepare docs for RAG",
+    "document index",
+    "process these files",
+    "searchable documents",
+    "import knowledge base"
+  ],
+  "categories": [
+    "documents",
+    "ingestion",
+    "search",
+    "memory"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "advanced_memory"
+  ],
+  "lifecycle": "active",
+  "name": "Document Ingestion",
+  "id": "doc-ingestion"
+}

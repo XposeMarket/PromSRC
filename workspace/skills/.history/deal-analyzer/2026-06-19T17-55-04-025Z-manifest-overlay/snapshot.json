@@ -1,0 +1,12 @@
+{
+  "skillId": "deal-analyzer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:04.029Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\deal-analyzer",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "0aeb9f390407246a"
+}

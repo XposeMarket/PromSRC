@@ -1,23 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for Three.js, WebGL, 3D scenes, 3D devices, shaders, cameras, lighting, canvas textures, or real-time 3D motion in Creative Video, HyperFrames, browser UI, or demos. It requires visual verification that the 3D object actually renders and moves.",
+  "description": "Use this skill when creating or adapting Three.js/WebGL/3D scenes, shaders, cameras, lighting, canvas textures, 3D product visuals, or real-time 3D motion for creative/web/video work.",
   "triggers": [
     "Three.js",
-    "three",
-    "WebGL",
+    "WebGL scene",
     "3D scene",
-    "3D phone",
-    "3D device",
-    "shader",
+    "shader material",
+    "3D product visual",
     "canvas texture",
-    "WebGLRenderer",
-    "3D animation",
-    "3D object",
     "camera lighting",
-    "real 3D",
-    "threejs demo",
-    "3D creative video"
+    "real-time 3D",
+    "3D device mockup",
+    "orbital camera",
+    "particle field",
+    "3D animation",
+    "browser 3D",
+    "WebGL shader",
+    "threejs scene"
   ],
   "categories": [
     "creative",
@@ -25,10 +25,10 @@
     "webgl"
   ],
   "requiredTools": [
-    "creative_mode",
-    "media_quality"
+    "creative_basic",
+    "workspace_write",
+    "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "Three.js",
   "id": "three"
 }

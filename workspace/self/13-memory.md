@@ -37,6 +37,17 @@ Returned hits can identify:
 - `canonicalKey`
 - `whyMatched`
 
+
+Memory search performance telemetry:
+
+- `memory_search` results include additive `stats.telemetry` diagnostics with `total_ms`, selected backend, fallback status/reason, and phase timings.
+- SQLite/vector search reports phases such as embedding provider resolution, query embedding/cache hit, cached DB open, FTS query, candidate scan, ranking, MMR rerank, hit hydration, and stats queries.
+- JSON fallback reports phases such as store read, hash embedding, candidate collection, score/sort, operational layer search, candidate counts, scored counts, and hit counts.
+- Tool observation telemetry separately records the wall-clock tool duration and estimated args/result tokens, so memory retrieval can be optimized for both latency and token cost.
+- SQLite memory search has an in-process circuit breaker for native binding/open failures. If `better-sqlite3` is compiled for the wrong Node module version or otherwise cannot load/open, the first failed attempt records `sqlite_disabled_reason`; later searches skip SQLite immediately and use JSON fallback instead of paying the long native-module failure penalty repeatedly. Rebuild/reinstall `better-sqlite3` for the active Node runtime to restore SQLite selection.
+- Quick-mode `memory_search` uses a local hash-vector fast path by default and skips remote/cloud query embeddings entirely, preventing OAuth/quota/rate-limit waits from blocking routine recall. Set `PROMETHEUS_MEMORY_QUICK_REMOTE_EMBEDDING=1` only when explicitly testing remote quick-query embeddings.
+- Non-quick query embedding has a bounded fast-fallback path: provider resolution and query embedding are capped by `PROMETHEUS_MEMORY_QUERY_EMBED_TIMEOUT_MS` (default 2500ms), 429/quota/rate-limit/timeout failures suppress that provider for `PROMETHEUS_MEMORY_QUERY_EMBED_SUPPRESS_MS` (default five minutes), and search immediately retries with the local hash vector. Telemetry records `quick_hash_fast_path`, `async_fallback_reason`, `async_phases`, timeout/suppression settings, and hash fallback timing so latency regressions are visible.
+
 `memory_read_record` resolves full records from either layer.
 
 ## 27) Memory Index Layers

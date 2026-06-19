@@ -1,0 +1,12 @@
+{
+  "skillId": "teams-meeting-pipeline",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T18:01:21.549Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\teams-meeting-pipeline",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "ff83163c49fa5bee"
+}

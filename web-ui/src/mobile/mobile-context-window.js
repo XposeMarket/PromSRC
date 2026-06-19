@@ -11,6 +11,7 @@ import { escapeHtml } from './mobile-shell.js';
 
 let _open = false;
 let _expanded = false;
+let _expandedRows = new Set();
 let _outsideHandler = null;
 let _planFetchAt = 0;
 let _planData = null;
@@ -96,6 +97,26 @@ function _setExpanded(expanded) {
   if (toggle) toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
 }
 
+function _renderRows(rows, windowTokens, depth = 0) {
+  const source = Array.isArray(rows) ? rows : [];
+  return source.map((row) => {
+    const tokens = Math.max(0, Number(row?.tokens || 0));
+    const pct = windowTokens > 0 ? `${((tokens / windowTokens) * 100).toFixed(1)}%` : '';
+    const pctText = row?.percentLabel ? String(row.percentLabel) : (row?.percentBasis === 'window' ? pct : '');
+    const children = Array.isArray(row?.children) ? row.children.filter(Boolean) : [];
+    const rowId = String(row?.id || row?.label || `row_${depth}`);
+    const expandable = children.length > 0;
+    const expanded = expandable && _expandedRows.has(rowId);
+    const tag = expandable ? 'button' : 'div';
+    const typeAttr = expandable ? ' type="button"' : '';
+    const dataAttr = expandable ? ` data-pm-ctx-row-id="${escapeHtml(rowId)}" aria-expanded="${expanded ? 'true' : 'false'}"` : '';
+    const caret = expandable ? `<span class="pm-ctx-caret" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>` : '';
+    const estimate = row?.estimated ? '<span class="pm-ctx-estimate">est</span>' : '';
+    const childHtml = expanded ? _renderRows(children, windowTokens, depth + 1) : '';
+    return `<${tag}${typeAttr}${dataAttr} class="pm-ctx-row${expandable ? ' is-expandable' : ''}${depth > 0 ? ' is-child' : ''}" style="--pm-ctx-depth:${Math.max(0, depth)};"><span>${caret}${escapeHtml(row?.label || 'Context')}${estimate}</span><span class="pm-ctx-row-val">${_fmtTokens(tokens)}</span><span class="pm-ctx-row-pct">${escapeHtml(pctText)}</span></${tag}>${childHtml}`;
+  }).join('');
+}
+
 function _renderContext(data) {
   const ring = document.getElementById('pm-ctx-chip-ring');
   const fill = document.getElementById('pm-ctx-fill');
@@ -118,12 +139,7 @@ function _renderContext(data) {
 
   const rows = Array.isArray(currentState.rows) ? currentState.rows : [];
   if (metrics) {
-    metrics.innerHTML = rows.map((row) => {
-      const tokens = Math.max(0, Number(row?.tokens || 0));
-      const pct = windowTokens > 0 ? `${((tokens / windowTokens) * 100).toFixed(1)}%` : '';
-      const pctText = row?.percentLabel ? String(row.percentLabel) : (row?.percentBasis === 'window' ? pct : '');
-      return `<div class="pm-ctx-row"><span>${escapeHtml(row?.label || 'Context')}</span><span class="pm-ctx-row-val">${_fmtTokens(tokens)}</span><span class="pm-ctx-row-pct">${escapeHtml(pctText)}</span></div>`;
-    }).join('');
+    metrics.innerHTML = _renderRows(rows, windowTokens);
   }
 }
 
@@ -251,7 +267,7 @@ export function wireMobileContextWindow(page, { getSessionId } = {}) {
   if (!chip) return;
   _bindModelChangeListener(getSessionId);
   // Reset transient state for the fresh page render.
-  _open = false; _expanded = false;
+  _open = false; _expanded = false; _expandedRows = new Set();
   if (_outsideHandler) { document.removeEventListener('pointerdown', _outsideHandler, true); _outsideHandler = null; }
 
   chip.addEventListener('click', (e) => {
@@ -259,6 +275,19 @@ export function wireMobileContextWindow(page, { getSessionId } = {}) {
     if (_open) _close(); else _open_(getSessionId);
   });
   if (toggle) toggle.addEventListener('click', (e) => { e.stopPropagation(); _setExpanded(!_expanded); });
+  const metrics = page.querySelector('#pm-ctx-metrics');
+  if (metrics) {
+    metrics.addEventListener('click', (e) => {
+      const row = e.target?.closest?.('[data-pm-ctx-row-id]');
+      if (!row) return;
+      e.stopPropagation();
+      const id = row.dataset.pmCtxRowId;
+      if (!id) return;
+      if (_expandedRows.has(id)) _expandedRows.delete(id);
+      else _expandedRows.add(id);
+      _refresh(typeof getSessionId === 'function' ? getSessionId() : '');
+    });
+  }
 
   // Pre-load so the ring shows the real fill as soon as the chat opens,
   // not just after the popover is first tapped.

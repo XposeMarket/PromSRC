@@ -1,0 +1,12 @@
+{
+  "skillId": "approval-policy-designer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:54:02.832Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\approval-policy-designer",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c1041f726235014e"
+}

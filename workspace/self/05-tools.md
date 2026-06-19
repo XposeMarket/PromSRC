@@ -12,7 +12,6 @@ Runtime categories:
 - `workspace_write`
 - `advanced_memory`
 - `media_assets`
-- `media_quality`
 - `automations`
 - `external_apps`
 - `integration_admin`
@@ -20,23 +19,48 @@ Runtime categories:
 - `proposal_admin`
 - `mcp_server_tools`
 - `composite_tools`
-- `creative_mode`
+- `creative_basic`
+- `creative_image`
+- `creative_video`
+- `creative_hyperframes`
+- `creative_quality`
 
 Legacy aliases still map onto the current category IDs, including `browser`, `desktop`, `team_ops`, `teams`, `agents`, `source_read`, `source_write`, `file_ops`, `files`, `shell`, `commands`, `run_commands`, `memory`, `media`, `schedule`, `scheduling`, `integrations`, `connectors`, `mcp`, and `composites`.
 
 Key rules:
 
-- categories are activated per session through `request_tool_category`
+- categories are activated through `request_tool_category` with scoped lifetimes: `turn` by default, `next_turn` for the current turn plus one follow-up, `ttl` with `turns`, or explicit `session`
+- auto-detected categories in main chat use `scope:"turn"` so browser/desktop/workspace/etc. tools do not stay loaded after the current user turn
+- creative categories are requestable manually but are not auto-activated from generic image/video/design wording
 - some tools are always core and never category-gated
 - MCP tools are injected dynamically as `mcp__<serverId>__<toolName>`
 - saved composite tools are injected dynamically too
 - `connector_list` is always available
 - `ask_team_coordinator` is always available
-- `deploy_analysis_team` is always available
-- `run_command`, `terminal`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit` are under `workspace_write` in the category-gated builder
+- `deploy_analysis_team` lives under `agents_and_teams`
+- `terminal` is the canonical model-facing command/process tool under `workspace_write`; hidden compatibility tools `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit` remain executable internals
 - `schedule_job` is core; deeper schedule operator tools such as history/detail/output/patch/stuck-control live under `automations`
-- `get_creative_mode` and `switch_creative_mode` are core
-- `creative_*`, `hyperframes_*`, and creative video QA tools live under the `creative_mode` category
+- workspace file/read/write tools such as `read_file`, `list_files`, `list_directory`, `grep_file`, `grep_files`, `file_stats`, `mkdir`, `present_file`, `apply_workspace_patchset`, and `clone_repo` live under `workspace_write`
+- legacy `creative_mode` normalizes to `creative_basic`; `image_mode`, `video_mode`, `hyperframes`, `creative_qa`, and `media_quality` normalize to the narrower creative buckets
+- `get_creative_mode`, `switch_creative_mode`, core canvas/project/element/style/export basics live under `creative_basic`
+- image/asset/layer/cutout/icon/generation helpers live under `creative_image`
+- video/shot/storyboard/audio/caption/sequence/composition helpers live under `creative_video`
+- HyperFrames and HTML Motion clip/template helpers live under `creative_hyperframes`
+- frame render, layout, text-fit, contrast, overlap, timing, lint, and validation helpers live under `creative_quality`
+- `generate_image` and `generate_video` remain core; `analyze_video` lives under `media_assets`
+- only `skill_list` and `skill_read` are core skill tools; `skill_resource_list`, `skill_resource_read`, metadata repair/update, authoring, import/export, and resource mutation live under `skills`
+- the model-facing web surface is unified: use `web_search` for preferred-provider, forced-provider, or multi-provider search; use `web_fetch` with either `url` or `urls` for single or batch fetch
+- the model-facing card surface is unified as `show_ui_card`; older `show_*` card tool names remain executable as compatibility aliases but are hidden from the exposed schema surface
+- the model-facing delivery surface is unified around `delivery_send` and `delivery_send_screenshot`; legacy `send_telegram` and `browser_send_to_telegram` remain executable compatibility aliases but are hidden from the exposed schema surface
+- the 2026-06-19 core schema compaction pass reduced the always-on core surface from 47 tools / ~15.9k estimated schema tokens to 45 tools / ~13.3k by shortening verbose descriptions and hiding legacy delivery aliases
+- the 2026-06-19 workspace command unification pass made `terminal` cover bounded commands (`action:"run"`), supervised starts (`action:"start"`), and process management (`status`, `log`, `wait`, `kill`, `submit`). The hidden legacy names still route to the same executor for compatibility, while `terminal` command runs reuse the existing run-command deny policy, cwd/boundary analysis, Lite terminal permission mode, command permission grants, approval queue/cards, task pause/resume flow, Telegram approvals, and audit logging.
+- the 2026-06-19 creative split replaced the old single `creative_mode` bucket (~28.9k schema tokens) with narrower buckets: `creative_basic` ~6.2k, `creative_image` ~3.6k, `creative_video` ~9.0k, `creative_hyperframes` ~7.1k, and `creative_quality` ~3.9k
+- the 2026-06-19 scoped category activation pass removed accidental sticky activation from main chat: `request_tool_category` defaults to `scope:"turn"`, while direct internal `activateToolCategory(...)` calls still default to session scope for dev approvals/background runners that intentionally need persistence
+- the 2026-06-19 file/dev read-output pass made active file results capped by default: `read_file` returns 240 lines unless windowed or `full:true`, `read_source`/`read_webui_source`/`read_prom_file` return 300 lines by default, `read_files_batch` defaults to 8 files x 200 lines, and `read_dev_sources` defaults to 8 files x 220 lines. Use `start_line`/`num_lines` for chunks; use `full:true` only when the whole file is genuinely needed.
+- grep/search defaults are now leaner: single-file grep defaults to 50 matches and multi-file/source/prom grep defaults to 50 matches, with runtime hard caps of 80 returned matches and 3 context lines even if `max_results` asks for more. Broad calls should narrow path/glob/pattern instead of requesting huge result sets.
+- `skill_list` is compact by default: it returns ids/names/count metadata, supports `query` and `limit`, and only includes descriptions when `include_descriptions:true` is explicitly needed.
+- large tool outputs are summarized before reinjection into the active model loop; full/raw output remains available through tool observation raw storage for audit/recovery.
+- the context-window endpoint includes last-turn usage telemetry: provider delta plus grouped tool-result output by tool, so oversized outputs such as repeated `grep_source` calls are visible in desktop/mobile context-window UI.
 
 Tool definition sources:
 
@@ -71,7 +95,7 @@ Executor routing facts from `src/gateway/agents-runtime/subagent-executor.ts`:
 - despite the filename, this is the main injected tool executor used by chat, background tasks, team agents, and subagents
 - proposal/source write gates run before normal policy execution
 - every tool call is evaluated by `getPolicyEngine().evaluateAction(...)` and audit-logged through `appendAuditEntry(...)`
-- `commit`-tier `run_command` calls validate native file-tool bypasses, blocked shell patterns, allowed command policy, cwd, absolute path scope, and command permission grants before queuing approval
+- `commit`-tier `terminal(action:"run")` calls normalize through the run-command policy path: native file-tool bypass checks, blocked shell patterns, allowed command policy, cwd, absolute path scope, command permission grants, and approval queue/cards
 - other `commit`-tier tools can use scoped browser-page or desktop-window permission grants for repeat approvals
 - approval requests flow through `ApprovalQueue`, WebSocket events, task `needs_assistance` state, task journal entries, and Telegram command approval when configured
 - after policy/approval, `executeRegisteredCapabilityTool(...)` gets first chance to handle registered capability families
@@ -79,17 +103,19 @@ Executor routing facts from `src/gateway/agents-runtime/subagent-executor.ts`:
 
 Tool observation/context facts:
 
-- `src/gateway/tool-observations.ts` is the canonical compact record layer for tool results used as future prompt context
-- the storage record is deliberately small: `id`, `sessionId`, `turnId`, `stepNum`, `toolName`, `category`, `status`, `argsPreview`, `resultPreview`, optional `resultRawRef`, `artifacts`, `pathsTouched`, `exitCode`, and `createdAt`
-- categories are inferred from tool name prefixes, including `shell_process`, `file`, `web`, `browser`, `desktop`, `memory`, `skill`, `media`, `agent_task`, `approval`, `connector`, `creative`, and `other`
-- args/results are scrubbed for secret-looking keys before preview formatting
-- huge results over roughly 6000 characters are written to a raw sidecar file and the observation gets a `tool-observation-raw:<session>/<file>` reference
-- `formatToolObservationsForContext(...)` ranks observations before injection: errors, approvals, file mutations, shell/process results, browser/desktop actions, artifacts, and raw refs receive extra priority
-- formatted observations use the `[RECENT_TOOL_OBSERVATIONS]` block name; avoid introducing new plural/singular variants
-- `session.ts` exposes `getRecentToolObservationsForContext(...)`, which reads the JSONL observation store and falls back to legacy `getRecentToolLog(...)` if no observations exist
-- `chat.router.ts` persists observations after tool turns with `persistToolResultsAsObservations(...)` and injects observation context into future model calls
-- `brain-runner.ts` has three tool-loop sites that now persist/format observations through the same helper instead of maintaining separate 8-result/80-arg/120-preview logic
-- `formatCompactionToolResults(...)` and rolling compaction now consume observation formatting rather than dumping raw tool result strings
+- `src/gateway/tool-observations.ts` is the canonical compact record layer for tool results used as future prompt context and profiling data.
+- the storage record is deliberately small: `id`, `sessionId`, `turnId`, `stepNum`, `toolName`, `category`, `status`, `argsPreview`, `resultPreview`, optional `resultRawRef`, `artifacts`, `pathsTouched`, `exitCode`, telemetry fields (`durationMs`, `startedAt`, `finishedAt`), token estimate fields (`argsTokens`, `resultTokens`, `totalTokens`, chars/bytes), and `createdAt`.
+- categories are inferred from tool name prefixes, including `shell_process`, `file`, `web`, `browser`, `desktop`, `memory`, `skill`, `media`, `agent_task`, `approval`, `connector`, `creative`, and `other`.
+- args/results are scrubbed for secret-looking keys before preview formatting.
+- huge results over roughly 6000 characters are written to a raw sidecar file and the observation gets a `tool-observation-raw:<session>/<file>` reference.
+- `chat.router.ts` wraps direct `executeTool(...)` calls with universal wall-clock telemetry so every normal tool result gets `extra.telemetry` before observation persistence; capability tools can still attach richer internal phase telemetry first.
+- `formatToolObservationsForContext(...)` ranks observations before injection: errors, approvals, file mutations, shell/process results, browser/desktop actions, artifacts, and raw refs receive extra priority.
+- formatted observations use the `[RECENT_TOOL_OBSERVATIONS]` block name; avoid introducing new plural/singular variants.
+- `session.ts` exposes `getRecentToolObservationsForContext(...)`, which reads the JSONL observation store and falls back to legacy `getRecentToolLog(...)` if no observations exist.
+- normal context injection is intentionally lean: timing/token lines are stored on every observation but omitted from default prompt context unless `includeTelemetry: true` is explicitly requested by compaction/debug/profiling callers.
+- turn-level persisted `toolLogText` and compaction formatting request `includeTelemetry: true`, so workflow profiling and post-run summaries can still produce exact per-tool duration/token tables without bloating every future prompt.
+- `brain-runner.ts` has three tool-loop sites that persist/format observations through the same helper instead of maintaining separate 8-result/80-arg/120-preview logic.
+- `formatCompactionToolResults(...)` and rolling compaction consume observation formatting rather than dumping raw tool result strings.
 
 Important boundary:
 
@@ -100,12 +126,12 @@ Important boundary:
 
 Run-command/system-control policy facts to preserve:
 
-- `run_command`, `terminal`, and `start_process` remain `workspace_write` tools, but the command token policy now distinguishes base command tokens from Windows diagnostics/read-only tokens and Windows local-control tokens
-- token allowlists are assembled in `src/gateway/chat/chat-helpers.ts` from defaults plus config-backed arrays under `tools.permissions.shell.*`
-- config/schema/type support exists for `allowed_commands`, `allowed_windows_read_commands`, `allowed_windows_system_commands`, and `allowed_custom_commands`
+- `terminal` is the only model-facing command/process schema in `workspace_write`; hidden compatibility aliases still execute through the same command handling. Command handling separates default approval routing from Lite terminal permissions.
+- token allowlists are assembled in `src/gateway/chat/chat-helpers.ts` from defaults plus config-backed arrays under `tools.permissions.shell.*`; in default mode, an unknown or non-allowlisted token should reach the normal command approval queue instead of hard-blocking before approval
+- config/schema/type support exists for `allowed_commands`, `allowed_windows_read_commands`, `allowed_windows_system_commands`, and `allowed_custom_commands`; those lists are enforced as hard/auto-block boundaries only when `tools.permissions.shell.approval_mode === "lite"`
 - local-control additions such as `powercfg` and `taskkill` are still commit-tier shell actions; allowing the token only permits them to reach normal policy/approval/audit, not to run silently
-- hard-deny policy remains separate in `src/gateway/tool-deny-policy.ts` and must continue blocking destructive or machine-interrupting patterns even if their leading token is otherwise allowed
-- when adding future computer-control capability, prefer typed capability executors or first-class tools that wrap validated command shapes instead of adding broad arbitrary shell access
+- hard-deny policy remains separate in `src/gateway/tool-deny-policy.ts` and must continue blocking destructive, credential-access, security-disabling, privilege-escalating, or machine-interrupting patterns even if default command permissions would otherwise ask for approval
+- future diagnostic commands such as WMI/CIM, `dxdiag`, GPU probes, or vendor CLIs should be added as typed capability tools when they become common, but default terminal permissions must not reject them solely because their leading token is unfamiliar
 
 Registered capability executors currently live under `src/gateway/agents-runtime/capabilities/`:
 
@@ -123,7 +149,7 @@ Capability-handled families currently include:
 - teams/agents: `agent_*`, `spawn_subagent`, `message_subagent`, `dispatch_team_agent`, `team_manage`, `ask_team_coordinator`, `set_agent_model`, `get_agent_models`, team chat/status/artifact tools
 - memory: `business_context_mode`, `memory_*`, `write_note`
 - platform: `mcp__*`, `mcp_server_manage`, `connector_*`, `connector_list`, composite management and saved composites
-- web/media: `web_search*`, `web_fetch`, `web_fetch_batch`, `download_url`, `download_media`, `generate_image`, `generate_video`, `analyze_image`, `analyze_video`, `video_analyze_imported_video`, `save_site_shortcut`
+- web/media: `web_search`, `web_fetch`, `download_url`, `download_media`, `generate_image`, `generate_video`, `analyze_image`, `analyze_video`, `video_analyze_imported_video`, `save_site_shortcut`
 
 Direct executor switch handlers still own lower-level or specialized families:
 
@@ -181,13 +207,10 @@ Operational rule to preserve:
 
 ## 11) Web, Media, Image, and Video Tools
 
-Current web/media tool surface includes:
+Current model-facing web/media tool surface includes:
 
 - `web_search`
-- `web_search_single`
-- `web_search_multi`
 - `web_fetch`
-- `web_fetch_batch`
 - `download_url`
 - `download_media`
 - `generate_image`
@@ -198,19 +221,33 @@ Current web/media tool surface includes:
 
 Current behavior:
 
-- `web_fetch` reads full page content for one URL after `web_search`
-- `web_fetch_batch` reads several URLs in parallel and returns one result per URL with partial-failure details; default guidance is small focused batches, usually 2-5 URLs, hard-capped in the tool implementation
-- `web_search`, `web_search_single`, and `web_search_multi` accept `fetch_top_k` and `fetch_max_chars` so a search can fetch its top result URLs in the same call
+- `web_search` handles preferred-provider, forced-provider, and multi-provider search. Use `provider: "multi"` or `multi_engine: true` for all configured providers; use `provider: "tinyfish" | "tavily" | "google" | "brave" | "ddg" | "xai"` for a single provider check.
+- `web_search` accepts `fetch_top_k` and `fetch_max_chars` so a search can fetch its top result URLs in the same call
+- `web_fetch` reads full page content for one URL after `web_search`, or reads several URLs in parallel when called with `urls`
 - `web_fetch` has special handling for X/Twitter status URLs and attempts attached-media download plus analysis automatically
-- for multiple X/Twitter status URLs, route first to `web_fetch_batch`; for one X/Twitter status URL, route first to `web_fetch`
+- for multiple X/Twitter status URLs, call `web_fetch({ urls: [...] })`; for one X/Twitter status URL, call `web_fetch({ url })`
 - `download_url` is for direct file/image/PDF links
 - `download_media` is for media-page extraction via `yt-dlp`
 - `generate_image` supports provider override `auto | openai | openai_codex | xai`
 - `generate_video` supports the configured video generation provider/model path, currently xAI-backed by default
 - `analyze_video` samples frames and can extract audio/transcripts when local tools are available
 - web/media execution is now handled by `webMediaCapabilityExecutor` before the fallback switch path
-- `webMediaCapabilityExecutor` handles `web_fetch_batch` for subagents and capability-routed sessions, not only the top-level registry
+- old `web_search_single`, `web_search_multi`, and `web_fetch_batch` remain executable compatibility aliases but are hidden from the exposed schema surface
 - Image/video provider selection must not be tied to the current chat LLM provider. If the user is chatting with Grok, Claude, or another model, `generate_image` and `generate_video` should still be able to use any configured media endpoint whose credentials exist in config/vault/OAuth.
+
+Implementation facts for the 2026-06-17 workspace batch-file-tools update:
+
+- `src/tools/files.ts` exports standalone registry tools for `read_files_batch`, `apply_workspace_patchset`, and `file_tree`
+- `src/tools/registry.ts` imports and registers `readFilesBatchTool`, `applyWorkspacePatchsetTool`, and `fileTreeTool` after `fileStatsTool` so registry-based execution paths can call them directly
+- direct chat/subagent fallback handlers for these tools remain in `src/gateway/agents-runtime/subagent-executor.ts`
+- chat tool schemas for these tools live in `src/gateway/tools/defs/file-web-memory.ts`
+- `src/gateway/tool-builder.ts` exposes `search_files`, `read_files_batch`, and `file_tree` in both `workspace_write` and `prometheus_source_read` contexts so source/self-edit sessions can use the token-saving helpers without activating the full workspace write category
+- `search_files(directory:"src/..."|"web-ui/...")` delegates to `grep_source`/`grep_webui_source` in the direct executor; `file_tree(path:"src/..."|"web-ui/...")` renders compact trees from the Prometheus project source roots
+- `read_files_batch` accepts `src/...` and `web-ui/...` entries and delegates those reads through the source-read handlers, keeping Prometheus self-edit inspection batched and read-only
+
+- `read_files_batch` should be preferred over serial `read_file` calls when inspecting two or more workspace files before an edit
+- `apply_workspace_patchset` supports grouped workspace file mutations (`find_replace`, `replace_lines`, `insert_after`, `delete_lines`, `write_file`, `create_file`) and returns per-edit results
+- `file_tree` returns a compact indented directory tree for fast project orientation, with depth, glob, and exclude controls
 
 Implementation facts for the 2026-06-05 batch research update:
 
@@ -218,13 +255,13 @@ Implementation facts for the 2026-06-05 batch research update:
 - top-level registry import/registration is in `src/tools/registry.ts`
 - chat tool schemas are exposed in `src/gateway/tools/defs/file-web-memory.ts`
 - subagent/capability routing is in `src/gateway/agents-runtime/capabilities/web-media-executor.ts`
-- `web_fetch_batch` args are `urls`, optional `max_chars`, and optional `concurrency`
+- `web_fetch` batch args are `urls`, optional `max_chars`, and optional `concurrency`
 - `web_search` batch-read args are `fetch_top_k` and `fetch_max_chars`
 - verification run after implementation: `npm run build:backend`, plus a local compiled runtime smoke test of `executeWebFetchBatch` using two `data:text/plain` URLs; both passed
 
 ## 12) Product Carousel
 
-`show_product_carousel` renders a horizontal scrollable product card UI in the chat — exactly like ChatGPT's product preview cards.
+`show_ui_card({ type: "product_carousel", payload: ... })` renders a horizontal scrollable product card UI in the chat — exactly like ChatGPT's product preview cards.
 
 **When to use:** Any time the user asks to find, compare, or show products from a website (Amazon, Best Buy, Google Shopping, etc.).
 
@@ -232,7 +269,7 @@ Implementation facts for the 2026-06-05 batch research update:
 1. Use `browser_open` to navigate to the site/search results
 2. Use `browser_extract_structured`, `browser_scroll_collect_v2`, or `browser_run_js` to extract product data (title, price, rating, image URL, product URL)
 3. Curate: pick the 3–8 best/most relevant items — do NOT dump all results
-4. Call `show_product_carousel({ title: "...", items: [...] })` — the UI renders the cards automatically
+4. Call `show_ui_card({ type: "product_carousel", payload: { title: "...", items: [...] } })` — the UI renders the cards automatically
 
 **Item fields:**
 - `title` (required), `productUrl` (required)
@@ -246,7 +283,7 @@ Implementation facts for the 2026-06-05 batch research update:
 - `merchant` — "Amazon", "Best Buy", etc.
 
 **Important rules:**
-- Always call `show_product_carousel` AFTER doing your own extraction — the tool is just the display step
+- Always call `show_ui_card` AFTER doing your own extraction — the tool is just the display step
 - You decide the curation (which products, how many, what tags) — not the tool
 - `imageUrl` from the page is fine to pass directly; you do NOT need to download images unless the URL is behind auth
 - Keep descriptions short and factual — one line per card maximum

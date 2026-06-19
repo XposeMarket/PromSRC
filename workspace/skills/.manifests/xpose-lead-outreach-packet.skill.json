@@ -1,35 +1,34 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to create, organize, or improve Xpose Market lead outreach packets from qualified local business leads, website audits, SEO findings, screenshots, contact info, offer angles, and manual outreach notes. It turns lead research into actionable outreach material.",
+  "description": "Use this skill when preparing Xpose Market lead outreach packets, business-specific evidence, website/SEO findings, offer framing, cold outreach drafts, screenshots, and local business lead materials.",
   "triggers": [
-    "Xpose lead outreach",
-    "outreach packet",
-    "lead packet",
-    "Xpose Market leads",
-    "local business lead",
-    "website audit outreach",
-    "SEO finding outreach",
-    "manual outreach notes",
-    "lead qualification",
-    "outreach angle",
-    "client prospect packet",
-    "business candidate",
-    "Xpose lead gen",
-    "outreach material",
-    "sales packet"
+    "Xpose lead packet",
+    "Xpose outreach",
+    "local business lead packet",
+    "prepare outreach packet",
+    "website evidence for lead",
+    "Xpose Market lead",
+    "lead outreach materials",
+    "business-specific outreach",
+    "local SEO findings",
+    "cold email for Xpose lead",
+    "website audit packet",
+    "prospect packet",
+    "Xpose sales packet",
+    "lead evidence summary"
   ],
   "categories": [
-    "xpose-market",
+    "xpose",
     "lead-generation",
-    "sales"
+    "outreach",
+    "website-analysis"
   ],
   "requiredTools": [
-    "web_search",
     "browser_automation",
-    "workspace_write"
+    "workspace_write",
+    "web_search"
   ],
   "lifecycle": "active",
-  "name": "Xpose Lead Outreach Packet",
   "id": "xpose-lead-outreach-packet"
 }

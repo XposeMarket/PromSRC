@@ -16,6 +16,10 @@ import {
   refreshXAITokens,
 } from '../../../auth/xai-oauth.js';
 import {
+  loadTokens as loadOpenAiCodexTokens,
+  refreshTokens as refreshOpenAiCodexTokens,
+} from '../../../auth/openai-oauth.js';
+import {
   X_API_ADD_LIST_MEMBER_TOOL_NAME,
   X_API_BLOCK_USER_TOOL_NAME,
   X_API_CREATE_LIST_TOOL_NAME,
@@ -97,6 +101,19 @@ function readXaiApiKeyFromConfig(): string | undefined {
   }
 }
 
+function readOpenAiApiKeyFromConfig(): string | undefined {
+  try {
+    const { getConfig } = require('../../../config/config') as typeof import('../../../config/config');
+    const cfg = getConfig();
+    const data = cfg.getConfig() as any;
+    const raw = data?.llm?.providers?.openai?.api_key ?? data?.providers?.openai?.api_key;
+    const resolved = cfg.resolveSecret(raw);
+    return resolved ? String(resolved).trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function readXaiBaseUrlFromConfig(): string | undefined {
   try {
     const { getConfig } = require('../../../config/config') as typeof import('../../../config/config');
@@ -113,6 +130,11 @@ interface ResolvedCreds {
   api_key: string;
   base_url: string;
   source: 'xai-oauth' | 'xai-env' | 'xai-config';
+}
+
+interface OpenAiVisionCreds {
+  api_key: string;
+  source: 'openai-env' | 'openai-config' | 'openai-codex-oauth-api-key';
 }
 
 export async function resolveXAICredentials(): Promise<ResolvedCreds | null> {
@@ -246,7 +268,7 @@ async function fetchWithRetry(url: string, init: RequestInit, retries = 2): Prom
       const res = await fetch(url, init);
       if (res.ok) return res;
       if (res.status < 500 || attempt >= retries) return res;
-      lastErr = new Error(`xAI upstream ${res.status}`);
+      lastErr = new Error(`upstream ${res.status}`);
     } catch (err) {
       lastErr = err;
       if (attempt >= retries) throw err;
@@ -290,8 +312,11 @@ async function fetchXaiJsonWithOAuthRefresh(
 async function readHttpError(res: Response): Promise<string> {
   try {
     const payload = await res.json() as any;
-    const code = String(payload?.code || '').trim();
-    const error = String(payload?.error || '').trim();
+    const errorObject = payload?.error;
+    const code = String(payload?.code || errorObject?.code || errorObject?.type || '').trim();
+    const error = typeof errorObject === 'string'
+      ? errorObject.trim()
+      : String(errorObject?.message || '').trim();
     const message = error || JSON.stringify(payload).slice(0, 500);
     return code && !message.includes(code) ? `${code}: ${message}` : message;
   } catch {
@@ -305,22 +330,127 @@ async function readHttpError(res: Response): Promise<string> {
 }
 
 // Vision summary for the realtime voice agent: xAI's voice/realtime models can't
-// take image input, so when the user captures a photo/video on xAI voice we route
-// the image(s) to Grok (grok-4.3) vision and feed the text summary back into the
-// live voice session. Video frames (sampled ~1/sec) are summarized as one clip.
+// take image input, so captures go through a sidecar vision model and the text
+// summary is injected into the live voice session. Prefer Grok vision, but fall
+// back to OpenAI mini vision by default when Grok is quota-limited/unavailable.
 const DEFAULT_XAI_VISION_MODEL = process.env.XAI_VISION_MODEL || 'grok-4.3';
+const DEFAULT_XAI_VISION_FALLBACK_MODEL = process.env.XAI_VISION_FALLBACK_MODEL
+  || process.env.OPENAI_VISION_FALLBACK_MODEL
+  || 'gpt-5.4-mini';
+const OPENAI_VISION_FALLBACK_TIMEOUT_MS = Math.max(
+  5_000,
+  Math.min(60_000, Number(process.env.XAI_VISION_FALLBACK_TIMEOUT_MS || 25_000) || 25_000),
+);
+
+async function resolveOpenAiVisionCredentials(): Promise<OpenAiVisionCreds[]> {
+  const out: OpenAiVisionCreds[] = [];
+  const seen = new Set<string>();
+  const push = (token: unknown, source: OpenAiVisionCreds['source']) => {
+    const apiKey = String(token || '').trim();
+    if (!apiKey || seen.has(apiKey)) return;
+    seen.add(apiKey);
+    out.push({ api_key: apiKey, source });
+  };
+
+  push(
+    process.env.XAI_VISION_FALLBACK_OPENAI_API_KEY
+      || process.env.OPENAI_API_KEY
+      || process.env.VOICE_TOOLS_OPENAI_KEY
+      || process.env.OPENAI_REALTIME_API_KEY,
+    'openai-env',
+  );
+  push(readOpenAiApiKeyFromConfig(), 'openai-config');
+
+  try {
+    const configDir = getConfigDir();
+    let tokens = loadOpenAiCodexTokens(configDir);
+    if (tokens && !String(tokens.api_key || '').trim()) {
+      tokens = await refreshOpenAiCodexTokens(configDir);
+    }
+    push(tokens?.api_key, 'openai-codex-oauth-api-key');
+  } catch {
+    // Env/config credentials above are enough for fallback; no need to fail here.
+  }
+
+  return out;
+}
+
+function extractOpenAiResponseText(data: any): string {
+  const direct = String(data?.output_text || '').trim();
+  if (direct) return direct;
+
+  const parts: string[] = [];
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const block of content) {
+      const text = typeof block?.text === 'string'
+        ? block.text
+        : typeof block?.output_text === 'string'
+          ? block.output_text
+          : '';
+      if (text.trim()) parts.push(text.trim());
+    }
+  }
+  if (parts.length) return parts.join('\n').trim();
+
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  return String(choice?.message?.content || '').trim();
+}
+
+async function executeOpenAiVisionFallback(
+  promptText: string,
+  images: string[],
+): Promise<{ success: boolean; summary?: string; model: string; credential_source?: OpenAiVisionCreds['source']; error?: string }> {
+  const creds = await resolveOpenAiVisionCredentials();
+  const model = DEFAULT_XAI_VISION_FALLBACK_MODEL;
+  if (!creds.length) {
+    return { success: false, model, error: 'OpenAI vision fallback is not configured. Set OPENAI_API_KEY, VOICE_TOOLS_OPENAI_KEY, or connect OpenAI Codex.' };
+  }
+
+  const content: any[] = [{ type: 'input_text', text: promptText }];
+  for (const url of images.slice(0, 12)) content.push({ type: 'input_image', image_url: url, detail: 'low' });
+  const body = {
+    model,
+    input: [{ role: 'user', content }],
+    max_output_tokens: 260,
+  };
+
+  let lastError = '';
+  for (const cred of creds) {
+    try {
+      const res = await fetchWithRetry('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cred.api_key}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'Prometheus/xai-vision-fallback',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(OPENAI_VISION_FALLBACK_TIMEOUT_MS),
+      }, 1);
+      if (!res.ok) {
+        lastError = await readHttpError(res);
+        continue;
+      }
+      const data = await res.json() as any;
+      const summary = extractOpenAiResponseText(data);
+      if (summary) return { success: true, summary, model, credential_source: cred.source };
+      lastError = 'OpenAI vision fallback returned an empty summary.';
+    } catch (err: any) {
+      lastError = String(err?.message || err);
+    }
+  }
+
+  return { success: false, model, error: lastError || 'OpenAI vision fallback failed.' };
+}
 
 export async function executeXaiImageVisionSummary(input: {
   dataUrl?: string;
   frames?: Array<{ dataUrl?: string }>;
   name?: string;
   durationMs?: number;
-}): Promise<{ success: boolean; summary?: string; model?: string; credential_source?: string; error?: string }> {
-  const creds = await resolveXAICredentials();
-  if (!creds) {
-    return { success: false, error: 'xAI credentials not configured. Connect xAI in Settings -> Models, or set XAI_API_KEY.' };
-  }
-
+}): Promise<{ success: boolean; summary?: string; model?: string; credential_source?: string; fallback_from?: string; error?: string }> {
   const images: string[] = [];
   const single = String(input?.dataUrl || '').trim();
   if (single.startsWith('data:image')) images.push(single);
@@ -340,19 +470,43 @@ export async function executeXaiImageVisionSummary(input: {
 
   const model = DEFAULT_XAI_VISION_MODEL;
   const body = { model, messages: [{ role: 'user', content }], temperature: 0.2 };
-  try {
-    const { res, creds: finalCreds } = await fetchXaiJsonWithOAuthRefresh('/chat/completions', creds, body);
-    if (!res.ok) {
-      return { success: false, error: await readHttpError(res), model };
+  let xaiError = '';
+  const creds = await resolveXAICredentials();
+  if (creds) {
+    try {
+      const { res, creds: finalCreds } = await fetchXaiJsonWithOAuthRefresh('/chat/completions', creds, body);
+      if (!res.ok) {
+        xaiError = await readHttpError(res);
+      } else {
+        const data = await res.json() as any;
+        const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+        const summary = String(choice?.message?.content || '').trim();
+        if (summary) return { success: true, summary, model, credential_source: finalCreds.source };
+        xaiError = 'xAI vision returned an empty summary.';
+      }
+    } catch (err: any) {
+      xaiError = String(err?.message || err);
     }
-    const data = await res.json() as any;
-    const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
-    const summary = String(choice?.message?.content || '').trim();
-    if (!summary) return { success: false, error: 'xAI vision returned an empty summary.', model };
-    return { success: true, summary, model, credential_source: finalCreds.source };
-  } catch (err: any) {
-    return { success: false, error: String(err?.message || err), model };
+  } else {
+    xaiError = 'xAI credentials not configured. Connect xAI in Settings -> Models, or set XAI_API_KEY.';
   }
+
+  const fallback = await executeOpenAiVisionFallback(promptText, images);
+  if (fallback.success) {
+    return {
+      success: true,
+      summary: fallback.summary,
+      model: fallback.model,
+      credential_source: fallback.credential_source,
+      fallback_from: model,
+    };
+  }
+
+  return {
+    success: false,
+    model: `${model} -> ${fallback.model}`,
+    error: `xAI vision failed (${xaiError || 'unknown error'}); OpenAI fallback failed (${fallback.error || 'unknown error'}).`,
+  };
 }
 
 export async function executeXSearch(args: XSearchArgs): Promise<XSearchResult> {

@@ -1,58 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when debugging code, reproducing failures, reading logs, tracing stack errors, isolating regressions, running tests, investigating broken behavior, or repairing a development issue.",
   "triggers": [
-    "codex",
-    "debugging",
-    "dev handoff",
-    "prometheus debugging",
-    "codex desktop",
-    "pass it onto codex",
-    "tell codex",
-    "let codex know",
-    "same codex chat",
-    "current codex chat",
-    "codex follow-up",
-    "debugging handoff",
-    "send this to codex",
-    "hand off to codex"
+    "debug this",
+    "fix this error",
+    "stack trace",
+    "failing test",
+    "reproduce the bug",
+    "logs show",
+    "regression",
+    "why is this broken",
+    "trace the issue",
+    "inspect the error",
+    "runtime failure",
+    "build failure",
+    "test failure",
+    "find root cause",
+    "debug the app",
+    "broken behavior",
+    "repair the bug",
+    "isolate the problem"
   ],
   "categories": [
-    "desktop",
     "debugging",
-    "prometheus",
-    "handoff"
+    "development",
+    "engineering"
   ],
   "requiredTools": [
-    "desktop",
-    "write_note",
-    "timer"
+    "workspace_write"
   ],
-  "toolBinding": {
-    "requiredTools": [
-      "desktop",
-      "write_note",
-      "timer"
-    ],
-    "recommendedToolCategories": [
-      "desktop_automation"
-    ],
-    "defaultWorkflow": [
-      "Focus Codex and use the requested current-chat or fresh-chat handoff path.",
-      "Submit the prepared debugging prompt, then maximize/capture Codex.",
-      "Send screenshot proof to Telegram, write a note, and set the follow-up timer unless explicitly told not to."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": true,
-    "shell": false,
-    "externalSideEffects": false
-  },
-  "status": "ready",
   "lifecycle": "active",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
   "id": "dev-debugging"
 }

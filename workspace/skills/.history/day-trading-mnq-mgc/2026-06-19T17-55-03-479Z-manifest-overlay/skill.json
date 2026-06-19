@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "day-trading-mnq-mgc",
+  "name": "Day Trading — MNQ & MGC",
+  "description": "Optional-pack Prometheus playbook for professional intraday MNQ and MGC futures prep, chart/news/levels analysis, NY open planning, risk framing, execution discipline, trade journaling, and emotional guardrails. Use only when explicitly relevant to trading.",
+  "version": "1.0.2",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "day trading",
+    "MNQ",
+    "MGC",
+    "Micro Nasdaq",
+    "Micro Gold",
+    "NQ futures",
+    "gold futures",
+    "NY open prep",
+    "trading prep",
+    "trade plan",
+    "intraday futures",
+    "opening range breakout",
+    "ORB setup",
+    "scalp setup",
+    "risk management trading",
+    "trade journal",
+    "trading emotions",
+    "stop trading",
+    "Nasdaq levels",
+    "futures catalysts"
+  ],
+  "categories": [
+    "trading",
+    "futures",
+    "risk-management",
+    "optional-pack"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "financialAdvice": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "examples/ny-open-5-minute-prep.md",
+      "type": "example",
+      "description": "Five-minute NY open prep workflow for urgent MNQ/MGC chart + news + levels requests."
+    },
+    {
+      "path": "examples/sunday-nasdaq-weekly-prep.md",
+      "type": "example",
+      "description": "Observed Sunday Nasdaq/NQ weekly prep workflow: web-search current futures, key levels, catalysts, and scenario-based bias without overclaiming live precision."
+    }
+  ]
+}

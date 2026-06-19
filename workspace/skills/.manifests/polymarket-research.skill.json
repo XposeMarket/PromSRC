@@ -1,23 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks about prediction markets, Polymarket odds, market probabilities, event odds, election odds, sports odds, crypto prediction markets, or what traders think will happen. It combines live market cards with source-grounded context.",
+  "description": "Use this skill when researching prediction markets, Polymarket odds, event probabilities, market pricing, election/sports/crypto outcome markets, trader sentiment, or probability shifts.",
   "triggers": [
-    "Polymarket",
+    "Polymarket odds",
     "prediction market",
-    "market odds",
-    "probability market",
-    "election odds",
-    "event odds",
-    "betting odds",
-    "what are the odds",
-    "crypto odds",
-    "sports market",
-    "prediction market research",
     "market probability",
-    "traders think",
+    "event odds",
+    "election odds",
+    "sports odds market",
+    "crypto prediction market",
+    "what are traders pricing",
+    "probability shifted",
     "Polymarket research",
-    "show prediction market"
+    "prediction market analysis",
+    "betting market odds",
+    "outcome market",
+    "market-implied probability",
+    "live odds"
   ],
   "categories": [
     "markets",
@@ -25,7 +25,7 @@
     "prediction"
   ],
   "requiredTools": [
-    "show_prediction_market",
+    "show_ui_card",
     "web_search"
   ],
   "lifecycle": "active",

@@ -3168,6 +3168,44 @@ export class TelegramChannel {
     return rows;
   }
 
+  // Shared resume path for both Telegram answer-submit flows (button Submit and
+  // single-question "Other" text reply). When the answer landed without a live
+  // waiter, `result.resumePrompt` is set: resume the QUESTION'S OWN session
+  // directly so the agent continues with full original context, instead of
+  // dispatching a stray turn into the Telegram session.
+  private async resumePrometheusQuestionFromTelegram(
+    chatId: number,
+    question: { sessionId?: string; originType?: string },
+    result: { resumePrompt?: string },
+  ): Promise<void> {
+    if (!result?.resumePrompt) return;
+    const resumeSessionId = String(question.sessionId || '').trim();
+    const canResumeMainChat = resumeSessionId
+      && (!question.originType || question.originType === 'main_chat' || question.originType === 'unknown');
+    if (!canResumeMainChat) {
+      // Task / subagent / scheduled origins are driven by their own runner; they
+      // pick the answer up from the durable queue on their next tick.
+      await this.sendMessage(chatId, `↩️ Saved. The originating ${this.tgEscape(String(question.originType || 'background'))} run will continue with your answer.`);
+      return;
+    }
+    await this.sendMessage(chatId, `↩️ Resuming your task with those answers…`);
+    await this.apiCall('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+    try {
+      const events: Array<{ type: string; data: any }> = [];
+      const turn = await this.runTelegramMainChatTurn({
+        chatId,
+        sessionId: resumeSessionId,
+        message: String(result.resumePrompt),
+        sendSSE: (type, data) => { events.push({ type, data }); },
+      });
+      if (!turn.aborted && turn.result?.text) {
+        await this.sendAiMessage(chatId, turn.result.text);
+      }
+    } catch (err: any) {
+      await this.sendMessage(chatId, `❌ Could not resume automatically: ${this.tgEscape(String(err?.message || err))}. Open the web/desktop chat to continue.`);
+    }
+  }
+
   async sendPrometheusQuestion(record: {
     id: string;
     title?: string;
@@ -4021,9 +4059,7 @@ export class TelegramChannel {
           reply_markup: { inline_keyboard: [[{ text: '✅ Submitted', callback_data: 'noop' }]] },
         }).catch(() => {});
         await this.sendMessage(chatId, `✅ Sent your answer to Prometheus.`);
-        if (result.resumePrompt) {
-          await this.sendMessage(chatId, `↩️ The original run was not live, so Prometheus will resume this in chat.`);
-        }
+        await this.resumePrometheusQuestionFromTelegram(chatId, question, result);
         return;
       }
 
@@ -6420,6 +6456,7 @@ export class TelegramChannel {
             await this.sendMessage(chatId, result.success
               ? '✅ Sent your Other answer to Prometheus.'
               : `❌ Question submit failed: ${this.tgEscape(result.error || 'unknown error')}`);
+            if (result.success) await this.resumePrometheusQuestionFromTelegram(chatId, question, result);
           } else {
             await this.sendMessage(chatId, `✅ Captured Other for: ${this.tgEscape(item.label)}\nTap <b>Submit answers</b> on the question card when ready.`);
           }

@@ -1,23 +1,21 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for Prometheus visual direction, Ash & Archive styling, non-generic AI visuals, brand art direction, promo design taste, release graphics, or avoiding purple-blue SaaS gradient aesthetics. It encodes Raul's preferred human, editorial, industrial visual language.",
+  "description": "Use this skill when creating Prometheus visual direction, Ash & Archive styling, non-generic AI visuals, brand art direction, promo design taste, release graphics, or avoiding purple/blue SaaS AI aesthetics.",
   "triggers": [
-    "Ash and Archive",
-    "Prometheus style",
-    "brand art direction",
-    "avoid AI gradients",
-    "promo design",
-    "release graphic",
-    "visual taste",
+    "Ash and Archive style",
+    "Prometheus visual direction",
     "non-generic AI visuals",
-    "industrial editorial",
-    "no purple blue",
+    "avoid purple blue gradients",
+    "release graphic",
+    "promo design taste",
+    "brand art direction",
+    "industrial editorial style",
     "human art direction",
-    "brand visuals",
-    "Prometheus promo",
-    "design direction",
-    "visual style guide"
+    "avoid SaaS gradients",
+    "Prometheus brand visuals",
+    "launch graphic style",
+    "make it less AI-looking"
   ],
   "categories": [
     "creative",
@@ -25,7 +23,7 @@
     "style"
   ],
   "requiredTools": [
-    "creative_mode",
+    "creative_basic",
     "generate_image",
     "generate_video"
   ],

@@ -2,11 +2,48 @@
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { timeAgo } from '../utils.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
+import { mobileGatewayFetch } from './mobile-api.js';
+
+// ── Pinned sessions (localStorage) ────────────────────────────────────────────
+const PM_PINNED_SESSIONS_KEY = 'pm_mobile_pinned_sessions';
+
+function _getPinnedSessionIds() {
+  try {
+    const raw = localStorage.getItem(PM_PINNED_SESSIONS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function _savePinnedSessionIds(ids) {
+  try { localStorage.setItem(PM_PINNED_SESSIONS_KEY, JSON.stringify(ids)); } catch {}
+}
+
+function _isPinned(sessionId) {
+  return _getPinnedSessionIds().includes(String(sessionId || ''));
+}
+
+function _togglePin(sessionId) {
+  const id = String(sessionId || '');
+  if (!id) return false;
+  const ids = _getPinnedSessionIds();
+  const idx = ids.indexOf(id);
+  if (idx >= 0) {
+    ids.splice(idx, 1);
+    _savePinnedSessionIds(ids);
+    return false; // unpinned
+  } else {
+    ids.unshift(id);
+    _savePinnedSessionIds(ids);
+    return true; // pinned
+  }
+}
 
 // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
 export const ICONS = {
   menu:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7"  x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>',
   gear:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  bell:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
   back:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
   chat:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   mic:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>',
@@ -21,6 +58,7 @@ export const ICONS = {
   fork:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v2a4 4 0 0 0 4 4h2"/><path d="M18 8v2a4 4 0 0 1-4 4h-2"/><path d="M12 14v2"/></svg>',
   refresh:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg>',
   plus:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+  x:         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   play:      '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
   pause:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>',
   trash:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
@@ -71,6 +109,7 @@ let _drawerSearchSeq = 0;
 let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
 let _drawerRefreshing = false;
+const PM_DRAWER_REFRESH_TTL_MS = 30_000;
 export async function refreshMobileDrawerSessions({ force = false, channel = '' } = {}) {
   if (!_drawerEl || !_drawerCallbacks) return;
   if (_drawerSearch) return;
@@ -78,6 +117,11 @@ export async function refreshMobileDrawerSessions({ force = false, channel = '' 
   _drawerRefreshing = true;
   try {
     const targetChannel = String(channel || _currentDrawerSessionChannel() || 'mobile').trim() || 'mobile';
+    const state = _drawerPageStateFor(targetChannel);
+    const freshEnough = state.initialized
+      && Number(state.loadedAt || 0) > 0
+      && Date.now() - Number(state.loadedAt || 0) < PM_DRAWER_REFRESH_TTL_MS;
+    if (!force && freshEnough) return;
     _resetDrawerPageState(targetChannel);
     await _renderDrawerSessions(_drawerCallbacks);
   } catch (err) {
@@ -186,7 +230,7 @@ const _drawerSessionPaging = {
 };
 
 function _newDrawerPageState() {
-  return { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false, pending: null };
+  return { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false, pending: null, loadedAt: 0 };
 }
 
 function _drawerPageStateFor(channel = 'mobile') {
@@ -264,6 +308,7 @@ async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset 
       state.offset = Math.max(0, Math.floor(Number(page?.offset || offset) || offset)) + incoming.length;
       state.hasMore = page?.hasMore === true || state.offset < state.total;
       state.initialized = true;
+      state.loadedAt = Date.now();
     } catch (err) {
       console.warn('[mobile drawer] Failed to load session page', { channel, offset, err });
       state.error = err?.message || 'Could not load sessions.';
@@ -602,6 +647,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     <aside class="pm-drawer" role="dialog" aria-label="Menu" aria-modal="true">
       <div class="pm-drawer-brand"><span class="pm-brand-flame">🔥</span><span>Prometheus</span></div>
       <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
+      <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Close menu">${ICONS.x}</button>
       <label class="pm-drawer-search" aria-label="Search chats">
         ${_searchIcon()}
         <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
@@ -623,6 +669,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       </nav>
       <section class="pm-drawer-sessions" id="pm-drawer-sessions" aria-label="Sessions">
         <div class="pm-drawer-divider"></div>
+        <div class="pm-drawer-pinned-list" id="pm-drawer-pinned-list"></div>
         <div class="pm-drawer-session-head" id="pm-drawer-session-head"></div>
         <div class="pm-drawer-session-list" id="pm-mobile-session-list"><div class="pm-session-empty">Loading...</div></div>
       </section>
@@ -669,6 +716,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   });
 
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
+  _drawerEl.querySelector('[data-mobile-drawer-close]')?.addEventListener('click', closeDrawer);
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
@@ -780,6 +828,39 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
   }
   try {
     const drawerState = _loadDrawerState();
+    if (drawerState.view === 'mobile') {
+      const cachedMobilePage = _drawerPageStateFor('mobile');
+      if (cachedMobilePage.initialized) {
+        head.innerHTML = `
+          <div class="pm-drawer-section-title">Sessions</div>
+          <button class="pm-session-row pm-channel-entry" type="button" data-drawer-view="channels">
+            <span class="pm-icon pm-channel-entry-icon">${ICONS.layers || ICONS.chat}</span>
+            <span class="pm-flex">Channels</span>
+            <span class="pm-chev">${ICONS.chev}</span>
+          </button>
+        `;
+        sessionList.innerHTML = _sessionPageHtml(cachedMobilePage, 'No mobile chats yet.');
+        _renderDrawerPinnedSessions(cachedMobilePage);
+        _wireDrawerInfiniteScroll({ channel: 'mobile', loadSessions, onOpenSession, searchSessions, onNewChat });
+        _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
+        return;
+      }
+      await _loadDrawerSessionPage({ channel: 'mobile', loadSessions });
+      const pageState = _drawerPageStateFor('mobile');
+      head.innerHTML = `
+        <div class="pm-drawer-section-title">Sessions</div>
+        <button class="pm-session-row pm-channel-entry" type="button" data-drawer-view="channels">
+          <span class="pm-icon pm-channel-entry-icon">${ICONS.layers || ICONS.chat}</span>
+          <span class="pm-flex">Channels</span>
+          <span class="pm-chev">${ICONS.chev}</span>
+        </button>
+      `;
+      sessionList.innerHTML = _sessionPageHtml(pageState, 'No mobile chats yet.');
+      _renderDrawerPinnedSessions(pageState);
+      _wireDrawerInfiniteScroll({ channel: 'mobile', loadSessions, onOpenSession, searchSessions, onNewChat });
+      _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
+      return;
+    }
     let data = await loadSessions({ channel: _currentDrawerSessionChannel(), limit: PM_DRAWER_SESSION_PAGE_SIZE, offset: 0 });
     data = typeof window.enrichMobileSessionGroupsForDrawer === 'function'
       ? await window.enrichMobileSessionGroupsForDrawer(async () => data)
@@ -821,6 +902,7 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
         </button>
       `;
       sessionList.innerHTML = _sessionPageHtml(pageState, 'No mobile chats yet.');
+      _renderDrawerPinnedSessions(pageState);
       _wireDrawerInfiniteScroll({ channel: 'mobile', loadSessions, onOpenSession, searchSessions, onNewChat });
     }
 
@@ -831,17 +913,137 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
   }
 }
 
+function _activeDrawerSessionId() {
+  const normalize = (value) => {
+    const sid = String(value || '').trim();
+    return sid && sid !== 'mobile_default' ? sid : '';
+  };
+  const liveSid = normalize(window.__pmChat?.activeSessionId);
+  if (liveSid) return liveSid;
+  const hash = String(window.location?.hash || '');
+  const match = hash.match(/^#mobile\/chat\/([^/?#]+)/);
+  if (match) {
+    try { return normalize(decodeURIComponent(match[1])); }
+    catch { return normalize(match[1]); }
+  }
+  try { return normalize(localStorage.getItem('pm_mobile_last_chat_session')); }
+  catch { return ''; }
+}
+
+function _isActiveDrawerSession(sessionId) {
+  const activeId = _activeDrawerSessionId();
+  return !!activeId && String(sessionId || '').trim() === activeId;
+}
+
+
 function _sessionPageHtml(pageState, emptyText) {
   const sessions = Array.isArray(pageState?.sessions) ? pageState.sessions : [];
   if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
-  if (!sessions.length) return `<div class="pm-session-empty">${emptyText}</div>`;
+  // Filter out pinned sessions — they appear in the dedicated pinned section above
+  const pinnedIds = _getPinnedSessionIds();
+  const unpinned = pinnedIds.length ? sessions.filter(s => !pinnedIds.includes(String(s.id))) : sessions;
+  if (!unpinned.length && !pageState?.hasMore && !pageState?.loading) return `<div class="pm-session-empty">${emptyText}</div>`;
   return [
-    sessions.map((s) => _sessionButtonHtml(s)).join(''),
+    unpinned.map((s) => _sessionButtonHtml(s)).join(''),
     pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',
     pageState?.hasMore ? '<button class="pm-session-load-more" type="button" data-session-load-more>Load more chats</button>' : '',
     pageState?.loading ? '<div class="pm-session-empty pm-session-loading">Loading more...</div>' : '',
   ].filter(Boolean).join('');
+}
+
+// Long-press wiring for session rows — 480ms hold triggers haptic + context sheet.
+const _SESS_LONG_PRESS_MS = 480;
+const _SESS_MOVE_CANCEL_PX = 10;
+let _sessLongPressTimer = null;
+let _sessLongFired = false;
+let _sessLongTargetId = null;
+let _sessLongTargetTitle = null;
+let _sessLongStartX = 0;
+let _sessLongStartY = 0;
+let _sessLongCallbacks = null;
+
+function _wireDrawerLongPress(callbacks) {
+  if (!_drawerEl) return;
+  // Store callbacks so the context sheet can use them
+  _sessLongCallbacks = callbacks;
+
+  // Remove old delegated handlers if already bound (re-wired on every render)
+  if (_drawerEl._pmLongPressDown) _drawerEl.removeEventListener('pointerdown', _drawerEl._pmLongPressDown);
+  if (_drawerEl._pmLongPressMove) _drawerEl.removeEventListener('pointermove', _drawerEl._pmLongPressMove);
+  if (_drawerEl._pmLongPressUp) { _drawerEl.removeEventListener('pointerup', _drawerEl._pmLongPressUp); _drawerEl.removeEventListener('pointercancel', _drawerEl._pmLongPressUp); }
+
+  var onDown = function(e) {
+    var sessionBtn = e.target && e.target.closest && e.target.closest('[data-session-id]');
+    if (!sessionBtn) return;
+    _sessLongFired = false;
+    _sessLongTargetId = sessionBtn.getAttribute('data-session-id');
+    _sessLongTargetTitle = (sessionBtn.querySelector('.pm-session-title') || {}).textContent || '';
+    _sessLongStartX = e.clientX;
+    _sessLongStartY = e.clientY;
+    if (_sessLongPressTimer) clearTimeout(_sessLongPressTimer);
+    _sessLongPressTimer = setTimeout(function() {
+      _sessLongPressTimer = null;
+      _sessLongFired = true;
+      pmHaptic(18);
+      sessionBtn.classList.add('pm-session-long-pressed');
+      setTimeout(function() { sessionBtn.classList.remove('pm-session-long-pressed'); }, 300);
+      _openSessionContextSheet(_sessLongTargetId, _sessLongTargetTitle, _sessLongCallbacks || {});
+    }, _SESS_LONG_PRESS_MS);
+  };
+
+  var onMove = function(e) {
+    if (!_sessLongPressTimer) return;
+    var dx = Math.abs(e.clientX - _sessLongStartX);
+    var dy = Math.abs(e.clientY - _sessLongStartY);
+    // Cancel on any movement — vertical scroll or horizontal swipe
+    if (dx > _SESS_MOVE_CANCEL_PX || dy > _SESS_MOVE_CANCEL_PX) {
+      clearTimeout(_sessLongPressTimer);
+      _sessLongPressTimer = null;
+      _sessLongFired = false;
+    }
+  };
+
+  var onUp = function() {
+    if (_sessLongPressTimer) { clearTimeout(_sessLongPressTimer); _sessLongPressTimer = null; }
+  };
+
+  _drawerEl._pmLongPressDown = onDown;
+  _drawerEl._pmLongPressMove = onMove;
+  _drawerEl._pmLongPressUp = onUp;
+  _drawerEl.addEventListener('pointerdown', onDown);
+  _drawerEl.addEventListener('pointermove', onMove);
+  _drawerEl.addEventListener('pointerup', onUp);
+  _drawerEl.addEventListener('pointercancel', onUp);
+
+  // Suppress the normal click that fires after a long-press release
+  if (!_drawerEl._pmLongPressClickGuard) {
+    _drawerEl._pmLongPressClickGuard = true;
+    _drawerEl.addEventListener('click', function(e) {
+      if (_sessLongFired) {
+        var sessionBtn = e.target && e.target.closest && e.target.closest('[data-session-id]');
+        if (sessionBtn) { e.stopImmediatePropagation(); e.preventDefault(); _sessLongFired = false; }
+      }
+    }, true);
+  }
+}
+
+
+function _renderDrawerPinnedSessions(pageState) {
+  var pinnedEl = _drawerEl && _drawerEl.querySelector('#pm-drawer-pinned-list');
+  if (!pinnedEl) return;
+  var pinnedIds = _getPinnedSessionIds();
+  if (!pinnedIds.length) { pinnedEl.innerHTML = ''; return; }
+  var sessions = Array.isArray(pageState && pageState.sessions) ? pageState.sessions : [];
+  var pinnedSessions = pinnedIds
+    .map(function(id) { return sessions.find(function(s) { return String(s.id) === String(id); }); })
+    .filter(Boolean);
+  if (!pinnedSessions.length) { pinnedEl.innerHTML = ''; return; }
+  pinnedEl.innerHTML =
+    '<div class="pm-drawer-pinned-section">' +
+      '<div class="pm-drawer-section-title">Pinned</div>' +
+      pinnedSessions.map(function(s) { return _sessionButtonHtml(s); }).join('') +
+    '</div>';
 }
 
 function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
@@ -875,6 +1077,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
       if (typeof onOpenSession === 'function') onOpenSession(sessionId);
     });
   });
+  _wireDrawerLongPress({ onOpenSession, loadSessions, searchSessions, onNewChat });
 }
 
 async function _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat } = {}) {
@@ -1019,8 +1222,11 @@ function _sessionButtonHtml(session) {
   const preview = String(session?.preview || '').trim();
   const lastMessageAt = Number(session?.lastMessageAt || session?.lastActiveAt || 0);
   const state = _sessionStateMeta(session);
+  const isActive = _isActiveDrawerSession(session?.id);
+  const activeClass = isActive ? ' is-active-session' : '';
+  const ariaCurrent = isActive ? ' aria-current="page"' : '';
   return `
-    <button class="pm-session-row${state.stateClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}">
+    <button class="pm-session-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
       <span class="pm-session-meta-row">
         <span class="pm-session-preview">${escapeHtml(preview || 'No messages yet')}</span>
@@ -1038,10 +1244,14 @@ function _searchResultButtonHtml(session, query) {
   const matched = String(session?.matchedContent || session?.preview || '').trim();
   const snippet = matched ? _highlightSnippet(matched, session?.matchedIndex, query) : escapeHtml(session?.preview || _formatSessionDate(session.lastActiveAt));
   const state = _sessionStateMeta(session);
+  const isActive = _isActiveDrawerSession(session?.id);
+  const activeClass = isActive ? ' is-active-session' : '';
+  const ariaCurrent = isActive ? ' aria-current="page"' : '';
+  const projectLabel = session?.projectName ? ' · ' + escapeHtml(session.projectName) : '';
   return `
-    <button class="pm-session-row pm-search-result-row${state.stateClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}">
+    <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
-      <span class="pm-search-meta">${escapeHtml(channel || 'Chat')}${session?.projectName ? ` · ${escapeHtml(session.projectName)}` : ''}</span>
+      <span class="pm-search-meta">${escapeHtml(channel || 'Chat')}${projectLabel}</span>
       <span class="pm-session-preview"><strong>${escapeHtml(label)}:</strong> ${snippet}</span>
     </button>
   `;
@@ -1061,6 +1271,296 @@ function _channelLabel(channel) {
 function _escapeRegExp(text) {
   return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+// ── Session context sheet (long-press menu) ───────────────────────────────────
+function _closeSessionSheet() {
+  const scrim = document.getElementById('pm-sess-sheet-scrim');
+  const sheet = document.getElementById('pm-sess-sheet');
+  if (scrim) scrim.classList.remove('open');
+  if (sheet) sheet.classList.remove('open');
+  setTimeout(() => { scrim && scrim.remove(); sheet && sheet.remove(); }, 240);
+}
+
+function _closeSessionSheetImmediate() {
+  document.getElementById('pm-sess-sheet-scrim') && document.getElementById('pm-sess-sheet-scrim').remove();
+  document.getElementById('pm-sess-sheet') && document.getElementById('pm-sess-sheet').remove();
+}
+
+function _openSessionContextSheet(sessionId, sessionTitle, callbacks) {
+  _closeSessionSheetImmediate();
+  const pinned = _isPinned(sessionId);
+  const cb = callbacks || {};
+
+  const scrim = document.createElement('div');
+  scrim.id = 'pm-sess-sheet-scrim';
+  scrim.className = 'pm-msheet-scrim';
+
+  const sheet = document.createElement('div');
+  sheet.id = 'pm-sess-sheet';
+  sheet.className = 'pm-msheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+  sheet.setAttribute('aria-label', 'Chat options');
+
+  const pinLabel = pinned ? 'Unpin from top' : 'Pin to top';
+  const pinCheck = pinned ? '<span class="pm-sess-pinned-check">&#x1F4CC;</span>' : '';
+  const titleSafe = escapeHtml(sessionTitle || 'Chat');
+  const pinIconSvg = ICONS.pin;
+  const trashIconSvg = ICONS.trash;
+  const wandIconSvg = ICONS.wand || ICONS.doc;
+
+  sheet.innerHTML =
+    '<div class="pm-msheet-handle"></div>' +
+    '<div class="pm-msheet-head">' +
+      '<div class="pm-msheet-title pm-sess-sheet-title">' + titleSafe + '</div>' +
+      '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
+      '<div class="pm-msheet-rows">' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="rename">' +
+          '<span class="pm-sess-action-icon pm-i">' + wandIconSvg + '</span>' +
+          '<span class="pm-msheet-row-label">Rename</span>' +
+        '</button>' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="pin">' +
+          '<span class="pm-sess-action-icon pm-i">' + pinIconSvg + '</span>' +
+          '<span class="pm-msheet-row-label">' + pinLabel + '</span>' +
+          pinCheck +
+        '</button>' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
+          '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
+          '<span class="pm-msheet-row-label pm-sess-delete-label">Delete chat</span>' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function() { scrim.classList.add('open'); sheet.classList.add('open'); });
+
+  var close = function() { _closeSessionSheet(); };
+  scrim.addEventListener('click', close);
+  var closeBtn = sheet.querySelector('.pm-msheet-close');
+  if (closeBtn) closeBtn.addEventListener('click', close);
+
+  var renameBtn = sheet.querySelector('[data-sess-action="rename"]');
+  if (renameBtn) renameBtn.addEventListener('click', function() {
+    _closeSessionSheetImmediate();
+    _openSessionRenameSheet(sessionId, sessionTitle, cb);
+  });
+
+  var pinBtn = sheet.querySelector('[data-sess-action="pin"]');
+  if (pinBtn) pinBtn.addEventListener('click', function() {
+    pmHaptic(10);
+    var nowPinned = _togglePin(sessionId);
+    close();
+    if (_drawerEl && _drawerCallbacks) {
+      _resetDrawerPageState(_currentDrawerSessionChannel());
+      _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+    }
+    try { if (window.pmToast) window.pmToast(nowPinned ? 'Chat pinned to top' : 'Chat unpinned', 'success'); } catch(e) {}
+  });
+
+  var deleteBtn = sheet.querySelector('[data-sess-action="delete"]');
+  if (deleteBtn) deleteBtn.addEventListener('click', function() {
+    _closeSessionSheetImmediate();
+    _openSessionDeleteConfirmSheet(sessionId, sessionTitle, cb);
+  });
+}
+
+function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
+  _closeSessionSheetImmediate();
+  var cb = callbacks || {};
+
+  var scrim = document.createElement('div');
+  scrim.id = 'pm-sess-sheet-scrim';
+  scrim.className = 'pm-msheet-scrim';
+
+  var sheet = document.createElement('div');
+  sheet.id = 'pm-sess-sheet';
+  sheet.className = 'pm-msheet pm-msheet-rename';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+
+  var titleSafe = escapeHtml(currentTitle || '');
+  sheet.innerHTML =
+    '<div class="pm-msheet-handle"></div>' +
+    '<div class="pm-msheet-head">' +
+      '<div class="pm-msheet-title">Rename Chat</div>' +
+      '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
+      '<div class="pm-sess-rename-wrap">' +
+        '<input id="pm-sess-rename-input" class="pm-sess-rename-input" type="text" maxlength="200" placeholder="Chat name\u2026" autocomplete="off" spellcheck="false" enterkeyhint="done" inputmode="text" />' +
+      '</div>' +
+      '<p class="pm-sess-rename-hint">Rename applies on both desktop and mobile.</p>' +
+    '</div>';
+
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+
+  // --- Keyboard-following: mirror the composer's visualViewport pattern ---
+  var _renameVvCleanup = null;
+  var _vv = window.visualViewport || null;
+  function _applyRenameKbOffset() {
+    var offset = _vv ? Math.max(0, Math.round(window.innerHeight - _vv.height - (_vv.offsetTop || 0))) : 0;
+    var isOpen = offset > 90;
+    sheet.style.bottom = isOpen ? (offset + 8) + 'px' : '';
+    sheet.style.maxHeight = isOpen ? Math.min((_vv ? _vv.height : window.innerHeight) - 24, 420) + 'px' : '';
+    // Scroll doc back to top so iOS doesn't lift the fixed sheet above the keyboard
+    try {
+      if (window.pageYOffset) window.scrollTo(0, 0);
+      var de = document.scrollingElement || document.documentElement;
+      if (de && de.scrollTop) de.scrollTop = 0;
+    } catch (e) {}
+  }
+  if (_vv) {
+    _vv.addEventListener('resize', _applyRenameKbOffset);
+    _vv.addEventListener('scroll', _applyRenameKbOffset);
+    _renameVvCleanup = function() {
+      _vv.removeEventListener('resize', _applyRenameKbOffset);
+      _vv.removeEventListener('scroll', _applyRenameKbOffset);
+    };
+  }
+
+  // Focus synchronously (required for iOS keyboard to open)
+  var _renameInput = document.getElementById('pm-sess-rename-input');
+  if (_renameInput) { _renameInput.value = currentTitle || ''; _renameInput.focus(); _renameInput.select(); }
+  requestAnimationFrame(function() {
+    scrim.classList.add('open');
+    sheet.classList.add('open');
+    // Fallback: iOS sometimes needs a second focus call once the sheet is visible
+    var input = document.getElementById('pm-sess-rename-input');
+    if (input) {
+      if (!input.value) input.value = currentTitle || '';
+      setTimeout(function() { input.focus(); input.select(); _applyRenameKbOffset(); }, 80);
+    }
+  });
+
+  var close = function() {
+    if (_renameVvCleanup) { _renameVvCleanup(); _renameVvCleanup = null; }
+    _closeSessionSheet();
+  };
+  scrim.addEventListener('click', close);
+  var closeBtn = sheet.querySelector('.pm-msheet-close');
+  if (closeBtn) closeBtn.addEventListener('click', close);
+
+
+  var doSave = async function() {
+    var input = document.getElementById('pm-sess-rename-input');
+    var newTitle = input ? String(input.value || '').trim() : '';
+    if (!newTitle) {
+      try { if (window.pmToast) window.pmToast('Name cannot be empty', 'error'); } catch(e) {}
+      return;
+    }
+    var saveBtn = document.getElementById('pm-sess-rename-save');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026'; }
+    try {
+      await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(sessionId), {
+        method: 'PATCH',
+        body: JSON.stringify({ title: newTitle }),
+      });
+      pmHaptic(10);
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState(_currentDrawerSessionChannel());
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { window.dispatchEvent(new CustomEvent('pm-session-renamed', { detail: { sessionId: sessionId, title: newTitle } })); } catch(e) {}
+      try { if (window.pmToast) window.pmToast('Chat renamed', 'success'); } catch(e) {}
+    } catch(err) {
+      try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not rename chat', 'error'); } catch(e) {}
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+    }
+  };
+
+  var renameInput = document.getElementById('pm-sess-rename-input');
+  if (renameInput) renameInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+    if (e.key === 'Escape') close();
+  });
+}
+
+function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks) {
+  _closeSessionSheetImmediate();
+  var cb = callbacks || {};
+
+  var scrim = document.createElement('div');
+  scrim.id = 'pm-sess-sheet-scrim';
+  scrim.className = 'pm-msheet-scrim';
+
+  var sheet = document.createElement('div');
+  sheet.id = 'pm-sess-sheet';
+  sheet.className = 'pm-msheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+
+  var titleSafe = escapeHtml(sessionTitle || 'This chat');
+  var trashIconSvg = ICONS.trash;
+  sheet.innerHTML =
+    '<div class="pm-msheet-handle"></div>' +
+    '<div class="pm-msheet-head">' +
+      '<div class="pm-msheet-title pm-sess-delete-title">Delete Chat?</div>' +
+      '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
+      '<p class="pm-sess-delete-msg">\u201C<strong>' + titleSafe + '</strong>\u201D will be permanently deleted and cannot be undone.</p>' +
+      '<div class="pm-msheet-rows pm-sess-confirm-rows">' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" id="pm-sess-confirm-delete">' +
+          '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
+          '<span class="pm-msheet-row-label pm-sess-delete-label">Delete permanently</span>' +
+        '</button>' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row" id="pm-sess-cancel-delete">' +
+          '<span class="pm-msheet-row-label">Cancel</span>' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function() { scrim.classList.add('open'); sheet.classList.add('open'); });
+
+  var close = function() { _closeSessionSheet(); };
+  scrim.addEventListener('click', close);
+  var closeBtn = sheet.querySelector('.pm-msheet-close');
+  if (closeBtn) closeBtn.addEventListener('click', close);
+  var cancelBtn = document.getElementById('pm-sess-cancel-delete');
+  if (cancelBtn) cancelBtn.addEventListener('click', close);
+
+  var confirmBtn = document.getElementById('pm-sess-confirm-delete');
+  if (confirmBtn) confirmBtn.addEventListener('click', async function() {
+    confirmBtn.disabled = true;
+    var lbl = confirmBtn.querySelector('.pm-msheet-row-label');
+    if (lbl) lbl.textContent = 'Deleting\u2026';
+    try {
+      await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+      pmHaptic(14);
+      // Remove from pin list
+      _savePinnedSessionIds(_getPinnedSessionIds().filter(function(id) { return id !== sessionId; }));
+      // Clear any localStorage keys containing this session id
+      try {
+        var keysToRemove = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (k && k.indexOf(sessionId) !== -1) keysToRemove.push(k);
+        }
+        keysToRemove.forEach(function(k) { localStorage.removeItem(k); });
+      } catch(e) {}
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState(_currentDrawerSessionChannel());
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { window.dispatchEvent(new CustomEvent('pm-session-deleted', { detail: { sessionId: sessionId } })); } catch(e) {}
+      try { if (window.pmToast) window.pmToast('Chat deleted', 'success'); } catch(e) {}
+    } catch(err) {
+      try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not delete chat', 'error'); } catch(e) {}
+      confirmBtn.disabled = false;
+      var lbl2 = confirmBtn.querySelector('.pm-msheet-row-label');
+      if (lbl2) lbl2.textContent = 'Delete permanently';
+    }
+  });
+}
+
 
 function _highlightSnippet(content, matchedIndex, query, maxLen = 132) {
   const raw = String(content || '').replace(/\s+/g, ' ').trim();
@@ -1102,10 +1602,10 @@ export function openDrawer() {
   if (!_drawerEl || !_scrimEl) return;
   _drawerEl.classList.add('open');
   _scrimEl.classList.add('open');
-  // Always pull fresh sessions when the drawer opens so chats created mid-session
-  // (e.g. a brand-new chat) appear without needing an app restart. No-ops while a
-  // search is active or a refresh is already running.
-  refreshMobileDrawerSessions({ force: true }).catch(() => {});
+  if (_drawerCallbacks) {
+    _renderDrawerSessions(_drawerCallbacks).catch(() => {});
+    setTimeout(() => refreshMobileDrawerSessions({ force: false }).catch(() => {}), 180);
+  }
 }
 
 export function closeDrawer() {
@@ -1253,6 +1753,7 @@ export function initMobileCanvasSheet() {
           src,
           download: String(file.download || src),
           interactionMode: normalizeCanvasInteractionMode(file.interactionMode) || defaultCanvasInteractionMode(file),
+          openMode: String(file.openMode || ''),
         });
         api.activeIdx = api.tabs.length - 1;
       }
@@ -1333,8 +1834,19 @@ export function initMobileCanvasSheet() {
         bodyEl.innerHTML = `<audio src="${escapeHtml(tab.src)}" controls></audio>`;
         sheetEl.classList.remove('is-interacting', 'is-inspecting');
         resetCanvasZoom(bodyEl);
-      } else {
+      } else if (isLiveWebCanvasFile(tab)) {
         bodyEl.innerHTML = canvasZoomHtml(`<iframe src="${escapeHtml(tab.src)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`);
+      } else if (tab.openMode === 'diff' && isCanvasCodeExt(getCanvasFileExt(tab)) && tab._canvasPreviewView !== 'full') {
+        // Opened from the end-of-turn diff card: default to the collapsed,
+        // syntax-highlighted edited-regions view (Codex-style). The Preview
+        // button flips _canvasPreviewView to toggle full \u2194 edits.
+        renderCanvasCodePreview(bodyEl, tab);
+      } else {
+        // Text-like files (md, txt, json, code, logs): render readable, scrollable
+        // content into a srcdoc iframe instead of the raw byte stream. This both
+        // fixes scrolling (the text iframe scrolls natively, independent of the
+        // pinch-zoom viewport) and gives clean Markdown formatting.
+        renderCanvasTextInto(bodyEl, tab);
       }
       applyCanvasInteractionMode(sheetEl, bodyEl, tab);
     },
@@ -1375,6 +1887,26 @@ export function initMobileCanvasSheet() {
     const bodyEl = document.getElementById('pm-canvas-body');
     const btn = document.getElementById('pm-canvas-preview');
     if (!bodyEl || !btn) return;
+    // Markdown: render clean formatted MD inline (no screenshot round-trip).
+    if (getCanvasFileExt(tab) === 'md') {
+      renderCanvasTextInto(bodyEl, tab);
+      return;
+    }
+    // Code files: Preview is a format/scope toggle.
+    //  - From a diff open (collapsed edits by default): flip to the full highlighted file, then back.
+    //  - From a normal open (full file by default): flip to the collapsed edited-regions view, then back.
+    if (isCanvasCodeExt(getCanvasFileExt(tab))) {
+      if (tab.openMode === 'diff') {
+        tab._canvasPreviewView = tab._canvasPreviewView === 'full' ? 'edits' : 'full';
+        if (tab._canvasPreviewView === 'full') renderCanvasTextInto(bodyEl, tab);
+        else renderCanvasCodePreview(bodyEl, tab);
+      } else {
+        tab._canvasPreviewView = tab._canvasPreviewView === 'edits' ? 'full' : 'edits';
+        if (tab._canvasPreviewView === 'edits') renderCanvasCodePreview(bodyEl, tab);
+        else renderCanvasTextInto(bodyEl, tab);
+      }
+      return;
+    }
     btn.disabled = true;
     btn.textContent = 'Rendering…';
     bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">Rendering preview…</div>';
@@ -1497,6 +2029,274 @@ function canvasZoomHtml(innerHtml) {
       <div class="pm-canvas-zoom-content" data-canvas-zoom-content>${innerHtml}</div>
     </div>
   `;
+}
+
+// True only for files that should run as live web content (their own HTML doc).
+// Everything else text-like is rendered as readable, scrollable formatted text.
+function isLiveWebCanvasFile(file = {}) {
+  return ['html', 'htm'].includes(getCanvasFileExt(file));
+}
+
+// Build a styled, self-contained HTML document for a text/markdown/code file.
+// Mirrors the desktop ChatPage markdown render so .md shows clean formatting.
+// Code file extensions that get syntax highlighting + line numbers in the canvas.
+const CANVAS_CODE_EXTS = new Set([
+  'js','jsx','ts','tsx','mjs','cjs','json','css','scss','less',
+  'py','rb','go','rs','java','c','h','cpp','hpp','cs','php','swift','kt',
+  'sh','bash','zsh','yml','yaml','toml','ini','sql','xml','vue','svelte','lua','pl'
+]);
+
+function isCanvasCodeExt(ext) {
+  return CANVAS_CODE_EXTS.has(String(ext || '').toLowerCase());
+}
+
+// Self-contained, dependency-free syntax highlighter. Tokenizes a single line of
+// code into spans (comments, strings, numbers, keywords, functions). Good enough
+// to read code at a glance like the Codex app, with zero CDN/offline cost.
+const CANVAS_CODE_KEYWORDS = new Set(('const let var function return if else for while do switch case break continue new class extends super this import from export default async await yield try catch finally throw typeof instanceof in of void delete null undefined true false public private protected static get set interface type enum namespace implements readonly as def elif lambda pass with self None True False and or not func struct map range defer go chan fn mut use pub impl trait match module require end then begin echo local').split(' '));
+
+// Single-pass tokenizer: scans the RAW line left-to-right, classifying each token,
+// and escapes every emitted segment. Because we never re-scan emitted markup, the
+// keyword/function passes can't corrupt previously injected <span> attributes
+// (the old multi-replace approach wrapped the literal word "class" inside
+// class="tk-s", producing &class=class=... garbage).
+function highlightCodeLine(line, ext) {
+  const src = String(line);
+  const e = String(ext || '').toLowerCase();
+  const isStyle = e === 'css' || e === 'scss' || e === 'less';
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  const wrap = (cls, text) => `<span class="${cls}">${escapeHtml(text)}</span>`;
+  while (i < n) {
+    const ch = src[i];
+    const rest = src.slice(i);
+    // Block comment /* ... */ (may be unterminated on this line)
+    if (ch === '/' && src[i + 1] === '*') {
+      const close = src.indexOf('*/', i + 2);
+      const end = close === -1 ? n : close + 2;
+      out += wrap('tk-c', src.slice(i, end));
+      i = end; continue;
+    }
+    // Line comment // ... (skip CSS where // isn't a comment)
+    if (ch === '/' && src[i + 1] === '/' && !isStyle) {
+      out += wrap('tk-c', src.slice(i)); i = n; continue;
+    }
+    // Hash comment (py/sh/yaml) — but NOT CSS hex colors (#fff)
+    if (ch === '#' && !isStyle) {
+      out += wrap('tk-c', src.slice(i)); i = n; continue;
+    }
+    // Strings: " ' `
+    if (ch === '"' || ch === '\'' || ch === '`') {
+      let j = i + 1;
+      while (j < n) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === ch) { j++; break; }
+        j++;
+      }
+      out += wrap('tk-s', src.slice(i, j));
+      i = j; continue;
+    }
+    // Numbers
+    const numMatch = /^(0x[0-9a-fA-F]+|\d+\.?\d*(?:e[+-]?\d+)?)/.exec(rest);
+    if (numMatch && !/[A-Za-z_$]/.test(src[i - 1] || '')) {
+      out += wrap('tk-n', numMatch[0]); i += numMatch[0].length; continue;
+    }
+    // Identifiers / keywords / function calls
+    const idMatch = /^[A-Za-z_$][\w$]*/.exec(rest);
+    if (idMatch) {
+      const word = idMatch[0];
+      let k = i + word.length;
+      while (k < n && (src[k] === ' ' || src[k] === '\t')) k++;
+      if (CANVAS_CODE_KEYWORDS.has(word)) {
+        out += wrap('tk-k', word);
+      } else if (src[k] === '(') {
+        out += wrap('tk-f', word);
+      } else {
+        out += escapeHtml(word);
+      }
+      i += word.length; continue;
+    }
+    // Plain character
+    out += escapeHtml(ch);
+    i++;
+  }
+  return out;
+}
+
+// Build a styled, self-contained HTML document for a text/markdown/code file.
+// opts: { changedRanges?: [{start,end}], onlyRanges?: bool, context?: number }
+// - For md: clean marked render (existing behavior).
+// - For code: syntax-highlighted, line-numbered rows, optional changed-line accent,
+//   and optional edited-regions-only collapse with gap markers.
+// - For other text: scrollable escaped <pre>.
+function canvasTextDocHtml(ext, content, opts = {}) {
+  const e = String(ext || '').toLowerCase();
+  const baseStyle = `
+    html,body{margin:0;height:auto}
+    body{font-family:system-ui,-apple-system,sans-serif;line-height:1.7;padding:18px 18px 64px;color:#17243b;-webkit-text-size-adjust:100%;word-wrap:break-word;overflow-wrap:anywhere}
+    h1,h2,h3{font-weight:700;margin:16px 0 8px;line-height:1.3}
+    code{background:#f0f4fb;padding:2px 6px;border-radius:4px;font-size:0.88em}
+    pre{background:#f0f4fb;padding:14px;border-radius:8px;overflow-x:auto}
+    pre code{background:none;padding:0}
+    blockquote{border-left:3px solid #3b82f6;padding-left:14px;color:#64748b;margin:10px 0}
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid #dbe3ee;padding:6px 10px}
+    a{color:#1668e3} hr{border:none;border-top:1px solid #dbe3ee;margin:16px 0}
+    img{max-width:100%;height:auto}
+    /* Code view */
+    .code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;padding:8px 0 64px;margin:0}
+    .ln{display:flex;white-space:pre}
+    .ln .g{flex:0 0 auto;min-width:38px;padding:0 10px 0 14px;text-align:right;color:#9aa6b8;user-select:none;border-right:1px solid #e6ecf5}
+    .ln .t{flex:1 1 auto;padding:0 14px;white-space:pre;overflow-wrap:normal}
+    .ln.changed{background:#eaf5ec}
+    .ln.changed .g{color:#2f9e54;font-weight:600;box-shadow:inset 2px 0 0 #2f9e54}
+    .gap{padding:6px 14px;color:#8a93a3;font-size:11px;background:#f6f8fc;border-top:1px solid #eef2f8;border-bottom:1px solid #eef2f8}
+    .tk-c{color:#7e8aa0;font-style:italic} .tk-s{color:#1f8a4c} .tk-n{color:#b5651d}
+    .tk-k{color:#9326c9;font-weight:600} .tk-f{color:#1668e3}
+    @media (prefers-color-scheme: dark){
+      body{color:#e6ebf5;background:#16181d}
+      code,pre{background:#23262e}
+      th,td{border-color:#2c313b} blockquote{color:#9aa4b5} hr{border-top-color:#2c313b}
+      .ln .g{color:#5b6678;border-right-color:#262b35}
+      .ln.changed{background:#16271c} .ln.changed .g{color:#56d98a;box-shadow:inset 2px 0 0 #2f9e54}
+      .gap{color:#7c8696;background:#1b1e25;border-color:#262b35}
+      .tk-c{color:#6b7686} .tk-s{color:#5fd38a} .tk-n{color:#e0a86a}
+      .tk-k{color:#c98bf0} .tk-f{color:#6aa9ff}
+    }
+  `;
+  let inner;
+  if (e === 'md' && typeof window !== 'undefined' && window.marked && typeof window.marked.parse === 'function') {
+    inner = window.marked.parse(String(content || ''), { breaks: true, gfm: true, mangle: false, headerIds: false });
+  } else if (isCanvasCodeExt(e)) {
+    const lines = String(content || '').replace(/\n$/, '').split('\n');
+    const changed = Array.isArray(opts.changedRanges) ? opts.changedRanges : [];
+    const isChanged = (n) => changed.some((r) => n >= r.start && n <= r.end);
+    const ctx = Number.isFinite(opts.context) ? opts.context : 3;
+    let visible = null; // null = all lines
+    if (opts.onlyRanges && changed.length) {
+      const set = new Set();
+      for (const r of changed) {
+        for (let n = Math.max(1, r.start - ctx); n <= Math.min(lines.length, r.end + ctx); n++) set.add(n);
+      }
+      visible = set;
+    }
+    const rows = [];
+    let prevShown = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const n = i + 1;
+      if (visible && !visible.has(n)) continue;
+      if (visible && prevShown && n > prevShown + 1) {
+        rows.push(`<div class="gap">⋯ ${n - prevShown - 1} unchanged line${n - prevShown - 1 === 1 ? '' : 's'}</div>`);
+      }
+      rows.push(`<div class="ln${isChanged(n) ? ' changed' : ''}"><span class="g">${n}</span><span class="t">${highlightCodeLine(lines[i], e) || '&nbsp;'}</span></div>`);
+      prevShown = n;
+    }
+    inner = `<div class="code">${rows.join('')}</div>`;
+  } else {
+    inner = `<pre style="white-space:pre-wrap">${escapeHtml(String(content || ''))}</pre>`;
+  }
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${baseStyle}</style></head><body>${inner}</body></html>`;
+}
+
+// Code-file Preview: fetch git changed line ranges + file content, then render a
+// syntax-highlighted, edited-regions-only view with a "Show full file" toggle.
+// Falls back to the full highlighted file when there are no detectable changes.
+async function renderCanvasCodePreview(bodyEl, tab) {
+  if (!bodyEl || !tab) return;
+  const sheetEl = document.getElementById('pm-canvas-sheet');
+  const ext = getCanvasFileExt(tab);
+  const path = String(tab.path || '');
+  if (!path) return;
+  bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">Loading diff\u2026</div>';
+  const renderDoc = (docHtml) => {
+    bodyEl.innerHTML = `<div class="pm-canvas-textframe-wrap"><iframe class="pm-canvas-textframe" title="${escapeHtml(tab.name || 'File')}" sandbox="allow-same-origin"></iframe></div>`;
+    const frame = bodyEl.querySelector('iframe.pm-canvas-textframe');
+    if (frame) frame.srcdoc = docHtml;
+    resetCanvasZoom(bodyEl);
+    sheetEl?.classList.remove('is-interacting');
+    sheetEl?.classList.add('is-inspecting');
+  };
+  try {
+    const [rangesRes, fileRes] = await Promise.all([
+      fetch(`/api/canvas/diff-ranges?path=${encodeURIComponent(path)}`).then((r) => r.json()).catch(() => null),
+      fetch(`/api/canvas/file?path=${encodeURIComponent(path)}`).then((r) => r.json()).catch(() => null),
+    ]);
+    const content = fileRes && typeof fileRes.content === 'string' ? fileRes.content : null;
+    if (content === null) { renderDoc(canvasTextDocHtml('txt', `Could not load ${tab.name || 'this file'}.`)); return; }
+    const ranges = rangesRes && Array.isArray(rangesRes.ranges) ? rangesRes.ranges : [];
+    const hasChanges = ranges.length > 0;
+    // Default = edited-regions-only when there are changes. Toggle state lives on
+    // the tab so it survives re-render within the session, but only an explicit
+    // user toggle (true/false) overrides the collapsed-by-default behavior.
+    let showFull;
+    if (!hasChanges) {
+      showFull = true; // nothing to collapse — show whole file
+    } else if (typeof tab._canvasPreviewShowFull === 'boolean') {
+      showFull = tab._canvasPreviewShowFull; // honor prior in-session toggle
+    } else {
+      showFull = false; // first open with changes → collapsed edited-regions view
+    }
+    const draw = () => {
+      const docHtml = canvasTextDocHtml(ext, content, {
+        changedRanges: ranges,
+        onlyRanges: hasChanges && !showFull,
+        context: 3,
+      });
+      renderDoc(docHtml);
+      // Toggle button overlay (only meaningful when there are changes).
+      if (hasChanges) {
+        const bar = document.createElement('div');
+        bar.className = 'pm-canvas-codebar';
+        bar.innerHTML = `<button type="button" class="pm-canvas-codebtn">${showFull ? 'Show edited regions only' : 'Show full file'}</button>`;
+        bar.querySelector('button').addEventListener('click', () => {
+          showFull = !showFull;
+          tab._canvasPreviewShowFull = showFull;
+          draw();
+        });
+        const wrap = bodyEl.querySelector('.pm-canvas-textframe-wrap');
+        if (wrap) wrap.appendChild(bar);
+      }
+    };
+    draw();
+  } catch (err) {
+    renderDoc(canvasTextDocHtml('txt', `Preview failed: ${String(err?.message || err)}`));
+  }
+}
+
+// Fetch a workspace text file and render it as a scrollable srcdoc iframe.
+function renderCanvasTextInto(bodyEl, tab) {
+  if (!bodyEl || !tab) return;
+  const sheetEl = document.getElementById('pm-canvas-sheet');
+  bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">Loading\u2026</div>';
+  const ext = getCanvasFileExt(tab);
+  const path = String(tab.path || '');
+  const show = (docHtml) => {
+    bodyEl.innerHTML = `<div class="pm-canvas-textframe-wrap"><iframe class="pm-canvas-textframe" title="${escapeHtml(tab.name || 'File')}" sandbox="allow-same-origin"></iframe></div>`;
+    const frame = bodyEl.querySelector('iframe.pm-canvas-textframe');
+    if (frame) frame.srcdoc = docHtml;
+    resetCanvasZoom(bodyEl);
+    sheetEl?.classList.remove('is-interacting');
+    sheetEl?.classList.add('is-inspecting');
+  };
+  if (!path) { show(canvasTextDocHtml(ext, '')); return; }
+  const showError = (msg) => show(canvasTextDocHtml('txt', String(msg || 'Could not load this file.')));
+  fetch(`/api/canvas/file?path=${encodeURIComponent(path)}`)
+    .then((res) => res.json())
+    .then((r) => {
+      if (r && typeof r.content === 'string') { show(canvasTextDocHtml(ext, r.content)); return; }
+      if (r && r.isImage) {
+        bodyEl.innerHTML = canvasZoomHtml(`<img src="${escapeHtml(tab.src)}" alt="${escapeHtml(tab.name)}">`);
+        applyCanvasInteractionMode(document.getElementById('pm-canvas-sheet'), bodyEl, tab);
+        return;
+      }
+      // No text content: render a clean error instead of dumping raw JSON.
+      const reason = r && r.error ? String(r.error) : 'This file could not be read.';
+      showError(`Could not load ${tab.name || 'this file'}.\n\n${reason}`);
+    })
+    .catch((err) => {
+      showError(`Could not load ${tab.name || 'this file'}.\n\n${err && err.message ? err.message : 'Network error.'}`);
+    });
 }
 
 function resetCanvasZoom(root) {

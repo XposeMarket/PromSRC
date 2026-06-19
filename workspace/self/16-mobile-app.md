@@ -1,6 +1,6 @@
 # 16) Prometheus Mobile App Maintenance Reference
 
-Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, and package scripts on: 2026-06-05
+Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, iOS Home Screen Web Push for chat/task/subagent/team/scheduled-job events, and package scripts on: 2026-06-19
 
 Prometheus Mobile is a hash-routed PWA shell inside the existing web UI. It is not a separate native iOS/Android/Capacitor app in this repo. Treat `web-ui/src/mobile/*` as the canonical mobile app source and treat `generated/public-web-ui/static/mobile/*` as generated public-build output.
 
@@ -47,7 +47,11 @@ The canonical sync path is:
 
 `scripts/check-public-web-ui-sync.js` compares source files against generated public copies, including root-level `manifest.webmanifest` and `service-worker.js`. A stale generated mobile file means the source may be right but public runtime output is not.
 
-Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump it on meaningful frontend/mobile changes or installed PWAs may keep old assets even after build/restart. The service worker intentionally never caches `/api/*`, `/ws`, or `/events`, so stale chat/auth/streaming data usually means app state or generated static files, not cached API responses.
+Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump it on meaningful frontend/mobile changes or installed PWAs may keep old assets even after build/restart. The service worker intentionally never caches `/api/*`, `/ws`, or `/events`, so stale chat/auth/streaming data usually means app state or generated static files, not cached API responses. Current version: `pm-v69-2026-06-19-mobile-deep-links`. [2026-06-19]
+
+Session cache: `web-ui/src/mobile/mobile-api.js` caches `loadMobileChatSession` results in-memory for 30s (max 20 entries). Use `invalidateMobileChatSessionCache(sessionId?)` to bust. Cache is automatically busted on `updateMobileChatSessionHistory` writes. This makes revisiting the same chat instant within the TTL window. [2026-06-17]
+
+Recovery parallelism: `refreshMobileRunRecovery` in `mobile-pages.js` now fires `loadMobileChatRunStatus` + `loadMobileChatSession` in parallel (batch 1), then `loadMobileApprovals` + `loadMobileQuestions` in parallel (batch 2). Previously all were serial awaits — a 5-call waterfall on every reconnect. [2026-06-17]
 
 ## Activation and Routing
 
@@ -154,6 +158,13 @@ Mobile chat attachment path:
 - Because this is PWA-facing static JS/CSS, bump `web-ui/service-worker.js` `VERSION` on meaningful attachment/picker changes; the 2026-06-05 video attachment change uses `pm-v29-2026-06-05-mobile-video-attachments`.
 - Verification used for this change: `npm run sync:web-ui`, which regenerated public assets and passed `check:web-ui`.
 
+Mobile drawer behavior:
+
+- The left hamburger drawer is intentionally full-screen on mobile: `.pm-drawer` in `web-ui/src/styles/mobile.css` uses full shell width rather than the old `min(78vw, 320px)` side-panel width. Keep this as a full-screen overlay unless the mobile UX requirement explicitly changes.
+- Drawer chat rows mark the currently open chat with `is-active-session` and `aria-current="page"`. `web-ui/src/mobile/mobile-shell.js` resolves the active row from `window.__pmChat.activeSessionId`, `#mobile/chat/:sessionId`, then `pm_mobile_last_chat_session`, excluding the `mobile_default` draft session.
+- The active chat highlight is styled in `mobile.css` as an orange/gold ring/glow on `.pm-session-row.is-active-session`, and it applies to normal drawer rows and search-result rows while preserving working/unread state labels.
+
+
 Mobile chat APIs:
 
 - `GET /api/sessions?channel=mobile&limit=...&offset=...`
@@ -181,7 +192,9 @@ Live stream behavior:
 - `chat.router.ts` tracks `mainChatStreams` per session and appends frames through `appendMainChatStreamEvent`.
 - `appendMainChatStreamEvent` broadcasts `main_chat_stream_event` over WebSocket to all clients.
 - Mobile can replay missed events through `GET /api/mobile/chat/stream/:sessionId`.
-- `web-ui/src/ws.js` auto-reconnects and routes WebSocket events through `wsEventBus`.
+- `web-ui/src/ws.js` auto-reconnects with **exponential backoff** (1s→2s→4s→8s→16s→30s cap) and routes WebSocket events through `wsEventBus`. When `navigator.onLine` is false it stops retrying and waits for the browser `online` event instead of hammering the server. Dispatches `ws:reconnecting` (with `delayMs`/`attempt`), `ws:open`, `ws:close`, `ws:error`, and `ws:waiting_for_network` events. A `_wsConnecting` flag prevents double-connect races. [2026-06-17]
+- Active mobile run recovery is now **incremental-first** on reconnect/focus/WebSocket-open recovery: `refreshMobileRunRecovery` preserves an existing live assistant bubble when it already has text, `processEntries`, or `liveTraceEntries`, fetches `/api/mobile/chat/stream/:sessionId?after=<lastSeq>`, and appends only missed/new frames. It only resets the live bubble and replays from `after=0` for cold recovery or when replay metadata shows the retained server buffer starts after the phone's last seen sequence (`firstSeq > lastSeq + 1`). This prevents the Process/tool stream from disappearing and reloading from the beginning while Prometheus is still working. `MAIN_CHAT_STREAM_MAX_EVENTS` is 1600 to keep long tool-heavy turns recoverable. Service worker version for this fix: `pm-v58-2026-06-17-incremental-stream-recovery`. [2026-06-17]
+
 - 2026-06-05 desktop-to-mobile live sync fix: the server was already broadcasting every main-chat frame, including `event: 'user_message'`, through `main_chat_stream_event`. The mobile bug was client-side: `web-ui/src/mobile/mobile-pages.js::onMainChatStreamEvent` created/reused an assistant placeholder for every frame before special-casing user frames, so a user message sent from desktop did not appear in the open mobile chat until history reload. Fix: handle `eventType === 'user_message'` first, insert a mobile-format user turn from `msg.data.message`, dedupe the phone's own send via `clientRequestId`, then return before assistant placeholder logic. Keep the generated public copy (`generated/public-web-ui/static/mobile/mobile-pages.js`) in sync or run `npm run sync:web-ui`.
 - Verification for that fix: `node --check web-ui/src/mobile/mobile-pages.js` and `node --check generated/public-web-ui/static/mobile/mobile-pages.js` passed. Manual expected behavior: with the same chat open on desktop and mobile, a desktop user message should appear immediately on mobile, followed by the normal Prometheus streaming/tool/process updates.
 
@@ -239,7 +252,7 @@ Mobile Realtime camera/video additions from 2026-06-05:
 - Typed sends after a staged voice photo also include the staged image as regular mobile chat attachments, so the Prometheus worker receives the pixels through `/api/chat` even if the user typed instead of speaking.
 - The OpenAI Realtime image event shape is `conversation.item.create` with a user `message` containing `input_text` and `input_image`. The `input_image` uses a data URL in `image_url` and includes `detail: "auto"`.
 - Realtime images must be downscaled/recompressed before data-channel send. Mobile Safari can silently drop large SCTP messages; `_downscaleDataUrlForRealtime(...)` targets small JPEG data URLs instead of passing full-res captures through.
-- xAI/Grok Realtime is not sent OpenAI-style `input_image` events in this implementation. xAI visual context goes through `/api/voice-agent/xai-vision-summary` and is injected into the xAI Realtime conversation as text.
+- xAI/Grok Realtime is not sent OpenAI-style `input_image` events in this implementation. xAI visual context goes through `/api/voice-agent/xai-vision-summary` and is injected into the xAI Realtime conversation as text. The sidecar tries Grok first and falls back by default to OpenAI `gpt-5.4-mini` vision when Grok is quota-limited/unavailable.
 - If a user says the bubble shows but the voice agent says it cannot see anything, inspect `_flushMobileRealtimeAgentPendingImages(...)`, the provider guard (`openai_realtime` vs `xai`), and the downscaled data URL size. The local bubble alone does not prove the Realtime model received the image event.
 
 Voice Agent and interruptions:
@@ -275,7 +288,69 @@ Debugging voice:
 
 ## Delivery, Push, Telegram, and Origin
 
-There is no native push-notification service in this PWA path. Mobile delivery is currently WebSocket/in-app delivery plus session unread state.
+Prometheus has iOS Home Screen Web Push for completed chat responses and terminal/attention events from tasks, subagents, teams, and scheduled jobs. Mobile delivery still uses WebSocket/in-app delivery plus session unread state while the app is open; Web Push is the opt-in background notification path for installed iOS/iPadOS PWAs.
+
+### iOS Home Screen Web Push
+
+iOS/iPadOS 16.4+ can receive Web Push for websites installed to the Home Screen when the app manifest is installable and the page is served over HTTPS. Prometheus uses standard Web Push with VAPID through the `web-push` package; it does not talk directly to APNs and does not require an Apple Developer account for this PWA path.
+
+Current behavior:
+
+- Mobile chat has an opt-in bell button. It requests notification permission and subscribes the active service worker. The permission is global to the installed PWA, not only the visible chat screen.
+- Notifications are sent for completed chat responses.
+- Chat response Web Push is sent for every completed `/api/chat` turn, not just mobile-origin turns. Mobile-origin turns are labeled `mobile`; every other chat origin is treated as `desktop` for channel-filter compatibility, but Web Push fanout is unconditional once the turn completes.
+- Notifications are also sent for background task completion/failure/pause, tasks needing assistance or clarification, standalone subagent completion/failure/attention states, team executor completion/failure/attention states, and scheduled-job completion/failure/pause states.
+- Starts and ordinary progress updates intentionally stay in-app to avoid notification spam.
+- Each background push increments the Home Screen app badge count where the Badging API is available. Opening the mobile app or tapping a notification clears the badge. This is currently an attention-since-last-open count, not a server-derived unread total.
+- Notifications include basic `Open`/`Clear` actions where the platform exposes web notification actions. iOS may ignore action buttons, so normal notification tap routing remains the durable path.
+- First enable sends `/api/push/test` so the device can prove delivery immediately.
+- Completion notifications are emitted after the final assistant response is produced, not during token streaming.
+- Notification clicks focus/open the best mobile surface when possible: chat, tasks, teams, subagents, or schedule.
+- iOS may render a system app attribution line such as `from Prometheus`; this comes from the installed Home Screen app identity, so payload titles should avoid repeating the app name.
+
+Source files:
+
+- `web-ui/service-worker.js` handles `push` and `notificationclick`.
+- `web-ui/service-worker.js` also owns badge updates, notification actions, and the cached offline shell fallback.
+- `web-ui/src/mobile/mobile-router.js` clears the app badge whenever the installed mobile app opens or navigates.
+- `web-ui/src/mobile/mobile-api.js` manages service worker update nudges, permission requests, subscription/unsubscription, and `/api/push/*` calls.
+- `web-ui/src/mobile/mobile-pages.js` renders and wires the mobile chat push bell.
+- `src/gateway/notifications/web-push.ts` owns VAPID key generation, subscription persistence, and fanout sending.
+- `src/gateway/notifications/completion-bridge.ts` builds the chat-response Web Push payload and fans it out alongside channel notifications.
+- `src/gateway/notifications/task-events.ts` builds task/subagent/team/scheduled-job Web Push payloads.
+- `src/gateway/tasks/background-task-runner.ts` calls the task event bridge from terminal and attention state transitions.
+- `src/gateway/routes/chat.router.ts` exposes `GET /api/push/public-key`, `GET /api/push/status`, `POST /api/push/subscribe`, `POST /api/push/unsubscribe`, and `POST /api/push/test`.
+
+Persistence and public URL:
+
+- VAPID keys and subscriptions live in `.prometheus/notifications/web-push.json`; do not commit this file.
+- Deleting or regenerating VAPID keys invalidates existing browser subscriptions.
+- The VAPID subject and chat notification links must resolve to the public HTTPS origin. For Funnel, use `gateway.remoteAccess.publicUrl`.
+- A bad VAPID subject can make Apple Push reject sends with a generic response such as `Received unexpected response code`; `/api/push/status` records `lastError`, `lastSuccessAt`, endpoint metadata, and subscription count.
+
+iOS-specific gotchas:
+
+- `Notification.requestPermission()` must be called from the direct user tap path. Do not put an awaited network request before the permission prompt.
+- Installed PWAs may keep an old service worker. Bump `web-ui/service-worker.js` `VERSION` for meaningful push/frontend changes, run `npm run sync:web-ui`, and reopen the Home Screen app if needed.
+- If permission is accepted but no banner appears, check iOS Settings > Notifications > Prometheus, Focus modes, `/api/push/status`, and then send `/api/push/test`.
+- Offline/bad-network mode is intentionally conservative: the service worker caches the mobile shell/static assets and the mobile chat page shows its local thread cache while the gateway reconnects. API/SSE/WS traffic is not blindly cached, so live task/session state does not go stale under the user's feet.
+
+### Mobile Deep Links
+
+Mobile supports both hash-style installed-PWA links and readable path links:
+
+- Chat: `/?source=pwa#mobile/chat/<sessionId>` or `/mobile/chat/<sessionId>`
+- Voice: `/?source=pwa#mobile/voice` or `/mobile/voice`
+- Tasks: `/?source=pwa#mobile/tasks/<taskId>` or `/mobile/tasks/<taskId>`
+- Teams: `/?source=pwa#mobile/teams/<teamId>/<tab?>` or `/mobile/teams/<teamId>/<tab?>`
+- Subagents: `/?source=pwa#mobile/subagents/<agentId>/<tab?>` or `/mobile/subagents/<agentId>/<tab?>`
+- Schedule: `/?source=pwa#mobile/schedule/<scheduleId?>` or `/mobile/schedule/<scheduleId?>`
+- Proposals: `/?source=pwa#mobile/proposals/<proposalId>` or `/mobile/proposals/<proposalId>`
+- Settings sections: `/?source=pwa#mobile/settings/<section>` or `/mobile/settings/<section>`
+
+The gateway serves `index.html` for `/mobile` and `/mobile/*`, so QR codes and shared links can use readable path URLs. The router normalizes aliases such as `task -> tasks`, `team -> teams`, `subagent -> subagents`, and `proposal -> proposals`. Notification payloads should still prefer `/?source=pwa#mobile/...` because that preserves installed-PWA launch behavior on iOS more reliably.
+
+`web-ui/manifest.webmanifest` exposes Home Screen long-press shortcuts for Chat, Voice, Tasks, Schedule, Teams, and Proposals.
 
 Prometheus now has an opt-in channel notification fallback for completed chat responses:
 

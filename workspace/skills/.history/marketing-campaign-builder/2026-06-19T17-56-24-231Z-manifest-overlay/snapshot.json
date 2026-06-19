@@ -1,0 +1,11 @@
+{
+  "skillId": "marketing-campaign-builder",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:56:24.234Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\marketing-campaign-builder",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "7c0b6423adf9a47d"
+}

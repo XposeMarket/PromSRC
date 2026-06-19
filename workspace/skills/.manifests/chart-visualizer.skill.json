@@ -1,33 +1,37 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to visualize data as charts, graphs, dashboards, KPI cards, trends, comparisons, or numeric summaries. It guides selecting the right chart type and rendering polished Chart.js-style visuals with labels, axes, and readable presentation.",
+  "description": "Use this skill when creating or choosing charts, graphs, KPI visuals, market charts, trend lines, comparisons, bar/line/pie/radar charts, or numeric visualizations.",
   "triggers": [
-    "chart",
-    "graph",
-    "visualize data",
-    "data visualization",
-    "KPI chart",
-    "line chart",
-    "bar chart",
-    "pie chart",
-    "trend chart",
-    "dashboard chart",
-    "compare numbers",
-    "plot this",
-    "chart visualizer",
     "make a chart",
-    "show data visually"
+    "graph this",
+    "visualize the data",
+    "KPI chart",
+    "trend line",
+    "bar chart",
+    "line chart",
+    "pie chart",
+    "radar chart",
+    "compare these numbers",
+    "financial chart",
+    "analytics visual",
+    "plot this data",
+    "show a graph",
+    "chart card",
+    "data visualization",
+    "sparkline",
+    "time series chart",
+    "dashboard chart"
   ],
   "categories": [
+    "charts",
     "visualization",
-    "data",
-    "reporting"
+    "data"
   ],
   "requiredTools": [
-    "show_chart",
-    "creative_mode"
+    "show_ui_card"
   ],
   "lifecycle": "active",
+  "name": "Chart Visualizer",
   "id": "chart-visualizer"
 }

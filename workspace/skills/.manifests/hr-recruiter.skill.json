@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when writing or improving job posts, hiring plans, interview questions, candidate screening rubrics, recruiting outreach, offer messaging, role scorecards, or HR workflows.",
+  "triggers": [
+    "job description",
+    "hiring plan",
+    "interview questions",
+    "candidate screening",
+    "recruiting outreach",
+    "role scorecard",
+    "job post",
+    "offer letter draft",
+    "hiring rubric",
+    "recruiter message",
+    "evaluate candidate",
+    "interview plan",
+    "team hiring",
+    "HR workflow",
+    "onboarding plan",
+    "candidate scorecard"
+  ],
+  "categories": [
+    "hr",
+    "recruiting",
+    "writing",
+    "operations"
+  ],
+  "requiredTools": [
+    "skills"
+  ],
+  "lifecycle": "active",
+  "name": "HR Recruiter",
+  "id": "hr-recruiter"
+}

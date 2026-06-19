@@ -1,23 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to connect, configure, test, automate, troubleshoot, or use Trello boards, cards, lists, labels, comments, due dates, or notifications through a connector/API. It covers connector checks and safe Trello operations.",
+  "description": "Use this skill when connecting, configuring, testing, automating, troubleshooting, or using Trello boards, cards, lists, labels, comments, due dates, or notifications through a connector.",
   "triggers": [
     "Trello connector",
-    "Trello integration",
+    "connect Trello",
     "Trello board",
     "Trello card",
     "Trello list",
     "create Trello card",
     "update Trello card",
-    "Trello automation",
-    "connect Trello",
-    "test Trello",
-    "Trello API",
-    "Trello workflow",
+    "Trello labels",
+    "Trello due dates",
     "Trello comments",
-    "Trello due date",
-    "Trello notification"
+    "test Trello integration",
+    "Trello webhook",
+    "automate Trello",
+    "read Trello board",
+    "Trello notifications"
   ],
   "categories": [
     "integrations",

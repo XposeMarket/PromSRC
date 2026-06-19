@@ -1,0 +1,11 @@
+{
+  "skillId": "api-integration",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:52:41.903Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\api-integration",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "89d6afd4334b4681"
+}

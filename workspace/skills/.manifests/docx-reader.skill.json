@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when reading, extracting, summarizing, searching, or converting Microsoft Word DOCX files, including tables, headings, comments, tracked changes, and document structure.",
+  "triggers": [
+    "read this DOCX",
+    "Word document summary",
+    "extract text from DOCX",
+    "parse DOCX",
+    "search Word file",
+    "DOCX table",
+    "convert DOCX to text",
+    "inspect Word document",
+    "summarize document",
+    "tracked changes",
+    "DOCX comments",
+    "pull clauses from Word",
+    "analyze DOCX",
+    "document headings",
+    "read .docx file"
+  ],
+  "categories": [
+    "documents",
+    "docx",
+    "reading"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "DOCX Reader",
+  "id": "docx-reader"
+}

@@ -1,0 +1,12 @@
+{
+  "skillId": "hook-library",
+  "reason": "resource-write",
+  "createdAt": "2026-06-17T22:10:48.130Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hook-library",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "373fc0e4b58b472d"
+}

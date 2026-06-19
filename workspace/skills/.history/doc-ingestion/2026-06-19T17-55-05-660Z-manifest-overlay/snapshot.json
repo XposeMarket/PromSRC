@@ -1,0 +1,11 @@
+{
+  "skillId": "doc-ingestion",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:55:05.663Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\doc-ingestion",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "466d6c4a9a48679b"
+}

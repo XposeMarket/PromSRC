@@ -1,0 +1,11 @@
+{
+  "skillId": "memory-governance-playbook",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-06-19T17:57:09.082Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\memory-governance-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "b8225f3e92b1b9bb"
+}

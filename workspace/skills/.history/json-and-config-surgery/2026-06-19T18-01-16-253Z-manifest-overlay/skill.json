@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "json-and-config-surgery",
+  "name": "JSON and Config Surgery",
+  "description": "Safe Prometheus JSON/config editing workflow: read the whole structure, parse mentally or with validation, modify minimal fields, write valid JSON, and verify config files without corrupting commas, brackets, model routing, jobs, teams, or skill manifests.",
+  "emoji": "🧩",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "edit json",
+    "fix json",
+    "update json",
+    "config surgery",
+    "edit config",
+    "update config.json",
+    "Prometheus config",
+    "jobs.json",
+    "managed-teams.json",
+    "heartbeat config",
+    "integrations-state.json",
+    "skill.json",
+    "skill manifest",
+    "model routing config",
+    "agent model config",
+    "parse json",
+    "invalid json",
+    "json comma",
+    "json bracket",
+    "write whole JSON file"
+  ],
+  "categories": [
+    "config",
+    "json",
+    "file-editing",
+    "prometheus-internals"
+  ],
+  "requiredTools": [
+    "file_stats",
+    "read_file",
+    "write_file"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  },
+  "resources": [
+    {
+      "path": "notes/model-routing-tools-2026-05-09.md",
+      "type": "doc",
+      "description": "May 9 runtime model-routing repair note: prefer get_agent_models/set_agent_model before raw .prometheus config edits."
+    }
+  ]
+}

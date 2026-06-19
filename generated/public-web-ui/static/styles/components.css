@@ -1667,7 +1667,7 @@ main {
 .background-spawn-dock {
   position: absolute;
   left: 50%;
-  bottom: 128px;
+  bottom: var(--background-spawn-dock-bottom, 128px);
   transform: translateX(-50%);
   width: min(860px, calc(100% - 40px));
   display: flex;
@@ -2088,16 +2088,39 @@ main {
 .skill-trigger-description {
   width: 100%;
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
   padding: 8px 10px 9px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
 }
+.skill-trigger-description-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
 .skill-trigger-description strong {
   color: var(--text);
   font-size: 12px;
+}
+.skill-trigger-remove {
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 42%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+  color: var(--danger, #ef4444);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+  padding: 7px 9px;
+  white-space: nowrap;
+}
+.skill-trigger-remove:hover {
+  background: color-mix(in srgb, var(--danger, #ef4444) 18%, transparent);
 }
 :root[data-theme="dark"] .chat-skill-trigger-pill {
   background:
@@ -2527,6 +2550,32 @@ body.side-chat-split-active #chat-view > .chat-input-area {
   white-space: nowrap;
 }
 
+button.chat-context-window-row {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.chat-context-window-row.is-expandable {
+  cursor: pointer;
+}
+
+.chat-context-window-row.is-expandable:hover .chat-context-window-label {
+  color: var(--text);
+}
+
+.chat-context-window-row.is-child {
+  padding-left: calc(var(--ccw-depth, 0) * 12px);
+  font-size: 11px;
+  opacity: 0.86;
+}
+
 .chat-context-window-label {
   display: inline-flex;
   align-items: center;
@@ -2534,6 +2583,26 @@ body.side-chat-split-active #chat-view > .chat-input-area {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-context-window-caret {
+  width: 8px;
+  flex: 0 0 8px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.chat-context-window-estimate {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: rgba(125, 185, 255, 0.10);
+  color: rgba(190, 216, 255, 0.78);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .chat-context-window-value,
@@ -3254,6 +3323,15 @@ body.side-chat-split-active #chat-view > .chat-input-area {
 }
 .live-turn-md > :first-child { margin-top: 0; }
 .live-turn-md > :last-child { margin-bottom: 0; }
+
+/* Pending question docked inside the live streaming bubble (below the tool
+   stream, above the Process button) — same slot as the plan-progress panel. */
+.streaming-question-dock {
+  width: min(620px, calc(100vw - 180px));
+  max-width: 100%;
+  margin: 10px 0 2px;
+}
+.streaming-question-dock .chat-approval-card { margin: 0; }
 
 .inline-runtime-plan {
   width: min(620px, calc(100vw - 180px));

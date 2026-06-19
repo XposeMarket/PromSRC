@@ -35,6 +35,9 @@ Prometheus currently builds the live prompt from these layers:
 
 Recent tool context is no longer a raw "last 5 tool logs" dump in the main chat path. `chat.router.ts`, `boot.ts`, `main-chat-goals.ts`, and the Brain runner now prefer structured `[RECENT_TOOL_OBSERVATIONS]` generated from `src/gateway/tool-observations.ts`. The legacy `getRecentToolLog(...)` still exists in `session.ts` as a fallback when no observation records exist, but new tool results are persisted as observations and then budget-formatted for future turns.
 
+Main-chat `/goal` mode is a nonstop interactive loop owned by `src/gateway/main-chat-goals.ts` and started from `startMainChatGoalRunner(...)` in `src/gateway/routes/chat.router.ts`. Worker turns still run through `runInteractiveTurn(...)` so they get normal tools/context, but the `GoalJudge` call is deliberately prompt-isolated: it uses the main model path without the normal soul/memory/persona prompt, then evaluates the goal against bounded original/recent session messages, recent tool observations, the progress ledger, denied actions, and the latest assistant response. The judge returns strict JSON with `status`, `reason`, `directive`, and `confidence`; `directive` is persisted as `mainChatGoal.nextStepDirective` and injected into the next synthetic continuation prompt so the loop keeps doing the specific missing work instead of vaguely continuing.
+
+
 Important current-turn boundary:
 
 - current-turn tool results are still delivered through the normal active tool-execution flow so browser DOM refs, screenshots, approval waits, and other in-flight tool mechanics keep working as before

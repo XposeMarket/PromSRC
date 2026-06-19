@@ -86,6 +86,8 @@ Standalone subagents:
   - `operator`
   - `verifier`
 - are messaged directly with `message_subagent`
+- standalone subagent task cards must copy the configured agent model into `TaskRecord.executorProvider`; otherwise `background_agent` execution falls through to mode defaults such as `background_spawn`/`main_chat` and can run on the wrong provider
+
 
 Managed teams:
 

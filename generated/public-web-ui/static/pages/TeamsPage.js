@@ -11,6 +11,7 @@
  */
 
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
+import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 import { api } from '../api.js';
 import { escHtml, bgtToast, timeAgo, showToast, showConfirm } from '../utils.js';
 import { wsEventBus } from '../ws.js';
@@ -3888,8 +3889,7 @@ function _findAgentInTeam(agentId) {
   return (window._allAgentsForTeam || []).find(a => a.id === agentId) || { id: agentId, name: agentId };
 }
 
-// Refresh team agent cache + re-render detail panel after a model picker save.
-registerAgentModelPickerOnSaved('ts-model', async (agentId) => {
+async function refreshTeamSubagentOverviewAfterAgentSave(agentId) {
   try {
     const data = await api('/api/agents');
     if (data?.agents) window._allAgentsForTeam = data.agents;
@@ -3899,8 +3899,13 @@ registerAgentModelPickerOnSaved('ts-model', async (agentId) => {
     const body = document.getElementById('team-subagent-detail-body');
     if (body && team) body.innerHTML = renderTeamSubagentDetailBody(team, agentId);
     agentModelPickerHydrate('ts-model', _findAgentInTeam(agentId));
+    agentVoicePickerHydrate('ts-voice', _findAgentInTeam(agentId));
   }
-});
+}
+
+// Refresh team agent cache + re-render detail panel after a picker save.
+registerAgentModelPickerOnSaved('ts-model', refreshTeamSubagentOverviewAfterAgentSave);
+registerAgentVoicePickerOnSaved('ts-voice', refreshTeamSubagentOverviewAfterAgentSave);
 
 function renderTeamSubagentsTab(team) {
   const agentIds = team.subagentIds || [];
@@ -3996,6 +4001,7 @@ function renderTeamSubagentOverview(team, agentId) {
       </div>
 
       ${_renderAgentModelPicker(ag, 'ts-model')}
+      ${_renderAgentVoicePicker(ag, 'ts-voice')}
 
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -4123,6 +4129,7 @@ async function openTeamSubagentDetail(teamId, agentId) {
     _mountTeamSubagentEditors(agentId);
     if (teamSubagentDetailTab === 'overview') {
       agentModelPickerHydrate('ts-model', _findAgentInTeam(agentId));
+      agentVoicePickerHydrate('ts-voice', _findAgentInTeam(agentId));
     }
   }
 }
@@ -4136,6 +4143,7 @@ function switchTeamSubagentTab(teamId, agentId, tab) {
   _mountTeamSubagentEditors(agentId);
   if (tab === 'overview') {
     agentModelPickerHydrate('ts-model', _findAgentInTeam(agentId));
+    agentVoicePickerHydrate('ts-voice', _findAgentInTeam(agentId));
   }
 }
 

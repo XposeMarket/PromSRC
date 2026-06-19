@@ -1,6 +1,6 @@
 import { ToolResult } from '../types.js';
 import { shellTool } from './shell.js';
-import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool } from './files.js';
+import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool, readFilesBatchTool, applyWorkspacePatchsetTool, fileTreeTool } from './files.js';
 import { webSearchTool, webSearchSingleTool, webSearchMultiTool, webFetchTool, webFetchBatchTool, shoppingSearchProductsTool } from './web.js';
 import { allSkillTools } from './skills.js';
 import { timeNowTool } from './time.js';
@@ -11,6 +11,7 @@ import { scheduleMemoryTool } from './schedule-memory-tool.js';
 import { talkToManagerTool, getTeamLogsTool, scheduleJobTool, manageTeamGoalTool, manageTeamContextRefTool } from './team-tools.js';
 import { uploadImageTool, fetchImageTool } from './image-tools.js';
 import { downloadUrlTool, downloadMediaTool } from './download-tools.js';
+import { cloneRepoTool } from './repo-tools.js';
 import { analyzeImageTool, analyzeVideoTool } from './media-analysis.js';
 import { generateImageTool } from './generate-image.js';
 import { generateVideoTool } from './generate-video.js';
@@ -111,7 +112,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_extract_structured', 'browser_element_watch',
     'browser_vision_screenshot', 'browser_vision_click', 'browser_vision_type',
     'browser_send_to_telegram', 'delivery_send', 'delivery_send_screenshot',
-    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
+    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'clone_repo', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
   // Scraper: browser + write output files.
@@ -122,7 +123,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_get_focused_item', 'browser_get_page_text', 'browser_send_to_telegram', 'delivery_send', 'delivery_send_screenshot',
     'browser_scroll_collect', 'browser_scroll_collect_v2', 'browser_snapshot_delta',
     'browser_extract_structured', 'browser_element_watch',
-    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
+    'shopping_search_products', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'clone_repo', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
 };
@@ -262,6 +263,9 @@ class ToolRegistry {
     this.registerSafe(grepFileTool);
     this.registerSafe(searchFilesTool);
     this.registerSafe(fileStatsTool);
+    this.registerSafe(readFilesBatchTool);
+    this.registerSafe(applyWorkspacePatchsetTool);
+    this.registerSafe(fileTreeTool);
     // Web tools
     this.registerSafe(webSearchTool);
     this.registerSafe(webSearchSingleTool);
@@ -308,6 +312,7 @@ class ToolRegistry {
     this.registerSafe(uploadImageTool);
     this.registerSafe(fetchImageTool);
     this.registerSafe(downloadUrlTool);
+    this.registerSafe(cloneRepoTool);
     this.registerSafe(downloadMediaTool);
     this.registerSafe(generateImageTool);
     this.registerSafe(generateVideoTool);

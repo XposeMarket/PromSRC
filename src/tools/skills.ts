@@ -35,7 +35,15 @@ function getDefaultSkillsManager(): SkillsManager {
 
 function parseCsv(value: any): string[] {
   if (Array.isArray(value)) return value.map((v) => String(v || '').trim()).filter(Boolean);
-  return String(value || '').split(',').map((v) => v.trim()).filter(Boolean);
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v || '').trim()).filter(Boolean);
+    } catch {}
+  }
+  return raw.split(',').map((v) => v.trim()).filter(Boolean);
 }
 
 function skillOk(stdout: string, data?: any): ToolResult {
@@ -46,16 +54,115 @@ function skillErr(error: string): ToolResult {
   return { success: false, error };
 }
 
+function buildMetadataOverlay(skill: any, args: any): Record<string, unknown> | null {
+  const manifest: Record<string, unknown> = {};
+  const existingEntrypoint = String(skill?.entrypoint || '').trim();
+  if (existingEntrypoint) manifest.entrypoint = existingEntrypoint;
+  let changed = false;
+
+  if (args?.description !== undefined && args.description !== null) {
+    const description = String(args.description).trim();
+    if (description && description !== String(skill?.description || '').trim()) {
+      manifest.description = description;
+      changed = true;
+    }
+  }
+
+  const currentTriggers = Array.isArray(skill?.triggers)
+    ? skill.triggers.map((trigger: any) => String(trigger || '').trim()).filter(Boolean)
+    : [];
+  let nextTriggers: string[] | null = null;
+  if (args?.triggers !== undefined && args.triggers !== null) {
+    const replacement = parseCsv(args.triggers);
+    if (replacement.length) nextTriggers = replacement;
+  }
+  if (args?.addTriggers !== undefined || args?.add_triggers !== undefined) {
+    const additions = parseCsv(args.addTriggers ?? args.add_triggers);
+    if (additions.length) nextTriggers = [...(nextTriggers || currentTriggers), ...additions];
+  }
+  if (args?.removeTriggers !== undefined || args?.remove_triggers !== undefined) {
+    const removals = new Set(parseCsv(args.removeTriggers ?? args.remove_triggers).map((trigger: string) => trigger.toLowerCase()));
+    if (removals.size) nextTriggers = (nextTriggers || currentTriggers).filter((trigger: string) => !removals.has(trigger.toLowerCase()));
+  }
+  if (nextTriggers) {
+    const seen = new Set<string>();
+    const deduped = nextTriggers
+      .map((trigger) => String(trigger || '').trim())
+      .filter((trigger) => {
+        const key = trigger.toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    const before = currentTriggers.map((trigger: string) => trigger.toLowerCase()).join('\n');
+    const after = deduped.map((trigger: string) => trigger.toLowerCase()).join('\n');
+    if (deduped.length && before !== after) {
+      manifest.triggers = deduped;
+      changed = true;
+    }
+  }
+
+  if (args?.categories !== undefined && args.categories !== null) {
+    const categories = parseCsv(args.categories);
+    if (categories.length) { manifest.categories = categories; changed = true; }
+  }
+  if (args?.requiredTools !== undefined || args?.required_tools !== undefined) {
+    const requiredTools = parseCsv(args.requiredTools ?? args.required_tools);
+    if (requiredTools.length) { manifest.requiredTools = requiredTools; changed = true; }
+  }
+  if (args?.lifecycle !== undefined && args.lifecycle !== null) {
+    const lifecycle = String(args.lifecycle).trim();
+    if (lifecycle) { manifest.lifecycle = lifecycle; changed = true; }
+  }
+  if (args?.name !== undefined && args.name !== null) {
+    const name = String(args.name).trim();
+    if (name && name !== String(skill?.name || '').trim()) {
+      manifest.name = name;
+      changed = true;
+    }
+  }
+
+  return changed ? manifest : null;
+}
+
 export async function executeSkillList(
-  _args: { compact?: boolean },
+  args: { compact?: boolean; query?: string; q?: string; limit?: number; include_descriptions?: boolean; includeDescriptions?: boolean },
   skillsManager: SkillsManager,
 ): Promise<ToolResult> {
   skillsManager.scanSkills();
   const all = skillsManager.getAll();
-  const list = skillsManager.getCompactList();
+  const query = String(args?.query || args?.q || '').trim().toLowerCase();
+  const includeDescriptions = args?.include_descriptions === true || args?.includeDescriptions === true;
+  const limit = Math.max(1, Math.min(80, Math.floor(Number(args?.limit) || 24)));
+  const haystackFor = (s: any): string => [
+    s?.id,
+    s?.name,
+    s?.description,
+    ...(Array.isArray(s?.triggers) ? s.triggers : []),
+    ...(Array.isArray(s?.categories) ? s.categories : []),
+    ...(Array.isArray(s?.requiredTools) ? s.requiredTools : []),
+  ].map((value) => String(value || '')).join(' ').toLowerCase();
+  const matched = query ? all.filter((s: any) => haystackFor(s).includes(query)) : all;
+  const rows = matched.slice(0, limit).map((s: any) => {
+    const row: any = { id: String(s.id || ''), name: String(s.name || s.id || '') };
+    if (s.eligibility?.status && s.eligibility.status !== 'ready') row.status = String(s.eligibility.status || '');
+    if (Array.isArray(s.categories) && s.categories.length) row.categories = s.categories.slice(0, 4);
+    if (Array.isArray(s.requiredTools) && s.requiredTools.length) row.requiredTools = s.requiredTools.slice(0, 6);
+    if (includeDescriptions) row.description = String(s.description || '').slice(0, 180);
+    return row;
+  });
   return {
     success: true,
-    stdout: `${all.length} skills available. Call skill_read(id) to load one.\n\n${list}`,
+    stdout: JSON.stringify({
+      totalInstalled: all.length,
+      query: query || undefined,
+      matchedCount: matched.length,
+      returnedCount: rows.length,
+      truncated: matched.length > rows.length,
+      compact: !includeDescriptions,
+      note: 'Compact skill discovery. Use query to narrow, include_descriptions:true only when descriptions are needed, then call skill_read(id) for one relevant skill.',
+      skills: rows,
+    }, null, 2),
   };
 }
 
@@ -144,10 +251,22 @@ export async function executeSkillCreate(
 
 export const skillListTool = {
   name: 'skill_list',
-  description: 'List available skills in the workspace, including bundle metadata and resources when available.',
+  description: 'Compact skill discovery. Returns skill IDs/names by default; use query to narrow before skill_read(id).',
   execute: (args: any) => executeSkillList(args, getDefaultSkillsManager()),
-  schema: { compact: 'boolean (optional)' },
-  jsonSchema: { type: 'object', properties: {}, additionalProperties: true },
+  schema: {
+    query: 'string (optional) - filter across id/name/description/triggers/categories/requiredTools',
+    limit: 'number (optional) - default 24, hard cap 80',
+    include_descriptions: 'boolean (optional) - include short descriptions; default false',
+  },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+      limit: { type: 'number' },
+      include_descriptions: { type: 'boolean' },
+    },
+    additionalProperties: true,
+  },
 };
 
 export const skillReadTool = {
@@ -328,6 +447,63 @@ export const skillManifestWriteTool = {
     properties: {
       id: { type: 'string' },
       manifest: { type: 'object' },
+    },
+    additionalProperties: true,
+  },
+};
+
+export const skillUpdateMetadataTool = {
+  name: 'skill_update_metadata',
+  description: 'Patch skill discovery metadata through a manifest overlay. Use addTriggers/removeTriggers to change trigger routing without rebuilding the skill.',
+  execute: async (args: any): Promise<ToolResult> => {
+    const sm = getDefaultSkillsManager();
+    const id = String(args?.id || args?.skill_id || '').trim();
+    if (!id) return skillErr('id is required.');
+    sm.scanSkills();
+    const skill = sm.get(id);
+    if (!skill) return skillErr(`Skill "${id}" not found. Call skill_list to see available IDs.`);
+    const manifest = buildMetadataOverlay(skill, args);
+    if (!manifest) return skillErr(`skill_update_metadata: no metadata changes provided for "${id}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, or name).`);
+    try {
+      const updated = sm.writeManifestOverlay(id, manifest, {
+        changeType: args?.changeType || args?.change_type ? String(args.changeType || args.change_type) : 'metadata_update',
+        evidence: Array.isArray(args?.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args?.evidence ? [String(args.evidence)] : undefined),
+        appliedBy: args?.appliedBy || args?.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
+        reason: args?.reason ? String(args.reason) : undefined,
+      });
+      return skillOk(`Updated metadata for skill "${updated.id}". Fields: ${Object.keys(manifest).join(', ')}.`, updated);
+    } catch (err: any) {
+      return skillErr(`skill_update_metadata failed: ${err.message}`);
+    }
+  },
+  schema: {
+    id: 'string (required) - installed skill id',
+    triggers: 'string|string[] (optional) - replace all triggers',
+    addTriggers: 'string|string[] (optional) - append trigger phrases, preserving existing triggers',
+    removeTriggers: 'string|string[] (optional) - remove trigger phrases',
+    description: 'string (optional)',
+    categories: 'string|string[] (optional)',
+    requiredTools: 'string|string[] (optional)',
+    lifecycle: 'string (optional)',
+    name: 'string (optional)',
+  },
+  jsonSchema: {
+    type: 'object',
+    required: ['id'],
+    properties: {
+      id: { type: 'string' },
+      skill_id: { type: 'string' },
+      triggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      addTriggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      add_triggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      removeTriggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      remove_triggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      description: { type: 'string' },
+      categories: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      requiredTools: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      required_tools: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      lifecycle: { type: 'string' },
+      name: { type: 'string' },
     },
     additionalProperties: true,
   },
@@ -623,6 +799,7 @@ export const allSkillTools = [
   skillImportBundleTool,
   skillInspectTool,
   skillManifestWriteTool,
+  skillUpdateMetadataTool,
   skillCreateBundleTool,
   skillResourceWriteTool,
   skillResourceDeleteTool,

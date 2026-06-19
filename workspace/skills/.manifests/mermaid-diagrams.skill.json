@@ -1,7 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to create flowcharts, sequence diagrams, architecture diagrams, ERDs, state diagrams, journey maps, dependency maps, or other Mermaid-based diagrams. It guides clear diagram syntax and readable structure.",
+  "description": "Use this skill when creating or editing Mermaid diagrams such as flowcharts, sequence diagrams, ERDs, state diagrams, architecture diagrams, journey maps, or markdown-embedded diagrams.",
   "triggers": [
     "Mermaid diagram",
     "flowchart",
@@ -9,15 +9,16 @@
     "ERD",
     "state diagram",
     "architecture diagram",
+    "draw the workflow",
+    "diagram this process",
+    "markdown diagram",
     "journey map",
-    "dependency map",
-    "diagram this",
-    "create diagram",
-    "mermaid flowchart",
-    "process diagram",
-    "system diagram",
+    "graph TD",
+    "visualize architecture",
     "class diagram",
-    "visual flow"
+    "dependency diagram",
+    "process map",
+    "render Mermaid"
   ],
   "categories": [
     "visualization",
@@ -25,8 +26,10 @@
     "documentation"
   ],
   "requiredTools": [
-    "creative_mode"
+    "creative_basic",
+    "workspace_write"
   ],
   "lifecycle": "active",
+  "name": "Mermaid Diagrams",
   "id": "mermaid-diagrams"
 }

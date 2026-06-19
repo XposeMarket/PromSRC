@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when a repeated browser workflow should be evaluated or converted into a connector, teach workflow, composite tool, desktop macro, CLI adapter, or API integration to reduce brittle browser automation.",
+  "triggers": [
+    "turn this browser workflow into a connector",
+    "stop using browser for this",
+    "make this a connector",
+    "migrate browser automation",
+    "repeated website workflow",
+    "create composite tool",
+    "teach this workflow",
+    "browser macro",
+    "automate this repeated task",
+    "API instead of browser",
+    "connector candidate",
+    "harden this browser flow",
+    "convert clicks to tool",
+    "browser-to-API migration"
+  ],
+  "categories": [
+    "prometheus",
+    "browser",
+    "connectors",
+    "automation"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "connector_list",
+    "integration_admin",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "id": "browser-to-connector-migration"
+}

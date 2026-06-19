@@ -1,38 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Raul asks Prometheus to find, screen, qualify, or save local business leads from live listings such as Google Maps, especially for Xpose Market prospecting. Triggers on phrases like find local leads, local lead hunting, Google Maps leads, scan local businesses, audit local business websites, qualify local companies, local SEO opportunity, and build a local lead list. Use it to run a browser-first prospecting workflow that persists evidence, scores website/SEO/conversion weaknesses, and separates strong outreach candidates from weak ones.",
+  "description": "Use this skill when Raul asks Prometheus to find, screen, qualify, or save local business leads from live listings such as Google Maps, especially for Xpose Market prospecting with website/SEO evidence.",
   "triggers": [
-    "find local leads",
     "local lead hunting",
-    "google maps leads",
-    "go through google maps for leads",
-    "scan businesses in",
-    "scan local businesses",
-    "prospect local companies",
-    "prospect frederick businesses",
-    "audit local business websites",
-    "check businesses for website problems",
-    "qualify local companies",
-    "build a local lead list",
-    "save evidence while researching",
-    "local seo opportunity",
-    "website lead qualification"
+    "find local business leads",
+    "Google Maps lead search",
+    "Xpose lead hunt",
+    "screen local businesses",
+    "qualify business leads",
+    "save leads to markdown",
+    "find prospects on Maps",
+    "local businesses with bad websites",
+    "live business listings",
+    "website SEO lead evidence",
+    "Xpose Market prospecting",
+    "local lead workflow"
   ],
   "categories": [
     "sales",
     "marketing",
     "lead-generation",
-    "browser-automation",
-    "xpose-market"
+    "browser-automation"
   ],
   "requiredTools": [
-    "skill_list",
-    "skill_read",
     "browser_automation",
-    "workspace_write"
+    "workspace_write",
+    "skills"
   ],
   "lifecycle": "active",
-  "name": "Local Lead Hunting",
   "id": "local-lead-hunting"
 }
