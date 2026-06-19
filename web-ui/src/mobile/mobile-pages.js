@@ -10639,7 +10639,6 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         type: 'session.update',
         session: {
           type: 'realtime',
-          model: __pmVoice?.settings?.realtimeModel || bootstrap.model || undefined,
           audio: {
             input: {
               turn_detection: _mobileRealtimeTurnDetectionForListenMode(listenMode),

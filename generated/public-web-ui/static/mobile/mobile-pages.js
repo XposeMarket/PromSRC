@@ -9704,7 +9704,6 @@ async function _ensureRealtimeSpeechConnection() {
       headers: _gatewayJsonHeaders(),
       body: JSON.stringify({
         voice: __pmVoice.settings?.realtimeVoice || __pmVoice.provider?.voice || 'marin',
-        model: __pmVoice.settings?.realtimeModel || undefined,
         speed: Number(__pmVoice.settings?.realtimeSpeed || __pmVoice.provider?.speed || 1.05),
         instructions: 'Speak the supplied Prometheus response verbatim. Do not add extra commentary.',
       }),
@@ -10437,15 +10436,10 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'realtime_agent_bootstrap' });
   }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
-  const desiredModel = String(__pmVoice?.settings?.realtimeModel || '').trim();
   if (
     __pmRealtimeAgent.conn?.dc?.readyState === 'open'
     && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid
   ) {
-    const activeModel = String(__pmRealtimeAgent.conn.model || '').trim();
-    if (desiredModel && desiredModel !== activeModel) {
-      _stopMobileRealtimeAgentSession();
-    } else {
     __pmRealtimeAgent.conn.listenMode = listenMode;
     __pmRealtimeAgent.listenMode = listenMode;
     _sendMobileRealtimeAgentSessionUpdateFromSettings('realtime_agent_reuse');
@@ -10459,8 +10453,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       micEnabled: __pmRealtimeAgent.conn.micTrack?.enabled === true,
       micTrackState: __pmRealtimeAgent.conn.micTrack?.readyState || '',
     });
-      return __pmRealtimeAgent.conn;
-    }
+    return __pmRealtimeAgent.conn;
   }
   if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
     _mobileRealtimeAgentDisableAlwaysListening();
@@ -10478,7 +10471,6 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       body: JSON.stringify({
         sessionId: sid,
         voice: String(__pmVoice?.settings?.realtimeVoice || 'marin'),
-        model: desiredModel || undefined,
         speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
         voiceRuntime: wakePhrase
           ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
@@ -10647,7 +10639,6 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         type: 'session.update',
         session: {
           type: 'realtime',
-          model: __pmVoice?.settings?.realtimeModel || bootstrap.model || undefined,
           audio: {
             input: {
               turn_detection: _mobileRealtimeTurnDetectionForListenMode(listenMode),
@@ -10669,7 +10660,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     // the voice agent continues the conversation instead of starting fresh.
     _seedMobileRealtimeAgentConversationHistory(dc, sid);
 
-    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true, model: bootstrap.model || desiredModel || '' };
+    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true };
     if (__pmRealtimeAgent.quiet.active) _sendMobileRealtimeAgentCreateResponseFlag(false);
     const logState = (reason) => _voiceDebug('realtime-agent-pc-state', {
       sessionId: sid,
@@ -11274,18 +11265,12 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'xai_realtime_agent_bootstrap' });
   }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
-  const desiredModel = String(__pmVoice?.settings?.xaiRealtimeModel || '').trim();
   if (__pmRealtimeAgent.conn?.dc?.readyState === 'open' && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid) {
-    const activeModel = String(__pmRealtimeAgent.conn.model || '').trim();
-    if (desiredModel && desiredModel !== activeModel) {
-      _stopMobileRealtimeAgentSession();
-    } else {
     __pmRealtimeAgent.conn.listenMode = listenMode;
     __pmRealtimeAgent.listenMode = listenMode;
     _sendMobileRealtimeAgentSessionUpdateFromSettings('xai_realtime_agent_reuse');
     if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
-      return __pmRealtimeAgent.conn;
-    }
+    return __pmRealtimeAgent.conn;
   }
   if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
   __pmRealtimeAgent.listenMode = listenMode;
@@ -11361,7 +11346,6 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       body: JSON.stringify({
         sessionId: sid,
         voice: _mobileXaiVoice(__pmVoice?.settings?.serverVoice || __pmVoice?.settings?.realtimeVoice),
-        model: desiredModel || undefined,
         speed: Number(__pmVoice?.settings?.xaiSpeed || 1.0),
         voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true } : undefined,
         deviceTime: _mobileVoiceDeviceTimeContext(),
@@ -11432,7 +11416,6 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
         type: 'session.update',
         session: {
           modalities: ['audio', 'text'],
-          model: __pmVoice?.settings?.xaiRealtimeModel || bootstrap.model || undefined,
           instructions: bootstrap.instructions,
           voice: bootstrap.voice,
           speed,
@@ -11453,7 +11436,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     } catch {}
 
     __pmRealtimeAgent.conn = {
-      provider: 'xai', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture, model: bootstrap.model || desiredModel || '',
+      provider: 'xai', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture,
       cleanup: () => {
         try { processor.disconnect(); } catch {}
         try { source.disconnect(); } catch {}
@@ -17611,18 +17594,12 @@ function _mobileVoiceSettingsFromAgentProfile(profile = {}) {
   const p = profile && typeof profile === 'object' ? profile : {};
   const provider = String(p.provider || '').trim();
   const voice = String(p.voice || '').trim();
-  const model = String(p.model || '').trim();
-  const reasoningEffort = String(p.reasoning_effort || p.reasoningEffort || '').trim();
-  const speed = Number(p.speed);
   if (provider === 'openai_realtime') {
     return {
       voiceMode: 'openai_realtime',
       sttProvider: 'openai_realtime',
       ttsProvider: 'openai_realtime',
       realtimeVoice: voice || undefined,
-      realtimeModel: model || undefined,
-      realtimeReasoningEffort: reasoningEffort || undefined,
-      realtimeSpeed: Number.isFinite(speed) && speed > 0 ? speed : undefined,
       sttProviderLocked: true,
       autoProviderDefault: '',
       voiceAgentRealtimeAgent: true,
@@ -17634,9 +17611,6 @@ function _mobileVoiceSettingsFromAgentProfile(profile = {}) {
       sttProvider: 'xai',
       ttsProvider: 'xai',
       serverVoice: voice || undefined,
-      xaiRealtimeModel: model || undefined,
-      xaiReasoningEffort: reasoningEffort || undefined,
-      xaiSpeed: Number.isFinite(speed) && speed > 0 ? speed : undefined,
       sttProviderLocked: true,
       autoProviderDefault: '',
       voiceAgentXaiRealtime: true,
@@ -17648,8 +17622,6 @@ function _mobileVoiceSettingsFromAgentProfile(profile = {}) {
       sttProvider: 'browser',
       ttsProvider: 'openai',
       serverVoice: voice || undefined,
-      voiceModel: model || undefined,
-      voiceReasoningEffort: reasoningEffort || undefined,
       sttProviderLocked: true,
       autoProviderDefault: '',
     };
