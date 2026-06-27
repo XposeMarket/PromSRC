@@ -776,9 +776,80 @@ function curatorApplyPreview(s) {
   return `Approve will apply this suggested change to ${skill}.`;
 }
 
+function curatorLessonTypeLabel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Skill change';
+  return raw
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function curatorResourceKind(pathValue) {
+  const p = String(pathValue || '').toLowerCase();
+  if (p.includes('/recovery/')) return 'Recovery note';
+  if (p.includes('/styles/')) return 'Style reference';
+  if (p.includes('/workflows/')) return 'Workflow recipe';
+  if (p.includes('/examples/')) return 'Example';
+  if (p.includes('/templates/')) return 'Template';
+  return 'Skill resource';
+}
+
+function curatorChangeSummary(s, lesson) {
+  const change = s?.change || {};
+  const kind = String(change.kind || '').toLowerCase();
+  const skill = String(s?.skillId || 'unknown skill').trim();
+  const pathValue = String(change.path || '').trim();
+  if (kind === 'write_resource') {
+    const resourceKind = curatorResourceKind(pathValue);
+    return {
+      action: `Create ${resourceKind.toLowerCase()}`,
+      targetLabel: 'Will write',
+      target: pathValue ? `skill:${skill}/${pathValue}` : `skill:${skill}/(new resource file)`,
+      scope: `${resourceKind} for ${skill}.`,
+      writeNote: 'Adds a reference file. It does not create a new skill or edit SKILL.md.',
+      teachLabel: 'Will teach',
+      teach: lesson || s?.learnedBehavior || 'A reusable behavior captured from Brain evidence.',
+    };
+  }
+  if (kind === 'manifest_overlay') {
+    return {
+      action: 'Update skill routing metadata',
+      targetLabel: 'Will write',
+      target: `skill:${skill}/skill.json overlay`,
+      scope: 'Adds or adjusts trigger words so this skill is found earlier.',
+      writeNote: 'No instruction body or resource markdown is changed.',
+      teachLabel: 'Routing change',
+      teach: lesson || s?.learnedBehavior || 'Prometheus should route matching requests to this skill sooner.',
+    };
+  }
+  if (kind === 'review_only') {
+    return {
+      action: 'Accept daily skill-change audit',
+      targetLabel: 'File change',
+      target: 'No files written',
+      scope: 'Marks a self-improvement audit item as reviewed.',
+      writeNote: 'This accepts the audit record only.',
+      teachLabel: 'Audit purpose',
+      teach: lesson || s?.learnedBehavior || 'Checks that recent skill mutations were evidence-backed and safe.',
+    };
+  }
+  return {
+    action: 'Apply suggested skill change',
+    targetLabel: 'Target',
+    target: pathValue ? `skill:${skill}/${pathValue}` : `skill:${skill}`,
+    scope: 'Applies a Brain skill suggestion.',
+    writeNote: 'Review the technical details before approving.',
+    teachLabel: 'Will teach',
+    teach: lesson || s?.learnedBehavior || 'A reusable skill behavior from Brain evidence.',
+  };
+}
+
 function curatorApproveLabel(s) {
   const kind = String(s?.change?.kind || '').toLowerCase();
-  return kind === 'review_only' ? 'Approve audit' : 'Approve and add';
+  if (kind === 'review_only') return 'Accept audit';
+  if (kind === 'manifest_overlay') return 'Update trigger';
+  if (kind === 'write_resource') return 'Create file';
+  return 'Apply change';
 }
 
 function renderCuratorSuggestion(s) {
@@ -790,6 +861,8 @@ function renderCuratorSuggestion(s) {
   const content = String(change.content || '').trim();
   const lesson = curatorLessonSummary(s, content);
   const applyPreview = curatorApplyPreview(s);
+  const changeSummary = curatorChangeSummary(s, lesson);
+  const lessonTypeLabel = curatorLessonTypeLabel(s.lessonType || change.kind);
   const isPending = status === 'pending';
   const isBusy = _curator.actingId === s.id;
   return `
@@ -804,25 +877,43 @@ function renderCuratorSuggestion(s) {
           </div>
         </div>
         <div class="hub-curator-badges">
+          <span class="hub-curator-badge kind">${escHtml(lessonTypeLabel)}</span>
           <span class="hub-curator-badge status">${escHtml(status)}</span>
           <span class="hub-curator-badge risk">${escHtml(risk)} risk</span>
           <span class="hub-curator-badge scan">${escHtml(s.scan?.verdict || 'unscanned')}</span>
         </div>
       </div>
-      <div class="hub-curator-apply-preview">${escHtml(applyPreview)}</div>
-      <div class="hub-curator-lesson">${escHtml(lesson)}</div>
-      ${s.futureTrigger ? `<div class="hub-curator-trigger"><span>Future trigger</span>${escHtml(s.futureTrigger)}</div>` : ''}
-      ${s.whyUseful ? `<div class="hub-curator-why">${escHtml(s.whyUseful)}</div>` : ''}
-      <div class="hub-curator-reason">${escHtml(s.reason || '')}</div>
-      <div class="hub-curator-path" title="${escHtml(change.path || '')}"><span>Target</span>${escHtml(change.path || '(manifest overlay)')}</div>
+      <div class="hub-curator-apply-preview">
+        <span>Approve action</span>
+        <strong>${escHtml(changeSummary.action)}</strong>
+        <small>${escHtml(changeSummary.scope)}</small>
+      </div>
+      <div class="hub-curator-decision-grid">
+        <div>
+          <span>${escHtml(changeSummary.targetLabel)}</span>
+          <code title="${escHtml(changeSummary.target)}">${escHtml(changeSummary.target)}</code>
+          <small>${escHtml(changeSummary.writeNote)}</small>
+        </div>
+        <div>
+          <span>${escHtml(changeSummary.teachLabel)}</span>
+          <strong>${escHtml(changeSummary.teach)}</strong>
+        </div>
+        ${s.futureTrigger ? `<div><span>Use when</span><strong>${escHtml(s.futureTrigger)}</strong></div>` : ''}
+      </div>
+      ${s.whyUseful ? `<div class="hub-curator-why"><strong>Why keep it</strong> ${escHtml(s.whyUseful)}</div>` : ''}
+      ${s.reason ? `<div class="hub-curator-reason"><strong>Curator reason</strong> ${escHtml(s.reason)}</div>` : ''}
+      <div class="hub-curator-path" title="${escHtml(changeSummary.target)}"><span>Target</span>${escHtml(changeSummary.target)}</div>
       ${evidence.length ? `
-        <div class="hub-curator-evidence">
+        <div class="hub-curator-evidence-block">
+          <span>Evidence sources</span>
+          <div class="hub-curator-evidence">
           ${evidence.slice(0, 4).map((item) => `<span title="${escHtml(item)}">${escHtml(item)}</span>`).join('')}
           ${evidence.length > 4 ? `<span>+${evidence.length - 4} more</span>` : ''}
+          </div>
         </div>
       ` : ''}
       <details class="hub-curator-details">
-        <summary>Raw evidence and scan details</summary>
+        <summary>Technical evidence, raw file preview, and scan results</summary>
         <div class="hub-curator-detail-grid">
           <div><span>ID</span><code>${escHtml(s.id || '')}</code></div>
           <div><span>Created</span><code>${escHtml(fmtDate(s.createdAt))}</code></div>
@@ -830,6 +921,8 @@ function renderCuratorSuggestion(s) {
           <div><span>Scan hash</span><code>${escHtml(s.scan?.contentHash || '')}</code></div>
           <div><span>Quality</span><code>${escHtml(String(s.qualityScore ?? 'legacy'))}</code></div>
           <div><span>Auto</span><code>${escHtml(s.autoApplyEligible ? 'eligible' : 'review')}</code></div>
+          <div><span>Backend preview</span><code>${escHtml(applyPreview)}</code></div>
+          <div><span>Change kind</span><code>${escHtml(change.kind || 'unknown')}</code></div>
         </div>
         ${s.autoDecisionReason ? `<div class="hub-curator-findings">${escHtml(s.autoDecisionReason)}</div>` : ''}
         ${findings.length ? `<div class="hub-curator-findings">${findings.map((f) => `<div>${escHtml(f.message || JSON.stringify(f))}</div>`).join('')}</div>` : ''}

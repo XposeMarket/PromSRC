@@ -474,6 +474,16 @@ router.get('/api/schedules/:scheduleId/run-log', (req, res) => {
 });
 
 // Ephemeral one-shot background executions (additive)
+router.get('/api/background', (req, res) => {
+  const { listBackgroundStatuses } = getTaskRunnerRuntime();
+  const spawnerSessionId = String(req.query.sessionId || req.query.spawnerSessionId || '').trim();
+  let statuses = listBackgroundStatuses();
+  if (spawnerSessionId) {
+    statuses = statuses.filter((status: any) => String(status?.spawnerSessionId || '').trim() === spawnerSessionId);
+  }
+  res.json({ success: true, statuses });
+});
+
 router.get('/api/background/:id/status', (req, res) => {
   const { backgroundStatus } = getTaskRunnerRuntime();
   const status = backgroundStatus(String(req.params.id || ''));

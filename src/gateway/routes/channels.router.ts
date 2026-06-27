@@ -8,7 +8,7 @@ import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastR
 import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
-import { findRecoveryTaskForSubagentChat, handleTaskRecoveryMessage } from '../tasks/task-router';
+import { findBlockedRecoveryTaskForSubagentChat, handleTaskRecoveryMessage } from '../tasks/task-router';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -16,6 +16,7 @@ import { checkForTeamSuggestion } from '../teams/team-detector';
 import { getTeamWorkspacePath } from '../teams/team-workspace';
 import type { RuntimeVisionAttachment } from '../chat/attachment-context';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
+import { installAgentProfilePack, isMarketplaceImportedAgent, previewAgentProfilePack } from '../marketplace/agent-profile-packs';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
@@ -654,6 +655,9 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   if (raw?.teamRole !== undefined) normalized.teamRole = String(raw.teamRole || '').trim();
   if (raw?.teamAssignment !== undefined) normalized.teamAssignment = String(raw.teamAssignment || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
+  if (raw?.executionWorkspace !== undefined) normalized.executionWorkspace = String(raw.executionWorkspace || '').trim();
+  if (Array.isArray(raw?.allowedWorkPaths)) normalized.allowedWorkPaths = raw.allowedWorkPaths.map((s: any) => String(s || '').trim()).filter(Boolean);
+  if (raw?.marketplaceProfile && typeof raw.marketplaceProfile === 'object') normalized.marketplaceProfile = raw.marketplaceProfile;
   if (raw?.model !== undefined) normalized.model = String(raw.model || '').trim();
   if (raw?.voice !== undefined) {
     const voice = normalizeAgentVoiceProfile(raw.voice);
@@ -753,7 +757,6 @@ function getChannelSubagentChatSessionId(channel: string, accountId: string, age
 function loadAgentIdentityPrompt(agentWorkspace: string): string {
   const candidates = [
     path.join(agentWorkspace, 'system_prompt.md'),
-    path.join(agentWorkspace, 'AGENTS.md'),
     path.join(agentWorkspace, 'HEARTBEAT.md'),
   ];
   for (const candidate of candidates) {
@@ -926,6 +929,8 @@ async function runSubagentChatTurn(
     sessionIdOverride?: string;
     source?: string;
     seedFromSharedChatStore?: boolean;
+    callerContextExtra?: string;
+    clientMessageId?: string;
   },
 ): Promise<{ result: { type: string; text: string; thinking?: string }; historyEntry: any; messages: any[] }> {
   const startedAt = Date.now();
@@ -945,7 +950,10 @@ async function runSubagentChatTurn(
   // Direct subagent chat is one long per-agent thread. Reset category expansion
   // each turn so the tool surface stays intent-scoped instead of accumulating.
   setActivatedToolCategories(sessionId, []);
-  const callerContext = buildSubagentCallerContext(agentId, agent, mainWorkspace, artifactWorkspace);
+  const callerContext = [
+    buildSubagentCallerContext(agentId, agent, mainWorkspace, artifactWorkspace),
+    options?.callerContextExtra,
+  ].filter(Boolean).join('\n\n');
   const abortSignal = externalAbortSignal || { aborted: false };
   const baseEmit = sendSSE || (() => {});
 
@@ -1004,10 +1012,11 @@ async function runSubagentChatTurn(
     const finishedAt = Date.now();
     const reply = String(result?.text || '').trim() || '(No response text returned.)';
     const agentMessage = appendSubagentChatMessage(agentId, {
+      id: options?.clientMessageId ? `${options.clientMessageId}_agent` : undefined,
       role: 'agent',
       content: reply,
       metadata: {
-        source: 'subagent_chat',
+        source: options?.source || 'subagent_chat',
         channelSource: options?.source,
         success: true,
         mode: result?.type || 'chat',
@@ -1041,9 +1050,10 @@ async function runSubagentChatTurn(
       throw err;
     }
     const agentMessage = appendSubagentChatMessage(agentId, {
+      id: options?.clientMessageId ? `${options.clientMessageId}_agent_error` : undefined,
       role: 'agent',
       content: `Error: ${err.message}`,
-      metadata: { source: 'subagent_chat', channelSource: options?.source, success: false },
+      metadata: { source: options?.source || 'subagent_chat', channelSource: options?.source, success: false },
     });
     broadcastWS({ type: 'subagent_chat_message', agentId, message: agentMessage });
     throw err;
@@ -1078,7 +1088,7 @@ export async function runSubagentChatTurnFromChannel(params: {
   const sessionId = params.sessionId || getChannelSubagentChatSessionId(source, accountId, agentId, peerId);
   const content = params.userLabel ? `[${params.userLabel}]\n${message}` : message;
 
-  const recoveryTask = findRecoveryTaskForSubagentChat(agentId);
+  const recoveryTask = findBlockedRecoveryTaskForSubagentChat(agentId);
   if (recoveryTask) {
     const recovery = await handleTaskRecoveryMessage(recoveryTask.id, content, {
       sourceSessionId: sessionId,
@@ -1204,6 +1214,28 @@ router.get('/api/agents/:id/chat', (req, res) => {
   res.json({ success: true, messages: getSubagentChatHistory(agentId, limit) });
 });
 
+router.post('/api/agents/:id/chat/voice-log', (req, res) => {
+  const agentId = _sanitizeAgentId(req.params.id);
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+  const roleRaw = String(req.body?.role || '').trim().toLowerCase();
+  const role = roleRaw === 'user' ? 'user' : 'agent';
+  const content = String(req.body?.content || req.body?.text || '').trim();
+  if (!content) return res.status(400).json({ success: false, error: 'content is required' });
+  const source = String(req.body?.source || 'voice_agent_realtime').trim() || 'voice_agent_realtime';
+  const message = appendSubagentChatMessage(agentId, {
+    role,
+    content,
+    metadata: {
+      source,
+      channelSource: source,
+      realtime: req.body?.realtime !== false,
+    },
+  });
+  broadcastWS({ type: 'subagent_chat_message', agentId, message });
+  res.json({ success: true, message, messages: getSubagentChatHistory(agentId, 100) });
+});
+
 router.get('/api/agents/:id/chat/stream', (req, res) => {
   const agentId = _sanitizeAgentId(req.params.id);
   const agent = getAgentById(agentId);
@@ -1251,9 +1283,11 @@ router.post('/api/agents/:id/chat', async (req, res) => {
   if (!_runInteractiveTurn) return res.status(503).json({ success: false, error: 'Subagent chat runtime is not initialized' });
 
   const message = String(req.body?.message || '').trim();
+  const visibleMessage = String(req.body?.visibleMessage || req.body?.visible_message || '').trim();
+  const clientMessageId = String(req.body?.clientMessageId || req.body?.client_message_id || '').replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 160);
   if (!message) return res.status(400).json({ success: false, error: 'message is required' });
 
-  const recoveryTask = findRecoveryTaskForSubagentChat(agentId);
+  const recoveryTask = findBlockedRecoveryTaskForSubagentChat(agentId);
   if (recoveryTask) {
     try {
       const recovery = await handleTaskRecoveryMessage(recoveryTask.id, message, {
@@ -1277,11 +1311,13 @@ router.post('/api/agents/:id/chat', async (req, res) => {
   }
 
   const userMessage = appendSubagentChatMessage(agentId, {
+    id: clientMessageId || undefined,
     role: 'user',
-    content: message,
+    content: visibleMessage || message,
     metadata: {
-      source: 'subagent_chat',
+      source: String(req.body?.source || 'subagent_chat').trim() || 'subagent_chat',
       attachmentPreviews: Array.isArray(req.body?.attachmentPreviews) ? req.body.attachmentPreviews : undefined,
+      runtimeMessage: visibleMessage && visibleMessage !== message ? message.slice(0, 2000) : undefined,
     },
   });
   broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
@@ -1301,6 +1337,7 @@ router.post('/api/agents/:id/chat', async (req, res) => {
       undefined,
       undefined,
       attachmentContext.visionAttachments,
+      clientMessageId ? { clientMessageId } : undefined,
     );
     res.json({ success: true, ...payload });
   } catch (err: any) {
@@ -1315,6 +1352,8 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
   if (!_runInteractiveTurn) return res.status(503).json({ success: false, error: 'Subagent chat runtime is not initialized' });
 
   const message = String(req.body?.message || '').trim();
+  const visibleMessage = String(req.body?.visibleMessage || req.body?.visible_message || '').trim();
+  const clientMessageId = String(req.body?.clientMessageId || req.body?.client_message_id || '').replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 160);
   if (!message) return res.status(400).json({ success: false, error: 'message is required' });
 
   const timeoutMs = Number.isFinite(Number(req.body?.timeoutMs)) && Number(req.body.timeoutMs) > 0
@@ -1347,7 +1386,7 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
     }
   });
 
-  const recoveryTask = findRecoveryTaskForSubagentChat(agentId);
+  const recoveryTask = findBlockedRecoveryTaskForSubagentChat(agentId);
   if (recoveryTask) {
     try {
       sendSSE('ui_preflight', { message: 'Routing message to paused subagent task...' });
@@ -1378,11 +1417,13 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
   }
 
   const userMessage = appendSubagentChatMessage(agentId, {
+    id: clientMessageId || undefined,
     role: 'user',
-    content: message,
+    content: visibleMessage || message,
     metadata: {
-      source: 'subagent_chat',
+      source: String(req.body?.source || 'subagent_chat').trim() || 'subagent_chat',
       attachmentPreviews: Array.isArray(req.body?.attachmentPreviews) ? req.body.attachmentPreviews : undefined,
+      runtimeMessage: visibleMessage && visibleMessage !== message ? message.slice(0, 2000) : undefined,
     },
   });
   broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
@@ -1398,6 +1439,27 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
       sendSSE,
       abortSignal,
       attachmentContext.visionAttachments,
+      req.body?.voiceTarget?.kind === 'subagent' || req.body?.source === 'subagent_voice'
+        ? {
+            source: 'subagent_voice',
+            clientMessageId,
+            callerContextExtra: [
+              '[VOICE_AGENT_HANDOFF]',
+              'This subagent voice turn was already routed by the selected subagent voice agent before durable work started.',
+              `Voice target: ${agent.name || (agent as any).alias || agentId} (${agentId}).`,
+              'Do not repeat a generic startup acknowledgement. Continue directly into the requested work and report progress naturally.',
+              '[/VOICE_AGENT_HANDOFF]',
+              '',
+              '[SUBAGENT_VOICE_TURN]',
+              `The user spoke this directly to this subagent (${agent.name || (agent as any).alias || agentId}) through its voice interface.`,
+              'Answer as this subagent. Do not claim to be Prometheus. Do not say you will get a worker or ask Prometheus; if work is needed, treat it as your own work.',
+              '[/SUBAGENT_VOICE_TURN]',
+            ].join('\n'),
+          }
+        : {
+            source: String(req.body?.source || 'subagent_chat').trim() || 'subagent_chat',
+            clientMessageId,
+          },
     );
     if (!abortSignal.aborted) {
       sendSSE('final', { text: payload.result?.text || '' });
@@ -1467,6 +1529,71 @@ router.get('/api/agents/:id/next-runs', (req, res) => {
     }
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/api/agent-profile-packs/preview', (req, res) => {
+  try {
+    const packPath = String(req.body?.path || req.body?.packPath || '').trim();
+    const preview = previewAgentProfilePack(packPath, getConfig().getWorkspacePath(), _skillsManager?.getSkillsDir?.());
+    res.json({ success: true, preview });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/agent-profile-packs/install', (req, res) => {
+  try {
+    const packPath = String(req.body?.path || req.body?.packPath || '').trim();
+    const overwrite = req.body?.overwrite !== false;
+    const result = installAgentProfilePack({
+      packPath,
+      workspacePath: getConfig().getWorkspacePath(),
+      skillsDir: _skillsManager?.getSkillsDir?.(),
+      overwrite,
+    });
+    const cm = getConfig();
+    const current = cm.getConfig() as any;
+    const explicitAgents = Array.isArray(current.agents) ? current.agents : [];
+    const idx = explicitAgents.findIndex((a: any) => _sanitizeAgentId(a.id) === result.agent.id);
+    const next = idx >= 0
+      ? explicitAgents.map((a: any, i: number) => (i === idx ? { ...a, ...result.agent } : a))
+      : [...explicitAgents, result.agent];
+    const finalAgents = _normalizeAgentsForSave(next);
+    cm.updateConfig({ agents: finalAgents } as any);
+    _skillsManager?.scanSkills?.();
+    reloadAgentSchedules();
+    broadcastWS({ type: 'agents_updated', source: 'agent_profile_pack_import', agentId: result.agent.id });
+    res.json({ success: true, agent: finalAgents.find((a: any) => a.id === result.agent.id) || result.agent, preview: result.preview, installRecordPath: result.installRecordPath });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.delete('/api/agent-profile-packs/:agentId', (req, res) => {
+  try {
+    const targetId = _sanitizeAgentId(req.params.agentId);
+    if (!targetId) return res.status(400).json({ success: false, error: 'Invalid agent id' });
+    if (req.body?.confirm !== true) return res.status(400).json({ success: false, error: 'confirm:true is required' });
+    const cm = getConfig();
+    const current = cm.getConfig() as any;
+    const explicitAgents = Array.isArray(current.agents) ? current.agents : [];
+    const target = explicitAgents.find((a: any) => _sanitizeAgentId(a.id) === targetId);
+    if (!target) return res.status(404).json({ success: false, error: `Agent "${targetId}" not found in config` });
+    if (!isMarketplaceImportedAgent(target)) return res.status(403).json({ success: false, error: `Agent "${targetId}" is not a marketplace-imported profile pack.` });
+    const workspace = resolveAgentWorkspaceSafe(target);
+    const workspaceRoot = path.resolve(getConfig().getWorkspacePath());
+    const resolvedWorkspace = path.resolve(workspace);
+    const rel = path.relative(workspaceRoot, resolvedWorkspace);
+    const canRemoveWorkspace = !rel.startsWith('..') && !path.isAbsolute(rel) && rel.replace(/\\/g, '/').includes('.prometheus/subagents/');
+    const finalAgents = _normalizeAgentsForSave(explicitAgents.filter((a: any) => _sanitizeAgentId(a.id) !== targetId));
+    cm.updateConfig({ agents: finalAgents } as any);
+    if (canRemoveWorkspace && fs.existsSync(resolvedWorkspace)) fs.rmSync(resolvedWorkspace, { recursive: true, force: true });
+    reloadAgentSchedules();
+    broadcastWS({ type: 'agents_updated', source: 'agent_profile_pack_uninstall', agentId: targetId });
+    res.json({ success: true, agentId: targetId, removedWorkspace: canRemoveWorkspace ? resolvedWorkspace : null });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: String(err?.message || err) });
   }
 });
 

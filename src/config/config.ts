@@ -133,10 +133,10 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       openai: {
         // Supports inline value OR env: reference
         api_key: process.env.OPENAI_API_KEY ? `env:OPENAI_API_KEY` : '',
-        model:   process.env.OPENAI_MODEL   ?? 'gpt-4o',
+        model:   process.env.OPENAI_MODEL   ?? 'gpt-5.5',
       },
       openai_codex: {
-        model: process.env.CODEX_MODEL ?? 'gpt-5.4',
+        model: process.env.CODEX_MODEL ?? 'gpt-5.5',
         reasoning_effort: process.env.CODEX_REASONING_EFFORT ?? 'low',
       },
       xai: {

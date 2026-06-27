@@ -66,6 +66,7 @@ export const ICONS = {
   paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>',
   send:      '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg>',
   micSmall:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/></svg>',
+  volume:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   pin:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 2h6l-1 6 4 4-3 3H9l-3-3 4-4z"/></svg>',
   brain:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a3 3 0 0 0-3 3v12a3 3 0 0 0 5 2 3 3 0 0 0 5-2V6a3 3 0 0 0-5-2 3 3 0 0 0-2-1z"/></svg>',
   monitor:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
@@ -109,7 +110,48 @@ let _drawerSearchSeq = 0;
 let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
 let _drawerRefreshing = false;
+let _mobileNoSelectGuardInstalled = false;
 const PM_DRAWER_REFRESH_TTL_MS = 30_000;
+const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
+  'button',
+  '[role="button"]',
+  '[data-action]',
+  '[data-route]',
+  '[data-tab]',
+  '.pm-tab',
+  '.pm-icon-btn',
+  '.pm-drawer-item',
+  '.pm-drawer-new-chat',
+  '.pm-drawer-close',
+  '.pm-session-row',
+  '.pm-channel-card',
+  '.pm-command-action',
+  '.pm-command-chip',
+  '.pm-mobile-queued-text',
+  '.pm-mobile-queued-icon',
+  '.pm-background-spawn-summary',
+  '.pm-msg-action',
+  '.pm-msg-lp-btn',
+].join(',');
+
+function _isEditableTarget(target) {
+  return !!target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .pm-composer-input, .pm-mobile-edit-input, .pm-drawer-search input');
+}
+
+function _installMobileNoSelectGuard() {
+  if (_mobileNoSelectGuardInstalled) return;
+  _mobileNoSelectGuardInstalled = true;
+  const suppress = (ev) => {
+    if (!document.body?.classList?.contains('pm-mobile-active')) return;
+    if (_isEditableTarget(ev.target)) return;
+    const interactive = ev.target?.closest?.(PM_NO_SELECT_INTERACTIVE_SELECTOR);
+    if (!interactive) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+  };
+  document.addEventListener('selectstart', suppress, true);
+  document.addEventListener('contextmenu', suppress, true);
+}
 export async function refreshMobileDrawerSessions({ force = false, channel = '' } = {}) {
   if (!_drawerEl || !_drawerCallbacks) return;
   if (_drawerSearch) return;
@@ -324,20 +366,57 @@ async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset 
 }
 
 
-function _getTheme() {
-  const current = document.documentElement.getAttribute('data-theme');
-  if (current === 'dark' || current === 'light') return current;
-  try {
-    const saved = localStorage.getItem(PM_THEME_KEY);
-    if (saved === 'dark' || saved === 'light') return saved;
-  } catch {}
-  return 'dark';
+function _getThemeList() {
+  return (window.PROM_THEMES && window.PROM_THEMES.length)
+    ? window.PROM_THEMES
+    : [
+      { id: 'dark', label: 'Default Dark', base: 'dark' },
+      { id: 'light', label: 'Light', base: 'light' },
+    ];
 }
 
-function _applyMobileTheme(theme) {
-  const resolved = theme === 'dark' ? 'dark' : 'light';
+function _resolveTheme(themeId) {
+  const themes = _getThemeList();
+  const byId = themes.find((t) => t.id === String(themeId || ''));
+  if (byId) return byId;
+
+  const direct = String(themeId || '').trim().toLowerCase();
+  if (direct === 'dark' || direct === 'light') {
+    const byBase = themes.find((t) => t.base === direct);
+    if (byBase) return byBase;
+  }
+
+  return themes[0] || { id: 'dark', label: 'Default Dark', base: 'dark' };
+}
+
+function _getTheme() {
+  const currentSkin = document.documentElement.getAttribute('data-skin');
+  const list = _getThemeList();
+  if (list.some((t) => t.id === currentSkin)) return currentSkin;
+
+  const currentTheme = document.documentElement.getAttribute('data-theme');
+  if (currentTheme === 'dark' || currentTheme === 'light') {
+    const byBase = _resolveTheme(currentTheme);
+    if (byBase) return byBase.id;
+  }
+
+  try {
+    const saved = localStorage.getItem(PM_THEME_KEY);
+    if (saved) {
+      const resolved = _resolveTheme(saved);
+      if (list.some((t) => t.id === resolved.id)) return resolved.id;
+    }
+  } catch {}
+
+  return list[0]?.id || 'dark';
+}
+
+function _applyMobileTheme(themeId) {
+  const theme = _resolveTheme(themeId);
+  const resolved = theme.base === 'light' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', resolved);
-  try { localStorage.setItem(PM_THEME_KEY, resolved); } catch {}
+  document.documentElement.setAttribute('data-skin', theme.id);
+  try { localStorage.setItem(PM_THEME_KEY, theme.id); } catch {}
 
   const desktopToggle = document.getElementById('theme-toggle');
   if (desktopToggle) {
@@ -354,11 +433,26 @@ function _applyMobileTheme(theme) {
     mobileToggle.setAttribute('aria-pressed', String(isDark));
     mobileToggle.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
     mobileToggle.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+    mobileToggle.setAttribute('aria-pressed-label', isDark ? 'Current theme: dark' : 'Current theme: light');
+    mobileToggle.setAttribute('data-theme-id', theme.id);
   }
+
+  try {
+    document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: resolved } }));
+  } catch {}
 }
 
 function _toggleMobileTheme() {
-  _applyMobileTheme(_getTheme() === 'dark' ? 'light' : 'dark');
+  const themes = _getThemeList();
+  if (!themes.length) {
+    _applyMobileTheme('dark');
+    return;
+  }
+
+  const currentThemeId = _getTheme();
+  const currentIndex = themes.findIndex((t) => t.id === currentThemeId);
+  const nextTheme = themes[(currentIndex + 1) % themes.length] || themes[0];
+  _applyMobileTheme(nextTheme?.id || 'dark');
 }
 
 function _tabIndex(tabId) {
@@ -637,6 +731,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   root.hidden = false;
 
   _ensureLiquidGlassFilters();
+  _installMobileNoSelectGuard();
 
   const app = el(`<div class="pm-app" id="pm-app"></div>`);
   root.appendChild(app);
@@ -968,13 +1063,23 @@ function _wireDrawerLongPress(callbacks) {
   // Store callbacks so the context sheet can use them
   _sessLongCallbacks = callbacks;
 
+  // Resolve a session button from either the button itself or the haptic overlay host.
+  var _resolveSessionButton = function(node) {
+    if (!node || !node.closest) return null;
+    var btn = node.closest('[data-session-id]');
+    if (btn) return btn;
+    var host = node.closest('.pm-haptic-host');
+    if (host) return host.querySelector('[data-session-id]');
+    return null;
+  };
+
   // Remove old delegated handlers if already bound (re-wired on every render)
   if (_drawerEl._pmLongPressDown) _drawerEl.removeEventListener('pointerdown', _drawerEl._pmLongPressDown);
   if (_drawerEl._pmLongPressMove) _drawerEl.removeEventListener('pointermove', _drawerEl._pmLongPressMove);
   if (_drawerEl._pmLongPressUp) { _drawerEl.removeEventListener('pointerup', _drawerEl._pmLongPressUp); _drawerEl.removeEventListener('pointercancel', _drawerEl._pmLongPressUp); }
 
   var onDown = function(e) {
-    var sessionBtn = e.target && e.target.closest && e.target.closest('[data-session-id]');
+    var sessionBtn = _resolveSessionButton(e.target);
     if (!sessionBtn) return;
     _sessLongFired = false;
     _sessLongTargetId = sessionBtn.getAttribute('data-session-id');
@@ -1021,7 +1126,7 @@ function _wireDrawerLongPress(callbacks) {
     _drawerEl._pmLongPressClickGuard = true;
     _drawerEl.addEventListener('click', function(e) {
       if (_sessLongFired) {
-        var sessionBtn = e.target && e.target.closest && e.target.closest('[data-session-id]');
+        var sessionBtn = _resolveSessionButton(e.target);
         if (sessionBtn) { e.stopImmediatePropagation(); e.preventDefault(); _sessLongFired = false; }
       }
     }, true);
@@ -1071,11 +1176,15 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
       .catch(() => {});
   });
   _drawerEl.querySelectorAll('[data-session-id]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    const openSession = () => {
       const sessionId = btn.getAttribute('data-session-id');
       closeDrawer();
       if (typeof onOpenSession === 'function') onOpenSession(sessionId);
-    });
+    };
+    btn.addEventListener('click', openSession);
+    try {
+      attachMobileButtonHaptic(btn, openSession);
+    } catch {}
   });
   _wireDrawerLongPress({ onOpenSession, loadSessions, searchSessions, onNewChat });
 }
@@ -1157,12 +1266,18 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
 
     list.innerHTML = matches.map((s) => _searchResultButtonHtml(s, query)).join('');
     list.querySelectorAll('[data-session-id]').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      const openSession = () => {
         const sessionId = btn.getAttribute('data-session-id');
         closeDrawer();
         if (typeof onOpenSession === 'function') onOpenSession(sessionId);
-      });
+      };
+      btn.addEventListener('click', openSession);
+      try {
+        attachMobileButtonHaptic(btn, openSession);
+      } catch {}
     });
+    _wireDrawerLongPress({ onOpenSession, loadSessions, searchSessions, onNewChat });
+
   }, 180);
 }
 

@@ -153,14 +153,14 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
     const opts = provider === 'openai_codex' ? CODEX_EFFORT_OPTIONS : EFFORT_OPTIONS;
     const cur = String(providerConfig?.reasoning_effort || '').trim();
     return `
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Reasoning effort</label>
-        <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Reasoning effort</label>
+        <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1 1 140px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
           ${opts.map((o) => `<option value="${o}" ${o===cur?'selected':''}>${o ? escHtml(o) : '— none —'}</option>`).join('')}
         </select>
         <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}','${provider}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
       </div>
-      <div style="font-size:10px;color:var(--muted);margin-top:3px;margin-left:128px">Shared with all <strong>${escHtml(provider)}</strong> agents.</div>`;
+      <div style="font-size:10px;color:var(--muted);margin-top:3px">Shared with all <strong>${escHtml(provider)}</strong> agents.</div>`;
   }
   if (provider === 'anthropic') {
     const ext = providerConfig?.extended_thinking === true;
@@ -168,9 +168,9 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
     const budget = parseInt(providerConfig?.thinking_budget || '10000', 10);
     const effort = String(providerConfig?.reasoning_effort || '').trim();
     return `
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Thinking effort</label>
-        <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Thinking effort</label>
+        <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1 1 140px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
           ${ANTHROPIC_EFFORT_OPTIONS.map((o) => `<option value="${o}" ${o===effort?'selected':''}>${o === 'xhigh' ? 'extra high' : (o || 'provider default')}</option>`).join('')}
         </select>
       </div>
@@ -213,7 +213,7 @@ export function renderAgentModelPicker(agent, prefix) {
   const item = _getCatalogItem(provider);
   const accent = item?.ui?.color || 'var(--brand)';
   return `
-    <div id="${prefix}-wrap-${escHtml(id)}" style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;border-left:3px solid ${escHtml(accent)}">
+    <div id="${prefix}-wrap-${escHtml(id)}" style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;border-left:3px solid ${escHtml(accent)};max-width:100%;box-sizing:border-box;overflow:hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div>
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Model</div>
@@ -222,22 +222,22 @@ export function renderAgentModelPicker(agent, prefix) {
         <div id="${prefix}-status-${escHtml(id)}" style="font-size:11px;color:var(--muted)"></div>
       </div>
 
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Provider</label>
-        <select id="${prefix}-provider-${escHtml(id)}" onchange="agentModelPickerOnProviderChange('${prefix}','${escHtml(id)}')" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Provider</label>
+        <select id="${prefix}-provider-${escHtml(id)}" onchange="agentModelPickerOnProviderChange('${prefix}','${escHtml(id)}')" style="flex:1 1 150px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
           ${_providerOptionsHtml(provider)}
         </select>
-        <button onclick="agentModelPickerRefreshLiveModels('${prefix}','${escHtml(id)}')" title="Fetch live models from this provider" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer">Fetch models</button>
+        <button onclick="agentModelPickerRefreshLiveModels('${prefix}','${escHtml(id)}')" title="Fetch live models from this provider" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;flex:0 0 auto">Fetch models</button>
       </div>
 
-      <div style="display:flex;gap:8px;align-items:center">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Model</label>
-        <select id="${prefix}-modelselect-${escHtml(id)}" onchange="document.getElementById('${prefix}-modelcustom-${escHtml(id)}').value=this.value" style="flex:1;min-width:160px;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text);font-family:'IBM Plex Mono',monospace">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Model</label>
+        <select id="${prefix}-modelselect-${escHtml(id)}" onchange="document.getElementById('${prefix}-modelcustom-${escHtml(id)}').value=this.value" style="flex:1 1 155px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text);font-family:'IBM Plex Mono',monospace">
           ${_modelOptionsHtml(provider, model)}
         </select>
-        <input id="${prefix}-modelcustom-${escHtml(id)}" type="text" placeholder="custom model id" value="${escHtml(model)}" style="flex:1;min-width:140px;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text);font-family:'IBM Plex Mono',monospace" />
-        <button onclick="agentModelPickerSaveModel('${prefix}','${escHtml(id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
-        <button onclick="agentModelPickerClearModel('${prefix}','${escHtml(id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:7px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer">Clear</button>
+        <input id="${prefix}-modelcustom-${escHtml(id)}" type="text" placeholder="custom model id" value="${escHtml(model)}" style="flex:1 1 155px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text);font-family:'IBM Plex Mono',monospace" />
+        <button onclick="agentModelPickerSaveModel('${prefix}','${escHtml(id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;flex:0 0 auto">Save</button>
+        <button onclick="agentModelPickerClearModel('${prefix}','${escHtml(id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:7px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;flex:0 0 auto">Clear</button>
       </div>
 
       <div id="${prefix}-reasoning-${escHtml(id)}">${_reasoningRowHtml(prefix, id, provider, providerConfig)}</div>

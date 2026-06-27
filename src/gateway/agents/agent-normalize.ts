@@ -19,6 +19,9 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   if (raw?.teamRole !== undefined) normalized.teamRole = String(raw.teamRole || '').trim();
   if (raw?.teamAssignment !== undefined) normalized.teamAssignment = String(raw.teamAssignment || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
+  if (raw?.executionWorkspace !== undefined) normalized.executionWorkspace = String(raw.executionWorkspace || '').trim();
+  if (Array.isArray(raw?.allowedWorkPaths)) normalized.allowedWorkPaths = raw.allowedWorkPaths.map((s: any) => String(s || '').trim()).filter(Boolean);
+  if (raw?.marketplaceProfile && typeof raw.marketplaceProfile === 'object') normalized.marketplaceProfile = raw.marketplaceProfile;
   if (raw?.model !== undefined) normalized.model = String(raw.model || '').trim();
   if (Array.isArray(raw?.skillIds)) {
     normalized.skillIds = Array.from(new Set(raw.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean)));

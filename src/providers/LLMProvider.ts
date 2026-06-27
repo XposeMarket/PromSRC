@@ -93,6 +93,10 @@ export interface ModelUsage {
   cacheWriteTokens?: number;
   totalTokens?: number;
   source?: 'provider' | 'estimated';
+  requestedModel?: string;
+  actualModel?: string;
+  fallbackFrom?: string;
+  fallbackReason?: string;
 }
 
 export interface ChatResult {

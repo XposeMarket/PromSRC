@@ -7,6 +7,10 @@ export interface ModelUsageEvent {
   timestamp: string;
   provider: string;
   model: string;
+  requestedModel?: string;
+  actualModel?: string;
+  fallbackFrom?: string;
+  fallbackReason?: string;
   callType: 'chat' | 'generate';
   sessionId?: string;
   agentId?: string;
@@ -175,6 +179,10 @@ export function normalizeUsage(usage: ModelUsage | undefined, fallback: {
     cacheWriteTokens,
     totalTokens,
     source: usage?.source || 'estimated',
+    requestedModel: usage?.requestedModel || '',
+    actualModel: usage?.actualModel || '',
+    fallbackFrom: usage?.fallbackFrom || '',
+    fallbackReason: usage?.fallbackReason || '',
   };
 }
 
@@ -184,6 +192,10 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       timestamp: event.timestamp || new Date().toISOString(),
       provider: String(event.provider || 'unknown'),
       model: String(event.model || 'unknown'),
+      requestedModel: event.requestedModel ? String(event.requestedModel) : undefined,
+      actualModel: event.actualModel ? String(event.actualModel) : undefined,
+      fallbackFrom: event.fallbackFrom ? String(event.fallbackFrom) : undefined,
+      fallbackReason: event.fallbackReason ? String(event.fallbackReason) : undefined,
       callType: event.callType,
       sessionId: event.sessionId,
       agentId: event.agentId,

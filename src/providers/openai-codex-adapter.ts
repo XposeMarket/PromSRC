@@ -13,6 +13,8 @@
  * Tool calls come back as response.output items with type "function_call".
  */
 
+import fs from 'fs';
+import path from 'path';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
 import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { contentToString, stripCacheMarker } from './content-utils';
@@ -27,8 +29,13 @@ const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 24
 const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 75_000, 15_000);
 const DEFAULT_CODEX_INSTRUCTIONS = 'You are Prometheus, a helpful AI assistant. Answer the user directly and follow the conversation context.';
 
-// Models available via Codex OAuth (latest first; includes standard GPT and Codex variants)
+// Models available via Codex OAuth (latest first; official OpenAI IDs only).
+// GPT-5.6 preview models are limited-access IDs published by OpenAI for API and Codex.
+// Keep GPT-5.5 as the stable default/fallback until the account/workspace is provisioned for GPT-5.6.
 export const CODEX_MODELS = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.4-codex',
   'gpt-5.4-codex-mini',
@@ -46,6 +53,9 @@ export const CODEX_MODELS = [
 ];
 
 const CHATGPT_ACCOUNT_CODEX_MODEL_FALLBACKS: Record<string, string> = {
+  'gpt-5.6-sol': 'gpt-5.5',
+  'gpt-5.6-terra': 'gpt-5.5',
+  'gpt-5.6-luna': 'gpt-5.5',
   'gpt-5.5': 'gpt-5.4',
   'gpt-5.4-codex': 'gpt-5.4',
   'gpt-5.4-codex-mini': 'gpt-5.4-mini',
@@ -63,6 +73,29 @@ function getChatgptAccountCompatibleModel(model: string): string {
 
 function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string): boolean {
   return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
+}
+
+function writeCodexModelRuntimeStatus(status: {
+  configuredModel: string;
+  requestedModel: string;
+  actualModel?: string;
+  fallbackFrom?: string;
+  fallbackReason?: string;
+  ok: boolean;
+  error?: string;
+}): void {
+  try {
+    const filePath = path.join(getConfig().getConfigDir(), 'model-runtime-status.json');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({
+      provider: 'openai_codex',
+      timestamp: new Date().toISOString(),
+      ...status,
+      fallback: !!status.fallbackFrom,
+    }, null, 2), 'utf-8');
+  } catch {
+    // Diagnostics must never break model calls.
+  }
 }
 
 function parseUsage(usage: any): ModelUsage | undefined {
@@ -252,7 +285,13 @@ export class OpenAICodexAdapter implements LLMProvider {
     const toolChoice = hasTools ? (_codexToolChoiceCfg === 'required' ? 'required' : 'auto') : 'auto';
     const input = this.buildInput(messages);
 
-    const runRequest = async (requestedModel: string, allowFallback: boolean): Promise<ChatResult> => {
+    const configuredModel = String(model || '').trim();
+    const runRequest = async (
+      requestedModel: string,
+      allowFallback: boolean,
+      fallbackFrom?: string,
+      fallbackReason?: string,
+    ): Promise<ChatResult> => {
       const controller = new AbortController();
       let abortReason = '';
       let requestTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -335,12 +374,34 @@ export class OpenAICodexAdapter implements LLMProvider {
             && isUnsupportedChatgptAccountCodexModel(response.status, text)
           ) {
             console.warn(`[openai_codex] Model "${requestedModel}" is unsupported for this ChatGPT account. Retrying with "${fallbackModel}".`);
-            return runRequest(fallbackModel, false);
+            return runRequest(fallbackModel, false, requestedModel, 'unsupported_chatgpt_account_model');
           }
+          writeCodexModelRuntimeStatus({
+            configuredModel,
+            requestedModel,
+            ok: false,
+            error: text.slice(0, 400),
+          });
           throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
         }
 
-        return await this.parseSSEStream(response, model, options, resetIdleTimer);
+        const result = await this.parseSSEStream(response, requestedModel, options, resetIdleTimer);
+        result.usage = {
+          ...(result.usage || {}),
+          requestedModel: configuredModel,
+          actualModel: requestedModel,
+          fallbackFrom,
+          fallbackReason,
+        };
+        writeCodexModelRuntimeStatus({
+          configuredModel,
+          requestedModel: configuredModel,
+          actualModel: requestedModel,
+          fallbackFrom,
+          fallbackReason,
+          ok: true,
+        });
+        return result;
       } catch (err: any) {
         if (controller.signal.aborted || err?.name === 'AbortError') {
           throw new Error(abortReason || 'openai_codex request aborted');
@@ -352,7 +413,7 @@ export class OpenAICodexAdapter implements LLMProvider {
       }
     };
 
-    return runRequest(String(model || '').trim(), true);
+    return runRequest(configuredModel, true);
   }
 
 	  private async parseSSEStream(

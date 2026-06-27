@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Minecraft-Style Block Game</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      touch-action: none;
+      overscroll-behavior: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    canvas { display: block; }
+
+    #hud {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 40;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.45);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: 12px/1.35 Consolas, 'Courier New', monospace;
+      max-width: min(92vw, 560px);
+    }
+
+    #startOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: rgba(0, 0, 0, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #startCard {
+      text-align: center;
+      color: #fff;
+      font: 16px/1.35 sans-serif;
+    }
+
+    #startBtn {
+      margin-top: 10px;
+      font: 18px/1 sans-serif;
+      color: #fff;
+      background: rgba(0,0,0,.75);
+      border: 1px solid rgba(255,255,255,.45);
+      border-radius: 12px;
+      padding: 12px 18px;
+      cursor: pointer;
+      pointer-events: auto;
+    }
+
+    #crosshair {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: 14px;
+      height: 14px;
+      margin-left: -7px;
+      margin-top: -7px;
+      color: #fff;
+      font: 14px/14px monospace;
+      pointer-events: none;
+      text-align: center;
+      z-index: 20;
+      text-shadow: 0 0 4px rgba(0,0,0,.7);
+    }
+
+    #mobileControls {
+      position: fixed;
+      inset: 0;
+      z-index: 25;
+      pointer-events: none;
+      display: none;
+    }
+
+    #movePad {
+      position: fixed;
+      left: 14px;
+      bottom: 14px;
+      width: 132px;
+      height: 132px;
+      border: 2px solid rgba(255,255,255,.35);
+      border-radius: 50%;
+      background: rgba(0,0,0,.22);
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    #moveKnob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 52px;
+      height: 52px;
+      margin-left: -26px;
+      margin-top: -26px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,.5);
+      background: rgba(255,255,255,.22);
+      pointer-events: none;
+      transform: translate(0px, 0px);
+    }
+
+    #lookPad {
+      position: fixed;
+      right: 0;
+      top: 0;
+      width: 56%;
+      height: 100%;
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    #mobileButtons {
+      position: fixed;
+      right: 12px;
+      bottom: 14px;
+      display: flex;
+      gap: 8px;
+      pointer-events: none;
+      z-index: 26;
+    }
+
+    .btn {
+      pointer-events: auto;
+      min-width: 66px;
+      padding: 10px 12px;
+      font: 13px/1 sans-serif;
+      border: 1px solid rgba(255,255,255,.4);
+      border-radius: 10px;
+      background: rgba(0,0,0,.55);
+      color: #fff;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">Loading controls…</div>
+
+  <div id="startOverlay">
+    <div id="startCard">
+      <div id="loadMsg">Loading game engine…</div>
+      <button id="startBtn" type="button">Start</button>
+    </div>
+  </div>
+
+  <div id="crosshair">+</div>
+
+  <div id="mobileControls">
+    <div id="movePad"><div id="moveKnob"></div></div>
+    <div id="lookPad"></div>
+    <div id="mobileButtons">
+      <button id="jumpBtn" class="btn" type="button">JUMP</button>
+      <button id="mineBtn" class="btn" type="button">MINE</button>
+      <button id="placeBtn" class="btn" type="button">PLACE</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const cfg = {
+        moveSpeed: 6.4,
+        jumpSpeed: 8.6,
+        gravity: -32,
+        lookSpeed: 0.0025,
+        touchLookSpeed: 0.0048,
+        interactDistance: 6,
+        eyeHeight: 1.6,
+        worldSize: 24,
+      };
+
+      const qs = (sel) => document.getElementById(sel);
+      const hud = qs('hud');
+      const overlay = qs('startOverlay');
+      const startBtn = qs('startBtn');
+      const loadMsg = qs('loadMsg');
+      const startCard = qs('startCard');
+      const mobileControls = qs('mobileControls');
+      const movePad = qs('movePad');
+      const moveKnob = qs('moveKnob');
+      const lookPad = qs('lookPad');
+      const jumpBtn = qs('jumpBtn');
+      const mineBtn = qs('mineBtn');
+      const placeBtn = qs('placeBtn');
+
+      const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+      const input = { forward: 0, strafe: 0, jump: false, mine: false, place: false };
+      const rightDrag = { active: false, x: 0, y: 0 };
+
+      let running = false;
+      let pointerLocked = false;
+      let scene, camera, renderer, player, pitch, raycaster, downRay;
+      let downDir = null;
+      const meshes = [];
+      const blocks = new Map();
+      let geo = null;
+      let mats = {
+        grass: null,
+        dirt: null,
+        stone: null,
+      };
+      let onGround = true;
+      let vy = 0;
+
+      if (!window.THREE) {
+        const candidates = [
+          '/three.min.js',
+          './three.min.js',
+          'https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.min.js',
+          'https://unpkg.com/three@0.160.1/build/three.min.js',
+          'https://unpkg.com/three@latest/build/three.min.js',
+        ];
+
+
+        let idx = 0;
+
+        function tryLoadThree() {
+          if (idx >= candidates.length) {
+            loadMsg.textContent = 'Cannot load Three.js from CDN. Check internet/CSP and reopen.';
+            startCard.style.opacity = '0.9';
+            startBtn.disabled = true;
+            return Promise.reject(new Error('three load failed'));
+          }
+
+          const src = candidates[idx++];
+          loadMsg.textContent = `Loading Three.js (${idx}/${candidates.length})`;
+
+          return new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = src;
+            s.async = true;
+            s.defer = true;
+            s.referrerPolicy = 'no-referrer';
+            s.onload = () => {
+              if (window.THREE && window.THREE.Scene) {
+                resolve();
+              } else {
+                if (s.parentNode) s.parentNode.removeChild(s);
+                reject(new Error(`empty script ${src}`));
+              }
+            };
+            s.onerror = () => {
+              if (s.parentNode) s.parentNode.removeChild(s);
+              reject(new Error(`failed ${src}`));
+            };
+            document.head.appendChild(s);
+          }).catch(() => tryLoadThree());
+        }
+
+        tryLoadThree()
+          .then(initGame)
+          .catch((e) => {
+            console.error(e);
+            loadMsg.textContent = 'Game engine unavailable. Sorry.';
+            hud.textContent = loadMsg.textContent;
+          });
+      } else {
+        initGame();
+      }
+
+      function keyAt(x, y, z) {
+        return `${x},${y},${z}`;
+      }
+
+
+      function addBlock(x, y, z, type = 'stone') {
+        const key = keyAt(x, y, z);
+        if (blocks.has(key)) return;
+        const m = new THREE.Mesh(geo, mats[type]);
+        m.position.set(x, y, z);
+        m.userData = { x, y, z, type };
+        scene.add(m);
+        blocks.set(key, m);
+        meshes.push(m);
+      }
+
+      function removeBlock(mesh) {
+        if (!mesh || !mesh.userData) return;
+        const { x, y, z } = mesh.userData;
+        const k = keyAt(x, y, z);
+        blocks.delete(k);
+        const idx = meshes.indexOf(mesh);
+        if (idx >= 0) meshes.splice(idx, 1);
+        scene.remove(mesh);
+      }
+
+      function worldHeightAt(x, z) {
+        const from = new THREE.Vector3(x, 40, z);
+        downRay.set(from, downDir, 0, 100);
+        const hits = downRay.intersectObjects(meshes, false);
+        if (!hits.length) return null;
+        return hits[0].point.y;
+      }
+
+      function getCrosshairHit() {
+        const origin = new THREE.Vector3();
+        const dir = new THREE.Vector3();
+        camera.getWorldPosition(origin);
+        camera.getWorldDirection(dir);
+        raycaster.set(origin, dir, 0, cfg.interactDistance);
+        const hits = raycaster.intersectObjects(meshes, false);
+        return hits[0] || null;
+      }
+
+      function mineNow() {
+        const hit = getCrosshairHit();
+        if (hit) {
+          removeBlock(hit.object);
+          setHud('Mined one block.');
+        }
+      }
+
+      function placeNow() {
+        const hit = getCrosshairHit();
+        if (!hit || !hit.face) return;
+        const n = hit.face.normal;
+        const b = hit.object.userData;
+        const x = Math.round(b.x + n.x);
+        const y = Math.round(b.y + n.y);
+        const z = Math.round(b.z + n.z);
+
+        const eye = new THREE.Vector3();
+        camera.getWorldPosition(eye);
+        const d2 = (x - eye.x) ** 2 + (y - eye.y) ** 2 + (z - eye.z) ** 2;
+        if (d2 < 1.7 * 1.7) return;
+
+        addBlock(x, y, z, 'stone');
+        setHud('Placed one block.');
+      }
+
+      function setHud(msg) {
+        hud.textContent = msg;
+      }
+
+      function applyLook(dx, dy, touch = false) {
+        const sx = dx * (touch ? cfg.touchLookSpeed : cfg.lookSpeed);
+        const sy = dy * (touch ? cfg.touchLookSpeed : cfg.lookSpeed);
+        player.rotation.y -= sx;
+        pitch.rotation.x -= sy;
+        const limit = Math.PI / 2 - 0.12;
+        pitch.rotation.x = Math.max(-limit, Math.min(limit, pitch.rotation.x));
+      }
+
+      function setKnob(nx, ny) {
+        const rad = movePad.clientWidth * 0.5;
+        const limit = rad - 26;
+        moveKnob.style.transform = `translate(${nx * limit}px, ${ny * limit}px)`;
+      }
+
+      function startGame() {
+        if (running) return;
+        running = true;
+        overlay.style.display = 'none';
+        setHud(isMobile ? 'Mobile controls active. Move, look, mine/place now.' : 'Desktop: WASD + mouse look. LMB mine, RMB place, Space jump.');
+        if (!isMobile) {
+          if (!pointerLocked) {
+            try { renderer.domElement.requestPointerLock(); } catch {}
+          }
+        }
+      }
+
+      function initBindings() {
+        // both pointer + click for broad mobile compatibility
+        const activate = (el, handler) => {
+          if (!el) return;
+          el.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            handler(e);
+          }, { passive: false });
+          el.addEventListener('click', (e) => {
+            e.preventDefault();
+            handler(e);
+          }, { passive: false });
+        };
+
+        activate(startBtn, startGame);
+        overlay.addEventListener('pointerdown', (e) => {
+          // only start when tapping the start button area
+          if (e.target === startBtn || e.target === overlay) {
+            startGame();
+          }
+        }, { passive: false });
+
+        // Desktop
+        addEventListener('pointerlockchange', () => {
+          pointerLocked = document.pointerLockElement === renderer.domElement;
+          if (pointerLocked && running) setHud('Pointer locked. Keep moving, mine/place with mouse buttons, jump = Space.');
+        });
+
+        renderer.domElement.addEventListener('pointerdown', (e) => {
+          if (isMobile) return;
+          if (!running) {
+            startGame();
+            return;
+          }
+          if (e.button === 0) mineNow();
+          if (e.button === 2) placeNow();
+          if (e.button === 2 && !pointerLocked) {
+            rightDrag.active = true;
+            rightDrag.x = e.clientX;
+            rightDrag.y = e.clientY;
+          }
+        }, { passive: true });
+
+        renderer.domElement.addEventListener('pointerup', (e) => {
+          if (e.button === 2) rightDrag.active = false;
+        }, { passive: true });
+
+        renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault(), { passive: true });
+
+        renderer.domElement.addEventListener('pointermove', (e) => {
+          if (isMobile || !running || !pointerLocked) return;
+          applyLook(e.movementX || 0, e.movementY || 0);
+        }, { passive: true });
+
+        addEventListener('pointermove', (e) => {
+          if (isMobile || !running || pointerLocked) return;
+          if (!rightDrag.active || !(e.buttons & 2)) return;
+          const dx = e.clientX - rightDrag.x;
+          const dy = e.clientY - rightDrag.y;
+          rightDrag.x = e.clientX;
+          rightDrag.y = e.clientY;
+          applyLook(dx, dy);
+        }, { passive: true });
+
+        const keyMap = {
+          KeyW: ['forward', 1],
+          KeyS: ['forward', -1],
+          KeyA: ['strafe', -1],
+          KeyD: ['strafe', 1],
+        };
+
+        addEventListener('keydown', (e) => {
+          const m = keyMap[e.code];
+          if (m) input[m[0]] = m[1];
+          if (e.code === 'Space') {
+            input.jump = true;
+            if (!running) startGame();
+          }
+        });
+
+        addEventListener('keyup', (e) => {
+          const m = keyMap[e.code];
+          if (!m) return;
+          if (input[m[0]] === m[1]) input[m[0]] = 0;
+        });
+
+        if (isMobile) {
+          mobileControls.style.display = 'block';
+
+          let movePointerId = null;
+          let lookPointerId = null;
+          let moveCenter = { x: 0, y: 0, r: 1 };
+          let lookPrev = { x: 0, y: 0 };
+
+          function beginMove(id, x, y) {
+            movePointerId = id;
+            const r = movePad.getBoundingClientRect();
+            moveCenter = {
+              x: r.left + r.width * 0.5,
+              y: r.top + r.height * 0.5,
+              r: r.width * 0.5,
+            };
+            updateMove(x, y);
+          }
+
+          function updateMove(x, y) {
+            const dx = x - moveCenter.x;
+            const dy = y - moveCenter.y;
+            const dist = Math.hypot(dx, dy);
+            const clamped = Math.min(moveCenter.r, dist);
+            const sx = dist === 0 ? 0 : (dx / moveCenter.r) * (clamped / moveCenter.r);
+            const sy = dist === 0 ? 0 : (dy / moveCenter.r) * (clamped / moveCenter.r);
+
+            input.strafe = Math.max(-1, Math.min(1, sx));
+            input.forward = Math.max(-1, Math.min(1, -sy));
+            setKnob(input.strafe, input.forward);
+          }
+
+          function stopMove() {
+            movePointerId = null;
+            input.strafe = 0;
+            input.forward = 0;
+            setKnob(0, 0);
+          }
+
+          function beginLook(id, x, y) {
+            lookPointerId = id;
+            lookPrev.x = x;
+            lookPrev.y = y;
+          }
+
+          function applyLookMove(x, y) {
+            const dx = x - lookPrev.x;
+            const dy = y - lookPrev.y;
+            lookPrev.x = x;
+            lookPrev.y = y;
+            applyLook(dx, dy, true);
+          }
+
+          function stopLook() {
+            lookPointerId = null;
+          }
+
+          movePad.addEventListener('pointerdown', (e) => {
+            if (movePointerId !== null) return;
+            beginMove(e.pointerId, e.clientX, e.clientY);
+          }, { passive: false });
+
+          movePad.addEventListener('pointermove', (e) => {
+            if (e.pointerId !== movePointerId) return;
+            updateMove(e.clientX, e.clientY);
+          }, { passive: false });
+
+          movePad.addEventListener('pointerup', (e) => {
+            if (e.pointerId === movePointerId) stopMove();
+          }, { passive: true });
+          movePad.addEventListener('pointercancel', stopMove, { passive: true });
+
+          lookPad.addEventListener('pointerdown', (e) => {
+            if (lookPointerId !== null) return;
+            beginLook(e.pointerId, e.clientX, e.clientY);
+          }, { passive: false });
+
+          lookPad.addEventListener('pointermove', (e) => {
+            if (e.pointerId !== lookPointerId) return;
+            applyLookMove(e.clientX, e.clientY);
+          }, { passive: false });
+
+          lookPad.addEventListener('pointerup', (e) => {
+            if (e.pointerId === lookPointerId) stopLook();
+          }, { passive: true });
+          lookPad.addEventListener('pointercancel', stopLook, { passive: true });
+
+          const bindTouchFallback = (el, start, move, end) => {
+            const state = { id: null };
+            el.addEventListener('touchstart', (e) => {
+              const t = e.changedTouches[0];
+              if (!t) return;
+              state.id = t.identifier;
+              if (start) start(`touch-${t.identifier}`, t.clientX, t.clientY);
+              e.preventDefault();
+            }, { passive: false });
+            el.addEventListener('touchmove', (e) => {
+              for (const t of e.changedTouches) {
+                if (t.identifier !== state.id) continue;
+                if (move) move(`touch-${t.identifier}`, t.clientX, t.clientY);
+                e.preventDefault();
+                break;
+              }
+            }, { passive: false });
+            const finalize = (e) => {
+              for (const t of e.changedTouches) {
+                if (t.identifier !== state.id) continue;
+                if (end) end(`touch-${t.identifier}`);
+                state.id = null;
+                break;
+              }
+            };
+            el.addEventListener('touchend', finalize, { passive: false });
+            el.addEventListener('touchcancel', finalize, { passive: false });
+          };
+
+          bindTouchFallback(movePad, (id, x, y) => beginMove(id, x, y), (_id, x, y) => {
+            if (movePointerId === `touch-${_id}`) {
+              const r = `touch-${_id}`;
+              updateMove(x, y);
+            }
+          }, (id) => {
+            if (movePointerId === `touch-${id}`) stopMove();
+          });
+
+          bindTouchFallback(lookPad, (id, x, y) => beginLook(id, x, y), (_id, x, y) => {
+            if (lookPointerId === `touch-${_id}`) applyLookMove(x, y);
+          }, (id) => {
+            if (lookPointerId === `touch-${id}`) stopLook();
+          });
+
+          activate(jumpBtn, () => { input.jump = true; startGame(); });
+          activate(mineBtn, () => { input.mine = true; startGame(); });
+          activate(placeBtn, () => { input.place = true; startGame(); });
+
+          setHud('Mobile: left joystick to move, right side drag to look, buttons below for jump/mine/place.');
+        } else {
+          setHud('Desktop: click Start then WASD + mouse look, LMB mine, RMB place, Space jump.');
+        }
+      }
+
+      function buildWorld() {
+        for (let x = -cfg.worldSize; x <= cfg.worldSize; x++) {
+          for (let z = -cfg.worldSize; z <= cfg.worldSize; z++) {
+            addBlock(x, -1, z, 'stone');
+            addBlock(x, 0, z, 'grass');
+          }
+        }
+
+        for (let i = 0; i < 120; i++) {
+          const x = Math.floor(Math.random() * (cfg.worldSize * 2 + 1)) - cfg.worldSize;
+          const z = Math.floor(Math.random() * (cfg.worldSize * 2 + 1)) - cfg.worldSize;
+          const h = 1 + Math.floor(Math.random() * 3);
+          for (let y = 1; y <= h; y++) {
+            addBlock(x, y, z, y === 1 ? 'dirt' : 'stone');
+          }
+        }
+      }
+
+      function animate(ts) {
+        requestAnimationFrame(animate);
+
+        if (!running) {
+          renderer.render(scene, camera);
+          return;
+        }
+
+        if (input.mine) {
+          mineNow();
+          input.mine = false;
+        }
+
+        if (input.place) {
+          placeNow();
+          input.place = false;
+        }
+
+        let sx = input.strafe;
+        let sz = input.forward;
+        const mag = Math.hypot(sx, sz);
+        if (mag > 1) {
+          sx /= mag;
+          sz /= mag;
+        }
+
+        if (sx || sz) {
+          const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion);
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(player.quaternion);
+          const mv = new THREE.Vector3();
+          mv
+            .addScaledVector(forward, sz)
+            .addScaledVector(right, sx)
+            .normalize();
+          mv.y = 0;
+          player.position.addScaledVector(mv, cfg.moveSpeed * Math.min(0.033, (ts - animate.lastTs) / 1000 || 0.016));
+        }
+
+        if (input.jump && onGround) {
+          vy = cfg.jumpSpeed;
+          onGround = false;
+        }
+        input.jump = false;
+
+        vy += cfg.gravity * 0.016;
+        player.position.y += vy * 0.016;
+
+        const ground = worldHeightAt(player.position.x, player.position.z);
+        const floorY = ground === null ? -Infinity : (ground + cfg.eyeHeight);
+        if (ground !== null && player.position.y <= floorY) {
+          player.position.y = floorY;
+          vy = 0;
+          onGround = true;
+        } else if (ground !== null && player.position.y > floorY + 0.12) {
+          onGround = false;
+        }
+
+        if (player.position.y < -100) {
+          player.position.set(0, cfg.eyeHeight, 10);
+          vy = 0;
+          onGround = true;
+        }
+
+        renderer.render(scene, camera);
+      }
+
+      animate.lastTs = performance.now();
+
+      function initGame() {
+        // rebind if game started loading three externally
+        if (!window.THREE || !window.THREE.Scene) {
+          setTimeout(initGame, 20);
+          return;
+        }
+
+        // refresh refs if script loaded later
+        downDir = new THREE.Vector3(0, -1, 0);
+        geo = new THREE.BoxGeometry(1, 1, 1);
+        mats = {
+          grass: new THREE.MeshStandardMaterial({ color: 0x57a957 }),
+          dirt: new THREE.MeshStandardMaterial({ color: 0x9a6433 }),
+          stone: new THREE.MeshStandardMaterial({ color: 0x7a7a7a }),
+        };
+        scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x8fd4ff, 14, 150);
+
+        camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 500);
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+        renderer.setSize(innerWidth, innerHeight);
+        renderer.domElement.style.display = 'block';
+
+        // If game file loaded twice we may already have a canvas
+        const existing = document.querySelector('canvas');
+        if (existing) existing.remove();
+        document.body.appendChild(renderer.domElement);
+
+        player = new THREE.Object3D();
+        pitch = new THREE.Object3D();
+        player.add(pitch);
+        pitch.position.y = cfg.eyeHeight;
+        pitch.add(camera);
+        player.position.set(0, cfg.eyeHeight, 10);
+        scene.add(player);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+        sun.position.set(10, 16, 8);
+        scene.add(sun);
+
+        raycaster = new THREE.Raycaster();
+        downRay = new THREE.Raycaster();
+
+        buildWorld();
+        initBindings();
+
+        loadMsg.textContent = 'Loaded! Tap Start to play.';
+        startBtn.disabled = false;
+
+        requestAnimationFrame(animate);
+
+        addEventListener('resize', () => {
+          camera.aspect = innerWidth / innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(innerWidth, innerHeight);
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

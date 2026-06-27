@@ -72,6 +72,10 @@ export interface EphemeralBackgroundStatus {
   joinPolicy: BackgroundJoinPolicy;
   timeoutMs: number;
   tags?: string[];
+  spawnerSessionId?: string;
+  prompt?: string;
+  promptPreview?: string;
+  fileChanges?: any;
   providerId?: string;
   model?: string;
   modelSource?: string;
@@ -609,13 +613,20 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
       const sendSSE = (event: string, data: any) => {
         if (spawnerSessionId) {
+          const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
           broadcastWS({
+            ...eventData,
             type: 'bg_agent_event',
             sessionId: spawnerSessionId,
+            spawnerSessionId,
+            bgSessionId: sessionId,
+            backgroundSessionId: sessionId,
             bgId: record.id,
             eventType: event,
             actor: 'Background Agent',
-            ...(data && typeof data === 'object' ? data : { message: String(data ?? '') }),
+            task: prompt,
+            prompt,
+            taskPrompt: prompt,
           });
         }
         // Capture tool calls for the result summary returned to main agent on join
@@ -651,7 +662,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.state = 'failed';
           record.completedAt = Date.now();
           if (spawnerSessionId) {
-            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
           }
           finishLiveRuntime(runtimeId);
           return;
@@ -666,7 +677,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         console.log(`[Background Agent] ${record.id} completed`);
 
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'completed', result: record.result, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'completed', result: record.result, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
         }
       } catch (err: any) {
         record.error = String(err?.message || err || 'Background execution failed');
@@ -674,7 +685,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.completedAt = Date.now();
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
         }
       }
       finishLiveRuntime(runtimeId);
@@ -728,6 +739,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     startedAt: Date.now(),
     promise: Promise.resolve(),
     abortSignal: { aborted: false },
+    prompt,
     promptPreview: prompt.slice(0, 160),
   };
 
@@ -742,6 +754,10 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     joinPolicy: record.joinPolicy,
     timeoutMs: record.timeoutMs,
     tags: record.tags,
+    spawnerSessionId: record.spawnerSessionId,
+    prompt,
+    promptPreview: record.promptPreview,
+    fileChanges: record.fileChanges,
     providerId: record.providerId,
     model: record.model,
     modelSource: record.modelSource,
@@ -758,6 +774,10 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     joinPolicy: rec.joinPolicy,
     timeoutMs: rec.timeoutMs,
     tags: rec.tags,
+    spawnerSessionId: rec.spawnerSessionId,
+    prompt: rec.prompt,
+    promptPreview: rec.promptPreview,
+    fileChanges: rec.fileChanges,
     providerId: rec.providerId,
     model: rec.model,
     modelSource: rec.modelSource,
@@ -833,6 +853,10 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
     joinPolicy: rec.joinPolicy,
     timeoutMs: rec.timeoutMs,
     tags: rec.tags,
+    spawnerSessionId: rec.spawnerSessionId,
+    prompt: rec.prompt,
+    promptPreview: rec.promptPreview,
+    fileChanges: rec.fileChanges,
     providerId: rec.providerId,
     model: rec.model,
     modelSource: rec.modelSource,

@@ -14,7 +14,7 @@ Canonical mobile source files:
 - `web-ui/src/mobile/mobile-api.js` - thin API shim. Mobile fetches go through `mfetch`, which attaches `X-Pairing-Token`; media/WS URLs use query `pt`.
 - `web-ui/src/mobile/mobile-settings.js` - mobile settings surfaces, including model/voice settings.
 - `web-ui/src/mobile/mobile-data.js` - static first-pass/mock mobile nav/schedule/team data still used by parts of the shell.
-- `web-ui/src/styles/mobile.css` - isolated mobile styling. It only takes over when `body.pm-mobile-active` is present.
+- `web-ui/src/styles/mobile.css` - isolated mobile styling. It only takes over when `body.pm-mobile-active` is present; mobile themes use `--pm-*` surface tokens and semantic `--pm-accent*` tokens, while legacy `--pm-orange*` variables are compatibility aliases.
 
 Root PWA/static entry files:
 
@@ -157,6 +157,12 @@ Mobile chat attachment path:
 - Keep generated mirrors in sync: `generated/public-web-ui/static/mobile/mobile-pages.js` and `generated/public-web-ui/static/styles/mobile.css`.
 - Because this is PWA-facing static JS/CSS, bump `web-ui/service-worker.js` `VERSION` on meaningful attachment/picker changes; the 2026-06-05 video attachment change uses `pm-v29-2026-06-05-mobile-video-attachments`.
 - Verification used for this change: `npm run sync:web-ui`, which regenerated public assets and passed `check:web-ui`.
+
+
+Mobile subagent chat layout:
+
+- `mobile-pages.js::_renderSubagentChatTab` wraps the subagent message list and queue in `.pm-sa-chat-scrollport`, then renders the shared `_renderMobileAgentComposerHtml('pm-sa-chat', ...)` composer outside that scrollport.
+- `mobile.css` scopes `.pm-sa-chat-shell` as a flex column with a scrollable `.pm-sa-chat-scrollport` and a sticky `.pm-agent-chat-composer.pm-composer` offset above `--pm-tabbar-h` plus safe-area inset. This prevents the subagent composer from sitting under the bottom tab bar while preserving normal main-chat composer geometry.
 
 Mobile drawer behavior:
 

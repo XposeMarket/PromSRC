@@ -225,16 +225,34 @@ export function mobileModelBadgeSeedLabel() {
   return window.__pmModelBadgeLabel || 'Online';
 }
 
-// ── Bottom-sheet plumbing ─────────────────────────────────────────────────────
+// ── Model popover plumbing ────────────────────────────────────────────────────
 function _closeSheet() {
   const scrim = document.getElementById('pm-msheet-scrim');
   const sheet = document.getElementById('pm-msheet');
+  sheet?.__pmModelSheetCleanup?.();
   if (scrim) scrim.classList.remove('open');
   if (sheet) sheet.classList.remove('open');
   setTimeout(() => {
     if (scrim) scrim.remove();
     if (sheet) sheet.remove();
   }, 220);
+}
+
+function _positionSheetNearBadge(sheet) {
+  if (!sheet) return;
+  const margin = 10;
+  const badge = document.querySelector('.pm-model-badge');
+  const rect = badge?.getBoundingClientRect?.();
+  const width = Math.min(360, Math.max(280, window.innerWidth - margin * 2));
+  const center = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+  const left = Math.max(margin, Math.min(window.innerWidth - width - margin, center - width / 2));
+  const preferredTop = rect ? rect.bottom + 10 : Math.max(70, Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 70);
+  const top = Math.max(margin, Math.min(preferredTop, window.innerHeight - 260));
+  const maxHeight = Math.max(240, window.innerHeight - top - margin);
+  sheet.style.setProperty('--pm-msheet-left', `${left}px`);
+  sheet.style.setProperty('--pm-msheet-top', `${top}px`);
+  sheet.style.setProperty('--pm-msheet-width', `${width}px`);
+  sheet.style.setProperty('--pm-msheet-max-height', `${maxHeight}px`);
 }
 
 function _openSheet(titleHtml, bodyHtml) {
@@ -257,13 +275,30 @@ function _openSheet(titleHtml, bodyHtml) {
   `;
   document.body.appendChild(scrim);
   document.body.appendChild(sheet);
+  _positionSheetNearBadge(sheet);
+  const reposition = () => _positionSheetNearBadge(sheet);
   requestAnimationFrame(() => { scrim.classList.add('open'); sheet.classList.add('open'); });
   scrim.addEventListener('click', _closeSheet);
   sheet.querySelector('.pm-msheet-close')?.addEventListener('click', _closeSheet);
+  sheet.addEventListener('selectstart', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+  sheet.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+  window.addEventListener('resize', reposition, { passive: true });
+  window.visualViewport?.addEventListener?.('resize', reposition, { passive: true });
+  sheet.__pmModelSheetCleanup = () => {
+    window.removeEventListener('resize', reposition);
+    window.visualViewport?.removeEventListener?.('resize', reposition);
+  };
   return sheet;
 }
 
 function _closeSheetImmediate() {
+  document.getElementById('pm-msheet')?.__pmModelSheetCleanup?.();
   document.getElementById('pm-msheet-scrim')?.remove();
   document.getElementById('pm-msheet')?.remove();
 }
@@ -428,7 +463,7 @@ function _renderModelList(provider) {
   if (!models.length) {
     rows = '<div class="pm-msheet-empty">No known models — fetch them from Settings ▸ Models.</div>';
   }
-  const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+  const body = _setSheetBody(`<div class="pm-msheet-rows pm-msheet-model-rows">${rows}</div>`);
   document.getElementById('pm-msheet-back')?.addEventListener('click', _renderProviderList);
   if (!body) return;
   body.querySelectorAll('[data-model]').forEach((btn) => {
@@ -466,13 +501,22 @@ export function initMobileModelBadge() {
   let longFired = false;
   let startX = 0;
   let startY = 0;
+  let pressBadge = null;
+  let suppressNextClick = false;
 
   const findBadge = (target) => (target?.closest ? target.closest('.pm-model-badge') : null);
+  const setSuppressNativeSelection = (on) => {
+    document.documentElement.classList.toggle('pm-model-badge-pressing', !!on);
+    document.body?.classList?.toggle('pm-model-badge-pressing', !!on);
+  };
 
   document.addEventListener('pointerdown', (e) => {
     const badge = findBadge(e.target);
     if (!badge) return;
+    e.preventDefault();
     longFired = false;
+    pressBadge = badge;
+    setSuppressNativeSelection(true);
     startX = e.clientX; startY = e.clientY;
     if (pressTimer) clearTimeout(pressTimer);
     pressTimer = setTimeout(() => {
@@ -486,17 +530,44 @@ export function initMobileModelBadge() {
   document.addEventListener('pointermove', (e) => {
     if (!pressTimer) return;
     if (Math.abs(e.clientX - startX) > MOVE_CANCEL_PX || Math.abs(e.clientY - startY) > MOVE_CANCEL_PX) {
-      clearTimeout(pressTimer); pressTimer = null;
+      clearTimeout(pressTimer); pressTimer = null; pressBadge = null; setSuppressNativeSelection(false);
     }
   });
 
-  const cancel = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
-  document.addEventListener('pointerup', cancel);
+  const cancel = () => {
+    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+    pressBadge = null;
+    setSuppressNativeSelection(false);
+  };
+  document.addEventListener('pointerup', (e) => {
+    const badge = pressBadge;
+    const wasLong = longFired;
+    const moved = Math.abs(e.clientX - startX) > MOVE_CANCEL_PX || Math.abs(e.clientY - startY) > MOVE_CANCEL_PX;
+    cancel();
+    if (badge && !wasLong && !moved) {
+      suppressNextClick = true;
+      _openReasoningSheet();
+      setTimeout(() => { suppressNextClick = false; }, 350);
+    }
+  });
   document.addEventListener('pointercancel', cancel);
+  document.addEventListener('selectstart', (e) => {
+    if (pressBadge || findBadge(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
+  document.addEventListener('contextmenu', (e) => {
+    if (pressBadge || findBadge(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
 
   document.addEventListener('click', (e) => {
     const badge = findBadge(e.target);
     if (!badge) return;
+    if (suppressNextClick) { e.preventDefault(); e.stopPropagation(); return; }
     if (longFired) { e.preventDefault(); e.stopPropagation(); longFired = false; return; }
     _openReasoningSheet();
   });

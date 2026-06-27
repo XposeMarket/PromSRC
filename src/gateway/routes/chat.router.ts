@@ -49,6 +49,7 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
 import { spawnAgent } from '../../agents/spawner';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, type TurnOrigin } from '../session';
+import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { collectRichArtifacts, productCarouselToArtifact } from '../rich-artifacts';
 import { getConnector, isConnectorConnected } from '../../integrations/connector-registry.js';
 import type { GmailConnector } from '../../integrations/connectors/gmail.js';
@@ -3178,6 +3179,13 @@ async function handleChat(
   }
 
   const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
+  const personalityProfile = isDirectSubagentChatTurn
+    ? { profile: 'direct_subagent' as const, excludedSkillIds }
+    : teachModeActive
+      ? { profile: 'teach_mode' as const, excludedSkillIds }
+      : (isLocalPrimary
+        ? { profile: 'local_llm' as const, excludedSkillIds }
+        : (excludedSkillIds.length ? { excludedSkillIds } : undefined));
   htime('reached Building model context');
   sendSSE('ui_preflight', { message: 'Building model context...' });
   const personalityCtx = await buildPersonalityContext(
@@ -3190,9 +3198,7 @@ async function handleChat(
     // Component 5: inject browser_vision hint when vision mode is active for this session.
     // browserVisionModeActive is declared higher in handleChat's closure scope.
     browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-    teachModeActive
-      ? { profile: 'teach_mode', excludedSkillIds }
-      : (isLocalPrimary ? { profile: 'local_llm', excludedSkillIds } : (excludedSkillIds.length ? { excludedSkillIds } : undefined)),
+    personalityProfile,
   );
   htime('after buildPersonalityContext');
   let switchModelPersonalityCtx: string | null = null;
@@ -3319,7 +3325,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     })();
     // A subagent (team or standalone) is a worker, not a dispatcher — it never
     // routes messages to managed teams, so the team-routing policy is noise for it.
-    const isSubagentMode = executionMode === 'team_subagent' || executionMode === 'background_agent';
+    const isSubagentMode = executionMode === 'team_subagent' || executionMode === 'background_agent' || isDirectSubagentChatTurn;
     const teamRoutingBlock = (teamsExist && !isSubagentMode) ? teamRoutingInstruction : '';
     const creativeActive = !!creativeMode;
     const creativeBlock = creativeActive
@@ -3354,12 +3360,9 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     if (mode === 'switch_model') {
       return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
     }
-    if (executionMode === 'team_subagent' || executionMode === 'background_agent') {
-      // Subagents (team + standalone) inherit the broader Prometheus identity/memory
-      // first, then receive their role file + [YOUR ASSIGNMENTS] + task context from
-      // callerContext as the most specific, final guidance. Keeping the role last
-      // (highest recency) is what holds role adherence for workers — the opposite of
-      // main chat, where the persona is the final word.
+    if (executionMode === 'team_subagent' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
+      // Subagents receive subagent personality context first, then their role file
+      // and task/chat context from callerContext as the final, most specific layer.
       return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
     }
     const onboardingBlock = isOnboardingSession(sessionId) ? '\n\n' + getMeetAndGreetSystemPrompt() : '';
@@ -8536,6 +8539,118 @@ type VoiceAgentAction =
   | 'handoff_new_work'
   | 'no_reply';
 
+type VoiceAgentTargetContext = {
+  kind: 'main' | 'subagent';
+  agentId?: string;
+  label?: string;
+};
+
+function normalizeVoiceAgentTarget(raw: any): VoiceAgentTargetContext {
+  const source = raw?.voiceTarget || raw?.voice_target || raw?.target || raw?.selectedVoiceTarget || raw?.selected_voice_target || raw || {};
+  const kind = String(source?.kind || source?.targetKind || source?.target_kind || '').trim().toLowerCase();
+  const agentId = compactVoiceText(source?.agentId || source?.agent_id || source?.id || '', 120);
+  const label = compactVoiceText(source?.label || source?.name || source?.alias || source?.friendlyName || source?.friendly_name || '', 160);
+  if (kind === 'subagent' || agentId) {
+    return { kind: 'subagent', agentId, label: label || agentId || 'Subagent' };
+  }
+  return { kind: 'main', label: 'Prometheus' };
+}
+
+function voiceAgentTargetIdentity(target?: VoiceAgentTargetContext) {
+  const normalized = normalizeVoiceAgentTarget(target || {});
+  const isSubagent = normalized.kind === 'subagent';
+  const label = compactVoiceText(normalized.label || normalized.agentId || (isSubagent ? 'Subagent' : 'Prometheus'), 120);
+  return {
+    target: normalized,
+    isSubagent,
+    label,
+    speakerName: isSubagent ? label : 'Prometheus',
+    workerLabel: isSubagent ? label : 'Prometheus worker',
+    identityLine: isSubagent
+      ? `You are ${label}, a standalone subagent running under Prometheus. You are speaking through your own voice interface. You are not Prometheus and must not claim to be Prometheus.`
+      : 'You are Prometheus speaking through the user\'s voice interface.',
+    roleLine: isSubagent
+      ? `You are not merely a voice layer, narrator, assistant voice, or provider voice. You are the subagent ${label} in live voice form. When work needs the durable worker path, phrase it as your own work: "I am on it", "I will handle that", or similar. Do not say you will get the worker, ask Prometheus, or hand it to Prometheus.`
+      : 'You have Prometheus\'s identity, memory, preferences, user knowledge, and current task context.',
+    handoffLine: isSubagent
+      ? `For handoffs, the app routes the request into this selected subagent chat (${label}) rather than the main Prometheus chat. The technical worker/tool wording is implementation detail; do not expose it.`
+      : 'When the user requests work requiring tools outside the voice_* and skill_* set, files, non-voice browser/desktop capabilities, coding, scheduling beyond voice_timer, memory mutation beyond voice_write_note, or long reasoning, acknowledge naturally first, then dispatch to the Prometheus worker.',
+  };
+}
+
+function resolveSubagentVoiceWorkspace(target?: VoiceAgentTargetContext): { workspacePath: string; agent: any; agentId: string; label: string } | null {
+  const normalized = normalizeVoiceAgentTarget(target || {});
+  const agentId = compactVoiceText(normalized.agentId || '', 120);
+  if (normalized.kind !== 'subagent' || !agentId) return null;
+  const agent = getAgentById(agentId);
+  if (!agent) return null;
+  const workspacePath = resolveAgentWorkspace(agent as any) || ensureAgentWorkspace(agent as any);
+  const label = compactVoiceText(normalized.label || agent?.name || (agent as any)?.alias || agentId, 160) || agentId;
+  return { workspacePath, agent, agentId, label };
+}
+
+function loadSubagentVoiceFile(workspacePath: string, candidates: string[], maxChars = 6000): string {
+  for (const candidate of candidates) {
+    try {
+      const content = loadWorkspaceFile(workspacePath, candidate, maxChars).trim();
+      if (content) return content;
+    } catch {}
+  }
+  return '';
+}
+
+function stripMainVoiceIdentitySections(contextBlock: string): string {
+  let next = String(contextBlock || '');
+  for (const marker of ['PROMETHEUS_SOUL', 'SOUL']) {
+    const pattern = new RegExp(`(?:^|\\n)\\[${marker}\\]\\n[\\s\\S]*?(?=\\n\\[[A-Z0-9_ -]+\\]\\n|$)`, 'g');
+    next = next.replace(pattern, '\n');
+  }
+  return next.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function buildSubagentVoiceContextOverlay(target?: VoiceAgentTargetContext): string {
+  const resolved = resolveSubagentVoiceWorkspace(target);
+  if (!resolved) return '';
+  const { workspacePath, agent, agentId, label } = resolved;
+  const identityPrompt = loadSubagentVoiceFile(workspacePath, ['system_prompt.md', 'HEARTBEAT.md'], 10000);
+  const subagentSoul = loadSubagentVoiceFile(workspacePath, ['SOUL.md', 'soul.md'], 7000);
+  const subagentMemory = loadSubagentVoiceFile(workspacePath, ['MEMORY.md', 'memory.md'], 8000);
+  const subagentVoiceAgent = loadSubagentVoiceFile(workspacePath, ['VOICEAGENT.md', 'voiceagent.md'], 5000);
+  const bits = [
+    '[SUBAGENT_VOICE_IDENTITY]',
+    `You are ${label}, the selected standalone subagent. The voice interface is only how the user is talking to you.`,
+    'Prometheus is the host/orchestrator/runtime around you; Prometheus is not your identity. You are a subagent under Prometheus, not a generic voice agent.',
+    'If asked who you are, say you are this subagent and describe your subagent role. Do not identify as "the live conversational voice agent" or "the voice layer".',
+    'Speak in first person as this subagent. For durable work, phrase the handoff as your own action, not as asking Prometheus or getting a worker.',
+    `Subagent id: ${agentId}`,
+    `Subagent configured name: ${compactVoiceText(agent?.name || label, 160)}`,
+    `Subagent workspace: ${workspacePath}`,
+    '',
+    identityPrompt ? `[SUBAGENT_SYSTEM_PROMPT]\n${identityPrompt}` : '',
+    subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
+    subagentMemory ? `[SUBAGENT_MEMORY]\n${subagentMemory}` : '',
+    subagentVoiceAgent ? `[SUBAGENT_VOICEAGENT]\n${subagentVoiceAgent}` : '',
+  ].filter(Boolean);
+  return bits.join('\n\n').trim();
+}
+
+function applyVoiceTargetContextBlock(contextBlock: string, target?: VoiceAgentTargetContext): string {
+  const normalized = normalizeVoiceAgentTarget(target || {});
+  if (normalized.kind !== 'subagent') return contextBlock;
+  const overlay = buildSubagentVoiceContextOverlay(normalized);
+  if (!overlay) return contextBlock;
+  return `${overlay}\n\n${stripMainVoiceIdentitySections(contextBlock)}`.trim();
+}
+
+function loadVoiceAgentMemoryForTarget(target?: VoiceAgentTargetContext): string {
+  const mainWorkspacePath = getConfig().getWorkspacePath();
+  const mainVoiceMemory = loadVoiceAgentMemory(mainWorkspacePath);
+  const resolved = resolveSubagentVoiceWorkspace(target);
+  if (!resolved) return mainVoiceMemory;
+  const subagentVoiceMemory = loadVoiceAgentMemory(resolved.workspacePath);
+  return subagentVoiceMemory || mainVoiceMemory;
+}
+
 const voiceAgentNarrationState = new Map<string, { signature: string; at: number; text?: string }>();
 const voiceAgentWorkerHandoffSessions = new Map<string, { at: number; transcript: string; eventId: string }>();
 const VOICE_AGENT_HANDOFF_SESSION_TTL_MS = 90 * 1000;
@@ -8741,12 +8856,67 @@ function summarizeVoiceObservation(sessionId: string): Record<string, any> {
   return { browser, desktop };
 }
 
+function cleanVoiceCompactionSummaryText(value: unknown, maxChars = 4000): string {
+  let summary = String(value || '').trim();
+  if (!summary) return '';
+  if (summary.startsWith(ROLLING_COMPACTION_SUMMARY_PREFIX)) {
+    summary = summary.slice(ROLLING_COMPACTION_SUMMARY_PREFIX.length).trim();
+  } else if (summary.startsWith(LEGACY_COMPACTION_SUMMARY_PREFIX)) {
+    summary = summary.slice(LEGACY_COMPACTION_SUMMARY_PREFIX.length).trim();
+  }
+  return voiceNarrationClean(summary, maxChars);
+}
+
+function subagentVoiceTargetId(target?: VoiceAgentTargetContext): string {
+  const normalized = normalizeVoiceAgentTarget(target || {});
+  return normalized.kind === 'subagent' ? compactVoiceText(normalized.agentId || '', 120) : '';
+}
+
+function subagentVoiceTargetLabel(target?: VoiceAgentTargetContext): string {
+  const normalized = normalizeVoiceAgentTarget(target || {});
+  if (normalized.kind !== 'subagent') return 'Prometheus';
+  const agent = normalized.agentId ? getAgentById(normalized.agentId) : null;
+  return compactVoiceText(normalized.label || agent?.name || (agent as any)?.alias || normalized.agentId || 'Subagent', 160) || 'Subagent';
+}
+
 // Recent back-and-forth of the actual chat, so the voice agent picks up the
 // ongoing conversation instead of acting like a fresh session. The worker
 // context packet only carries the single latest user/assistant turn plus run
 // status; this gives the realtime agent the recent dialogue window.
-function buildVoiceConversationTranscript(sessionId: string, maxTurns = 24, maxCharsPerTurn = 600): string {
+function buildVoiceConversationTranscript(sessionId: string, maxTurns = 24, maxCharsPerTurn = 600, target?: VoiceAgentTargetContext): string {
   try {
+    const agentId = subagentVoiceTargetId(target);
+    if (agentId) {
+      const label = subagentVoiceTargetLabel(target);
+      const session = getSession(sessionId);
+      const sessionSummary = cleanVoiceCompactionSummaryText((session as any)?.latestContextSummary || '', 4000);
+      const sessionHistory = Array.isArray(session?.history) ? session.history : [];
+      const sourceHistory = sessionSummary && sessionHistory.length
+        ? sessionHistory.map((entry: any) => ({
+          role: String(entry?.role || '') === 'assistant' || String(entry?.role || '') === 'ai' ? 'agent' : entry?.role,
+          content: entry?.content || entry?.body?.text || '',
+          metadata: entry?.metadata || {},
+        }))
+        : getSubagentChatHistory(agentId, Math.max(80, maxTurns * 3));
+      const turns = sourceHistory
+        .filter((msg: any) => {
+          const role = String(msg?.role || '');
+          if (role !== 'user' && role !== 'agent') return false;
+          const text = String(msg?.content || '').trim();
+          if (!text) return false;
+          if (text.startsWith(ROLLING_COMPACTION_SUMMARY_PREFIX) || text.startsWith(LEGACY_COMPACTION_SUMMARY_PREFIX)) return false;
+          if (String(msg?.metadata?.source || '').toLowerCase().includes('compaction')) return false;
+          return true;
+        })
+        .slice(-maxTurns)
+        .map((msg: any) => {
+          const speaker = String(msg?.role || '') === 'user' ? 'User' : label;
+          const text = voiceNarrationClean(msg?.content || '', maxCharsPerTurn);
+          return text ? `${speaker}: ${text}` : '';
+        })
+        .filter(Boolean);
+      return turns.join('\n');
+    }
     const session = getSession(sessionId);
     const history = Array.isArray(session?.history) ? session.history : [];
     const turns = history
@@ -8775,19 +8945,29 @@ function buildVoiceConversationTranscript(sessionId: string, maxTurns = 24, maxC
 // The latest rolling-compaction summary for this thread. On a compacted thread
 // everything before the summary boundary lives ONLY here, so voice must include
 // it or the agent loses all earlier context (the "fresh chat" amnesia).
-function buildVoiceCompactionSummaryBlock(sessionId: string, maxChars = 4000): string {
+function buildVoiceCompactionSummaryBlock(sessionId: string, maxChars = 4000, target?: VoiceAgentTargetContext): string {
   try {
+    const agentId = subagentVoiceTargetId(target);
+    if (agentId) {
+      const session = getSession(sessionId);
+      const sessionSummary = cleanVoiceCompactionSummaryText((session as any)?.latestContextSummary || '', maxChars);
+      if (sessionSummary) return sessionSummary;
+      const history = getSubagentChatHistory(agentId, 500);
+      const latestSummaryMsg = [...history].reverse().find((msg: any) => {
+        const text = String(msg?.content || '').trim();
+        const source = String(msg?.metadata?.source || '').toLowerCase();
+        return !!text && (
+          text.startsWith(ROLLING_COMPACTION_SUMMARY_PREFIX)
+          || text.startsWith(LEGACY_COMPACTION_SUMMARY_PREFIX)
+          || source.includes('compaction')
+          || source.includes('context_summary')
+        );
+      });
+      return cleanVoiceCompactionSummaryText(latestSummaryMsg?.content || '', maxChars);
+    }
     const session = getSession(sessionId);
     let summary = String((session as any)?.latestContextSummary || '').trim();
-    if (!summary) return '';
-    // Strip the injected prefix so it reads as plain narrative context.
-    if (summary.startsWith(ROLLING_COMPACTION_SUMMARY_PREFIX)) {
-      summary = summary.slice(ROLLING_COMPACTION_SUMMARY_PREFIX.length).trim();
-    } else if (summary.startsWith(LEGACY_COMPACTION_SUMMARY_PREFIX)) {
-      summary = summary.slice(LEGACY_COMPACTION_SUMMARY_PREFIX.length).trim();
-    }
-    const cleaned = voiceNarrationClean(summary, maxChars);
-    return cleaned || '';
+    return cleanVoiceCompactionSummaryText(summary, maxChars);
   } catch {
     return '';
   }
@@ -8795,8 +8975,21 @@ function buildVoiceCompactionSummaryBlock(sessionId: string, maxChars = 4000): s
 
 // Compact recent tool-result log mirroring what main chat carries, so the voice
 // agent knows what was actually done (not just what was said) in this thread.
-function buildVoiceRecentToolLog(sessionId: string, maxEntries = 8): string {
+function buildVoiceRecentToolLog(sessionId: string, maxEntries = 8, target?: VoiceAgentTargetContext): string {
   try {
+    const agentId = subagentVoiceTargetId(target);
+    if (agentId) {
+      const lines = getSubagentChatHistory(agentId, 120)
+        .filter((msg: any) => {
+          if (String(msg?.role || '') !== 'agent') return false;
+          const md = msg?.metadata && typeof msg.metadata === 'object' ? msg.metadata : {};
+          return md.success === true || md.taskId || md.durationMs || md.stepCount || String(md.source || '').includes('dispatch');
+        })
+        .map((msg: any) => String(msg?.content || '').trim())
+        .filter(Boolean)
+        .slice(-maxEntries);
+      return lines.length ? lines.map((l: string) => `- ${voiceNarrationClean(l, 420)}`).join('\n') : '';
+    }
     const packet = buildVoiceWorkerContextPacket(sessionId);
     const done = Array.isArray((packet as any)?.doneAlready) ? (packet as any).doneAlready : [];
     const lines = done
@@ -8816,11 +9009,23 @@ function voiceRequestTimeInput(source: Record<string, any> = {}): any {
 
 function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string, any> = {}): Record<string, any> {
   const sid = String(sessionId || 'default').trim() || 'default';
+  const voiceTarget = normalizeVoiceAgentTarget(options?.voiceTarget || options?.voice_target || options?.target || options || {});
+  const subagentId = subagentVoiceTargetId(voiceTarget);
+  const subagentLabel = subagentVoiceTargetLabel(voiceTarget);
   const activeRuntime = findActiveMainChatRuntimeForSession(sid, String(options.expectedRuntimeId || options.runtimeId || ''));
   const currentTime = buildVoiceTimeContext(voiceRequestTimeInput(options));
   const checkpoint = activeRuntime?.checkpoint && typeof activeRuntime.checkpoint === 'object' ? activeRuntime.checkpoint : {};
+  const subagentHistory = subagentId ? getSubagentChatHistory(subagentId, 120) : [];
   const session = getSession(sid);
-  const history = Array.isArray(session?.history) ? session.history : [];
+  const history = subagentId
+    ? subagentHistory.map((entry: any) => ({
+      role: entry.role === 'agent' ? 'assistant' : entry.role,
+      content: entry.content,
+      body: { text: entry.content },
+      timestamp: entry.ts,
+      metadata: entry.metadata,
+    }))
+    : (Array.isArray(session?.history) ? session.history : []);
   const latestUser: any = [...history].reverse().find((entry: any) => String(entry?.role || '') === 'user') || null;
   const latestAssistant: any = [...history].reverse().find((entry: any) => ['assistant', 'ai'].includes(String(entry?.role || ''))) || null;
   const stream = getMainChatStream(sid);
@@ -8851,9 +9056,22 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     .slice(-5)
     .map((entry) => entry.toolName ? `${friendlyVoiceToolName(entry.toolName)}: ${entry.content}` : entry.content)
     .filter(Boolean);
+  if (subagentId && completed.length < 5) {
+    const threadWork = subagentHistory
+      .filter((msg: any) => String(msg?.role || '') === 'agent' && String(msg?.content || '').trim())
+      .filter((msg: any) => {
+        const md = msg?.metadata && typeof msg.metadata === 'object' ? msg.metadata : {};
+        return md.success === true || md.taskId || md.durationMs || md.stepCount || String(md.source || '').includes('dispatch');
+      })
+      .map((msg: any) => voiceNarrationClean(msg.content, 260))
+      .filter(Boolean)
+      .slice(-(5 - completed.length));
+    completed.push(...threadWork);
+  }
   const displayPhase = currentPhase && currentPhase !== 'running' ? currentPhase : '';
   const displayTool = activeToolName && activeToolName !== 'skill_list' ? friendlyVoiceToolName(activeToolName) : '';
   const recentSummaryLines = [
+    subagentId ? `Voice target: ${subagentLabel} subagent` : '',
     currentGoal ? `Goal: ${currentGoal}` : '',
     displayPhase ? `Current phase: ${displayPhase}` : '',
     displayTool ? `Active step: ${displayTool}` : '',
@@ -8864,6 +9082,7 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     id: `voice_ctx_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
     createdAt: Date.now(),
     sessionId: sid,
+    target: subagentId ? { kind: 'subagent', agentId: subagentId, label: subagentLabel } : { kind: 'main', label: 'Prometheus' },
     active: !!activeRuntime,
     activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
     trigger: activeRuntime ? {
@@ -8884,6 +9103,14 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     lastVoiceInterruption: checkpoint.voiceInterruptionEvent || null,
     latestUser: latestUser ? compactVoiceText(latestUser.content || latestUser.body?.text || '', 700) : '',
     latestAssistant: latestAssistant ? compactVoiceText(latestAssistant.content || latestAssistant.body?.text || '', 700) : '',
+    thread: subagentId ? {
+      kind: 'subagent',
+      agentId: subagentId,
+      label: subagentLabel,
+      messageCount: subagentHistory.length,
+      compactionSummary: buildVoiceCompactionSummaryBlock(sid, 1200, voiceTarget),
+      recentTranscript: buildVoiceConversationTranscript(sid, 8, 360, voiceTarget),
+    } : undefined,
     time: currentTime,
     currentTime,
     processEntries,
@@ -8930,6 +9157,7 @@ type VoiceAgentContextBlockCacheEntry = {
   sessionId: string;
   workspacePath: string;
   historyLength: number;
+  targetKey: string;
   contextBlock: string;
   createdAt: number;
 };
@@ -8938,32 +9166,49 @@ const VOICE_AGENT_CONTEXT_BLOCK_TTL_MS = 30_000;
 const voiceAgentContextBlockCache = new Map<string, VoiceAgentContextBlockCacheEntry>();
 const voiceAgentContextBlockPending = new Map<string, Promise<VoiceAgentContextBlockCacheEntry>>();
 
-function getVoiceAgentContextBlockCacheKey(sessionId: string): string {
-  return String(sessionId || 'default').trim() || 'default';
+function getVoiceAgentContextBlockCacheKey(sessionId: string, voiceTarget?: VoiceAgentTargetContext): string {
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const target = normalizeVoiceAgentTarget(voiceTarget || {});
+  if (target.kind === 'subagent') {
+    return `${sid}::subagent:${compactVoiceText(target.agentId || target.label || 'unknown', 160) || 'unknown'}`;
+  }
+  return `${sid}::main`;
 }
 
 function invalidateVoiceAgentContextBlockCache(sessionId?: string): void {
   const sid = String(sessionId || '').trim();
   if (sid) {
-    voiceAgentContextBlockCache.delete(getVoiceAgentContextBlockCacheKey(sid));
+    const prefix = `${sid}::`;
+    for (const key of Array.from(voiceAgentContextBlockCache.keys())) {
+      if (key === sid || key.startsWith(prefix)) voiceAgentContextBlockCache.delete(key);
+    }
+    for (const key of Array.from(voiceAgentContextBlockPending.keys())) {
+      if (key === sid || key.startsWith(prefix)) voiceAgentContextBlockPending.delete(key);
+    }
     return;
   }
   voiceAgentContextBlockCache.clear();
+  voiceAgentContextBlockPending.clear();
 }
 
 async function getVoiceAgentContextBlock(sessionId: string, transcript: string, options: Record<string, any> = {}): Promise<{ contextBlock: string; elapsedMs: number; cacheHit: boolean }> {
-  const sid = getVoiceAgentContextBlockCacheKey(sessionId);
+  const voiceTarget = normalizeVoiceAgentTarget(options?.voiceTarget || options?.voice_target || options?.target || {});
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const cacheKey = getVoiceAgentContextBlockCacheKey(sid, voiceTarget);
   const startedAt = Date.now();
   const workspacePath = getConfig().getWorkspacePath();
   const session = getSession(sid);
-  const history = Array.isArray(session?.history) ? session.history : [];
+  const targetAgentId = subagentVoiceTargetId(voiceTarget);
+  const history = targetAgentId ? getSubagentChatHistory(targetAgentId, 500) : (Array.isArray(session?.history) ? session.history : []);
   const historyLength = history.length;
-  const cached = voiceAgentContextBlockCache.get(sid);
+  const targetKey = voiceTarget.kind === 'subagent' ? `subagent:${voiceTarget.agentId || voiceTarget.label || 'unknown'}` : 'main';
+  const cached = voiceAgentContextBlockCache.get(cacheKey);
   const ageMs = cached ? Date.now() - Number(cached.createdAt || 0) : Number.POSITIVE_INFINITY;
   if (
     cached
     && cached.workspacePath === workspacePath
     && cached.historyLength === historyLength
+    && cached.targetKey === targetKey
     && Number.isFinite(ageMs)
     && ageMs >= 0
     && ageMs <= VOICE_AGENT_CONTEXT_BLOCK_TTL_MS
@@ -8971,16 +9216,16 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
     return { contextBlock: cached.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: true };
   }
 
-  const pending = voiceAgentContextBlockPending.get(sid);
+  const pending = voiceAgentContextBlockPending.get(cacheKey);
   if (pending) {
     const entry = await pending;
-    if (entry.workspacePath === workspacePath && entry.historyLength === historyLength) {
+    if (entry.workspacePath === workspacePath && entry.historyLength === historyLength && entry.targetKey === targetKey) {
       return { contextBlock: entry.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: true };
     }
   }
 
   const buildPromise = (async (): Promise<VoiceAgentContextBlockCacheEntry> => {
-    const contextBlock = await buildPersonalityContext(
+    const baseContextBlock = await buildPersonalityContext(
       sid,
       workspacePath,
       transcript,
@@ -8990,16 +9235,17 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
       undefined,
       { profile: 'voice_agent' },
     );
-    const entry = { sessionId: sid, workspacePath, historyLength, contextBlock, createdAt: Date.now() };
-    voiceAgentContextBlockCache.set(sid, entry);
+    const contextBlock = applyVoiceTargetContextBlock(baseContextBlock, voiceTarget);
+    const entry = { sessionId: sid, workspacePath, historyLength, targetKey, contextBlock, createdAt: Date.now() };
+    voiceAgentContextBlockCache.set(cacheKey, entry);
     return entry;
   })();
-  voiceAgentContextBlockPending.set(sid, buildPromise);
+  voiceAgentContextBlockPending.set(cacheKey, buildPromise);
   try {
     const entry = await buildPromise;
     return { contextBlock: entry.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: false };
   } finally {
-    if (voiceAgentContextBlockPending.get(sid) === buildPromise) voiceAgentContextBlockPending.delete(sid);
+    if (voiceAgentContextBlockPending.get(cacheKey) === buildPromise) voiceAgentContextBlockPending.delete(cacheKey);
   }
 }
 
@@ -9432,8 +9678,9 @@ function buildRealtimeSkillContextForTranscript(transcript: string, maxChars = 4
   });
   const context = [
     '## Realtime Skill Trigger Update',
-    `Latest spoken request: ${compactVoiceText(text, 500)}`,
-    'The request matches installed skill trigger metadata. These are not active instructions yet. If a skill is relevant, call skill_read with its id before acting.',
+    'The just-completed spoken turn matched installed skill trigger metadata.',
+    'This is metadata for the current audio turn only, not a second user message or a transcript repeat.',
+    'These are not active instructions yet. If a skill is relevant, call skill_read with its id before acting.',
     ...skillLines,
     'Use skill guidance only through voice_* tools and canonical read-only skill_* tools. Explicit user-authorized social posts/messages are allowed through voice browser/desktop UI tools when the content and destination are clear. Dispatch to the Prometheus worker for non-voice tools, files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
   ].join('\n');
@@ -11377,7 +11624,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       );
       const contextPacket = providedIsFreshActive
         ? providedPacket
-        : buildVoiceWorkerContextPacket(sessionId, { source: 'voice_worker_status_tool' });
+        : buildVoiceWorkerContextPacket(sessionId, { source: 'voice_worker_status_tool', voiceTarget: args?.voiceTarget });
       const recentEvents = args?.include_recent_events === false ? [] : contextPacket.recentEvents;
       const processEntries = args?.include_recent_events === false ? [] : contextPacket.processEntries;
       const active = contextPacket.active === true;
@@ -11394,6 +11641,8 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         activeToolName: contextPacket.activeToolName || '',
         activeToolLabel: contextPacket.activeToolLabel || '',
         pendingSteerCount: contextPacket.pendingSteerCount || 0,
+        target: contextPacket.target || null,
+        thread: contextPacket.thread || null,
         activeRun: contextPacket.activeRun || null,
         trigger: contextPacket.trigger || null,
         doneAlready: contextPacket.doneAlready || [],
@@ -11737,11 +11986,12 @@ function normalizeVoiceAgentDecision(raw: any, fallback: VoiceAgentDecision): Vo
   };
 }
 
-function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record<string, any>): string {
+function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record<string, any>, voiceTarget?: VoiceAgentTargetContext): string {
+  const identity = voiceAgentTargetIdentity(voiceTarget);
   return [
-    'You are Prometheus speaking through the user\'s voice interface.',
+    identity.identityLine,
     '',
-    'You have Prometheus\'s identity, memory, preferences, user knowledge, and current task context.',
+    identity.roleLine,
     'You are the live voice layer and you MAY call the provided voice_* tools plus canonical read-only skill_* tools directly.',
     'The voice_* tools are safe wrappers around existing Prometheus tools, and skill_* tools are the normal Prometheus skill list/read/resource tools. Those provided tools are the only tools you may use from this layer.',
     'Do not say web search, fetch, notes, memory search, skill list/read, timers, or screenshot capture/delivery are only available to the Worker when a matching voice_* or skill_* tool is provided.',
@@ -11751,11 +12001,12 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     'When the user asks for current Worker status/progress/context, call voice_worker_status and answer from the returned live packet; never steer the Worker just to ask it for status.',
     'When the user requests work that can be handled by a voice_* or skill_* tool, call that tool and answer_now from the result.',
     'Skill scout rule for voice: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call the matching voice_browser_* or voice_desktop_* tool immediately.',
-    'When the user requests work requiring tools outside the voice_* and skill_* set, files, non-voice browser/desktop capabilities, coding, scheduling beyond voice_timer, memory mutation beyond voice_write_note, or long reasoning, acknowledge naturally first, then dispatch to the Prometheus worker.',
+    identity.handoffLine,
     'When the user interrupts an active worker, decide whether to answer, steer, interrupt, hand off new work, or stay quiet. A normal status question or casual comment is not a steer.',
     '',
     'Hard boundary: never claim you used full Worker tools or changed files/accounts from the voice layer. You may truthfully say you searched, fetched, saved a note, checked memory, listed/read skills, or set a timer when a matching voice_* or skill_* tool result confirms it.',
-    'Speak like Prometheus: warm, specific, alive, and context-aware. Avoid generic acknowledgements like "I\'ll get started on that" unless no better context exists.',
+    `Speak like ${identity.speakerName}: warm, specific, alive, and context-aware. Avoid generic acknowledgements like "I\'ll get started on that" unless no better context exists.`,
+    identity.isSubagent ? `If you need to acknowledge heavier work, say it as ${identity.speakerName}'s own action, such as "I am on it" or "I will handle that." Never say "I will get the worker" or "I will ask Prometheus."` : '',
     'For voice tests, first messages, and no-context check-ins, do not answer with generic "I am here" or "I\'m here" phrasing. Acknowledge what the user is testing or saying.',
     '',
     'Return ONLY strict JSON. CRITICAL: The "spokenReply" field MUST be the FIRST field in your JSON output so audio playback can begin as you write. Do NOT output any other field before spokenReply. Use this exact field order:',
@@ -11809,13 +12060,17 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
   ].filter(Boolean).join('\n');
 }
 
-function buildVoiceAgentLightSystemPrompt(contextBlock: string, contextPacket: Record<string, any>): string {
+function buildVoiceAgentLightSystemPrompt(contextBlock: string, contextPacket: Record<string, any>, voiceTarget?: VoiceAgentTargetContext): string {
+  const identity = voiceAgentTargetIdentity(voiceTarget);
   return [
-    'You are Prometheus speaking through the user\'s voice interface.',
+    identity.identityLine,
+    identity.roleLine,
     'Answer naturally and specifically in one or two short spoken sentences.',
     'Do not use canned fallback phrases. Do not answer with generic "I am here" or "I\'m here" phrasing; respond to what the user actually said.',
     'If the user asks for current Worker status/progress/context, answer from the injected worker packet; do not steer the Worker just to ask it for status.',
-    'If the user asks for heavier work outside conversation, choose handoff_new_work and write a natural, specific acknowledgement in spokenReply.',
+    identity.isSubagent
+      ? `If the user asks for heavier work outside conversation, choose handoff_new_work and write a natural, specific acknowledgement as ${identity.speakerName}; say you will handle it yourself, not that you will get a worker or Prometheus.`
+      : 'If the user asks for heavier work outside conversation, choose handoff_new_work and write a natural, specific acknowledgement in spokenReply.',
     '',
     'Return ONLY strict JSON. CRITICAL: The "spokenReply" field MUST be the FIRST field in your JSON output so audio playback can begin as you write. Do NOT output any other field before spokenReply. Use this exact field order:',
     '{"spokenReply":"string","action":"answer_now|handoff_new_work|no_reply","workerInstruction":"string optional","needsWorkerResponse":false,"reason":"string optional"}',
@@ -12889,12 +13144,13 @@ async function callVoiceAgentDecisionModel(
   fallback: VoiceAgentDecision,
   trace?: VoiceAgentProcessEntry[],
   onSpeechChunk?: (text: string) => void,
-  options?: { disableDeterministicFastRoutes?: boolean },
+  options?: { disableDeterministicFastRoutes?: boolean; voiceTarget?: VoiceAgentTargetContext },
 ): Promise<VoiceAgentDecision> {
   try {
     const startedAt = Date.now();
+    const targetIdentity = voiceAgentTargetIdentity(options?.voiceTarget);
     const contextStartedAt = Date.now();
-    const contextBlockResult = await getVoiceAgentContextBlock(sessionId, transcript);
+    const contextBlockResult = await getVoiceAgentContextBlock(sessionId, transcript, { voiceTarget: options?.voiceTarget });
     const contextBuildMs = contextBlockResult.elapsedMs || (Date.now() - contextStartedAt);
     const contextBlock = contextBlockResult.contextBlock;
     pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: context ${contextBlockResult.cacheHit ? 'cache hit' : 'build'} ${contextBuildMs}ms.`, {
@@ -12916,7 +13172,7 @@ async function callVoiceAgentDecisionModel(
         {
           role: 'system',
           content: [
-            'You are Prometheus speaking through the user\'s voice interface.',
+            targetIdentity.identityLine,
             'The user just set their wake phrase. Acknowledge naturally in one short spoken sentence.',
             'Do not say you will remember it forever. Do not mention implementation details. Return only the sentence, no JSON.',
           ].join('\n'),
@@ -13011,9 +13267,10 @@ async function callVoiceAgentDecisionModel(
           {
             role: 'system',
             content: [
-              'You are Prometheus on voice. The user asked something and you already ran a tool to get the answer.',
+              `You are ${targetIdentity.speakerName} on voice. The user asked something and you already ran a tool to get the answer.`,
               'Write a single spoken reply (1-3 sentences max) that delivers the result naturally and conversationally.',
-              'Speak as Prometheus: warm, direct, specific. Do not use markdown or bullet characters.',
+              `Speak as ${targetIdentity.speakerName}: warm, direct, specific. Do not use markdown or bullet characters.`,
+              targetIdentity.isSubagent ? 'Do not claim to be Prometheus. Do not mention getting or asking a worker.' : '',
               'Return only the spoken reply — no JSON, no labels, no meta-commentary.',
             ].join('\n'),
           },
@@ -13103,8 +13360,8 @@ async function callVoiceAgentDecisionModel(
       && !classification.shouldAbortOriginalRun
       && !classification.shouldPauseOriginalRun;
     const system = lightVoiceDecision
-      ? buildVoiceAgentLightSystemPrompt(contextBlock, contextPacket)
-      : buildVoiceAgentSystemPrompt(contextBlock, contextPacket);
+      ? buildVoiceAgentLightSystemPrompt(contextBlock, contextPacket, options?.voiceTarget)
+      : buildVoiceAgentSystemPrompt(contextBlock, contextPacket, options?.voiceTarget);
     const user = [
       '[VOICE_TRANSCRIPT]',
       transcript || '(empty)',
@@ -13587,8 +13844,9 @@ router.post('/api/voice-agent/context', (req, res) => {
     const body = req.body || {};
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
     const originalUserPrompt = String(body.originalUserPrompt || body.transcript || body.userInterruptionTranscript || '').trim();
+    const voiceTarget = normalizeVoiceAgentTarget(body);
     const contextPacket = buildVoiceWorkerContextPacket(sessionId, body);
-    prewarmVoiceAgentContextBlock(sessionId, originalUserPrompt, { source: body.source || 'voice_context_endpoint' });
+    prewarmVoiceAgentContextBlock(sessionId, originalUserPrompt, { source: body.source || 'voice_context_endpoint', voiceTarget });
     res.json({
       ok: true,
       success: true,
@@ -13605,8 +13863,9 @@ router.get('/api/voice-agent/context/:sessionId', (req, res) => {
     const sessionId = String(req.params.sessionId || 'default').trim() || 'default';
     const query = req.query as any;
     const originalUserPrompt = String(query.originalUserPrompt || query.transcript || query.userInterruptionTranscript || '').trim();
+    const voiceTarget = normalizeVoiceAgentTarget(query);
     const contextPacket = buildVoiceWorkerContextPacket(sessionId, query);
-    prewarmVoiceAgentContextBlock(sessionId, originalUserPrompt, { source: query.source || 'voice_context_endpoint' });
+    prewarmVoiceAgentContextBlock(sessionId, originalUserPrompt, { source: query.source || 'voice_context_endpoint', voiceTarget });
     res.json({
       ok: true,
       success: true,
@@ -13698,6 +13957,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
     };
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
     const transcript = String(body.transcript || body.userInterruptionTranscript || body.message || '').trim();
+    const voiceTarget = normalizeVoiceAgentTarget(body);
     const classification = classifyVoiceInterruption(transcript);
     const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
     const contextPacketStartedAt = Date.now();
@@ -13763,7 +14023,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
         fallbackDecision,
         voiceProcessEntries,
         streamMode ? emitSpeechChunk : undefined,
-        { disableDeterministicFastRoutes: realtimeAgentInput },
+        { disableDeterministicFastRoutes: realtimeAgentInput, voiceTarget },
       );
     }
     if (decision.action === 'answer_now' && !String(decision.spokenReply || '').trim() && transcript) {
@@ -13810,6 +14070,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
       isStreamActive: body.isStreamActive === true,
       voiceAgentAction: action,
       voiceContextPacketId: contextPacket.id,
+      voiceTarget,
     };
     let injectedContextText = buildVoiceInterruptionContextBlock(event);
     let steerApplied = false;
@@ -13955,6 +14216,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
       steerEventId,
       runtimeId: activeRuntime?.id || '',
       classification,
+      voiceTarget,
       contextPacket,
       decision,
       processEntries: voiceProcessEntries,
@@ -14124,7 +14386,8 @@ function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTI
 // and add Realtime-specific worker-control tools (dispatch/steer/interrupt)
 // that the model uses to signal the browser to do something outside the audio
 // loop. The browser receives these via response.function_call events.
-function buildRealtimeVoiceAgentTools(): any[] {
+function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): any[] {
+  const identity = voiceAgentTargetIdentity(voiceTarget);
   const chatTools = buildVoiceToolDefinitions();
   const realtimeTools: any[] = chatTools.map((tool: any) => ({
     type: 'function',
@@ -14135,7 +14398,9 @@ function buildRealtimeVoiceAgentTools(): any[] {
   realtimeTools.push({
     type: 'function',
     name: 'dispatch_prometheus_worker',
-    description: 'Hand off heavy or durable work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that the curated voice_browser_* and voice_desktop_* tools can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Speaking "on it" or "I started that" WITHOUT emitting this function call does nothing and the work never runs. Never claim the worker is running unless you actually called this function or voice_worker_status reports it active.',
+    description: identity.isSubagent
+      ? `Technical dispatch signal for heavy or durable work. The app routes this into the selected subagent chat for ${identity.label}, not the main Prometheus chat. Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. In speech, phrase the work as your own work as ${identity.label}; do not say you are getting a worker or asking Prometheus.`
+      : 'Hand off heavy or durable work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that the curated voice_browser_* and voice_desktop_* tools can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Speaking "on it" or "I started that" WITHOUT emitting this function call does nothing and the work never runs. Never claim the worker is running unless you actually called this function or voice_worker_status reports it active.',
     parameters: {
       type: 'object',
       required: ['task'],
@@ -14184,8 +14449,10 @@ function buildRealtimeVoiceAgentInstructions(args: {
   conversationSummary?: string;
   recentToolLog?: string;
   currentTime?: Record<string, any>;
+  voiceTarget?: VoiceAgentTargetContext;
 }): string {
   const currentTime = args.currentTime || buildVoiceTimeContext();
+  const identity = voiceAgentTargetIdentity(args.voiceTarget);
   // Continuity block lives HIGH (right after identity) and is built first so the
   // 18k clamp truncates the tool-routing preamble before it touches the thread
   // context. This is what makes voice pick up mid-conversation instead of acting
@@ -14221,8 +14488,19 @@ function buildRealtimeVoiceAgentInstructions(args: {
     continuityLines.push('');
   }
   const lines = [
-    'You are Prometheus speaking through the user\'s voice interface in OpenAI Realtime mode.',
-    'You are the live conversational voice agent: small talk, status answers, fast voice_* tools, canonical read-only skill_* tools, and worker hand-offs all flow through you. You ARE Prometheus on voice — speak with that identity.',
+    identity.isSubagent
+      ? `You are ${identity.label}, a standalone subagent under Prometheus, speaking in Realtime mode through your own voice interface. You are not Prometheus and must not claim to be Prometheus.`
+      : 'You are Prometheus speaking through the user\'s voice interface in OpenAI Realtime mode.',
+    identity.isSubagent
+      ? `Your identity is the subagent ${identity.label}; the Realtime voice layer is only the transport. You are not a generic live conversational voice agent. For small talk, status answers, fast voice_* tools, canonical read-only skill_* tools, and hand-offs, speak as ${identity.label} from this subagent's role.`
+      : 'You are the live conversational voice agent: small talk, status answers, fast voice_* tools, canonical read-only skill_* tools, and worker hand-offs all flow through you. You ARE Prometheus on voice — speak with that identity.',
+    identity.isSubagent
+      ? `If the user asks "who are you?", answer that you are ${identity.label}, a standalone subagent under Prometheus, then summarize your configured subagent role from the context below. Do not answer that you are a voice layer, voice interface, realtime voice, or provider voice.`
+      : '',
+    identity.isSubagent
+      ? `When work needs durable execution, use dispatch_prometheus_worker as the technical signal, but the app routes it into ${identity.label}'s subagent chat. In speech, say "I am on it" or "I will handle that"; never say you will get the worker, ask Prometheus, or hand it to Prometheus.`
+      : '',
+    'Your audio voice label or provider voice name, such as Eve, Marin, Alloy, or any similar setting, is only the sound used for speech output. It is never your name, persona, identity, role, or agent name. If asked who you are, answer from the identity above.',
     '',
     ...continuityLines,
     'Personality: warm, direct, technically sharp, playful when natural, deeply aligned with the user. Use the user name only when it is known and natural. Avoid generic acknowledgements like "I am here" or "How can I help" — answer what they actually said.',
@@ -14255,7 +14533,9 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- voice_send_screenshot: send a browser/desktop screenshot through the delivery router. Use this in Realtime voice when the user asks to send, share, show, or deliver a screenshot.',
     '- Screenshot ownership: when screenshot voice tools are available, screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser_screenshot, voice_desktop_screenshot, or voice_send_screenshot.',
     '- voice_worker_status: read fresh Worker status/context for status/progress/update questions. This is read-only; use it instead of steer_active_worker for questions like “what are you doing?”, “where are we?”, or “how’s it going?”.',
-    '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
+    identity.isSubagent
+      ? `- dispatch_prometheus_worker: TECHNICAL HANDOFF for heavy/durable work. The browser routes it into ${identity.label}'s selected subagent chat. Call it IMMEDIATELY and do not speak an acknowledgement before or after it. Do not describe this as getting a worker or asking Prometheus.`
+      : '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
     '- steer_active_worker / interrupt_active_worker: ONLY when a worker run is currently active (check the worker context below) AND the user is correcting, changing, pausing, or cancelling the active work. Normal conversation and status questions are not steers.',
     '',
     '## Routing decisions you make implicitly',
@@ -14264,7 +14544,9 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- Skill scout rule: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call the matching voice_browser_* or voice_desktop_* tool immediately.',
     '- If the user wants quick voice-scope work — call the matching voice_* or skill_* tool, then narrate the result. For automation/operator status snapshots, call voice_automation_dashboard.',
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_agent_memory instead of voice_write_note.',
-    '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app shows the handoff and the worker will report progress.',
+    identity.isSubagent
+      ? `- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app routes it into ${identity.label}'s subagent chat and ${identity.label} will report progress.`
+      : '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app shows the handoff and the worker will report progress.',
     '- If the user interrupts an active worker with an actual correction, new constraint, pause, or direction change — call steer_active_worker.',
     '- If the user explicitly cancels/stops/aborts — call interrupt_active_worker.',
     '',
@@ -14301,6 +14583,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const voiceTarget = normalizeVoiceAgentTarget(body);
     const authCandidates = await getRealtimeAgentAuthCandidates();
     if (!authCandidates.length) {
       res.status(400).json({ ok: false, success: false, error: 'OpenAI Realtime requires OPENAI_API_KEY, OPENAI_REALTIME_API_KEY, or a connected OpenAI Codex OAuth account.' });
@@ -14316,12 +14599,12 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     const originalPrompt = String(body.originalUserPrompt || '').trim();
     let contextBlockResult: { contextBlock: string; elapsedMs?: number; cacheHit?: boolean };
     try {
-      contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+      contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt, { voiceTarget });
     } catch (err: any) {
       console.warn('[voice-agent-realtime] context block failed; starting with worker packet only:', err?.message || err);
       contextBlockResult = { contextBlock: '' };
     }
-    const voiceAgentMemory = loadVoiceAgentMemory(getConfig().getWorkspacePath());
+    const voiceAgentMemory = loadVoiceAgentMemoryForTarget(voiceTarget);
     const runtimeBody = body?.voiceRuntime && typeof body.voiceRuntime === 'object'
       ? body.voiceRuntime
       : (body?.voice_runtime && typeof body.voice_runtime === 'object' ? body.voice_runtime : {});
@@ -14334,12 +14617,13 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
-      conversationTranscript: buildVoiceConversationTranscript(sessionId),
-      conversationSummary: buildVoiceCompactionSummaryBlock(sessionId),
-      recentToolLog: buildVoiceRecentToolLog(sessionId),
+      conversationTranscript: buildVoiceConversationTranscript(sessionId, 24, 600, voiceTarget),
+      conversationSummary: buildVoiceCompactionSummaryBlock(sessionId, 4000, voiceTarget),
+      recentToolLog: buildVoiceRecentToolLog(sessionId, 8, voiceTarget),
       currentTime,
+      voiceTarget,
     });
-    const tools = buildRealtimeVoiceAgentTools();
+    const tools = buildRealtimeVoiceAgentTools(voiceTarget);
 
     const model = sanitizeRealtimeAgentModel(body.model);
     const voice = sanitizeRealtimeAgentVoice(body.voice);
@@ -14679,6 +14963,7 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const voiceTarget = normalizeVoiceAgentTarget(body);
     const authCandidates = await getXaiRealtimeAuthCandidates();
     if (!authCandidates.length) {
       res.status(400).json({ ok: false, success: false, error: 'xAI Realtime requires an xAI API key (XAI_API_KEY) or a connected xAI OAuth account. Add one in Settings -> Models.' });
@@ -14694,12 +14979,12 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
     const originalPrompt = String(body.originalUserPrompt || '').trim();
     let contextBlockResult: { contextBlock: string; elapsedMs?: number; cacheHit?: boolean };
     try {
-      contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+      contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt, { voiceTarget });
     } catch (err: any) {
       console.warn('[xai-realtime] context block failed; starting with worker packet only:', err?.message || err);
       contextBlockResult = { contextBlock: '' };
     }
-    const voiceAgentMemory = loadVoiceAgentMemory(getConfig().getWorkspacePath());
+    const voiceAgentMemory = loadVoiceAgentMemoryForTarget(voiceTarget);
     const wakePhrase = cleanVoiceWakePhrase(body?.voiceRuntime?.wakePhrase || body?.voice_runtime?.wakePhrase || '');
 
     const instructions = buildRealtimeVoiceAgentInstructions({
@@ -14708,12 +14993,13 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
-      conversationTranscript: buildVoiceConversationTranscript(sessionId),
-      conversationSummary: buildVoiceCompactionSummaryBlock(sessionId),
-      recentToolLog: buildVoiceRecentToolLog(sessionId),
+      conversationTranscript: buildVoiceConversationTranscript(sessionId, 24, 600, voiceTarget),
+      conversationSummary: buildVoiceCompactionSummaryBlock(sessionId, 4000, voiceTarget),
+      recentToolLog: buildVoiceRecentToolLog(sessionId, 8, voiceTarget),
       currentTime,
+      voiceTarget,
     });
-    const tools = buildRealtimeVoiceAgentTools();
+    const tools = buildRealtimeVoiceAgentTools(voiceTarget);
 
     const model = sanitizeXaiRealtimeModel(body.model);
     const voice = sanitizeXaiRealtimeVoice(body.voice);
@@ -14821,6 +15107,9 @@ router.post('/api/voice-agent/realtime-tool', async (req, res) => {
       : parseVoiceToolArgs(body.arguments || body.args);
     const toolArgs = {
       ...parsedToolArgs,
+      ...(body.voiceTarget || body.voice_target || body.target
+        ? { voiceTarget: normalizeVoiceAgentTarget(body) }
+        : {}),
       ...(toolName === 'voice_worker_status' && body.contextPacket && typeof body.contextPacket === 'object'
         ? { contextPacket: body.contextPacket }
         : {}),

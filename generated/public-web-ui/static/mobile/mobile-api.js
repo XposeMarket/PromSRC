@@ -179,16 +179,26 @@ export async function loadMobileQuestions(status = 'pending') {
   return Array.isArray(r?.questions) ? r.questions : [];
 }
 
-export async function approveMobileApproval(id, grantScope = '') {
+export async function approveMobileApproval(id, grantScope = '', options = {}) {
   const scope = String(grantScope || '').trim();
+  const source = String(options?.source || options?.resolvedBy || '').trim();
+  const body = scope ? { grantScope: scope } : {};
+  if (source) {
+    body.source = source;
+    body.resolvedBy = source;
+  }
   return mfetch(`/api/approvals/${encodeURIComponent(id)}/approve`, {
     method: 'POST',
-    body: JSON.stringify(scope ? { grantScope: scope } : {}),
+    body: JSON.stringify(body),
   });
 }
 
-export async function denyMobileApproval(id) {
-  return mfetch(`/api/approvals/${encodeURIComponent(id)}/deny`, { method: 'POST', body: JSON.stringify({}) });
+export async function denyMobileApproval(id, options = {}) {
+  const source = String(options?.source || options?.resolvedBy || '').trim();
+  return mfetch(`/api/approvals/${encodeURIComponent(id)}/deny`, {
+    method: 'POST',
+    body: JSON.stringify(source ? { source, resolvedBy: source } : {}),
+  });
 }
 
 export async function loadMobileProcessRuns(limit = 100) {
@@ -787,7 +797,7 @@ export async function spawnSubagentTask(agentId, task, timeoutMs = 180000) {
 }
 
 // POST /api/agents/{id}/chat/stream — streams SSE events. Mirrors `streamChat()` shape.
-export function streamSubagentChat(agentId, { message, signal }, handlers = {}) {
+export function streamSubagentChat(agentId, { message, signal, ...extra }, handlers = {}) {
   const ctrl = new AbortController();
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
   const url = (API || '') + `/api/agents/${encodeURIComponent(agentId)}/chat/stream`;
@@ -803,7 +813,7 @@ export function streamSubagentChat(agentId, { message, signal }, handlers = {}) 
           'Accept': 'text/event-stream',
           ...(getDeviceToken() ? { 'X-Pairing-Token': getDeviceToken() } : {}),
         },
-        body: JSON.stringify({ message, timeoutMs: 300000 }),
+        body: JSON.stringify({ message, timeoutMs: 300000, ...(extra || {}) }),
         signal: ctrl.signal,
       });
     } catch (err) {
@@ -1373,6 +1383,18 @@ export async function loadMobileChatStreamReplay(sessionId, after = 0) {
   const seq = Math.max(0, Math.floor(Number(after || 0)) || 0);
   const qs = seq ? `?after=${encodeURIComponent(seq)}` : '';
   return mfetch(`/api/mobile/chat/stream/${encodeURIComponent(sid)}${qs}`);
+}
+
+export async function loadMobileBackgroundStatuses(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  const qs = sid ? `?sessionId=${encodeURIComponent(sid)}` : '';
+  return mfetch(`/api/background${qs}`);
+}
+
+export async function loadMobileBackgroundStatus(backgroundId) {
+  const id = String(backgroundId || '').trim();
+  if (!id) return null;
+  return mfetch(`/api/background/${encodeURIComponent(id)}/status`);
 }
 
 export async function loadGatewayStatus() {

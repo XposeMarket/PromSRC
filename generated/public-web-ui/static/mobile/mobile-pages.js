@@ -1,6 +1,6 @@
 // Mobile pages — render functions for every mobile route.
 import {
-  chatMessages, recentCommands, mobileSchedules, mobileTeams, mobileTeamDetail,
+  recentCommands, mobileSchedules, mobileTeams, mobileTeamDetail,
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
@@ -15,6 +15,7 @@ import {
   saveTeamContextReference, invalidateTeamsCache,
   streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession,
   loadGatewayStatus, loadLatestUsableSession, loadMobileChatSession, invalidateMobileChatSessionCache, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay,
+  loadMobileBackgroundStatuses, loadMobileBackgroundStatus,
   updateMobileChatSessionHistory, markMobileEditRerunReset, markMobileChatSessionRead,
   loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState, streamTeamChat, loadTeamChatStreamReplay,
   claimPairing, pollPairing, verifyPairingMe,
@@ -174,12 +175,55 @@ const PM_MOBILE_LAST_CHAT_SESSION_KEY = 'pm_mobile_last_chat_session';
 const PM_MOBILE_THREAD_CACHE_KEY = 'pm_mobile_thread_cache_v1';
 const PM_MOBILE_THREAD_CACHE_MAX = 30; // messages to persist per session
 const PM_MOBILE_SIDE_CHAT_LINKS_KEY = 'prometheus_side_chat_links_v1';
+const PM_MOBILE_GOAL_CACHE_KEY = 'pm_mobile_main_chat_goals_v1';
+const PM_MOBILE_LAST_GOAL_SESSION_KEY = 'pm_mobile_last_goal_session';
+
+function _readMobileGoalCache() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PM_MOBILE_GOAL_CACHE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function _writeMobileGoalCache(goals = __pmChat.mainChatGoals) {
+  try {
+    const safe = {};
+    Object.entries(goals || {}).forEach(([sid, goal]) => {
+      const key = String(sid || '').trim();
+      if (key && goal && goal.status !== 'cleared') safe[key] = goal;
+    });
+    localStorage.setItem(PM_MOBILE_GOAL_CACHE_KEY, JSON.stringify(safe));
+  } catch {}
+}
+
+function _readMobileLastGoalSession() {
+  try {
+    return String(localStorage.getItem(PM_MOBILE_LAST_GOAL_SESSION_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function _rememberMobileLastGoalSession(sessionId, goal) {
+  const sid = String(sessionId || '').trim();
+  try {
+    if (sid && goal && goal.status !== 'cleared') {
+      localStorage.setItem(PM_MOBILE_LAST_GOAL_SESSION_KEY, sid);
+      return;
+    }
+    if (sid && _readMobileLastGoalSession() === sid) {
+      localStorage.removeItem(PM_MOBILE_LAST_GOAL_SESSION_KEY);
+    }
+  } catch {}
+}
 
 const __pmChat = (window.__pmChat = window.__pmChat || {
   activeSessionId: MOBILE_CHAT_SESSION_ID,
-  threads: { [MOBILE_CHAT_SESSION_ID]: chatMessages.slice() },
+  threads: { [MOBILE_CHAT_SESSION_ID]: [] },
   attachments: {},
-  thread: chatMessages.slice(),  // legacy alias for the active thread
+  thread: [],  // legacy alias for the active thread
   busy: false,
   abort: null,
   activeRuns: {},
@@ -192,8 +236,144 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
   pendingApprovals: {},
   sentClientRequestIds: {},
   queuedPrompts: {},
+  mainChatGoals: _readMobileGoalCache(),
+  goalDetailsOpen: {},
+  goalTimer: null,
   editingMessageIndex: -1,
 });
+
+if (!__pmChat.mainChatGoals || typeof __pmChat.mainChatGoals !== 'object') __pmChat.mainChatGoals = {};
+__pmChat.mainChatGoals = { ..._readMobileGoalCache(), ...__pmChat.mainChatGoals };
+if (!__pmChat.goalDetailsOpen || typeof __pmChat.goalDetailsOpen !== 'object') __pmChat.goalDetailsOpen = {};
+
+function _mobileGoalTimestampMs(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function _mobileGoalStartedAtMs(goal) {
+  return _mobileGoalTimestampMs(goal?.createdAt || goal?.created_at || goal?.startedAt);
+}
+
+function _mobileGoalFinishedAtMs(goal) {
+  return _mobileGoalTimestampMs(goal?.completedAt || goal?.failedAt || goal?.blockedAt || goal?.updatedAt);
+}
+
+function _mobileGoalElapsedMs(goal) {
+  const startedAt = _mobileGoalStartedAtMs(goal);
+  if (!startedAt) return 0;
+  const status = String(goal?.status || 'active');
+  const endAt = ['completed', 'done', 'failed', 'blocked'].includes(status) ? (_mobileGoalFinishedAtMs(goal) || Date.now()) : Date.now();
+  return Math.max(0, endAt - startedAt);
+}
+
+function _formatMobileGoalElapsed(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function _setMobileSessionGoal(sessionId, goal) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  if (goal && goal.status !== 'cleared') __pmChat.mainChatGoals[sid] = goal;
+  else delete __pmChat.mainChatGoals[sid];
+  _rememberMobileLastGoalSession(sid, goal);
+  _writeMobileGoalCache();
+}
+
+function _rememberMobileSessionGoal(session = {}, fallbackSessionId = '') {
+  const sid = String(session?.id || session?.sessionId || fallbackSessionId || '').trim();
+  if (!sid) return;
+  _setMobileSessionGoal(sid, session?.mainChatGoal || null);
+}
+
+function _getMobileGoalForSession(sessionId = '', options = {}) {
+  const sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+  const direct = sid ? (__pmChat.mainChatGoals?.[sid] || null) : null;
+  if (direct || options.fallbackToLast !== true) return direct;
+  const lastSid = _readMobileLastGoalSession();
+  return lastSid ? (__pmChat.mainChatGoals?.[lastSid] || null) : null;
+}
+
+function _updateMobileGoalElapsedLabels() {
+  document.querySelectorAll('[data-pm-goal-elapsed][data-session-id]').forEach((label) => {
+    const goal = _getMobileGoalForSession(label.getAttribute('data-session-id'));
+    if (!goal || goal.status === 'cleared') return;
+    label.textContent = _formatMobileGoalElapsed(_mobileGoalElapsedMs(goal));
+  });
+}
+
+function _syncMobileGoalTimer() {
+  const hasVisibleGoal = !!document.querySelector('[data-pm-goal-elapsed][data-session-id]');
+  if (!hasVisibleGoal) {
+    if (__pmChat.goalTimer) clearInterval(__pmChat.goalTimer);
+    __pmChat.goalTimer = null;
+    return;
+  }
+  _updateMobileGoalElapsedLabels();
+  if (!__pmChat.goalTimer) __pmChat.goalTimer = setInterval(_updateMobileGoalElapsedLabels, 1000);
+}
+
+function _renderMobileGoalPill(target, sessionId = '', options = {}) {
+  if (!target) return;
+  let sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+  let goal = _getMobileGoalForSession(sid);
+  target.dataset.goalFallback = options.fallbackToLast === true ? 'last' : '';
+  if (!goal && options.fallbackToLast === true) {
+    const lastSid = _readMobileLastGoalSession();
+    const fallbackGoal = lastSid ? _getMobileGoalForSession(lastSid) : null;
+    if (fallbackGoal) {
+      sid = lastSid;
+      goal = fallbackGoal;
+    }
+  }
+  if (!sid || !goal || goal.status === 'cleared') {
+    target.hidden = true;
+    target.innerHTML = '';
+    delete target.dataset.sessionId;
+    _syncMobileGoalTimer();
+    return;
+  }
+  target.dataset.sessionId = sid;
+  const expanded = __pmChat.goalDetailsOpen?.[sid] === true;
+  const judgeReprompt = String(goal.nextStepDirective || goal.lastJudgeDirective || goal.lastReason || '').trim();
+  target.hidden = false;
+  target.innerHTML = `
+    <button type="button" class="pm-mobile-goal-pill" data-mobile-goal-toggle="${escapeHtml(sid)}" aria-expanded="${expanded ? 'true' : 'false'}">
+      <span>Pursuing goal</span>
+      <b data-pm-goal-elapsed data-session-id="${escapeHtml(sid)}">${escapeHtml(_formatMobileGoalElapsed(_mobileGoalElapsedMs(goal)))}</b>
+    </button>
+    ${expanded ? `
+      <div class="pm-mobile-goal-details">
+        <div><strong>Turns</strong><span>${escapeHtml(String(Number(goal.turnsUsed || 0)))}</span></div>
+        <div><strong>Original goal</strong><span>${escapeHtml(goal.goal || 'Untitled goal')}</span></div>
+        <div><strong>Last judge reprompt</strong><span>${escapeHtml(judgeReprompt || 'No judge reprompt yet.')}</span></div>
+      </div>
+    ` : ''}`;
+  target.querySelector('[data-mobile-goal-toggle]')?.addEventListener('click', () => {
+    __pmChat.goalDetailsOpen[sid] = !__pmChat.goalDetailsOpen[sid];
+    _renderMobileGoalPill(target, sid);
+  });
+  _syncMobileGoalTimer();
+}
+
+function _refreshVisibleMobileGoalPills(sessionId = '') {
+  document.querySelectorAll('.pm-mobile-goal-strip').forEach((target) => {
+    const existingSid = String(target.dataset.sessionId || __pmChat.activeSessionId || '').trim();
+    const changedSid = String(sessionId || '').trim();
+    if (changedSid && existingSid && changedSid !== existingSid) return;
+    const sid = String(existingSid || changedSid || __pmChat.activeSessionId || '').trim();
+    _renderMobileGoalPill(target, sid, { fallbackToLast: target.dataset.goalFallback === 'last' });
+  });
+}
 
 function _activeMobileThread() {
   const sid = __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID;
@@ -230,6 +410,14 @@ function _readMobileLastChatSession() {
 
 function _clearMobileLastChatSession() {
   try { localStorage.removeItem(PM_MOBILE_LAST_CHAT_SESSION_KEY); } catch {}
+}
+
+function _clearMobileDraftSessionState() {
+  __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
+  __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
+  if (String(__pmChat.activeSessionId || '') === MOBILE_CHAT_SESSION_ID) {
+    __pmChat.thread = __pmChat.threads[MOBILE_CHAT_SESSION_ID];
+  }
 }
 
 // ── Thread skeleton cache (instant cold-open render) ─────────────────────────
@@ -334,8 +522,7 @@ async function enrichMobileSessionGroupsForDrawer(loadSessions) {
 function _startMobileNewChat(navigate) {
   _clearMobileLastChatSession();
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
-  __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
-  __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
+  _clearMobileDraftSessionState();
   __pmChat.editingMessageIndex = -1;
   __pmVoice.targetSessionId = MOBILE_CHAT_SESSION_ID;
   __pmVoice.targetSessionLabel = 'Mobile - New Chat';
@@ -353,8 +540,7 @@ function _startMobileNewChat(navigate) {
 function _startMobileNewVoiceDraft() {
   _clearMobileLastChatSession();
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
-  __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
-  __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
+  _clearMobileDraftSessionState();
   __pmChat.editingMessageIndex = -1;
   __pmVoice.targetSessionId = MOBILE_CHAT_SESSION_ID;
   __pmVoice.targetSessionLabel = 'Mobile - New Chat';
@@ -1002,7 +1188,7 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
   }
   panel.hidden = false;
   panel.innerHTML = `
-    <div class="pm-mobile-queued-head"><span>Queued prompts</span><b>${queue.length}</b></div>
+    <div class="pm-mobile-queued-head"><b aria-label="${queue.length} queued prompt${queue.length === 1 ? '' : 's'}">${queue.length}</b></div>
     <div class="pm-mobile-queued-list">
       ${queue.map((item, index) => `
         <div class="pm-mobile-queued-item">
@@ -1194,12 +1380,12 @@ function _renderMobileWorkTimer(msg, opts = {}) {
       ? Number(msg.workDurationMs)
       : ((Number.isFinite(endedAt) && endedAt > 0 ? endedAt : Number(msg?.timestamp || Date.now())) - startedAt));
   const label = `${active ? 'Working for' : 'Worked for'} ${escapeHtml(_formatMobileWorkDuration(duration))}`;
-  const hasTrace = !active && _mobileWorkflowTraceEntriesForMessage(msg).length > 0;
+  const hasTrace = !active && _mobileTraceHasToolGroup(_mobileWorkflowTraceEntriesForMessage(msg));
   if (hasTrace) {
     const expanded = opts.expanded ? ' expanded' : '';
     return `<div class="pm-work-timer pm-work-timer--expandable${expanded}" data-expandable="trace">
-      <svg class="pm-work-timer-chevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       ${label}
+      <svg class="pm-work-timer-chevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>`;
   }
   return `<div class="pm-work-timer">${label}</div>`;
@@ -1495,15 +1681,23 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
 function _mobileWorkflowTraceEntriesForMessage(message) {
   const out = [];
   const seen = new Set();
+  const finalText = String(message?.body?.text || message?.content || '').replace(/\s+/g, ' ').trim();
   const add = (entry, fallbackType = 'info') => {
     if (!entry || typeof entry !== 'object') return;
-    const type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
+    let type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
     const text = String(entry.text || entry.content || entry.message || '').trim();
     const preview = entry.preview && typeof entry.preview === 'object' ? entry.preview : null;
     const previewData = String(preview?.dataUrl || entry.dataUrl || '').trim();
     if (!text && !previewData) return;
     if (text && _isMobileStartupStatusText(text)) return;
-    const key = `${type}|${text.replace(/\s+/g, ' ')}|${previewData.slice(0, 120)}`;
+    if (type === 'user' || /^user\s*:/i.test(text)) return;
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    if (finalText && normalizedText === finalText && !previewData) return;
+    if (type === 'process' || type === 'info') {
+      if (/^thinking(?:\.\.\.)?$/i.test(normalizedText)) type = 'think';
+      else if (!previewData) return;
+    }
+    const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
@@ -1530,10 +1724,24 @@ function _moveMobilePreToolAnswerIntoPreamble(message) {
   message.finalResponseStarted = false;
 }
 
+function _moveMobileAnswerTextIntoTrace(message, type = 'think') {
+  if (!message) return;
+  const text = String(message.body?.text || message.content || '').trim();
+  if (!text) return;
+  _appendMobileLiveTrace(message, type, text);
+  if (message.body) message.body.text = '';
+  message.content = '';
+  message.finalResponseStarted = false;
+}
+
+function _moveMobileVisibleAnswerIntoWorkflowTrace(message) {
+  _moveMobileAnswerTextIntoTrace(message, message?.toolActivityStarted ? 'think' : 'preamble');
+}
+
 function _shouldRouteMobileTokenToLiveTrace(message) {
   if (!message || message.finalResponseStarted) return false;
   const mode = String(message.agentExecutionMode || '').trim();
-  return mode !== 'chat';
+  return mode !== 'chat' && !message.toolActivityStarted;
 }
 
 function _renderMobileLiveTracePreview(entry) {
@@ -1551,22 +1759,130 @@ function _renderMobileLiveTracePreview(entry) {
   </button>`;
 }
 
-function _renderMobileLiveTrace(entries) {
-  const list = (Array.isArray(entries) ? entries : []).filter((entry) =>
+function _normalizeMobileTraceProseText(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length >= 5) {
+    const shortLines = lines.filter((line) => line.split(/\s+/).filter(Boolean).length <= 2).length;
+    if (shortLines / lines.length >= 0.75) return raw.replace(/\s+/g, ' ').trim();
+  }
+  return raw;
+}
+
+function _renderMobileLiveTraceEntry(entry) {
+  const type = String(entry.type || 'info').toLowerCase();
+  const text = String(entry.text || '').trim();
+  const previewHtml = _renderMobileLiveTracePreview(entry);
+  if (type === 'preamble' || type === 'think' || type === 'assistant') {
+    return `<div class="pm-live-prose ${escapeHtml(type)}"><div class="pm-live-md">${_renderMobileMarkdown(_normalizeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
+  }
+  const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+  const body = text ? `<div class="pm-live-text">${escapeHtml(text)}</div>` : '';
+  return `<div class="pm-live-segment ${escapeHtml(type)}"><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
+}
+
+function _isMobilePreparedTraceEntry(entry) {
+  const type = String(entry?.type || '').toLowerCase();
+  const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+  return type === 'tool' && /^Prepared\b/i.test(text);
+}
+
+function _mobileVisibleTraceEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).filter((entry) =>
     !_isMobileImageGenerationStreamEntry(entry)
+    && !_isMobilePreparedTraceEntry(entry)
     && (String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim())
   );
+}
+
+function _renderMobileLiveTrace(entries) {
+  const list = _mobileVisibleTraceEntries(entries);
   if (!list.length) return '';
-  return `<div class="pm-live-trace">${list.map((entry) => {
-    const type = String(entry.type || 'info').toLowerCase();
-    const text = String(entry.text || '').trim();
-    const previewHtml = _renderMobileLiveTracePreview(entry);
-    if (type === 'preamble' || type === 'think' || type === 'assistant') {
-      return `<div class="pm-live-prose ${escapeHtml(type)}"><div class="pm-live-md">${_renderMobileMarkdown(text)}</div>${previewHtml}</div>`;
+  return `<div class="pm-live-trace">${list.map(_renderMobileLiveTraceEntry).join('')}</div>`;
+}
+
+function _isMobileTraceThoughtEntry(entry) {
+  const type = String(entry?.type || 'info').toLowerCase();
+  return type === 'preamble' || type === 'think' || type === 'assistant';
+}
+
+function _mobileTraceGroupStableKey(group, index = 0) {
+  return `trace_group_${String(group?.kind || 'group')}_${index}`;
+}
+
+function _mobileTraceGroups(entries) {
+  const list = _mobileVisibleTraceEntries(entries);
+  const groups = [];
+  let activeToolGroup = null;
+  list.forEach((entry) => {
+    if (_isMobileTraceThoughtEntry(entry)) {
+      activeToolGroup = null;
+      groups.push({ kind: 'thought', entries: [entry] });
+      return;
     }
-    const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
-    const body = text ? `<div class="pm-live-text">${escapeHtml(text)}</div>` : '';
-    return `<div class="pm-live-segment ${escapeHtml(type)}"><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
+    if (!activeToolGroup) {
+      activeToolGroup = { kind: 'tools', entries: [] };
+      groups.push(activeToolGroup);
+    }
+    activeToolGroup.entries.push(entry);
+  });
+  return groups.map((group, index) => ({ ...group, id: _mobileTraceGroupStableKey(group, index) }));
+}
+
+function _mobileTraceHasToolGroup(entries) {
+  return _mobileTraceGroups(entries).some((group) => group.kind === 'tools' && group.entries.length > 0);
+}
+
+function _mobileTraceToolLabel(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^Preparing\s+/i, '')
+    .replace(/^Prepared\s+/i, '')
+    .replace(/\s*(?:->|→).*/, '')
+    .replace(/:\s+(?!\{).*/, '')
+    .replace(/\s+(?:complete|failed)$/i, '')
+    .replace(/:\s*\{.*$/, '')
+    .trim();
+}
+
+function _mobileTraceToolSummary(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision'].includes(String(entry?.type || '').toLowerCase()));
+  const labels = [...new Set(toolish.map((entry) => _mobileTraceToolLabel(entry.text)).filter(Boolean))];
+  const errors = [...new Set(list
+    .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
+    .map((entry) => _mobileTraceToolLabel(entry.text))
+    .filter(Boolean))].length;
+  const logicalCount = Math.max(labels.length, errors || 0, toolish.length ? 1 : 0);
+  if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
+  if (labels.length === 1) {
+    const count = logicalCount;
+    return `${labels[0]}${count > 1 ? ` x${count}` : ''}`;
+  }
+  const count = logicalCount || list.length;
+  return `Ran ${count} tool${count === 1 ? '' : 's'}`;
+}
+
+function _renderMobileGroupedTrace(entries, { streaming = false } = {}) {
+  const groups = _mobileTraceGroups(entries);
+  if (!groups.length) return '';
+  const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
+  return `<div class="pm-trace-timeline">${groups.map((group, index) => {
+    if (group.kind === 'thought') {
+      return `<div class="pm-trace-thought">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div>`;
+    }
+    const open = streaming && index === lastToolIndex;
+    const summary = _mobileTraceToolSummary(group.entries);
+    const eventCount = _mobileVisibleTraceEntries(group.entries).length;
+    return `<details class="pm-trace-tool-group"${open ? ' open data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
+      <summary class="pm-trace-tool-summary">
+        <span class="pm-trace-tool-icon" aria-hidden="true">›</span>
+        <strong>${escapeHtml(summary)}</strong>
+        <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
+      </summary>
+      <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
+    </details>`;
   }).join('')}</div>`;
 }
 
@@ -1793,6 +2109,8 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   const restartText = String(msg.text || '').trim();
   _clearMobileLiveRunForSession(sid);
   const session = await loadMobileChatSession(sid).catch(() => null);
+  _rememberMobileSessionGoal(session, sid);
+  try { window.__pmMobileGoalChanged?.(); } catch {}
   const history = Array.isArray(session?.history) ? session.history : [];
   const mapped = _mapServerHistoryToMobile(history);
   const localThread = __pmChat.threads?.[sid] || [];
@@ -1890,6 +2208,17 @@ if (!window.__pmMobileSessionNotificationBridgeInstalled) {
         console.warn('[mobile] scheduled notification sync failed:', err?.message || err);
       });
     }
+  });
+}
+
+if (!window.__pmMobileGoalBridgeInstalled) {
+  window.__pmMobileGoalBridgeInstalled = true;
+  wsEventBus.on('main_chat_goal_updated', (msg = {}) => {
+    const sid = String(msg?.sessionId || '').trim();
+    if (!sid) return;
+    _setMobileSessionGoal(sid, msg.goal || null);
+    _refreshVisibleMobileGoalPills(sid);
+    try { window.__pmMobileGoalChanged?.(); } catch {}
   });
 }
 
@@ -2142,21 +2471,101 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
   </div>`;
 }
 
+function _mobileBackgroundSpawnIdFromSessionId(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const match = sid.match(/^background_(bg_[A-Za-z0-9_.:-]+)$/);
+  return match ? match[1] : '';
+}
+
+function _mobileBackgroundSpawnApprovalId(approvalInput = {}) {
+  const source = approvalInput && typeof approvalInput === 'object' ? approvalInput : {};
+  const nested = source.approval && typeof source.approval === 'object' ? source.approval : {};
+  const taskId = String(source.taskId || nested.taskId || '').trim();
+  return _mobileBackgroundSpawnId(source)
+    || _mobileBackgroundSpawnId(nested)
+    || (taskId.startsWith('bg_') ? taskId : '')
+    || _mobileBackgroundSpawnIdFromSessionId(source.backgroundSessionId || source.bgSessionId || source.sourceSessionId || source.sessionId)
+    || _mobileBackgroundSpawnIdFromSessionId(nested.backgroundSessionId || nested.bgSessionId || nested.sourceSessionId || nested.sessionId);
+}
+
+function _mobileBackgroundSpawnLaneForApproval(approvalInput = {}) {
+  const bgId = _mobileBackgroundSpawnApprovalId(approvalInput);
+  return bgId ? (_mobileBackgroundSpawnLanes()[bgId] || null) : null;
+}
+
+function _mobileApprovalVisibleSessionId(approvalInput = {}) {
+  const source = approvalInput && typeof approvalInput === 'object' ? approvalInput : {};
+  const explicit = String(
+    source.visibleSessionId
+      || source.spawnerSessionId
+      || source.parentSessionId
+      || source.mainSessionId
+      || source.browserSpawnerSessionId
+      || ''
+  ).trim();
+  if (explicit) return explicit;
+  const lane = _mobileBackgroundSpawnLaneForApproval(source);
+  if (lane?.sessionId) return String(lane.sessionId).trim();
+  const sid = String(source.sessionId || source.sourceSessionId || '').trim();
+  if (_mobileBackgroundSpawnIdFromSessionId(sid)) {
+    const activeSid = String(__pmChat.activeSessionId || '').trim();
+    if (activeSid && activeSid !== sid) return activeSid;
+  }
+  return sid || String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
+}
+
+function _linkMobileApprovalToBackgroundLane(approvalInput = {}) {
+  const bgId = _mobileBackgroundSpawnApprovalId(approvalInput);
+  if (!bgId) return null;
+  const lane = _mobileBackgroundSpawnLanes()[bgId] || null;
+  if (!lane) return null;
+  const approval = _normalizeMobileApproval({
+    ...approvalInput,
+    bgId,
+    backgroundId: bgId,
+    visibleSessionId: lane.sessionId || approvalInput.visibleSessionId,
+    spawnerSessionId: lane.sessionId || approvalInput.spawnerSessionId,
+    backgroundSessionId: approvalInput.backgroundSessionId || approvalInput.bgSessionId || approvalInput.sourceSessionId || approvalInput.sessionId,
+  });
+  const status = String(approval.status || 'pending').toLowerCase();
+  lane.approvalRequest = approval;
+  if (status === 'pending') {
+    lane.status = 'approval_required';
+    lane.expanded = true;
+  } else if (lane.status === 'approval_required') {
+    lane.status = 'running';
+  }
+  lane.updatedAt = Date.now();
+  return lane;
+}
+
 function _getPendingApprovalsForSession(sessionId) {
   const sid = String(sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
-  const list = Array.isArray(__pmChat.pendingApprovals?.[sid]) ? __pmChat.pendingApprovals[sid] : [];
-  return list.filter((approval) => approval && approval.id && String(approval.status || 'pending') === 'pending');
+  const out = new Map();
+  const add = (approval) => {
+    if (!approval || !approval.id || String(approval.status || 'pending') !== 'pending') return;
+    if (_mobileApprovalVisibleSessionId(approval) !== sid) return;
+    out.set(String(approval.id), approval);
+  };
+  (Array.isArray(__pmChat.pendingApprovals?.[sid]) ? __pmChat.pendingApprovals[sid] : []).forEach(add);
+  Object.entries(__pmChat.pendingApprovals || {}).forEach(([key, list]) => {
+    if (key === sid || !Array.isArray(list)) return;
+    list.forEach(add);
+  });
+  return [...out.values()];
 }
 
 function _upsertMobilePendingApproval(approvalInput = {}) {
   const approval = _normalizeMobileApproval(approvalInput);
   if (!approval.id) return false;
-  const sid = approval.sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID;
+  const lane = _linkMobileApprovalToBackgroundLane(approval);
+  const storedApproval = lane?.approvalRequest || approval;
+  const sid = _mobileApprovalVisibleSessionId(storedApproval) || storedApproval.sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID;
   if (!__pmChat.pendingApprovals) __pmChat.pendingApprovals = {};
   const list = Array.isArray(__pmChat.pendingApprovals[sid]) ? __pmChat.pendingApprovals[sid] : [];
-  const idx = list.findIndex((item) => String(item?.id || '') === approval.id);
-  if (idx >= 0) list[idx] = { ...list[idx], ...approval };
-  else list.push(approval);
+  const idx = list.findIndex((item) => String(item?.id || '') === storedApproval.id);
+  if (idx >= 0) list[idx] = { ...list[idx], ...storedApproval };
+  else list.push(storedApproval);
   __pmChat.pendingApprovals[sid] = list.slice(-8);
   return true;
 }
@@ -2168,6 +2577,8 @@ function _updateMobilePendingApproval(id, patch = {}) {
     const idx = Array.isArray(list) ? list.findIndex((item) => String(item?.id || '') === approvalId) : -1;
     if (idx < 0) continue;
     list[idx] = _normalizeMobileApproval({ ...list[idx], ...patch, id: approvalId });
+    const lane = _linkMobileApprovalToBackgroundLane(list[idx]);
+    if (lane?.approvalRequest) list[idx] = lane.approvalRequest;
     __pmChat.pendingApprovals[sid] = list;
     return list[idx];
   }
@@ -2188,7 +2599,7 @@ function _renderMobileApprovalSheet() {
     host.id = 'pm-global-approval-host';
     document.body.appendChild(host);
   }
-  const current = pending.find((approval) => String(approval.sessionId || approval.sourceSessionId || '') === String(__pmChat.activeSessionId || '')) || pending[0];
+  const current = pending.find((approval) => _mobileApprovalVisibleSessionId(approval) === String(__pmChat.activeSessionId || '')) || pending[0];
   const openTerminals = {};
   const approvalDetails = _captureMobileApprovalDetailsState(host);
   try {
@@ -2268,7 +2679,8 @@ async function _resolveMobileApprovalButton(button) {
     const result = approved ? await approveMobileApproval(id, grantScope) : await denyMobileApproval(id);
     const updated = _updateMobilePendingApproval(id, { status: approved ? 'approved' : 'rejected' });
     pmToast(approved ? (grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved') : 'Rejected', approved ? 'success' : 'info');
-    const sid = updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId;
+    const sid = _mobileApprovalVisibleSessionId(updated || result?.approval || { id }) || updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId;
+    _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid || __pmChat.activeSessionId);
     if (String(sid || '') === String(__pmChat.activeSessionId || '')) {
       const threadEl = document.getElementById('pm-chat-thread');
       const bodyEl = document.getElementById('pm-chat-body');
@@ -2323,7 +2735,8 @@ function _installMobileApprovalBridge() {
     const approval = await _approvalFromMobileEvent(msg);
     if (!approval?.id) return;
     _upsertMobilePendingApproval(approval);
-    const sid = approval.sessionId || approval.sourceSessionId || '';
+    const sid = _mobileApprovalVisibleSessionId(approval);
+    _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid || __pmChat.activeSessionId);
     if (String(sid) === String(__pmChat.activeSessionId || '')) {
       const threadEl = document.getElementById('pm-chat-thread');
       const bodyEl = document.getElementById('pm-chat-body');
@@ -2340,7 +2753,8 @@ function _installMobileApprovalBridge() {
           : eventName === 'approval_expired' ? 'expired'
             : 'failed';
       const updated = _updateMobilePendingApproval(id, { ...(msg.approval || {}), status });
-      const sid = updated?.sessionId || updated?.sourceSessionId || msg.sessionId || '';
+      const sid = _mobileApprovalVisibleSessionId(updated || msg.approval || msg) || updated?.sessionId || updated?.sourceSessionId || msg.sessionId || '';
+      _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid || __pmChat.activeSessionId);
       if (String(sid) === String(__pmChat.activeSessionId || '')) {
         const threadEl = document.getElementById('pm-chat-thread');
         const bodyEl = document.getElementById('pm-chat-body');
@@ -2375,6 +2789,7 @@ function _renderMobileMessageActions(m, index) {
   const secondary = `<button type="button" class="pm-msg-action" data-msg-action="fork" data-msg-index="${index}" title="Fork" aria-label="Fork">${ICONS.fork || ICONS.chev}</button>`;
   return `<div class="pm-msg-actions">
     <button type="button" class="pm-msg-action" data-msg-action="copy" data-msg-index="${index}" title="Copy" aria-label="Copy">${ICONS.clipboard}</button>
+    <button type="button" class="pm-msg-action" data-msg-action="speak" data-msg-index="${index}" title="Speak response" aria-label="Speak response">${ICONS.volume || ICONS.play}</button>
     ${secondary}
   </div>`;
 }
@@ -3381,15 +3796,15 @@ function _renderChatMessageHtml(m, index = -1) {
     if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
     if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
   }
-  const hasLiveTrace = m.streaming && !answerStarted && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length;
+  const hasLiveTrace = m.streaming && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length;
   const completedTraceEntries = !m.streaming ? _mobileWorkflowTraceEntriesForMessage(m) : [];
-  const hasCompletedTrace = completedTraceEntries.length > 0;
+  const hasCompletedTrace = _mobileTraceHasToolGroup(completedTraceEntries);
   const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
   if (hasLiveTrace) {
-    inner += _renderMobileLiveTrace(m.liveTraceEntries);
+    inner += _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true });
   } else if (hasCompletedTrace) {
     // Completed turn — trace hidden in collapsible drawer behind the work timer
-    inner += `<div class="pm-trace-drawer">${_renderMobileLiveTrace(completedTraceEntries)}</div>`;
+    inner += `<div class="pm-trace-drawer">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
   } else if (m.streaming && !answerStarted && !hasPendingImageGeneration) {
     inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
   }
@@ -3679,6 +4094,8 @@ function _renderThread(threadEl) {
   // reset panel state every tick.
   const openProc = {};
   const closedProc = new Set();
+  const openTraceGroups = {};
+  const closedTraceGroups = new Set();
   const openTerminals = {};
   const approvalDetails = _captureMobileApprovalDetailsState(threadEl);
   const questionDrafts = _captureMobileQuestionDraftState(threadEl);
@@ -3691,6 +4108,16 @@ function _renderThread(threadEl) {
         openProc[idx] = { scrollTop: full ? full.scrollTop : 0 };
       } else {
         closedProc.add(idx);
+      }
+    });
+    threadEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
+      const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
+      if (idx == null) return;
+      const key = `${idx}:${d.getAttribute('data-pm-trace-group') || detailIndex}`;
+      if (d.open) {
+        if (d.getAttribute('data-pm-trace-live-current') !== '1') openTraceGroups[key] = true;
+      } else {
+        closedTraceGroups.add(key);
       }
     });
     threadEl.querySelectorAll('[data-process-approval-host][data-terminal-open="1"]').forEach((host) => {
@@ -3720,6 +4147,13 @@ function _renderThread(threadEl) {
       const msgEl = threadEl.querySelector(`[data-msg-index="${idx}"]`);
       const d = msgEl?.querySelector('details.pm-process-stream');
       if (d) d.removeAttribute('open');
+    });
+    threadEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
+      const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
+      if (idx == null) return;
+      const key = `${idx}:${d.getAttribute('data-pm-trace-group') || detailIndex}`;
+      if (closedTraceGroups.has(key)) d.removeAttribute('open');
+      else if (openTraceGroups[key]) d.setAttribute('open', '');
     });
     _restoreMobileApprovalDetailsState(threadEl, approvalDetails);
     _restoreMobileQuestionDraftState(threadEl, questionDrafts);
@@ -3758,6 +4192,8 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     if (!currentBubble || !nextBubble) return false;
     const openProc = {};
     const closedProc = new Set();
+    const openTraceGroups = {};
+    const closedTraceGroups = new Set();
     const openTerminals = {};
     const stableVisionPreviews = {};
     const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
@@ -3773,6 +4209,14 @@ function _patchMobileThreadMessage(threadEl, message, index) {
           openProc[detailIndex] = { scrollTop: full ? full.scrollTop : 0 };
         } else {
           closedProc.add(detailIndex);
+        }
+      });
+      currentEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
+        const key = d.getAttribute('data-pm-trace-group') || String(detailIndex);
+        if (d.open) {
+          if (d.getAttribute('data-pm-trace-live-current') !== '1') openTraceGroups[key] = true;
+        } else {
+          closedTraceGroups.add(key);
         }
       });
       currentEl.querySelectorAll('[data-process-approval-host][data-terminal-open="1"]').forEach((host) => {
@@ -3807,6 +4251,11 @@ function _patchMobileThreadMessage(threadEl, message, index) {
           const full = d.querySelector('.pm-process-full');
           if (full) full.scrollTop = openProc[detailIndex].scrollTop;
         }
+      });
+      currentEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
+        const key = d.getAttribute('data-pm-trace-group') || String(detailIndex);
+        if (closedTraceGroups.has(key)) d.removeAttribute('open');
+        else if (openTraceGroups[key]) d.setAttribute('open', '');
       });
       _restoreMobileApprovalDetailsState(currentEl, approvalDetails);
       _restoreMobileQuestionDraftState(currentEl, questionDrafts);
@@ -4066,18 +4515,11 @@ function _installMobileTimestampReveal(threadEl, onMessageAction) {
     // Android fallback
     try { pmHaptic(18); } catch {}
 
-    // Timestamp
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const isToday = now.toDateString() === new Date().toDateString();
-    const dateStr = isToday ? 'Today' : now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-
     const pop = document.createElement('div');
     pop.id = 'pm-msg-lp-popover';
     pop.className = 'pm-msg-lp-popover';
     pop.style.visibility = 'hidden'; // hide until rAF positions it
     pop.innerHTML = `
-      <div class="pm-msg-lp-time">${dateStr}, ${timeStr}</div>
       <div class="pm-msg-lp-actions">
         <button type="button" class="pm-msg-lp-btn" data-lp-action="copy" data-lp-index="${msgIndex}">
           ${ICONS.clipboard}<span>Copy</span>
@@ -4091,10 +4533,10 @@ function _installMobileTimestampReveal(threadEl, onMessageAction) {
     document.body.appendChild(pop);
 
     // Position after layout so offsetHeight is real
-    const popW = 168;
     const margin = 10;
     requestAnimationFrame(() => {
       const popH = pop.offsetHeight || 100;
+      const popW = Math.min(Math.max(pop.offsetWidth || 260, 240), window.innerWidth - margin * 2);
       const nearBottom = rect.bottom > window.innerHeight * 0.67;
       let top, origin;
       if (nearBottom) {
@@ -4756,17 +5198,71 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   let requestedSession = String(sessionId || rememberedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
+  if (requestedSession === MOBILE_CHAT_SESSION_ID) {
+    _clearMobileDraftSessionState();
+  }
   if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
   _activeMobileThread();
+  const closeMenu = () => {
+    const pop = document.getElementById('pm-chat-settings-popover');
+    const overlay = document.getElementById('pm-chat-settings-popover-overlay');
+    if (overlay) overlay.remove();
+    if (pop) pop.remove();
+  };
+
+  const openSettingsMenu = () => {
+    const existingPop = document.getElementById('pm-chat-settings-popover');
+    const existingOverlay = document.getElementById('pm-chat-settings-popover-overlay');
+    if (existingPop) existingPop.remove();
+    if (existingOverlay) existingOverlay.remove();
+
+    const overlay = document.createElement('button');
+    overlay.type = 'button';
+    overlay.id = 'pm-chat-settings-popover-overlay';
+    overlay.className = 'pm-chat-settings-popover-overlay';
+    overlay.addEventListener('click', () => closeMenu(), { passive: true });
+    overlay.addEventListener('touchstart', () => closeMenu(), { passive: true });
+
+    const pop = document.createElement('div');
+    pop.id = 'pm-chat-settings-popover';
+    pop.className = 'pm-chat-settings-popover';
+    pop.setAttribute('aria-label', 'Chat settings menu');
+    pop.innerHTML = `
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-open" type="button" data-action="settings">Settings</button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-notifications" type="button" data-action="notifications">Notifications</button>
+    `;
+
+    const openSettings = () => {
+      closeMenu();
+      if (typeof page.openSettings === 'function') page.openSettings();
+      else if (typeof window.pmOpenSettings === 'function') window.pmOpenSettings();
+      else if (typeof window.openSettings === 'function') window.openSettings();
+      else navigate?.('#mobile/settings');
+    };
+
+    pop.querySelector('#pm-chat-settings-open')?.addEventListener('click', () => {
+      closeMenu();
+      requestAnimationFrame(openSettings);
+    }, { passive: true });
+
+    pop.querySelector('#pm-chat-settings-notifications')?.addEventListener('click', () => {
+      closeMenu();
+      requestAnimationFrame(() => {
+        _toggleMobileChatPushNotifications().catch(() => {});
+      });
+    }, { passive: true });
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(pop);
+    _refreshMobileChatPushButton().catch(() => {});
+  };
+
   const header = renderMobileHeader({
     title: requestedSession === MOBILE_CHAT_SESSION_ID ? 'New Chat' : 'Chat',
     online: true,
     hideTitle: true,
     hideBrand: true,
-    rightActions: `
-      <button class="pm-icon-btn" id="pm-chat-push-btn" type="button" aria-label="Enable notifications" aria-pressed="false">${ICONS.bell}</button>
-      <button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.plus}</button>
-    `,
+    rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.plus}</button>`,
   });
   page.innerHTML = `
     ${header}
@@ -4776,6 +5272,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     </div>
     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
     <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
+    <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
     <form class="pm-composer" id="pm-composer">
       <span class="pm-glass-lens" aria-hidden="true"></span>
       <span class="pm-glass-border" aria-hidden="true"></span>
@@ -4802,13 +5299,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     <div class="pm-attach-sheet" id="pm-attach-sheet" hidden>
       <div class="pm-attach-sheet-scrim" id="pm-attach-sheet-scrim"></div>
       <section class="pm-attach-sheet-panel" aria-label="Attach">
-        <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="camera">
-          <span>${ICONS.image}</span>
-          <strong>Camera</strong>
-        </button>
         <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="files">
           <span>${ICONS.paperclip}</span>
           <strong>Files</strong>
+        </button>
+        <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="camera">
+          <span>${ICONS.image}</span>
+          <strong>Camera</strong>
         </button>
       </section>
     </div>
@@ -4855,18 +5352,16 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     </div>
   `;
   wireHeaderActions(page, {
+    onSettings: openSettingsMenu,
     onNewChat: () => _startMobileNewChat(navigate),
   });
-  page.querySelector('#pm-chat-push-btn')?.addEventListener('click', () => {
-    _toggleMobileChatPushNotifications().catch(() => {});
-  });
-  _refreshMobileChatPushButton().catch(() => {});
   wireMobileContextWindow(page, { getSessionId: () => __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
 
   const body     = page.querySelector('#pm-chat-body');
   const threadEl = page.querySelector('#pm-chat-thread');
   const form     = page.querySelector('#pm-composer');
   const backgroundSpawnDock = page.querySelector('#pm-background-spawn-dock');
+  const goalStrip = page.querySelector('#pm-mobile-goal-strip');
   const input    = page.querySelector('#pm-composer-input');
   const sendBtn  = page.querySelector('#pm-send-btn');
   const attachBtn = page.querySelector('#pm-attach-btn');
@@ -4912,6 +5407,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   _installMobileTimestampReveal(threadEl, handleMobileMessageAction);
   const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
   const previousQueuedPromptsBridge = window.__pmMobileQueuedPromptsChanged;
+  const previousGoalBridge = window.__pmMobileGoalChanged;
   const currentBackgroundDockBridge = () => {
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
     updateChatComposerSpace();
@@ -4919,9 +5415,15 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const currentQueuedPromptsBridge = () => {
     updateChatComposerSpace();
   };
+  const currentGoalBridge = () => {
+    _renderMobileGoalPill(goalStrip, requestedSession);
+    updateChatComposerSpace();
+  };
   window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
   window.__pmMobileQueuedPromptsChanged = currentQueuedPromptsBridge;
+  window.__pmMobileGoalChanged = currentGoalBridge;
   _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
+  _renderMobileGoalPill(goalStrip, requestedSession);
 
   const resizeComposerInput = () => {
     if (!input) return;
@@ -5697,6 +6199,9 @@ void main() {
     loadMobileChatSession(requestedSession)
       .then((session) => {
         if (__pmChat.activeSessionId !== requestedSession) return;
+        _rememberMobileSessionGoal(session, requestedSession);
+        _renderMobileGoalPill(goalStrip, requestedSession);
+        updateChatComposerSpace();
         const history = Array.isArray(session?.history) ? session.history : [];
         const localThread = __pmChat.threads[requestedSession] || [];
         __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
@@ -5727,18 +6232,32 @@ void main() {
     const remembered = _readMobileActiveRun(requestedSession);
     try {
       // ── Parallel batch 1: run-status + session history (independent) ──────────
-      const [status, prefetchedSession] = await Promise.all([
+      const [status, prefetchedSession, backgroundStatusResponse] = await Promise.all([
         loadMobileChatRunStatus(requestedSession),
         (fullRefresh || force) ? loadMobileChatSession(requestedSession, { force: true }).catch(() => null) : Promise.resolve(null),
+        loadMobileBackgroundStatuses(requestedSession).catch(() => null),
       ]);
+      const recoveredBackgroundStatuses = Array.isArray(backgroundStatusResponse?.statuses) ? backgroundStatusResponse.statuses : [];
       if (!force && !remembered && !status?.active) return;
       // Draft new-chat session has no server-side history — skip even when force=true
       if (requestedSession === MOBILE_CHAT_SESSION_ID && !remembered && !status?.active) return;
       if (__pmChat.activeSessionId !== requestedSession) return;
+      const recoverBackgroundDock = async (frames = []) => {
+        const changed = await _recoverMobileBackgroundSpawnDock({
+          sessionId: requestedSession,
+          frames,
+          statuses: recoveredBackgroundStatuses,
+          dock: backgroundSpawnDock,
+        });
+        if (changed) updateChatComposerSpace();
+        return changed;
+      };
 
       let recoveredSessionProcessLog = [];
       if (fullRefresh || force) {
         const session = prefetchedSession;
+        _rememberMobileSessionGoal(session, requestedSession);
+        _renderMobileGoalPill(goalStrip, requestedSession);
         const history = Array.isArray(session?.history) ? session.history : [];
         recoveredSessionProcessLog = Array.isArray(session?.processLog) ? session.processLog : [];
         // CRITICAL: do NOT replace the thread with server history while a run is
@@ -5763,7 +6282,7 @@ void main() {
         (Array.isArray(pendingApprovals) ? pendingApprovals : [])
           .filter((approval) => {
             const sid = String(approval?.sessionId || approval?.sourceSessionId || '').trim();
-            return !sid || sid === requestedSession;
+            return !sid || sid === requestedSession || !!_mobileBackgroundSpawnIdFromSessionId(sid);
           })
           .forEach((approval) => _upsertMobilePendingApproval(approval));
         (Array.isArray(pendingQuestions) ? pendingQuestions : [])
@@ -5864,6 +6383,7 @@ void main() {
           }
         }
         if (terminal) {
+          await recoverBackgroundDock(events);
           finalizeMobileLiveAiTurn(aiTurn);
           return;
         }
@@ -5880,12 +6400,17 @@ void main() {
             Number(remembered?.lastSeq || 0) || 0,
           ),
         });
+        await recoverBackgroundDock(events);
         renderThreadNow();
         setBusy(true);
         return;
       }
 
+      const replay = await loadMobileChatStreamReplay(requestedSession, 0).catch(() => null);
+      await recoverBackgroundDock(Array.isArray(replay?.events) ? replay.events : []);
       const session = await loadMobileChatSession(requestedSession).catch(() => null);
+      _rememberMobileSessionGoal(session, requestedSession);
+      _renderMobileGoalPill(goalStrip, requestedSession);
       const history = Array.isArray(session?.history) ? session.history : [];
       if (history.length) {
         const localThread = __pmChat.threads[requestedSession] || [];
@@ -6025,12 +6550,16 @@ void main() {
       const queuedHeight = queuedPanel && !queuedPanel.hidden
         ? Math.ceil(queuedPanel.getBoundingClientRect?.().height || 0)
         : 0;
+      const goalHeight = goalStrip && !goalStrip.hidden
+        ? Math.ceil(goalStrip.getBoundingClientRect?.().height || 0)
+        : 0;
       page?.style?.setProperty?.('--pm-composer-live-height', `${height}px`);
       page?.style?.setProperty?.('--pm-queued-live-height', `${queuedHeight}px`);
+      page?.style?.setProperty?.('--pm-goal-live-height', `${goalHeight}px`);
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
-      const space = Math.max(170, height + queuedHeight + dockHeight + (dockHeight ? 54 : 40));
+      const space = Math.max(170, height + queuedHeight + goalHeight + dockHeight + (dockHeight ? 54 : 40));
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
       if (form.classList.contains('is-voice-active') && chatVoiceShell && !chatVoiceShell.hidden) {
         const bodyRect = body.getBoundingClientRect?.();
@@ -6101,7 +6630,7 @@ void main() {
   async function ensureMobileSideParentSession() {
     if (requestedSession !== MOBILE_CHAT_SESSION_ID) return requestedSession;
     const sid = createMobileChatSessionId();
-    const currentThread = Array.isArray(__pmChat.threads[requestedSession]) ? __pmChat.threads[requestedSession] : [];
+    const currentThread = [];
     __pmChat.threads[sid] = currentThread;
     __pmChat.attachments[sid] = getPendingAttachments().slice();
     __pmChat.activeSessionId = sid;
@@ -6204,7 +6733,7 @@ void main() {
         return 'streaming';
       case 'agent_mode':
         aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
-        if (aiTurn.agentExecutionMode === 'execute') _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        if (aiTurn.agentExecutionMode === 'execute') _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
         scheduleSideRenderSoon();
         return 'streaming';
@@ -6222,7 +6751,7 @@ void main() {
       case 'heartbeat':
       case 'tool_progress':
         if (String(evt.type || '') === 'tool_progress') {
-          _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+          _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
           aiTurn.toolActivityStarted = true;
           _collectMediaFromToolEvent(aiTurn, evt);
         }
@@ -6233,14 +6762,14 @@ void main() {
         renderMobileSideSheet();
         return 'streaming';
       case 'tool_call':
-        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileProcess(aiTurn, 'tool', _mobileToolLabel(evt), evt);
         _appendMobileLiveTrace(aiTurn, 'tool', _mobileToolLabel(evt));
         renderMobileSideSheet();
         return 'streaming';
       case 'tool_result':
-        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`, evt);
@@ -6248,7 +6777,7 @@ void main() {
         renderMobileSideSheet();
         return 'streaming';
       case 'vision_injected':
-        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileVisionTrace(aiTurn, evt);
         renderMobileSideSheet();
@@ -6700,6 +7229,67 @@ void main() {
     }
   }
 
+  function _mobileSpeakResponseLabel() {
+    const settings = __pmVoice?.settings || {};
+    const mode = String(settings.voiceMode || 'default');
+    const provider = String(settings.ttsProvider || __pmVoice?.provider?.ttsProvider || _outputProviderForMode(mode) || 'browser');
+    if (provider === 'openai_realtime') return `OpenAI Realtime · ${String(settings.realtimeVoice || __pmVoice?.provider?.voice || 'saved voice')}`;
+    if (provider === 'xai') return `xAI / Grok · ${String(settings.serverVoice || __pmVoice?.provider?.ttsVoice || 'saved voice')}`;
+    if (provider === 'openai') return `OpenAI · ${String(settings.serverVoice || __pmVoice?.provider?.ttsVoice || 'saved voice')}`;
+    return 'Browser voice';
+  }
+
+  function _showMobileSpeakResponseConfirm({ text, onConfirm }) {
+    const clean = _cleanVoiceSpeechText(text);
+    if (!clean) return;
+    const existing = document.querySelector('.pm-speak-confirm-overlay');
+    existing?.remove?.();
+    const overlay = document.createElement('div');
+    overlay.className = 'pm-speak-confirm-overlay';
+    overlay.setAttribute('role', 'presentation');
+    overlay.innerHTML = `
+      <section class="pm-speak-confirm" role="dialog" aria-modal="true" aria-labelledby="pm-speak-confirm-title">
+        <button type="button" class="pm-speak-confirm-close" data-speak-close aria-label="Close">${ICONS.x}</button>
+        <div class="pm-speak-confirm-icon">${ICONS.volume || ICONS.play}</div>
+        <h2 id="pm-speak-confirm-title">Speak response?</h2>
+        <p>Play this Prometheus message with ${escapeHtml(_mobileSpeakResponseLabel())}.</p>
+        <div class="pm-speak-confirm-actions">
+          <button type="button" class="pm-speak-confirm-btn secondary" data-speak-close>Cancel</button>
+          <button type="button" class="pm-speak-confirm-btn primary" data-speak-confirm>Speak</button>
+        </div>
+      </section>`;
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (target === overlay || target?.closest?.('[data-speak-close]')) {
+        close();
+        return;
+      }
+      if (target?.closest?.('[data-speak-confirm]')) {
+        close();
+        try { await onConfirm?.(clean); }
+        catch (err) { pmToast(err?.message || 'Could not speak response', 'error'); }
+      }
+    });
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('is-visible'));
+  }
+
+  async function speakMobileChatMessage(index) {
+    const msg = _activeMobileThread()[index];
+    if (!_isMobileAssistantMessage(msg)) return;
+    const text = _mobileMessageCopyText(msg);
+    if (!String(text || '').trim()) return;
+    _showMobileSpeakResponseConfirm({
+      text,
+      onConfirm: async (clean) => {
+        __pmVoice.lastAi = clean;
+        _ttsStop();
+        await _ttsSpeak(clean);
+      },
+    });
+  }
+
   async function forkMobileConversationFromMessage(index) {
     const thread = _activeMobileThread();
     const msg = thread[index];
@@ -6808,6 +7398,7 @@ void main() {
     const index = Number(button?.getAttribute?.('data-msg-index'));
     if (!action || !Number.isFinite(index)) return;
     if (action === 'copy') return copyMobileChatMessage(index);
+    if (action === 'speak') return speakMobileChatMessage(index);
     if (action === 'fork') return forkMobileConversationFromMessage(index);
     if (action === 'edit') return startMobileEditUserMessage(index);
     if (action === 'cancel-edit') return cancelMobileEditUserMessage(index);
@@ -6961,7 +7552,7 @@ void main() {
         return 'streaming';
       case 'agent_mode':
         aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
-        if (aiTurn.agentExecutionMode === 'execute') _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        if (aiTurn.agentExecutionMode === 'execute') _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
         renderThreadSoon();
         return 'streaming';
@@ -6989,7 +7580,7 @@ void main() {
         }
         return 'streaming';
       case 'tool_call': {
-        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
@@ -6999,7 +7590,7 @@ void main() {
         return 'streaming';
       }
       case 'tool_result': {
-        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
@@ -7010,13 +7601,13 @@ void main() {
         return 'streaming';
       }
       case 'vision_injected':
-        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileVisionTrace(aiTurn, evt);
         renderThreadSoon();
         return 'streaming';
       case 'tool_progress': {
-        _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         _collectMediaFromToolEvent(aiTurn, evt);
         const messageText = String(evt.message || '').trim();
@@ -7049,7 +7640,7 @@ void main() {
         const modelEvent = evt.event && typeof evt.event === 'object' ? evt.event : {};
         const eventType = String(modelEvent.type || '').trim();
         if (eventType === 'tool_call_start' || eventType === 'tool_call_done') {
-          _moveMobilePreToolAnswerIntoPreamble(aiTurn);
+          _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
           aiTurn.toolActivityStarted = true;
           const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
           _appendMobileLiveTrace(aiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
@@ -7478,7 +8069,7 @@ void main() {
     const isUnsavedDraftSession = requestedSession === MOBILE_CHAT_SESSION_ID;
     const actualSessionId = isUnsavedDraftSession ? createMobileChatSessionId() : requestedSession;
     if (isUnsavedDraftSession) {
-      __pmChat.threads[actualSessionId] = Array.isArray(__pmChat.threads[requestedSession]) ? __pmChat.threads[requestedSession] : [];
+      __pmChat.threads[actualSessionId] = [];
       __pmChat.attachments[actualSessionId] = files.slice();
       __pmChat.activeSessionId = actualSessionId;
       _rememberMobileLastChatSession(actualSessionId);
@@ -7922,6 +8513,9 @@ void main() {
     }
     if (window.__pmMobileQueuedPromptsChanged === currentQueuedPromptsBridge) {
       window.__pmMobileQueuedPromptsChanged = previousQueuedPromptsBridge;
+    }
+    if (window.__pmMobileGoalChanged === currentGoalBridge) {
+      window.__pmMobileGoalChanged = previousGoalBridge;
     }
     if (__pmChat.workTimer) {
       clearInterval(__pmChat.workTimer);
@@ -8494,12 +9088,16 @@ function _updateRealtimeSpeechConnectionFromSettings(reason = 'settings_live_upd
 function _restartMobileRealtimeAgentForSettings(reason = 'settings_changed') {
   const wasListening = __pmVoice?.listening === true;
   const nextListenMode = _mobileRealtimeListenModeFromSettings(__pmVoice?.settings || {});
-  const sid = String(__pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  const sid = String(__pmVoice?.targetSessionId || __pmRealtimeAgent?.conn?.sessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  const restartId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  __pmRealtimeAgent.restartId = restartId;
   _stopMobileRealtimeAgentSession?.();
   if (_mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings || {}) === 'split') return;
   if (nextListenMode !== 'always_listening' && !wasListening) return;
   _startMobileRealtimeAgentSession?.(sid, { listenMode: nextListenMode })
-    .then(() => {
+    .then((conn) => {
+      if (__pmRealtimeAgent.restartId !== restartId) return;
+      if (conn && String(conn.sessionId || '').trim() !== sid) return;
       if (nextListenMode === 'always_listening' || wasListening) _setMobileRealtimeAgentMicEnabled?.(true);
       _voiceDebug?.('voice-settings-live-restarted-agent', { reason, listenMode: nextListenMode });
     })
@@ -8760,6 +9358,7 @@ async function _prefetchMobileVoiceWorkerContextPacket(sessionId, options = {}) 
           source: String(options.source || 'mobile_voice_context_prefetch'),
           voiceMode: String(__pmVoice?.settings?.voiceMode || 'default'),
           originalUserPrompt: String(options.originalUserPrompt || ''),
+          voiceTarget: _mobileVoiceTargetPayload(),
         }),
       });
       if (!result?.success && !result?.ok) return null;
@@ -8820,6 +9419,9 @@ const __pmVoice = (window.__pmVoice = window.__pmVoice || {
   hintEl: null,
   voiceCatalog: {},
   activeVoiceRuntime: null,
+  activeVoiceRenderToken: null,
+  activeVoiceRenderCleanup: null,
+  lastSubagentBridgeSubmit: null,
   pendingInterruptContext: null,
   lastInterruptionEvent: null,
   spokenTextSoFar: '',
@@ -8834,6 +9436,536 @@ if (!['default', 'openai_realtime', 'xai', 'custom'].includes(__pmVoice.settings
 if (!['browser', 'openai_realtime', 'xai'].includes(__pmVoice.settings.sttProvider)) __pmVoice.settings.sttProvider = _inputProviderForMode(__pmVoice.settings.voiceMode);
 if (!['browser', 'openai_realtime', 'xai'].includes(__pmVoice.settings.ttsProvider)) __pmVoice.settings.ttsProvider = _outputProviderForMode(__pmVoice.settings.voiceMode);
 __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
+
+const PM_VOICE_ROOM_STATE_KEY = 'pm_voice_room_state_v1';
+const PM_VOICE_ROOM_FOCUS_MS = 45_000;
+const PM_VOICE_ROOM_ROUTE_DEDUPE_MS = 12_000;
+
+function _voiceRoomNormalizeText(value) {
+  return _normalizeMobileWakePhrase(String(value || ''));
+}
+
+function _voiceRoomParticipantKey(participant = {}) {
+  const kind = String(participant?.kind || '').trim();
+  if (kind === 'subagent') {
+    const id = String(participant.agentId || participant.id || '').trim();
+    return id ? `subagent:${id}` : '';
+  }
+  return kind === 'main' || !kind ? 'main' : '';
+}
+
+function _voiceRoomParticipantLabel(participant = {}) {
+  if (String(participant?.kind || '') === 'main') return String(participant.label || 'Prometheus').trim() || 'Prometheus';
+  return String(participant.label || participant.name || participant.alias || participant.agentId || participant.id || 'Subagent').trim() || 'Subagent';
+}
+
+function _voiceRoomUniqueAliases(values = []) {
+  const out = [];
+  const seen = new Set();
+  values.forEach((value) => {
+    const label = String(value || '').replace(/\s+/g, ' ').trim();
+    const normalized = _voiceRoomNormalizeText(label);
+    if (!label || !normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(label);
+  });
+  return out;
+}
+
+function _voiceMainRoomParticipant() {
+  return {
+    key: 'main',
+    kind: 'main',
+    label: 'Prometheus',
+    aliases: _voiceRoomUniqueAliases(['Prometheus', 'Prom', 'main agent', 'main chat']),
+  };
+}
+
+function _voiceSubagentRoomParticipant(agent = {}) {
+  const agentId = String(agent?.agentId || agent?.id || '').trim();
+  if (!agentId) return null;
+  const label = String(agent?.label || agent?.name || agent?.alias || agentId).trim() || agentId;
+  const voice = agent.voice || agent.raw?.voice || null;
+  return {
+    key: `subagent:${agentId}`,
+    kind: 'subagent',
+    agentId,
+    label,
+    voice,
+    aliases: _voiceRoomUniqueAliases([label, agent.alias, agent.name, agentId]),
+  };
+}
+
+function _normalizeVoiceRoomState(source = {}) {
+  const fallback = {
+    enabled: false,
+    participants: [],
+    activeKey: '',
+    focusUntil: 0,
+    quiet: {},
+    recentRoutes: [],
+  };
+  const participants = Array.isArray(source?.participants)
+    ? source.participants.map((item) => {
+        const participant = String(item?.kind || '') === 'subagent'
+          ? _voiceSubagentRoomParticipant(item)
+          : _voiceMainRoomParticipant();
+        if (!participant) return null;
+        const aliases = _voiceRoomUniqueAliases([...(Array.isArray(item?.aliases) ? item.aliases : []), participant.label, ...(participant.aliases || [])]);
+        return { ...participant, aliases };
+      }).filter(Boolean)
+    : [];
+  const unique = [];
+  const seen = new Set();
+  participants.forEach((participant) => {
+    const key = _voiceRoomParticipantKey(participant);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    unique.push({ ...participant, key });
+  });
+  const activeKey = String(source?.activeKey || '').trim();
+  const focusUntil = Number(source?.focusUntil || 0) || 0;
+  const quiet = source?.quiet && typeof source.quiet === 'object' ? { ...source.quiet } : {};
+  const recentRoutes = Array.isArray(source?.recentRoutes) ? source.recentRoutes.slice(-12) : [];
+  return {
+    ...fallback,
+    enabled: source?.enabled === true && unique.length > 1,
+    participants: unique,
+    activeKey: activeKey && unique.some((p) => p.key === activeKey) ? activeKey : (unique[0]?.key || ''),
+    focusUntil,
+    quiet,
+    recentRoutes,
+  };
+}
+
+function _loadVoiceRoomState() {
+  try {
+    return _normalizeVoiceRoomState(JSON.parse(localStorage.getItem(PM_VOICE_ROOM_STATE_KEY) || '{}'));
+  } catch {
+    return _normalizeVoiceRoomState({});
+  }
+}
+
+function _saveVoiceRoomState(next = null) {
+  const room = _normalizeVoiceRoomState(next || __pmVoice?.room || {});
+  __pmVoice.room = room;
+  try { localStorage.setItem(PM_VOICE_ROOM_STATE_KEY, JSON.stringify(room)); } catch {}
+  return room;
+}
+
+__pmVoice.room = _normalizeVoiceRoomState(__pmVoice.room || _loadVoiceRoomState());
+
+function _isVoiceRoomEnabled() {
+  return __pmVoice?.room?.enabled === true && Array.isArray(__pmVoice.room.participants) && __pmVoice.room.participants.length > 1;
+}
+
+function _voiceRoomActiveParticipant() {
+  const room = _normalizeVoiceRoomState(__pmVoice?.room || {});
+  if (!room.enabled) return null;
+  return room.participants.find((participant) => participant.key === room.activeKey) || room.participants[0] || null;
+}
+
+function _voiceRoomCurrentTargetKey() {
+  const target = __pmVoice?.target;
+  if (target?.kind === 'subagent') return _voiceRoomParticipantKey(target);
+  return 'main';
+}
+
+function _voiceRoomSetFocus(participant) {
+  const key = _voiceRoomParticipantKey(participant);
+  if (!key) return;
+  const room = _normalizeVoiceRoomState(__pmVoice?.room || {});
+  room.activeKey = key;
+  room.focusUntil = Date.now() + PM_VOICE_ROOM_FOCUS_MS;
+  _saveVoiceRoomState(room);
+}
+
+function _voiceRoomQuietState(key) {
+  const quiet = __pmVoice?.room?.quiet || {};
+  const state = quiet?.[key] && typeof quiet[key] === 'object' ? quiet[key] : null;
+  return state?.active === true ? state : null;
+}
+
+function _voiceRoomSetQuiet(participant, phrase = '') {
+  const key = _voiceRoomParticipantKey(participant);
+  if (!key) return;
+  const room = _normalizeVoiceRoomState(__pmVoice?.room || {});
+  const aliases = Array.isArray(participant?.aliases) ? participant.aliases : [];
+  const wakePhrase = String(phrase || aliases[0] || _voiceRoomParticipantLabel(participant)).replace(/\s+/g, ' ').trim();
+  room.quiet = { ...(room.quiet || {}), [key]: { active: true, wakePhrase } };
+  _saveVoiceRoomState(room);
+}
+
+function _voiceRoomClearQuiet(participant) {
+  const key = _voiceRoomParticipantKey(participant);
+  if (!key) return;
+  const room = _normalizeVoiceRoomState(__pmVoice?.room || {});
+  room.quiet = { ...(room.quiet || {}) };
+  delete room.quiet[key];
+  _saveVoiceRoomState(room);
+}
+
+function _voiceRoomAliasPatterns(alias) {
+  const normalized = _voiceRoomNormalizeText(alias);
+  if (!normalized) return [];
+  return [
+    `hey ${normalized}`,
+    `hi ${normalized}`,
+    `hello ${normalized}`,
+    `okay ${normalized}`,
+    `ok ${normalized}`,
+    `yo ${normalized}`,
+    normalized,
+  ];
+}
+
+function _voiceRoomMatchAddress(transcript, participants = []) {
+  const raw = String(transcript || '').replace(/\s+/g, ' ').trim();
+  const normalized = _voiceRoomNormalizeText(raw);
+  if (!raw || !normalized) return null;
+  let best = null;
+  participants.forEach((participant) => {
+    const aliases = Array.isArray(participant.aliases) && participant.aliases.length ? participant.aliases : [_voiceRoomParticipantLabel(participant)];
+    aliases.forEach((alias) => {
+      _voiceRoomAliasPatterns(alias).forEach((pattern) => {
+        if (!pattern) return;
+        const starts = normalized === pattern || normalized.startsWith(`${pattern} `);
+        const asks = normalized.startsWith(`ask ${pattern} to `) || normalized.startsWith(`tell ${pattern} to `);
+        if (!starts && !asks) return;
+        const score = pattern.length + (asks ? 1000 : 0);
+        if (best && best.score >= score) return;
+        let remainder = raw;
+        const words = raw.split(/\s+/).filter(Boolean);
+        const patternWords = pattern.split(/\s+/).filter(Boolean).length;
+        if (asks) {
+          const prefixWords = normalized.startsWith(`ask ${pattern} to `) ? 2 + patternWords : 2 + patternWords;
+          remainder = words.slice(prefixWords).join(' ');
+        } else {
+          remainder = words.slice(patternWords).join(' ');
+        }
+        best = {
+          participant,
+          pattern,
+          score,
+          remainder: remainder.replace(/^[,.:;\-\s]+/, '').trim(),
+        };
+      });
+    });
+  });
+  return best;
+}
+
+function _voiceRoomParseQuietCommand(transcript, match) {
+  if (!match?.participant) return null;
+  const label = _voiceRoomParticipantLabel(match.participant);
+  const text = String(match.remainder || transcript || '').replace(/\s+/g, ' ').trim();
+  const normalized = _voiceRoomNormalizeText(text);
+  if (!normalized) return null;
+  const quiet = normalized.match(/\b(?:be quiet|go quiet|stay quiet|mute|stand by|sleep)\b(?:\s+until\s+(?:i\s+say\s+)?(.+))?/i);
+  if (quiet) return { action: 'quiet', phrase: String(quiet[1] || '').trim() || label };
+  if (/\b(?:wake up|listen normally|come back|unmute|you can talk|start listening)\b/i.test(normalized)) return { action: 'wake' };
+  return null;
+}
+
+function _voiceRoomRouteDedupeKey(participant, text) {
+  const key = _voiceRoomParticipantKey(participant);
+  const normalized = _voiceRoomNormalizeText(text);
+  return key && normalized ? `${key}:${normalized}` : '';
+}
+
+function _voiceRoomSeenRecently(participant, text) {
+  const room = _normalizeVoiceRoomState(__pmVoice?.room || {});
+  const routeKey = _voiceRoomRouteDedupeKey(participant, text);
+  if (!routeKey) return false;
+  const now = Date.now();
+  const recent = Array.isArray(room.recentRoutes) ? room.recentRoutes : [];
+  return recent.some((entry) => entry?.key === routeKey && now - Number(entry.at || 0) < PM_VOICE_ROOM_ROUTE_DEDUPE_MS);
+}
+
+function _voiceRoomRememberRoute(participant, text) {
+  const room = _normalizeVoiceRoomState(__pmVoice?.room || {});
+  const routeKey = _voiceRoomRouteDedupeKey(participant, text);
+  if (!routeKey) return;
+  const now = Date.now();
+  const recent = (Array.isArray(room.recentRoutes) ? room.recentRoutes : [])
+    .filter((entry) => entry?.key !== routeKey && now - Number(entry?.at || 0) < PM_VOICE_ROOM_ROUTE_DEDUPE_MS)
+    .slice(-10);
+  recent.push({ key: routeKey, at: now });
+  room.recentRoutes = recent;
+  _saveVoiceRoomState(room);
+}
+
+async function _applyMobileVoiceTarget(participant = {}, options = {}) {
+  const kind = String(participant?.kind || 'main').trim();
+  if (kind === 'subagent') {
+    const agentId = String(participant.agentId || participant.id || '').trim();
+    if (!agentId) return null;
+    const detail = participant.voice && participant.label
+      ? participant
+      : await loadMobileSubagentDetail(agentId).catch(() => null);
+    const label = _voiceRoomParticipantLabel(detail || participant);
+    const voiceProfile = participant.voice || detail?.voice || detail?.raw?.voice || null;
+    __pmVoice.target = { kind: 'subagent', agentId, label, voice: voiceProfile };
+    __pmVoice.targetSessionId = `subagent_chat_${agentId}`;
+    __pmVoice.targetSessionLabel = label;
+    __pmVoice.targetSessionChannel = 'subagent';
+    __pmVoice.targetSessionForced = true;
+    _setTemporaryMobileSubagentVoiceProfile(voiceProfile, { applyLive: options.applyLive !== false });
+  } else {
+    _restoreTemporaryMobileSubagentVoiceProfile({ applyLive: options.applyLive !== false });
+    __pmVoice.target = { kind: 'main' };
+    __pmVoice.targetSessionForced = false;
+    const sid = String(__pmChat?.activeSessionId || __pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    __pmVoice.targetSessionId = sid;
+    __pmVoice.targetSessionLabel = sid === MOBILE_CHAT_SESSION_ID ? 'Mobile - New Chat' : 'Mobile - Chat';
+    __pmVoice.targetSessionChannel = 'mobile';
+  }
+  if (options.restart !== false) _restartMobileRealtimeAgentForSettings?.(String(options.reason || 'voice_target_changed'));
+  try { options.paint?.(); } catch {}
+  return __pmVoice.target || { kind: 'main' };
+}
+
+async function _refreshMobileRealtimeAgentRoomTarget(participant = {}, options = {}) {
+  const conn = __pmRealtimeAgent?.conn;
+  const dc = conn?.dc;
+  if (!conn || !dc || dc.readyState !== 'open') return false;
+  const sid = String(__pmVoice?.targetSessionId || _mobileRealtimeAgentEffectiveSessionId?.() || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  const listenMode = String(conn.listenMode || __pmRealtimeAgent?.listenMode || _mobileRealtimeListenModeFromSettings(__pmVoice?.settings || {}) || 'always_listening');
+  const quietState = _syncMobileRealtimeAgentQuietFromSettings?.() || {};
+  const wakePhrase = quietState.wakePhrase;
+  try {
+    const source = String(options.source || options.reason || 'voice_room_target_refresh');
+    const workerContextPacket = await _prefetchMobileVoiceWorkerContextPacket(sid, { source, force: true });
+    const provider = String(conn.provider || '').trim();
+    const isXai = provider === 'xai';
+    const endpoint = isXai ? '/api/voice-agent/xai-realtime-bootstrap' : '/api/voice-agent/realtime-bootstrap';
+    const settings = __pmVoice?.settings || {};
+    const bootstrap = await mobileGatewayFetch(endpoint, {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId: sid,
+        voiceTarget: _mobileVoiceTargetPayload(),
+        voice: isXai
+          ? _mobileXaiVoice(settings.serverVoice || settings.realtimeVoice)
+          : String(settings.realtimeVoice || 'marin'),
+        speed: isXai ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05),
+        voiceRuntime: wakePhrase
+          ? { wakePhrase, wakeGateActive: settings.wakeGateActive === true }
+          : undefined,
+        deviceTime: _mobileVoiceDeviceTimeContext(),
+        ...(workerContextPacket ? { contextPacket: workerContextPacket } : {}),
+      }),
+    });
+    if (!bootstrap?.success) throw new Error(bootstrap?.error || 'Realtime target refresh failed');
+    const turnDetection = _mobileRealtimeTurnDetectionForListenMode(listenMode, settings);
+    if (isXai) {
+      const speed = Number(settings.xaiSpeed || bootstrap.speed || 1.0);
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          modalities: ['audio', 'text'],
+          instructions: bootstrap.instructions,
+          voice: bootstrap.voice || _mobileXaiVoice(settings.serverVoice || settings.realtimeVoice),
+          speed,
+          audio: { output: { speed } },
+          input_audio_format: 'pcm16',
+          output_audio_format: 'pcm16',
+          input_audio_transcription: { model: 'grok-stt' },
+          turn_detection: turnDetection,
+        },
+      }));
+      if (Array.isArray(bootstrap.tools) && bootstrap.tools.length) {
+        dc.send(JSON.stringify({ type: 'session.update', session: { tools: bootstrap.tools, tool_choice: 'auto' } }));
+      }
+    } else {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          instructions: bootstrap.instructions,
+          tools: Array.isArray(bootstrap.tools) ? bootstrap.tools : [],
+          tool_choice: 'auto',
+          audio: {
+            input: {
+              turn_detection: turnDetection,
+              transcription: { model: 'gpt-4o-transcribe' },
+            },
+            output: {
+              voice: settings.realtimeVoice || 'marin',
+              speed: Number(settings.realtimeSpeed || 1.05),
+            },
+          },
+        },
+      }));
+    }
+    conn.sessionId = sid;
+    conn.listenMode = listenMode;
+    __pmRealtimeAgent.listenMode = listenMode;
+    if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
+    _voiceDebug?.('voice-room-target-refresh-ok', {
+      sessionId: sid,
+      provider: provider || 'openai_webrtc',
+      target: _voiceRoomParticipantKey(participant),
+      label: _voiceRoomParticipantLabel(participant),
+      listenMode,
+    });
+    return true;
+  } catch (err) {
+    _voiceDebug?.('voice-room-target-refresh-failed', {
+      sessionId: sid,
+      target: _voiceRoomParticipantKey(participant),
+      message: err?.message || String(err),
+    });
+    return false;
+  }
+}
+
+function _sendMobileRealtimeRoomTextToTarget(participant = {}, userText = '', options = {}) {
+  const conn = __pmRealtimeAgent?.conn;
+  const dc = conn?.dc;
+  const text = String(userText || '').replace(/\s+/g, ' ').trim();
+  if (!conn || !dc || dc.readyState !== 'open' || !text) return false;
+  const label = _voiceRoomParticipantLabel(participant);
+  const isAck = options.ackOnly === true;
+  const prompt = isAck
+    ? `[VOICE_ROOM_TARGET_SWITCH]\nThe user addressed ${label} in a voice room. Briefly acknowledge as ${label} in one short natural sentence. Do not start any work unless the user asks for it.`
+    : `[VOICE_ROOM_ROUTE]\nThe user addressed ${label} in a voice room. Treat this as ${label}'s current spoken turn and answer as ${label}:\n\n${text}`;
+  try {
+    if (!isAck) {
+      __pmRealtimeAgent.turn.lastUserTranscript = text;
+      __pmRealtimeAgent.turn.liveUserTranscript = '';
+      __pmRealtimeAgent.turn.lastAssistantTranscript = '';
+      __pmRealtimeAgent.turn.nudged = false;
+      __pmRealtimeAgent.turn.subagentVoiceUserLogKey = '';
+      __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
+      const target = _currentMobileSubagentVoiceTarget();
+      if (target) _persistRealtimeSubagentUserTranscript(target, text, 'voice_room_realtime').catch(() => {});
+    }
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: prompt }],
+      },
+    }));
+    dc.send(JSON.stringify({ type: 'response.create' }));
+    _voiceDebug?.('voice-room-realtime-text-sent', {
+      target: _voiceRoomParticipantKey(participant),
+      textLen: text.length,
+      ackOnly: isAck,
+      provider: conn.provider || 'openai_webrtc',
+    });
+    return true;
+  } catch (err) {
+    _voiceDebug?.('voice-room-realtime-text-failed', {
+      target: _voiceRoomParticipantKey(participant),
+      message: err?.message || String(err),
+    });
+    return false;
+  }
+}
+
+async function _routeMobileVoiceRoomTranscript(transcript, options = {}) {
+  const room = _normalizeVoiceRoomState(__pmVoice?.room || {});
+  if (!room.enabled || room.participants.length < 2) return { handled: false };
+  const text = String(transcript || '').replace(/\s+/g, ' ').trim();
+  if (!text) return { handled: false };
+  const match = _voiceRoomMatchAddress(text, room.participants);
+  let participant = match?.participant || null;
+  let routedText = match ? String(match.remainder || '').trim() : text;
+  if (!participant) {
+    const active = room.participants.find((item) => item.key === room.activeKey) || room.participants[0] || null;
+    if (active && Date.now() < Number(room.focusUntil || 0)) participant = active;
+  }
+  if (!participant) {
+    _voiceDebug?.('voice-room-ignored-no-target', { textLen: text.length });
+    _cancelMobileRealtimeAgentResponseForDispatch?.();
+    _ttsStop?.();
+    _voiceSetStatus?.('Room listening', 'Say "Hey Prometheus" or an agent name');
+    return { handled: true, suppressed: true };
+  }
+  const quietCommand = _voiceRoomParseQuietCommand(text, match || { participant, remainder: routedText });
+  if (quietCommand?.action === 'quiet') {
+    _cancelMobileRealtimeAgentResponseForDispatch?.();
+    _ttsStop?.();
+    _voiceRoomSetQuiet(participant, quietCommand.phrase);
+    const label = _voiceRoomParticipantLabel(participant);
+    const phrase = quietCommand.phrase || label;
+    _voiceSetStatus?.('Room quiet', `${label} wakes on "${phrase}"`);
+    pmToast(`${label} is quiet until "${phrase}"`, 'info');
+    return { handled: true, suppressed: true };
+  }
+  if (quietCommand?.action === 'wake') {
+    _cancelMobileRealtimeAgentResponseForDispatch?.();
+    _ttsStop?.();
+    _voiceRoomClearQuiet(participant);
+    _voiceRoomSetFocus(participant);
+    _voiceSetStatus?.('Room active', `${_voiceRoomParticipantLabel(participant)} is listening`);
+    return { handled: true, suppressed: true };
+  }
+  const participantKey = _voiceRoomParticipantKey(participant);
+  const quiet = _voiceRoomQuietState(participantKey);
+  if (quiet) {
+    const wake = _voiceRoomNormalizeText(quiet.wakePhrase || _voiceRoomParticipantLabel(participant));
+    const heard = _voiceRoomNormalizeText(text);
+    if (!wake || !heard.includes(wake)) {
+      _voiceDebug?.('voice-room-target-quiet-suppressed', { target: participantKey, textLen: text.length });
+      _cancelMobileRealtimeAgentResponseForDispatch?.();
+      _ttsStop?.();
+      return { handled: true, suppressed: true };
+    }
+    _voiceRoomClearQuiet(participant);
+  }
+  routedText = String(routedText || text).trim();
+  const currentKey = _voiceRoomCurrentTargetKey();
+  const targetChanged = currentKey !== participantKey;
+  if (match && !String(match.remainder || '').trim()) routedText = '';
+  if (!routedText) {
+    _voiceRoomSetFocus(participant);
+    _voiceSetStatus?.('Room active', `${_voiceRoomParticipantLabel(participant)} is listening`);
+    if (targetChanged) {
+      _cancelMobileRealtimeAgentResponseForDispatch?.();
+      _ttsStop?.();
+      await _applyMobileVoiceTarget(participant, { restart: false, reason: 'voice_room_address', applyLive: false, paint: options.paint });
+      const refreshed = await _refreshMobileRealtimeAgentRoomTarget(participant, { reason: 'voice_room_address' });
+      if (refreshed && _realtimeAgentDataChannelOpen()) {
+        _sendMobileRealtimeRoomTextToTarget(participant, _voiceRoomParticipantLabel(participant), { ackOnly: true, source: 'voice_room_address' });
+      } else {
+        _restartMobileRealtimeAgentForSettings?.('voice_room_address_refresh_failed');
+      }
+    }
+    return { handled: true, suppressed: true };
+  }
+  if (_voiceRoomSeenRecently(participant, routedText)) {
+    _voiceDebug?.('voice-room-route-dedupe-ignored', { target: participantKey, textLen: routedText.length });
+    _cancelMobileRealtimeAgentResponseForDispatch?.();
+    _ttsStop?.();
+    return { handled: true, suppressed: true };
+  }
+  _voiceRoomRememberRoute(participant, routedText);
+  _voiceRoomSetFocus(participant);
+  if (targetChanged) {
+    _cancelMobileRealtimeAgentResponseForDispatch?.();
+    _ttsStop?.();
+    await _applyMobileVoiceTarget(participant, { restart: false, reason: 'voice_room_route', applyLive: false, paint: options.paint });
+    const refreshed = await _refreshMobileRealtimeAgentRoomTarget(participant, { reason: 'voice_room_route' });
+    _voiceSetStatus?.('Room routed', `${_voiceRoomParticipantLabel(participant)} is listening`);
+    if (refreshed && _realtimeAgentDataChannelOpen()) {
+      if (_sendMobileRealtimeRoomTextToTarget(participant, routedText, { source: 'voice_room_route' })) {
+        return { handled: true, submitted: false, realtimeRouted: true, participant, text: routedText };
+      }
+    }
+  }
+  if (targetChanged || options.forceSubmit === true) {
+    const submit = typeof options.submit === 'function' ? options.submit : __pmRealtimeAgent?.submitToWorker;
+    if (typeof submit === 'function') {
+      await submit(routedText, { source: 'voice_room_route', skipVoiceAgentHandoff: true, roomRouted: true });
+      return { handled: true, submitted: true, participant, text: routedText };
+    }
+  }
+  return { handled: false, participant, text: routedText, targetChanged };
+}
 
 function _hasMobileVoiceWarmMic() {
   const stream = __pmVoice?.warmMicStream;
@@ -8881,6 +10013,46 @@ function _voiceSetStatus(s, hint) {
   const hintEl = __pmVoice.hintEl || document.getElementById('pm-voice-hint');
   if (statusEl) statusEl.textContent = s;
   if (hint != null && hintEl) hintEl.textContent = hint;
+}
+
+function _voiceStatusPreviewText(text, fallback = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return fallback;
+  return clean.length > 110 ? `${clean.slice(0, 107).trim()}...` : clean;
+}
+
+function _voiceReadyHintGlobal() {
+  const always = __pmVoice?.settings?.listenMode === 'always_listening';
+  if (!always) return 'Tap and hold the mic to speak';
+  const wakePhrase = _cleanMobileWakePhrase(__pmVoice?.settings?.wakePhrase || '');
+  return wakePhrase && __pmVoice?.settings?.wakeGateActive === true
+    ? `Quiet until "${wakePhrase}"`
+    : 'Always listening while this page stays open';
+}
+
+function _voiceSetStatusTone(tone = '') {
+  const statusEl = __pmVoice.statusEl || document.getElementById('pm-voice-status');
+  const hintEl = __pmVoice.hintEl || document.getElementById('pm-voice-hint');
+  [statusEl, hintEl].forEach((el) => {
+    if (!el) return;
+    el.classList.remove('pm-voice-live-text', 'pm-voice-agent-text');
+    if (tone) el.classList.add(tone);
+  });
+}
+
+function _voiceShowRealtimeUserTranscript(text, hint = 'Realtime transcript') {
+  _voiceSetStatus(_voiceStatusPreviewText(text, 'Listening...'), hint);
+  _voiceSetStatusTone('pm-voice-live-text');
+}
+
+function _voiceShowRealtimeAgentMessage(text, hint = 'Realtime agent is responding') {
+  _voiceSetStatus(_voiceStatusPreviewText(text, 'Thinking...'), hint);
+  _voiceSetStatusTone('pm-voice-agent-text');
+}
+
+function _voiceShowReadyStatus() {
+  _voiceSetStatus('Ready', _voiceReadyHintGlobal());
+  _voiceSetStatusTone('');
 }
 
 function _setOrbState(state) {
@@ -9046,6 +10218,42 @@ function _cleanVoiceSpeechText(text) {
   return /[A-Za-z0-9]/.test(value) ? value : '';
 }
 
+function _normalizeVoiceEchoText(text) {
+  const value = _cleanVoiceSpeechText(text).toLowerCase();
+  return value
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _isLikelyMobileVoiceSelfEcho(text, options = {}) {
+  const candidate = _normalizeVoiceEchoText(text);
+  if (!candidate || candidate.length < 3) return false;
+  const now = Date.now();
+  const recentlySpeaking = !!(
+    __pmVoice.speaking
+    || __pmVoice.realtimeSpeechActiveResponse
+    || (Number(__pmVoice.speakingEndedAt || 0) && now - Number(__pmVoice.speakingEndedAt || 0) < 8500)
+  );
+  const spokenCandidates = [
+    __pmVoice.currentSpokenSegment,
+    __pmVoice.lastAi,
+    __pmVoice.subagentLastSpokenReply?.text,
+    __pmVoice.recentSpokenText,
+  ].map(_normalizeVoiceEchoText).filter(Boolean);
+  if (!recentlySpeaking && !spokenCandidates.length) return false;
+  return spokenCandidates.some((spoken) => {
+    if (spoken === candidate) return true;
+    if (candidate.length >= 8 && spoken.includes(candidate)) return true;
+    if (options.allowPartial && candidate.length >= 8 && spoken.startsWith(candidate)) return true;
+    const words = candidate.split(' ').filter((word) => word.length > 1);
+    if (words.length < 3) return false;
+    const spokenWords = new Set(spoken.split(' ').filter(Boolean));
+    const overlap = words.filter((word) => spokenWords.has(word)).length / words.length;
+    return overlap >= 0.82 && spoken.length >= candidate.length;
+  });
+}
+
 function _voiceSpokenMilestone(text) {
   const value = _cleanVoiceSpeechText(text);
   if (!value) return '';
@@ -9103,6 +10311,98 @@ function _speakVoiceMilestone(text, options = {}) {
     .catch((err) => console.warn('[voice] milestone narration failed', err));
 }
 
+function _voiceToolTargetLabel(args = {}) {
+  const raw = String(
+    args.path || args.file || args.filename || args.url || args.command || args.query || args.target || ''
+  ).trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) {
+    try { return new URL(raw).hostname.replace(/^www\./i, ''); } catch {}
+  }
+  const last = raw.split(/[\\/]/).filter(Boolean).pop() || raw;
+  return last
+    .replace(/\.[a-z0-9]{1,6}$/i, (ext) => ext.replace('.', ' dot '))
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
+function _voiceLiveToolStatus(evt = {}, phase = 'start') {
+  const action = String(evt?.action || evt?.toolName || evt?.name || evt?.type || '').trim();
+  const actionKey = action.toLowerCase().replace(/[\s-]+/g, '_');
+  const args = (evt?.args || evt?.params || evt?.input || evt?.toolArgs || {});
+  const target = args && typeof args === 'object' ? _voiceToolTargetLabel(args) : '';
+  const progress = _voiceSpokenMilestone(evt?.message || evt?.summary || '');
+  if (phase === 'progress' && progress) return progress;
+  if (/browser.*open|open.*browser/.test(actionKey)) return 'Opening the browser';
+  if (/browser.*(screenshot|observe|snapshot|inspect|view)|vision/.test(actionKey)) return 'Looking at the browser';
+  if (/browser.*click|click.*browser/.test(actionKey)) return 'Clicking in the browser';
+  if (/browser.*(type|press|key|input)|(?:type|press|key).*browser/.test(actionKey)) return 'Typing in the browser';
+  if (/desktop.*(screenshot|observe|snapshot|inspect)|computer/.test(actionKey)) return 'Looking at the desktop';
+  if (/run_command|terminal|shell|powershell|cmd/.test(actionKey)) return 'Running a terminal command';
+  if (/search|grep|rg|find/.test(actionKey)) return target ? `Searching ${target}` : 'Searching the files';
+  if (/read|fetch|get_content|open_file|fetch_file|cat/.test(actionKey)) return target ? `Reading ${target}` : 'Reading files';
+  if (/write|edit|patch|apply|update|create_file|delete_file|replace|insert/.test(actionKey)) return 'Preparing file edits';
+  if (/web|http|url|fetch/.test(actionKey)) return target ? `Opening ${target}` : 'Opening the web';
+  const label = _mobileToolLabel(evt);
+  return label && label !== 'Working' ? `Using ${label}` : '';
+}
+
+function _speakVoiceLiveStatus(text, options = {}) {
+  const spoken = _cleanVoiceSpeechText(text);
+  if (!spoken || __pmVoice.dictation !== 'milestone') return;
+  const now = Date.now();
+  const recent = __pmVoice.milestoneRecent instanceof Map ? __pmVoice.milestoneRecent : new Map();
+  for (const [key, at] of recent.entries()) {
+    if (!at || now - at > 45000) recent.delete(key);
+  }
+  const key = `live:${spoken.toLowerCase()}`;
+  if (recent.has(key)) return;
+  __pmVoice.milestoneRecent = recent;
+  const force = options.force === true;
+  const minGap = Math.max(0, Number(options.minGapMs ?? 900) || 0);
+  const staleMs = Math.max(800, Number(options.staleMs ?? 4200) || 4200);
+  const speak = async (candidate, candidateKey) => {
+    const clean = _cleanVoiceSpeechText(candidate);
+    if (!clean || __pmVoice.dictation !== 'milestone') return;
+    recent.set(candidateKey, Date.now());
+    __pmVoice.milestoneRecent = recent;
+    __pmVoice.lastVoiceMilestone = clean.slice(0, 500);
+    __pmVoice.lastLiveMilestoneAt = Date.now();
+    await _ttsSpeak(clean);
+  };
+  if (force) {
+    __pmVoice.pendingLiveMilestone = null;
+    if (options.interrupt !== false) _ttsStop();
+    speak(spoken, key).catch((err) => console.warn('[voice] live narration failed', err));
+    return;
+  }
+  const lastAt = Number(__pmVoice.lastLiveMilestoneAt || 0);
+  if (!__pmVoice.speaking && now - lastAt >= minGap) {
+    speak(spoken, key).catch((err) => console.warn('[voice] live narration failed', err));
+    return;
+  }
+  __pmVoice.pendingLiveMilestone = { text: spoken, key, at: now, staleMs, minGap };
+  if (__pmVoice.liveMilestoneTimer) clearTimeout(__pmVoice.liveMilestoneTimer);
+  const flush = () => {
+    const pending = __pmVoice.pendingLiveMilestone;
+    if (!pending) return;
+    const age = Date.now() - Number(pending.at || 0);
+    if (age > Number(pending.staleMs || staleMs)) {
+      __pmVoice.pendingLiveMilestone = null;
+      return;
+    }
+    if (__pmVoice.speaking || Date.now() - Number(__pmVoice.lastLiveMilestoneAt || 0) < Number(pending.minGap || minGap)) {
+      __pmVoice.liveMilestoneTimer = setTimeout(flush, 320);
+      return;
+    }
+    __pmVoice.pendingLiveMilestone = null;
+    speak(pending.text, pending.key).catch((err) => console.warn('[voice] live narration failed', err));
+  };
+  __pmVoice.liveMilestoneTimer = setTimeout(flush, Math.min(600, Math.max(120, minGap)));
+}
+
 function _speakMobileRealtimeAgentMilestone(text, options = {}) {
   const spoken = _cleanVoiceSpeechText(text);
   const dc = __pmRealtimeAgent?.conn?.dc;
@@ -9155,6 +10455,26 @@ function _speakMobileRealtimeAgentMilestone(text, options = {}) {
 function _isMobileVoiceStatusQuestion(text) {
   const value = String(text || '').toLowerCase();
   return /\b(what are you doing|what're you doing|what is happening|what's happening|status|where are we|where are you|what step|what stage|what did you do|what have you done|what do you see|what are you seeing|what's on screen|what is on screen)\b/.test(value);
+}
+
+function _hasMobileVoiceWorkIntent(text) {
+  const value = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  if (/\b(run|start|stop|restart|open|close|click|tap|scroll|search|find|look up|check|inspect|analyze|summarize|write|draft|create|make|build|fix|update|change|edit|delete|remove|send|post|schedule|monitor|test|smoke test|deploy|install|fetch|download|upload|attach|read|review|compare|debug|tell the worker|ask the worker|handoff|hand off|go ahead|proceed|continue|keep going|do it|kick it off)\b/.test(value)) return true;
+  if (/\b(can you|could you|please|i need you to|i want you to|let'?s)\b.*\b(do|run|check|look|make|create|fix|send|post|open|search|find|test|review|analyze|summarize)\b/.test(value)) return true;
+  return false;
+}
+
+function _isMobileVoiceDirectAnswerOnlyTurn(text) {
+  const value = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  if (_hasMobileVoiceWorkIntent(value)) return false;
+  if (_isMobileVoiceStatusQuestion(value)) return true;
+  return /\b(who are you|what are you|which agent are you|what agent are you|are you prometheus|are you a subagent|what do you do|what is your role|what's your role|what are you for|tell me about yourself|introduce yourself|how are you|how'?s it going|what'?s up|you there|can you hear me|testing|test voice|thanks|thank you|appreciate it|cool|alright|all right|okay|ok|got it|sounds good|perfect|nice|great|good to know|glad|nevermind|never mind)\b/.test(value);
+}
+
+function _isSubagentVoiceDirectAnswerOnlyTurn(text) {
+  return _isMobileVoiceDirectAnswerOnlyTurn(text);
 }
 
 function _isBenignRealtimeCancelError(data) {
@@ -9439,6 +10759,7 @@ function _markVoiceSpeakingEnd() {
   if (segment) {
     const prior = String(__pmVoice.spokenTextSoFar || '').trim();
     __pmVoice.spokenTextSoFar = [prior, segment].filter(Boolean).join('\n').slice(-4000);
+    __pmVoice.recentSpokenText = segment.slice(0, 1200);
   }
   __pmVoice.currentSpokenSegment = '';
   __pmVoice.speaking = false;
@@ -9812,6 +11133,8 @@ const __pmRealtimeAgent = {
   conn: null,                        // { pc, dc, audio, micStream, micTrack, sessionId, listenMode }
   connecting: null,
   listenMode: 'idle',                // 'idle' | 'push_to_talk' | 'always_listening'
+  submitToWorker: null,
+  submitToWorkerOwner: null,
   functionCallBuffers: new Map(),    // call_id -> { name, argsStr }
   // Quiet mode: keep OpenAI STT running but turn create_response off; wake phrase
   // in a completed transcript re-opens the agent. Mirrors the desktop approach.
@@ -9825,8 +11148,8 @@ const __pmRealtimeAgent = {
   // user can "take a pic, then say 'look at this'".
   pendingImages: [],                 // [{ dataUrl, name, mimeType, base64 }]
   stagedImageTurn: null,             // the chat bubble holding staged image(s)
-  // Per-response tracking for explicit realtime worker hand-offs. Transcript-
-  // claim recovery is intentionally disabled: realtime must call the function.
+  // Per-response tracking for realtime worker hand-offs and subagent-only
+  // recovery when the voice model verbally claims a handoff without a tool call.
   turn: {
     hadFunctionCall: false,
     dispatchedWorkerThisResponse: false,
@@ -9838,14 +11161,20 @@ const __pmRealtimeAgent = {
     finalSummaryPending: false,
     finalSummaryContentKey: '',
     queuedFinalSummary: '',
+    queuedFinalSummaryKey: '',
+    queuedFinalSummaryTranscriptKey: '',
+    recentTranscriptEvents: [],
+    recentSkillContextKeys: [],
   },
 };
 
-const MOBILE_REALTIME_HANDOFF_RECOVERY_ENABLED = false;
+const MOBILE_REALTIME_HANDOFF_RECOVERY_ENABLED = true;
 const MOBILE_REALTIME_HANDOFF_CLAIM_RE = /\b(hand(?:ing|ed)?\s*(?:it|that|this)?\s*off|to the worker|kick(?:ing)?\s*(?:it|that)?\s*off|i('?ve|\s*have)?\s*started|getting started|i'?ll\s*(?:start|get|run|handle|take care)|on it|working on (?:it|that)|in progress|started (?:it|that|the|on)|spun? up|firing up)\b/i;
 
 function _maybeRecoverMobileHallucinatedHandoff() {
   if (!MOBILE_REALTIME_HANDOFF_RECOVERY_ENABLED) return;
+  const subagentTarget = _currentMobileSubagentVoiceTarget();
+  if (!subagentTarget) return;
   const t = __pmRealtimeAgent.turn;
   if (t.hadFunctionCall || t.nudged) return;
   const task = String(t.lastUserTranscript || '').trim();
@@ -9857,7 +11186,11 @@ function _maybeRecoverMobileHallucinatedHandoff() {
       const sid = __pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId;
       _removeMobileRealtimeAgentChatTurn(sid, 'user', task);
       _markMobileRealtimeAgentWorkerDispatch(sid, task);
-      __pmRealtimeAgent.submitToWorker(task, { source: 'realtime_agent_dispatch_recovery', skipVoiceAgentHandoff: true });
+      __pmRealtimeAgent.submitToWorker(task, {
+        source: 'realtime_agent_dispatch_recovery',
+        skipVoiceAgentHandoff: true,
+        visibleTranscript: task,
+      });
     }
   } catch (err) {
     _voiceDebug('realtime-agent-handoff-recovery-failed', { message: err?.message || String(err) });
@@ -10048,10 +11381,77 @@ function _finishMobileRealtimeAgentPendingResponse(reason = 'skill_context_ready
   return _sendMobileRealtimeAgentResponseCreate(reason);
 }
 
+function _sanitizeMobileRealtimeAgentSkillContext(rawContext) {
+  const context = String(rawContext || '').trim();
+  if (!context) return '';
+  const lines = context
+    .split(/\r?\n/)
+    .filter((line) => !/^Latest spoken request\s*:/i.test(String(line || '').trim()));
+  const body = lines.join('\n').replace(/^##\s*Realtime Skill Trigger Update\s*/i, '').trim();
+  if (!body) return '';
+  return [
+    '## Realtime Skill Trigger Update',
+    'Metadata for the current audio turn only. The user did not send a second message. Do not mention duplicate input because of this update.',
+    body,
+  ].join('\n');
+}
+
+function _mobileRealtimeRecentList(name, maxAgeMs) {
+  const turn = __pmRealtimeAgent.turn || (__pmRealtimeAgent.turn = {});
+  const list = Array.isArray(turn[name]) ? turn[name] : [];
+  const now = Date.now();
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (now - Number(list[i]?.at || 0) > maxAgeMs) list.splice(i, 1);
+  }
+  turn[name] = list;
+  return list;
+}
+
+function _shouldIgnoreMobileRealtimeAgentTranscriptEvent(sessionId, event, transcript) {
+  const textKey = _normalizeVoiceEchoText(transcript);
+  if (!textKey) return true;
+  const itemId = String(event?.item_id || event?.item?.id || '').trim();
+  const list = _mobileRealtimeRecentList('recentTranscriptEvents', 4500);
+  const itemKey = itemId ? `${sessionId || ''}:${itemId}` : '';
+  const duplicate = list.some((entry) => (
+    (itemKey && entry.itemKey === itemKey)
+    || (entry.textKey === textKey && Date.now() - Number(entry.at || 0) < 4500)
+  ));
+  if (duplicate) {
+    _voiceDebug('realtime-agent-transcript-event-dedupe-ignored', {
+      sessionId,
+      itemId,
+      textLen: String(transcript || '').length,
+    });
+    return true;
+  }
+  list.push({ itemKey, textKey, at: Date.now() });
+  while (list.length > 24) list.shift();
+  return false;
+}
+
+function _shouldInjectMobileRealtimeAgentSkillContext(sessionId, transcript) {
+  const textKey = _normalizeVoiceEchoText(transcript);
+  if (!textKey) return false;
+  const list = _mobileRealtimeRecentList('recentSkillContextKeys', 4500);
+  const key = `${sessionId || ''}:${textKey}`;
+  if (list.some((entry) => entry.key === key)) {
+    _voiceDebug('realtime-agent-skill-context-dedupe-ignored', {
+      sessionId,
+      textLen: String(transcript || '').length,
+    });
+    return false;
+  }
+  list.push({ key, at: Date.now() });
+  while (list.length > 24) list.shift();
+  return true;
+}
+
 async function _injectMobileRealtimeAgentSkillContext(sessionId, transcript, options = {}) {
   const dc = __pmRealtimeAgent.conn?.dc;
   const text = String(transcript || '').trim();
   if (!dc || dc.readyState !== 'open' || !text) return false;
+  if (!_shouldInjectMobileRealtimeAgentSkillContext(sessionId, text)) return false;
   try {
     const data = await mobileGatewayFetch('/api/voice-agent/realtime-skill-context', {
       method: 'POST',
@@ -10061,13 +11461,14 @@ async function _injectMobileRealtimeAgentSkillContext(sessionId, transcript, opt
         maxChars: options.maxChars || 4200,
       }),
     });
-    if (!data?.success || !data?.matched || !data?.context) return false;
+    const context = _sanitizeMobileRealtimeAgentSkillContext(data?.context);
+    if (!data?.success || !data?.matched || !context) return false;
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
         type: 'message',
         role: 'system',
-        content: [{ type: 'input_text', text: data.context }],
+        content: [{ type: 'input_text', text: context }],
       },
     }));
     _voiceDebug('realtime-agent-skill-context-injected', {
@@ -10121,14 +11522,19 @@ function _requestMobileRealtimeAgentFinalSummary(text) {
   const dc = __pmRealtimeAgent.conn?.dc;
   if (!content || !dc || dc.readyState !== 'open') return false;
   if (__pmRealtimeAgent.quiet.active) return false;
+  __pmVoice.lastAi = content;
+  __pmVoice.recentSpokenText = content.slice(0, 1200);
   const contentKey = `${content.length}:${content.slice(0, 160)}`;
   if (__pmRealtimeAgent.turn.finalSummaryPending || __pmRealtimeAgent.activeResponse || __pmVoice.realtimeSpeechActiveResponse || __pmVoice.speaking) {
     if (contentKey !== __pmRealtimeAgent.turn.finalSummaryContentKey) {
       __pmRealtimeAgent.turn.queuedFinalSummary = content;
+      __pmRealtimeAgent.turn.queuedFinalSummaryKey = contentKey;
+      __pmRealtimeAgent.turn.queuedFinalSummaryTranscriptKey = _mobileRealtimeAgentTranscriptKey();
       _voiceDebug('realtime-agent-final-summary-queued', {
         contentLen: content.length,
         activeResponse: !!__pmRealtimeAgent.activeResponse,
         speaking: !!__pmVoice.speaking,
+        transcriptKey: __pmRealtimeAgent.turn.queuedFinalSummaryTranscriptKey || '',
       });
     }
     return true;
@@ -10138,6 +11544,8 @@ function _requestMobileRealtimeAgentFinalSummary(text) {
     __pmRealtimeAgent.turn.finalSummaryPending = true;
     __pmRealtimeAgent.turn.finalSummaryContentKey = contentKey;
     __pmRealtimeAgent.turn.queuedFinalSummary = '';
+    __pmRealtimeAgent.turn.queuedFinalSummaryKey = '';
+    __pmRealtimeAgent.turn.queuedFinalSummaryTranscriptKey = '';
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -10224,17 +11632,20 @@ function _makePendingMobileRealtimeAgentWorkerPacket(sessionId, reason = 'worker
   const pending = _getPendingMobileRealtimeAgentWorkerDispatch(sessionId);
   if (!pending) return null;
   const id = pending.contextPacketId || `mobile_realtime_pending_worker_${pending.startedAt}`;
+  const target = _mobileVoiceTargetPayload();
+  const isSubagent = target?.kind === 'subagent';
+  const workerLabel = isSubagent ? `${target.label || 'the selected subagent'} subagent` : 'Prometheus worker';
   return {
     id,
     contextPacketId: id,
     createdAt: pending.startedAt,
     sessionId,
     active: true,
-    summary: `The Prometheus worker has just been dispatched and is starting up: ${pending.task}`,
+    summary: `The ${workerLabel} has just been dispatched and is starting up: ${pending.task}`,
     currentGoal: pending.task,
     currentPhase: 'starting',
     activeToolName: 'dispatch_prometheus_worker',
-    activeToolLabel: 'Worker dispatch is starting',
+    activeToolLabel: `${isSubagent ? 'Subagent' : 'Worker'} dispatch is starting`,
     pendingSteerCount: 0,
     activeRun: null,
     trigger: {
@@ -10242,9 +11653,9 @@ function _makePendingMobileRealtimeAgentWorkerPacket(sessionId, reason = 'worker
       detail: pending.task,
       startedAt: pending.startedAt,
     },
-    currentlyDoing: 'Starting the Prometheus worker for the realtime voice handoff.',
-    doneAlready: ['Realtime voice agent sent the task to the Prometheus worker.'],
-    observations: [`Pending worker context synthesized locally because the live worker registry has not caught up yet. Reason: ${reason}.`],
+    currentlyDoing: `Starting the ${workerLabel} for the realtime voice handoff.`,
+    doneAlready: [`Realtime voice agent sent the task to the ${workerLabel}.`],
+    observations: [`Pending ${isSubagent ? 'subagent' : 'worker'} context synthesized locally because the live runtime registry has not caught up yet. Reason: ${reason}.`],
     processEntries: [],
     recentEvents: [],
   };
@@ -10317,6 +11728,14 @@ function _cancelMobileRealtimeAgentResponseForDispatch() {
   _restoreMobileRealtimeInputAfterOutput('response_cancelled_for_dispatch');
   __pmVoice.realtimeSpeechActiveResponse = '';
   __pmVoice.speaking = false;
+}
+
+function _mobileRealtimeAgentEffectiveSessionId(sessionId) {
+  const target = _mobileVoiceTargetPayload();
+  if (target?.kind === 'subagent' && target.agentId) {
+    return String(target.sessionId || `subagent_chat_${target.agentId}`).trim();
+  }
+  return String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
 }
 
 function _startMobileRealtimeAgentContextRefreshLoop(conn) {
@@ -10428,6 +11847,93 @@ function _mobileVoiceDeviceTimeContext() {
   };
 }
 
+function _mobileVoiceTargetPayload() {
+  const target = __pmVoice?.target || null;
+  if (target?.kind === 'subagent') {
+    const agentId = String(target.agentId || '').trim();
+    const label = String(target.label || target.name || agentId || 'Subagent').trim();
+    return {
+      kind: 'subagent',
+      agentId,
+      label,
+      sessionId: `subagent_chat_${agentId}`,
+    };
+  }
+  return { kind: 'main', label: 'Prometheus' };
+}
+
+function _currentMobileSubagentVoiceTarget() {
+  const target = _mobileVoiceTargetPayload();
+  return target?.kind === 'subagent' && target.agentId ? target : null;
+}
+
+function _realtimeAgentDataChannelOpen() {
+  return __pmRealtimeAgent?.conn?.dc?.readyState === 'open';
+}
+
+async function _persistSubagentVoiceLog(agentId, role, text, source = 'voice_agent_realtime') {
+  const id = String(agentId || '').trim();
+  const content = String(text || '').trim();
+  if (!id || !content) return null;
+  try {
+    return await mobileGatewayFetch(`/api/agents/${encodeURIComponent(id)}/chat/voice-log`, {
+      method: 'POST',
+      body: JSON.stringify({
+        role: role === 'user' ? 'user' : 'agent',
+        content,
+        source,
+        realtime: true,
+      }),
+    });
+  } catch (err) {
+    _voiceDebug?.('subagent-voice-log-failed', { agentId: id, role, message: err?.message || String(err) });
+    return null;
+  }
+}
+
+function _mobileRealtimeAgentTranscriptKey(text = __pmRealtimeAgent?.turn?.lastUserTranscript || '') {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  return value ? `${value.length}:${value.slice(0, 160)}` : '';
+}
+
+function _clearMobileRealtimeAgentQueuedFinalSummary(reason = 'turn_changed') {
+  const turn = __pmRealtimeAgent?.turn;
+  if (!turn?.queuedFinalSummary && !turn?.queuedFinalSummaryKey && !turn?.queuedFinalSummaryTranscriptKey) return;
+  _voiceDebug('realtime-agent-final-summary-cleared', {
+    reason,
+    contentLen: String(turn.queuedFinalSummary || '').length,
+    queuedKey: turn.queuedFinalSummaryKey || '',
+    queuedTranscriptKey: turn.queuedFinalSummaryTranscriptKey || '',
+    currentTranscriptKey: _mobileRealtimeAgentTranscriptKey(),
+  });
+  turn.queuedFinalSummary = '';
+  turn.queuedFinalSummaryKey = '';
+  turn.queuedFinalSummaryTranscriptKey = '';
+}
+
+async function _persistRealtimeSubagentUserTranscript(target, text, source = 'voice_agent_realtime') {
+  const agentId = String(target?.agentId || '').trim();
+  const userText = String(text || '').trim();
+  if (!agentId || !userText) return null;
+  const userKey = `${agentId}:${userText.length}:${userText.slice(0, 120)}`;
+  if (__pmRealtimeAgent.turn.subagentVoiceUserLogKey === userKey) return null;
+  __pmRealtimeAgent.turn.subagentVoiceUserLogKey = userKey;
+  return _persistSubagentVoiceLog(agentId, 'user', userText, source);
+}
+
+async function _persistRealtimeSubagentDirectReply(target, assistantText) {
+  const agentId = String(target?.agentId || '').trim();
+  const userText = String(__pmRealtimeAgent?.turn?.lastUserTranscript || '').trim();
+  const reply = String(assistantText || '').trim();
+  if (!agentId || !reply) return;
+  await _persistRealtimeSubagentUserTranscript(target, userText, 'voice_agent_realtime');
+  const replyKey = `${agentId}:${reply.length}:${reply.slice(0, 120)}`;
+  if (__pmRealtimeAgent.turn.subagentVoiceReplyLogKey !== replyKey) {
+    __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = replyKey;
+    await _persistSubagentVoiceLog(agentId, 'agent', reply, 'voice_agent_realtime');
+  }
+}
+
 
 async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
   if (_wantsMobileXaiRealtime()) return _startMobileXaiRealtimeSession(sessionId, options);
@@ -10458,8 +11964,15 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
   if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
     _mobileRealtimeAgentDisableAlwaysListening();
   }
-  if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
+  if (__pmRealtimeAgent.connecting) {
+    const pendingSid = String(__pmRealtimeAgent.connectingSessionId || '').trim();
+    if (!pendingSid || pendingSid === sid) return __pmRealtimeAgent.connecting;
+    _stopMobileRealtimeAgentSession();
+  }
   __pmRealtimeAgent.listenMode = listenMode;
+  const startId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  __pmRealtimeAgent.connectingSessionId = sid;
+  __pmRealtimeAgent.connectingStartId = startId;
 
   __pmRealtimeAgent.connecting = (async () => {
     _voiceDebug('realtime-agent-bootstrap-start', { sessionId: sid, listenMode });
@@ -10470,6 +11983,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       method: 'POST',
       body: JSON.stringify({
         sessionId: sid,
+        voiceTarget: _mobileVoiceTargetPayload(),
         voice: String(__pmVoice?.settings?.realtimeVoice || 'marin'),
         speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
         voiceRuntime: wakePhrase
@@ -10660,6 +12174,12 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     // the voice agent continues the conversation instead of starting fresh.
     _seedMobileRealtimeAgentConversationHistory(dc, sid);
 
+    if (__pmRealtimeAgent.connectingStartId !== startId) {
+      try { dc?.close(); } catch {}
+      try { pc?.close(); } catch {}
+      try { if (audio) audio.srcObject = null; } catch {}
+      throw new Error('Realtime agent bootstrap superseded');
+    }
     __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true };
     if (__pmRealtimeAgent.quiet.active) _sendMobileRealtimeAgentCreateResponseFlag(false);
     const logState = (reason) => _voiceDebug('realtime-agent-pc-state', {
@@ -10686,7 +12206,11 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     _voiceDebug('realtime-agent-ready', { sessionId: sid, listenMode });
     return __pmRealtimeAgent.conn;
   })().finally(() => {
-    __pmRealtimeAgent.connecting = null;
+    if (__pmRealtimeAgent.connectingStartId === startId) {
+      __pmRealtimeAgent.connecting = null;
+      __pmRealtimeAgent.connectingSessionId = '';
+      __pmRealtimeAgent.connectingStartId = '';
+    }
   });
   return __pmRealtimeAgent.connecting;
 }
@@ -10695,6 +12219,8 @@ function _stopMobileRealtimeAgentSession() {
   const conn = __pmRealtimeAgent.conn;
   __pmRealtimeAgent.conn = null;
   __pmRealtimeAgent.connecting = null;
+  __pmRealtimeAgent.connectingSessionId = '';
+  __pmRealtimeAgent.connectingStartId = '';
   __pmRealtimeAgent.listenMode = 'idle';
   __pmRealtimeAgent.pendingImages = [];
   __pmRealtimeAgent.stagedImageTurn = null;
@@ -11272,8 +12798,18 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
     return __pmRealtimeAgent.conn;
   }
-  if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
+  if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
+    _mobileRealtimeAgentDisableAlwaysListening();
+  }
+  if (__pmRealtimeAgent.connecting) {
+    const pendingSid = String(__pmRealtimeAgent.connectingSessionId || '').trim();
+    if (!pendingSid || pendingSid === sid) return __pmRealtimeAgent.connecting;
+    _stopMobileRealtimeAgentSession();
+  }
   __pmRealtimeAgent.listenMode = listenMode;
+  const startId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  __pmRealtimeAgent.connectingSessionId = sid;
+  __pmRealtimeAgent.connectingStartId = startId;
 
   __pmRealtimeAgent.connecting = (async () => {
     _voiceDebug('xai-realtime-bootstrap-start', { sessionId: sid, listenMode });
@@ -11345,6 +12881,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       method: 'POST',
       body: JSON.stringify({
         sessionId: sid,
+        voiceTarget: _mobileVoiceTargetPayload(),
         voice: _mobileXaiVoice(__pmVoice?.settings?.serverVoice || __pmVoice?.settings?.realtimeVoice),
         speed: Number(__pmVoice?.settings?.xaiSpeed || 1.0),
         voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true } : undefined,
@@ -11435,6 +12972,15 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       }
     } catch {}
 
+    if (__pmRealtimeAgent.connectingStartId !== startId) {
+      try { ws?.close(); } catch {}
+      try { processor.disconnect(); } catch {}
+      try { source.disconnect(); } catch {}
+      try { mutedGain.disconnect(); } catch {}
+      try { captureCtx.close?.(); } catch {}
+      try { playback.close(); } catch {}
+      throw new Error('xAI realtime bootstrap superseded');
+    }
     __pmRealtimeAgent.conn = {
       provider: 'xai', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture,
       cleanup: () => {
@@ -11450,7 +12996,11 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     _voiceDebug('xai-realtime-ready', { sessionId: sid, listenMode });
     return __pmRealtimeAgent.conn;
   })().finally(() => {
-    __pmRealtimeAgent.connecting = null;
+    if (__pmRealtimeAgent.connectingStartId === startId) {
+      __pmRealtimeAgent.connecting = null;
+      __pmRealtimeAgent.connectingSessionId = '';
+      __pmRealtimeAgent.connectingStartId = '';
+    }
   });
   return __pmRealtimeAgent.connecting;
 }
@@ -11511,7 +13061,23 @@ function _finalizeMobileRealtimeAgentChatTurn(sessionId, role, text) {
 }
 
 async function _handleMobileRealtimeAgentEvent(event, sessionId) {
+  sessionId = _mobileRealtimeAgentEffectiveSessionId(sessionId);
   const type = String(event?.type || '');
+  const _eventText = (value = event) => {
+    const parts = [];
+    const push = (v) => {
+      if (v == null || (typeof v === 'object' && !Array.isArray(v))) return;
+      if (Array.isArray(v)) return;
+      const t = String(v || '').replace(/\s+/g, ' ').trim();
+      if (t) parts.push(t);
+    };
+    push(value?.transcript || value?.text || value?.delta || value?.content || value?.output_text);
+    const item = value?.item || value?.response || value?.message || null;
+    push(item?.transcript || item?.text || item?.delta || item?.content || item?.output_text);
+    const content = Array.isArray(item?.content) ? item.content : (Array.isArray(value?.content) ? value.content : []);
+    content.forEach((part) => push(part?.transcript || part?.text || part?.delta || part?.content || part?.audio_transcript));
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  };
   _voiceDebug('realtime-agent-event', {
     type,
     info: type === 'error' ? (event?.error?.message || event?.error) : (event?.transcript ?? event?.delta ?? undefined),
@@ -11531,8 +13097,10 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     __pmRealtimeAgent.turn.hadFunctionCall = false;
     __pmRealtimeAgent.turn.dispatchedWorkerThisResponse = false;
     __pmRealtimeAgent.turn.lastAssistantTranscript = '';
-    __pmRealtimeAgent.turn.liveUserTranscript = '';
+    __pmRealtimeAgent.turn.liveAssistantTranscript = '';
     __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+    _voiceShowRealtimeAgentMessage('', 'Realtime agent is responding');
+    __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
     return;
   }
   if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
@@ -11559,31 +13127,59 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     await _executeMobileRealtimeAgentFunctionCall({ call_id: callId, name, args }, sessionId);
     return;
   }
-  if (type === 'conversation.item.input_audio_transcription.delta') {
-    const delta = String(event.delta || event.transcript || '').trim();
+  if (type === 'conversation.item.input_audio_transcription.delta' || type === 'conversation.item.input_audio_transcription.updated') {
+    const delta = _eventText(event);
     if (delta) {
-      __pmRealtimeAgent.turn.liveUserTranscript = `${__pmRealtimeAgent.turn.liveUserTranscript || ''}${delta}`;
-      _voiceDebug('realtime-agent-user-transcript-delta', { textLen: String(__pmRealtimeAgent.turn.liveUserTranscript || '').length });
+      __pmRealtimeAgent.turn.liveUserTranscript = type.endsWith('.updated') ? delta : `${__pmRealtimeAgent.turn.liveUserTranscript || ''}${delta}`;
+      _voiceShowRealtimeUserTranscript(__pmRealtimeAgent.turn.liveUserTranscript, 'Realtime transcript');
+      _voiceDebug('realtime-agent-user-transcript-delta', { textLen: String(__pmRealtimeAgent.turn.liveUserTranscript || '').length, type });
     }
     return;
   }
   if (type === 'conversation.item.input_audio_transcription.completed') {
-    const transcript = String(event.transcript || event.text || event.delta || __pmRealtimeAgent.turn.liveUserTranscript || '').trim();
+    const transcript = String(_eventText(event) || __pmRealtimeAgent.turn.liveUserTranscript || '').trim();
     if (transcript) {
+      if (_shouldIgnoreMobileRealtimeAgentTranscriptEvent(sessionId, event, transcript)) {
+        __pmRealtimeAgent.turn.liveUserTranscript = '';
+        return;
+      }
+      const roomRoute = await _routeMobileVoiceRoomTranscript(transcript, {
+        submit: (roomText, roomOptions = {}) => {
+          if (typeof __pmRealtimeAgent.submitToWorker !== 'function') return Promise.resolve(false);
+          return __pmRealtimeAgent.submitToWorker(roomText, { ...roomOptions, roomRouted: true });
+        },
+      });
+      if (roomRoute.handled) {
+        __pmRealtimeAgent.turn.liveUserTranscript = '';
+        _clearMobileRealtimeAgentPendingCreateResponse();
+        return;
+      }
       if (_handleMobileRealtimeAgentQuietTranscript(transcript)) {
         __pmRealtimeAgent.turn.liveUserTranscript = '';
         return;
       }
-      if (transcript === String(__pmRealtimeAgent.turn.lastUserTranscript || '').trim()) return;
+      if (__pmVoice.tryHandleApprovalIntent?.(transcript, { source: 'realtime_agent' })) {
+        __pmRealtimeAgent.turn.liveUserTranscript = '';
+        return;
+      }
+      const previousTranscript = String(__pmRealtimeAgent.turn.lastUserTranscript || '').trim();
+      if (transcript !== previousTranscript) {
+        _clearMobileRealtimeAgentQueuedFinalSummary('new_user_transcript');
+      }
       __pmRealtimeAgent.turn.lastUserTranscript = transcript;
+      _voiceShowRealtimeUserTranscript(transcript, 'Realtime transcript');
       __pmRealtimeAgent.turn.liveUserTranscript = '';
       __pmRealtimeAgent.turn.nudged = false;
       _voiceDebug('realtime-agent-user-transcript', { transcript });
-      // Surface what the user said in the main chat thread (display-only).
+      // Surface what the user said. Subagent voice targets are persisted through
+      // the subagent chat store instead of the main mobile chat thread.
       try {
         const sid = sessionId;
         const staged = __pmRealtimeAgent.stagedImageTurn;
-        if (staged && Array.isArray(__pmChat.threads?.[sid]) && __pmChat.threads[sid].includes(staged)) {
+        const subagentTarget = _currentMobileSubagentVoiceTarget();
+        if (subagentTarget) {
+          _voiceDebug('realtime-agent-subagent-user-transcript', { agentId: subagentTarget.agentId, transcript });
+        } else if (staged && Array.isArray(__pmChat.threads?.[sid]) && __pmChat.threads[sid].includes(staged)) {
           // The user just spoke about a staged photo — attach the transcript to the
           // photo bubble so the image + caption show as one user message.
           staged.body = staged.body || { text: '', attachments: [] };
@@ -11616,10 +13212,28 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     }
     return;
   }
-  if (type === 'response.audio_transcript.delta' || type === 'response.output_audio_transcript.delta') {
+  if ((type === 'conversation.item.created' || type === 'conversation.item.done' || type === 'conversation.item.completed') && String(event?.item?.role || '').toLowerCase() === 'user') {
+    const transcript = _eventText(event);
+    if (transcript) {
+      __pmRealtimeAgent.turn.lastUserTranscript = transcript;
+      __pmRealtimeAgent.turn.liveUserTranscript = '';
+      _voiceShowRealtimeUserTranscript(transcript, 'Realtime transcript');
+    }
+    return;
+  }
+  if (
+    type === 'response.audio_transcript.delta'
+    || type === 'response.output_audio_transcript.delta'
+    || type === 'response.text.delta'
+    || type === 'response.output_text.delta'
+    || type === 'response.content_part.delta'
+  ) {
     if (__pmRealtimeAgent.quiet.active || __pmRealtimeAgent.quiet.suppressResponse || __pmRealtimeAgent.turn.suppressAssistantTranscript) return;
-    const delta = String(event.delta || event.transcript || '').trim();
+    const delta = _eventText(event);
     if (delta) {
+      __pmRealtimeAgent.turn.liveAssistantTranscript = `${__pmRealtimeAgent.turn.liveAssistantTranscript || ''}${delta}`;
+      _voiceShowRealtimeAgentMessage(__pmRealtimeAgent.turn.liveAssistantTranscript, 'Realtime agent is responding');
+      if (_currentMobileSubagentVoiceTarget()) return;
       const turn = _ensureMobileRealtimeAgentChatTurn(sessionId, 'ai');
       if (turn) {
         turn.body.text = `${turn.body?.text || ''}${delta}`;
@@ -11629,17 +13243,31 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     }
     return;
   }
-  if (type === 'response.audio_transcript.done' || type === 'response.output_audio_transcript.done') {
+  if (
+    type === 'response.audio_transcript.done'
+    || type === 'response.output_audio_transcript.done'
+    || type === 'response.text.done'
+    || type === 'response.output_text.done'
+    || type === 'response.content_part.done'
+    || (type === 'response.output_item.done' && String(event?.item?.role || event?.item?.type || '').toLowerCase() !== 'function_call')
+  ) {
     if (__pmRealtimeAgent.quiet.active || __pmRealtimeAgent.quiet.suppressResponse || __pmRealtimeAgent.turn.suppressAssistantTranscript) return;
-    const transcript = _cleanVoiceSpeechText(event.transcript || '');
+    const transcript = _cleanVoiceSpeechText(_eventText(event) || __pmRealtimeAgent.turn.liveAssistantTranscript || '');
     if (transcript) {
       __pmRealtimeAgent.turn.lastAssistantTranscript = transcript;
+      __pmRealtimeAgent.turn.liveAssistantTranscript = '';
+      _voiceShowRealtimeAgentMessage(transcript, 'Realtime agent response');
       if (__pmRealtimeAgent.turn.dispatchedWorkerThisResponse) {
         _removeMobileRealtimeAgentChatTurn(sessionId, 'ai', transcript);
         __pmRealtimeAgent.turn.mobileAssistantTurn = null;
         return;
       }
       _voiceDebug('realtime-agent-assistant-transcript', { transcript });
+      const subagentTarget = _currentMobileSubagentVoiceTarget();
+      if (subagentTarget) {
+        await _persistRealtimeSubagentDirectReply(subagentTarget, transcript);
+        return;
+      }
       // Append to chat thread for visibility
       try {
         const sid = sessionId;
@@ -11665,17 +13293,33 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     }
     const queuedFinalSummary = String(__pmRealtimeAgent.turn.queuedFinalSummary || '').trim();
     if (queuedFinalSummary && !__pmRealtimeAgent.quiet.active) {
-      __pmRealtimeAgent.turn.queuedFinalSummary = '';
-      setTimeout(() => {
-        if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) {
-          _requestMobileRealtimeAgentFinalSummary(queuedFinalSummary);
-        } else {
-          __pmRealtimeAgent.turn.queuedFinalSummary = queuedFinalSummary;
-        }
-      }, 80);
+      const queuedTranscriptKey = String(__pmRealtimeAgent.turn.queuedFinalSummaryTranscriptKey || '');
+      const currentTranscriptKey = _mobileRealtimeAgentTranscriptKey();
+      if (queuedTranscriptKey && queuedTranscriptKey !== currentTranscriptKey) {
+        _clearMobileRealtimeAgentQueuedFinalSummary('queued_summary_transcript_mismatch');
+      } else {
+        const queuedFinalSummaryKey = String(__pmRealtimeAgent.turn.queuedFinalSummaryKey || '');
+        __pmRealtimeAgent.turn.queuedFinalSummary = '';
+        __pmRealtimeAgent.turn.queuedFinalSummaryKey = '';
+        __pmRealtimeAgent.turn.queuedFinalSummaryTranscriptKey = '';
+        setTimeout(() => {
+          if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) {
+            _requestMobileRealtimeAgentFinalSummary(queuedFinalSummary);
+          } else {
+            __pmRealtimeAgent.turn.queuedFinalSummary = queuedFinalSummary;
+            __pmRealtimeAgent.turn.queuedFinalSummaryKey = queuedFinalSummaryKey;
+            __pmRealtimeAgent.turn.queuedFinalSummaryTranscriptKey = queuedTranscriptKey;
+          }
+        }, 80);
+      }
     }
     __pmRealtimeAgent.narrationPending = false;
     __pmRealtimeAgent.lastResponseEndedAt = Date.now();
+    const lastRealtimeReply = String(__pmRealtimeAgent.turn.lastAssistantTranscript || __pmRealtimeAgent.turn.liveAssistantTranscript || '').trim();
+    if (lastRealtimeReply) _voiceShowRealtimeAgentMessage(lastRealtimeReply, 'Realtime agent response');
+    setTimeout(() => {
+      if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) _voiceShowReadyStatus();
+    }, lastRealtimeReply ? 8500 : 1200);
     __pmRealtimeAgent.turn.mobileUserTurn = null;
     setTimeout(() => _restoreMobileRealtimeInputAfterOutput('response_done'), 450);
     if (__pmRealtimeAgent.quiet.pendingActivate) {
@@ -11691,6 +13335,11 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     // the image is attached to this spoken turn.
     if (type === 'input_audio_buffer.speech_started') {
       if (_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput(__pmRealtimeAgent.conn?.provider || 'openai_webrtc')) return;
+      _clearMobileRealtimeAgentQueuedFinalSummary('speech_started');
+      __pmRealtimeAgent.turn.liveUserTranscript = '';
+      _voiceShowRealtimeUserTranscript('', 'Listening for realtime speech');
+      __pmRealtimeAgent.turn.subagentVoiceUserLogKey = '';
+      __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
       const autoCapture = typeof __pmRealtimeAgent.autoCaptureCameraFrames === 'function'
         ? __pmRealtimeAgent.autoCaptureCameraFrames('speech_started', { count: 2, cooldownMs: 1000 })
         : null;
@@ -11815,18 +13464,78 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
 
   if (name === 'dispatch_prometheus_worker') {
     const task = String(args.task || '').trim();
+    const subagentTarget = _currentMobileSubagentVoiceTarget();
+    const spokenTranscript = String(__pmRealtimeAgent.turn.liveUserTranscript || __pmRealtimeAgent.turn.lastUserTranscript || '').trim();
+    const visibleTranscript = String(spokenTranscript || task || '').trim();
+    const taskKey = _normalizeVoiceEchoText(task);
+    const transcriptKey = _normalizeVoiceEchoText(spokenTranscript);
+    const taskHasWorkIntent = _hasMobileVoiceWorkIntent(task);
+    const transcriptHasWorkIntent = _hasMobileVoiceWorkIntent(spokenTranscript);
+    const taskIsDirectAnswerOnly = _isMobileVoiceDirectAnswerOnlyTurn(task);
+    const transcriptIsDirectAnswerOnly = _isMobileVoiceDirectAnswerOnlyTurn(spokenTranscript || task);
+    const taskAddsSubstance = !!(
+      task
+      && !taskIsDirectAnswerOnly
+      && (
+        taskHasWorkIntent
+        || !spokenTranscript
+        || (taskKey && transcriptKey && taskKey !== transcriptKey)
+      )
+    );
+    if (subagentTarget && !taskHasWorkIntent && !transcriptHasWorkIntent && !taskAddsSubstance) {
+      const alreadyAnswered = !!String(__pmRealtimeAgent.turn.lastAssistantTranscript || '').trim();
+      _voiceDebug('realtime-agent-subagent-dispatch-blocked-no-work-intent', {
+        agentId: subagentTarget.agentId,
+        task: task.slice(0, 160),
+        transcript: visibleTranscript.slice(0, 160),
+        alreadyAnswered,
+      });
+      _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({
+        ok: true,
+        dispatched: false,
+        direct_answer_only: true,
+        no_work_intent: true,
+        note: `This is conversational voice traffic for ${subagentTarget.label || 'the selected subagent'}, not a concrete work request. Answer directly as the subagent and do not start the subagent worker/chat stream.`,
+      }), { createResponse: !alreadyAnswered });
+      return;
+    }
+    if (transcriptIsDirectAnswerOnly && !taskHasWorkIntent && !taskAddsSubstance) {
+      const alreadyAnswered = !!String(__pmRealtimeAgent.turn.lastAssistantTranscript || '').trim();
+      const targetLabel = subagentTarget?.label || (subagentTarget ? 'the selected subagent' : 'Prometheus');
+      _voiceDebug('realtime-agent-dispatch-blocked-direct-answer', {
+        targetKind: subagentTarget ? 'subagent' : 'main',
+        agentId: subagentTarget?.agentId || '',
+        task: task.slice(0, 160),
+        transcript: visibleTranscript.slice(0, 160),
+        alreadyAnswered,
+      });
+      _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({
+        ok: true,
+        dispatched: false,
+        direct_answer_only: true,
+        note: subagentTarget
+          ? `This is an identity, status, or small-talk turn for ${targetLabel}. Answer directly as the subagent. Do not dispatch worker work for this turn.`
+          : 'This is an identity, status, or small-talk turn for Prometheus. Answer directly as Prometheus. Do not dispatch worker work for this turn.',
+      }), { createResponse: !alreadyAnswered });
+      return;
+    }
     let dispatched = false;
     if (task) {
       try {
         if (typeof __pmRealtimeAgent.submitToWorker === 'function') {
           __pmRealtimeAgent.turn.dispatchedWorkerThisResponse = true;
+          if (visibleTranscript) __pmRealtimeAgent.turn.lastUserTranscript = visibleTranscript;
           _cancelMobileRealtimeAgentResponseForDispatch();
-          _removeMobileRealtimeAgentChatTurn(sessionId, 'user', task || __pmRealtimeAgent.turn.lastUserTranscript);
+          _removeMobileRealtimeAgentChatTurn(sessionId, 'user', visibleTranscript || task);
           _markMobileRealtimeAgentWorkerDispatch(sessionId, task);
           // Runs the proven voice→worker path: pushes the user turn, creates a
           // recent command, streams the worker response into the chat thread, and
           // starts the realtime narration/context loop for live milestone updates.
-          __pmRealtimeAgent.submitToWorker(task, { source: 'realtime_agent_dispatch', skipVoiceAgentHandoff: true });
+          __pmRealtimeAgent.submitToWorker(task, {
+            source: 'realtime_agent_dispatch',
+            skipVoiceAgentHandoff: true,
+            visibleTranscript,
+          });
           dispatched = true;
           setTimeout(() => _refreshMobileRealtimeAgentWorkerContext('worker_dispatched_fast'), 300);
           setTimeout(() => _refreshMobileRealtimeAgentWorkerContext('worker_dispatched'), 1200);
@@ -11854,7 +13563,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       try {
         const status = await mobileGatewayFetch('/api/voice-agent/realtime-tool', {
           method: 'POST',
-          body: JSON.stringify({ sessionId, toolName: 'voice_worker_status', toolArgs: { include_recent_events: true } }),
+          body: JSON.stringify({ sessionId, toolName: 'voice_worker_status', toolArgs: { include_recent_events: true }, voiceTarget: _mobileVoiceTargetPayload() }),
         });
           const packet = _overlayPendingMobileRealtimeAgentWorkerPacket(status?.result && typeof status.result === 'object'
           ? {
@@ -11915,6 +13624,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
         sessionId,
         toolName: name,
         toolArgs: args,
+        voiceTarget: _mobileVoiceTargetPayload(),
         ...(contextPacket ? { contextPacket } : {}),
       }),
     });
@@ -12496,11 +14206,19 @@ async function _sendMobileRealtimeAgentVideoFrames(payload = {}, options = {}) {
 
 // PTT and always-listening hooks for the mobile mic UI
 function _mobileRealtimeAgentPttPress(sessionId) {
+  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
+    _voiceDebug('realtime-agent-ptt-session-switch', {
+      from: String(__pmRealtimeAgent.conn.sessionId || '').trim(),
+      to: sid,
+    });
+    _stopMobileRealtimeAgentSession();
+  }
   if (typeof __pmRealtimeAgent.autoCaptureCameraFrames === 'function') {
     __pmRealtimeAgent.autoCaptureCameraFrames('ptt_press', { count: 1, cooldownMs: 650 }).catch(() => {});
   }
   if (!__pmRealtimeAgent.conn) {
-    _startMobileRealtimeAgentSession(sessionId, { listenMode: 'push_to_talk' })
+    _startMobileRealtimeAgentSession(sid, { listenMode: 'push_to_talk' })
       .then(() => _setMobileRealtimeAgentMicEnabled(true))
       .catch((err) => _voiceDebug('realtime-agent-ptt-start-failed', { message: err?.message || String(err) }));
     return;
@@ -12560,7 +14278,15 @@ function _mobileRealtimeAgentPttRelease() {
 }
 
 async function _mobileRealtimeAgentEnableAlwaysListening(sessionId) {
-  await _startMobileRealtimeAgentSession(sessionId, { listenMode: 'always_listening' });
+  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
+    _voiceDebug('realtime-agent-always-session-switch', {
+      from: String(__pmRealtimeAgent.conn.sessionId || '').trim(),
+      to: sid,
+    });
+    _stopMobileRealtimeAgentSession();
+  }
+  await _startMobileRealtimeAgentSession(sid, { listenMode: 'always_listening' });
   _setMobileRealtimeAgentMicEnabled(true);
 }
 
@@ -12774,6 +14500,19 @@ function _ttsStop() {
   try { __pmVoice.audioEl?.pause?.(); if (__pmVoice.audioEl) __pmVoice.audioEl.currentTime = 0; } catch {}
   try { __pmVoice.serverAudioEl?.pause?.(); if (__pmVoice.serverAudioEl) __pmVoice.serverAudioEl.currentTime = 0; } catch {}
   _markVoiceSpeakingEnd();
+}
+
+async function _speakSubagentVoiceReplyOnce(agentId, text) {
+  const clean = _cleanVoiceSpeechText(text);
+  if (!clean) return false;
+  const key = `${String(agentId || '').trim()}:${clean.toLowerCase().slice(0, 800)}`;
+  const last = __pmVoice.subagentLastSpokenReply || {};
+  if (last.key === key && Date.now() - Number(last.at || 0) < 12000) return false;
+  __pmVoice.subagentLastSpokenReply = { key, at: Date.now(), text: clean, agentId: String(agentId || '').trim() };
+  __pmVoice.lastAi = clean;
+  _ttsStop();
+  await _ttsSpeak(clean);
+  return true;
 }
 
 function _captureVoicePlaybackInterrupt(reason = 'barge_in') {
@@ -13106,6 +14845,7 @@ async function _trySubmitVoiceAsLiveSteer(sessionId, transcript = '') {
     const wakePhrase = _cleanMobileWakePhrase(__pmVoice.settings?.wakePhrase || '');
     const requestPayload = {
       sessionId: sid,
+      voiceTarget: _mobileVoiceTargetPayload(),
       transcript: text,
       userInterruptionTranscript: text,
       source: 'mobile_voice_live_steer',
@@ -13179,6 +14919,7 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
     const wakePhrase = _cleanMobileWakePhrase(__pmVoice.settings?.wakePhrase || '');
     const requestPayload = {
       sessionId: sid,
+      voiceTarget: _mobileVoiceTargetPayload(),
       transcript: text,
       userInterruptionTranscript: text,
       source: 'mobile_voice_handoff',
@@ -13414,24 +15155,78 @@ function _voiceShortSessionLabel(session) {
   return title ? `${channel} - ${title}` : `${channel} - ${session.id}`;
 }
 
+function _voiceTargetLabel(target = null) {
+  const kind = String(target?.kind || '').trim();
+  if (kind === 'subagent') return String(target.label || target.name || 'Subagent').trim() || 'Subagent';
+  return String(__pmVoice?.targetSessionLabel || target?.label || 'Latest chat').trim() || 'Latest chat';
+}
+
+function _voiceMainAgentSvg() {
+  return `<svg viewBox="0 0 96 96" width="72" height="72" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="pm-main-agent-glow" cx="50%" cy="42%" r="62%">
+        <stop offset="0%" stop-color="#ffd8a8"/>
+        <stop offset="44%" stop-color="#ea6a1f"/>
+        <stop offset="100%" stop-color="#8f3b16"/>
+      </radialGradient>
+      <linearGradient id="pm-main-agent-line" x1="0" x2="1">
+        <stop offset="0%" stop-color="#ea6a1f" stop-opacity=".1"/>
+        <stop offset="48%" stop-color="#fff2d2"/>
+        <stop offset="100%" stop-color="#ea6a1f" stop-opacity=".1"/>
+      </linearGradient>
+    </defs>
+    <circle cx="48" cy="48" r="34" fill="url(#pm-main-agent-glow)" opacity=".92"/>
+    <circle cx="48" cy="48" r="42" fill="none" stroke="rgba(255,188,118,.25)" stroke-width="1.5"/>
+    <path d="M12 50 C24 50 25 40 36 40 C46 40 43 62 52 62 C62 62 59 35 69 35 C77 35 75 51 84 51" fill="none" stroke="url(#pm-main-agent-line)" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="31" cy="25" r="2" fill="#fff8df" opacity=".8"/>
+    <circle cx="72" cy="67" r="2.2" fill="#fff8df" opacity=".72"/>
+    <circle cx="23" cy="70" r="1.8" fill="#fff8df" opacity=".86"/>
+  </svg>`;
+}
+
+function _renderVoiceAgentTargetPickerHtml() {
+  return `
+    <div class="pm-voice-target-card" id="pm-voice-target-card" hidden aria-label="Choose voice target">
+      <div class="pm-voice-target-grid" id="pm-voice-target-grid">
+        <button type="button" class="pm-voice-target-character" data-voice-target-kind="main" aria-label="Main Agent" title="Main Agent">
+          <span class="pm-voice-target-avatar pm-main-agent-avatar">${_voiceMainAgentSvg()}</span>
+        </button>
+      </div>
+      <div class="pm-voice-target-actions">
+        <button type="button" class="pm-voice-room-btn" id="pm-voice-room-toggle">Room</button>
+      </div>
+    </div>
+  `;
+}
+
 export async function renderVoicePage(page, ctx) {
   const navigate = ctx?.navigate;
   const inlineMode = ctx?.inline === true;
   const inlineSessionId = String(ctx?.inlineChatSessionId || '').trim();
   const inlineSessionLabel = String(ctx?.inlineChatSessionLabel || '').trim();
+  const voiceRenderToken = `voice_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    if (typeof __pmVoice.activeVoiceRenderCleanup === 'function' && __pmVoice.activeVoiceRenderToken) {
+      __pmVoice.activeVoiceRenderCleanup('voice_render_replaced');
+    }
+  } catch {}
+  __pmVoice.activeVoiceRenderToken = voiceRenderToken;
+  const _isActiveVoiceRender = () => __pmVoice.activeVoiceRenderToken === voiceRenderToken && page?.isConnected !== false;
   const header = inlineMode ? '' : renderMobileHeader({
     title: 'Voice Control',
     online: true,
     hideTitle: true,
+    hideBrand: true,
     rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New voice chat">${ICONS.plus}</button>`,
   });
   page.innerHTML = `
     ${header}
-    <div class="pm-body">
+    <div class="pm-body pm-voice-body ${inlineMode ? 'pm-voice-body--inline' : 'pm-voice-body--page'}">
 
       <section class="pm-voice-stage">
         <div id="pm-voice-preview-host" class="pm-voice-preview-host" aria-live="polite"></div>
-        <div class="pm-voice-orb" id="pm-voice-orb" aria-hidden="true">${_voiceOrbSvg()}</div>
+        <button type="button" class="pm-voice-orb" id="pm-voice-orb" aria-label="Choose voice target">${_voiceOrbSvg()}</button>
+        ${_renderVoiceAgentTargetPickerHtml()}
         <div class="pm-voice-status" id="pm-voice-status">Ready</div>
         <div class="pm-voice-hint"   id="pm-voice-hint">Tap and hold the mic to speak</div>
 
@@ -13488,10 +15283,15 @@ export async function renderVoicePage(page, ctx) {
             <button type="button" class="pm-va-btn always" id="pm-va-always" hidden>Always allow</button>
           </div>
         </div>
-        <button type="button" class="pm-voice-mic pm-voice-wave-ptt" id="pm-voice-mic" aria-label="Hold to talk">
-          <span class="pm-voice-wave-ambient" aria-hidden="true"></span>
-          <span class="pm-voice-wave-line" aria-hidden="true"></span>
-          <canvas class="pm-voice-wave-canvas" id="pm-voice-wave-canvas"></canvas>
+        <button type="button" class="pm-voice-mic ${inlineMode ? 'pm-voice-wave-ptt' : 'pm-voice-page-mic'}" id="pm-voice-mic" aria-label="Hold to talk">
+          ${inlineMode ? `
+            <span class="pm-voice-wave-ambient" aria-hidden="true"></span>
+            <span class="pm-voice-wave-line" aria-hidden="true"></span>
+            <canvas class="pm-voice-wave-canvas" id="pm-voice-wave-canvas"></canvas>
+          ` : `
+            <span class="pm-voice-page-mic-ring" aria-hidden="true"></span>
+            <span class="pm-voice-page-mic-icon" aria-hidden="true">${ICONS.mic}</span>
+          `}
         </button>
         <div id="pm-voice-provider-banner" style="margin-top:14px;font-size:12px;color:var(--pm-muted);"></div>
         <button id="pm-voice-session-target" type="button" style="margin-top:8px;border:1px solid var(--pm-border);background:var(--pm-bg-soft);color:var(--pm-text-soft);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Target: resolving latest chat...</button>
@@ -13592,6 +15392,9 @@ export async function renderVoicePage(page, ctx) {
   __pmVoice.statusEl = statusEl;
   __pmVoice.hintEl = hintEl;
   const orbEl      = page.querySelector('#pm-voice-orb');
+  const targetCard = page.querySelector('#pm-voice-target-card');
+  const targetGrid = page.querySelector('#pm-voice-target-grid');
+  const roomBtn    = page.querySelector('#pm-voice-room-toggle');
   const banner     = page.querySelector('#pm-voice-provider-banner');
   const settingsToggle = page.querySelector('#pm-voice-settings-toggle');
   const settingsPanel = page.querySelector('#pm-voice-settings-panel');
@@ -13626,6 +15429,14 @@ export async function renderVoicePage(page, ctx) {
 
   let _activeApprovalId = null;
   let _activeVoiceCommandApprovalId = null;
+  let _activeApprovalRecord = null;
+  let _lastSpokenApprovalPrompt = { id: '', at: 0 };
+  let voiceTargetAgents = [];
+  let voiceTargetPickerOpen = false;
+  let voiceTargetRestore = null;
+  let voiceTargetActivation = { key: '', at: 0 };
+  let voiceRoomSelectMode = false;
+  let voiceRoomDraftKeys = new Set();
   let voiceWaveRaf = 0;
   let voiceWaveCtx = null;
   let voiceWaveAudioCtx = null;
@@ -13982,6 +15793,11 @@ void main() {
       clearTimeout(__pmVoice.previewTimer);
       __pmVoice.previewTimer = null;
     }
+    if (__pmVoice.liveMilestoneTimer) {
+      clearTimeout(__pmVoice.liveMilestoneTimer);
+      __pmVoice.liveMilestoneTimer = null;
+    }
+    if (__pmVoice.tryHandleApprovalIntent) __pmVoice.tryHandleApprovalIntent = null;
   }
 
   function _startVoicePreviewTimer() {
@@ -14189,9 +16005,32 @@ void main() {
   // by the realtime-tool endpoint directly onto the orb via this closure function.
   __pmRealtimeAgent.enqueuePreviews = (items, opts) => _enqueueVoicePreviews(items, opts || {});
 
+  function _voiceApprovalPrompt(approval = {}) {
+    const human = _pmHumanApproval(approval);
+    const kind = String(approval.approvalKind || '').trim();
+    const tool = String(approval.toolName || '').trim();
+    const isDevEdit = kind === 'dev_source_edit' || tool === 'request_dev_source_edit';
+    const isFinalAction = kind === 'final_action' || tool === 'request_final_action_approval';
+    const isCommand = _pmIsCommandApproval(approval);
+    if (isDevEdit) return 'Prometheus has an edit plan ready. It is waiting for your approval on screen, or you can say approve it.';
+    if (isFinalAction) return `${human.summary || 'Prometheus is ready for the final action.'} Say approve final action to continue, or reject it to stop.`;
+    if (isCommand) return 'Prometheus wants to run a terminal command. Say approve it, trust this session, always allow, or reject it.';
+    return `${human.title || 'Approval required'}. Say approve it to continue, or reject it to stop.`;
+  }
+
+  function _speakVoiceApprovalPrompt(approval = {}) {
+    const id = String(approval?.id || '').trim();
+    if (!id || __pmVoice.dictation !== 'milestone') return;
+    const now = Date.now();
+    if (_lastSpokenApprovalPrompt.id === id && now - Number(_lastSpokenApprovalPrompt.at || 0) < 30000) return;
+    _lastSpokenApprovalPrompt = { id, at: now };
+    _speakVoiceLiveStatus(_voiceApprovalPrompt(approval), { force: true, staleMs: 18000 });
+  }
+
   function _showVoiceApproval(approval) {
     if (!approvalCard) return;
     _activeApprovalId = approval.id;
+    _activeApprovalRecord = _normalizeMobileApproval(approval);
     _activeVoiceCommandApprovalId = _pmIsCommandApproval(approval) ? approval.id : null;
     const risk = Number(approval.riskScore || 0);
     const riskLabel = risk >= 7 ? 'High' : risk >= 4 ? 'Medium' : 'Low';
@@ -14295,12 +16134,14 @@ void main() {
     approvalCard.hidden = false;
     requestAnimationFrame(() => approvalCard.classList.add('pm-va-visible'));
     _setStatus('Waiting for your approval', 'Approve or reject the request below');
+    _speakVoiceApprovalPrompt(_activeApprovalRecord);
   }
 
   function _hideVoiceApproval() {
     if (!approvalCard) return;
     _activeApprovalId = null;
     _activeVoiceCommandApprovalId = null;
+    _activeApprovalRecord = null;
     approvalCard.classList.remove('pm-va-visible');
     setTimeout(() => {
       if (approvalCard && !_activeApprovalId) {
@@ -14310,14 +16151,14 @@ void main() {
     }, 280);
   }
 
-  const _approveVoiceApproval = async (grantScope = '') => {
+  const _approveVoiceApproval = async (grantScope = '', options = {}) => {
     const id = _activeApprovalId;
     if (!id) return;
     const isCommand = !!_activeVoiceCommandApprovalId;
     approvalCard?.querySelectorAll('.pm-va-btn')?.forEach((btn) => { btn.disabled = true; });
     _setStatus(grantScope === 'always' ? 'Always allowed - continuing...' : grantScope === 'session' ? 'Allowed this session - continuing...' : 'Approved - continuing...', '');
     try {
-      await approveMobileApproval(id, grantScope);
+      await approveMobileApproval(id, grantScope, { source: String(options?.source || 'mobile_voice') });
       if (isCommand) {
         approvalCard?.classList.add('pm-va-running');
         const terminalHost = approvalCard?.querySelector('#pm-va-terminal-host');
@@ -14334,9 +16175,61 @@ void main() {
     }
   };
 
-  approvalCard?.querySelector('#pm-va-approve')?.addEventListener('click', () => _approveVoiceApproval(''));
-  approvalCard?.querySelector('#pm-va-session')?.addEventListener('click', () => _approveVoiceApproval('session'));
-  approvalCard?.querySelector('#pm-va-always')?.addEventListener('click', () => _approveVoiceApproval('always'));
+  const _rejectVoiceApproval = async (options = {}) => {
+    const id = _activeApprovalId;
+    if (!id) return;
+    _hideVoiceApproval();
+    _setStatus('Rejected', '');
+    try { await denyMobileApproval(id, { source: String(options?.source || 'mobile_voice') }); } catch (e) { pmToast('Reject failed: ' + (e?.message || e), 'error'); }
+  };
+
+  function _parseVoiceApprovalIntent(text = '') {
+    const normalized = _normalizeVoiceEchoText(text);
+    if (!_activeApprovalId || !normalized) return null;
+    const approval = _activeApprovalRecord || {};
+    const isCommand = _pmIsCommandApproval(approval);
+    const isFinalAction = String(approval.approvalKind || '').trim() === 'final_action'
+      || String(approval.toolName || '').trim() === 'request_final_action_approval';
+    if (/\b(reject|deny|decline|cancel|stop|do not approve|dont approve|don't approve)\b/.test(normalized)) {
+      return { action: 'reject', scope: '' };
+    }
+    if (isCommand && /\b(always allow|allow always|always approve|trust always|approve always)\b/.test(normalized)) {
+      return { action: 'approve', scope: 'always' };
+    }
+    if (isCommand && /\b(trust this session|allow this session|approve this session|for this session|session trust)\b/.test(normalized)) {
+      return { action: 'approve', scope: 'session' };
+    }
+    const normalApprove = /\b(approve|approved|allow|authorize|yes approve|go ahead|proceed|continue|do it|looks good|confirm)\b/.test(normalized);
+    const finalApprove = /\b(approve|approved|allow|authorize|confirm|approve final action|final action|send it|post it|publish it|submit it)\b/.test(normalized);
+    if (isFinalAction) return finalApprove ? { action: 'approve', scope: '' } : null;
+    if (normalApprove) return { action: 'approve', scope: '' };
+    return null;
+  }
+
+  function _tryHandleVoiceApprovalIntent(text = '', options = {}) {
+    const intent = _parseVoiceApprovalIntent(text);
+    if (!intent) return false;
+    _voiceDebug('voice-approval-intent', {
+      source: String(options?.source || ''),
+      action: intent.action,
+      scope: intent.scope,
+      approvalId: _activeApprovalId,
+      textLen: String(text || '').length,
+    });
+    _ttsStop();
+    if (intent.action === 'reject') {
+      _rejectVoiceApproval({ source: 'voice' });
+      return true;
+    }
+    _approveVoiceApproval(intent.scope || '', { source: 'voice' });
+    return true;
+  }
+
+  __pmVoice.tryHandleApprovalIntent = (text, options = {}) => _tryHandleVoiceApprovalIntent(text, options);
+
+  approvalCard?.querySelector('#pm-va-approve')?.addEventListener('click', () => _approveVoiceApproval('', { source: 'mobile' }));
+  approvalCard?.querySelector('#pm-va-session')?.addEventListener('click', () => _approveVoiceApproval('session', { source: 'mobile' }));
+  approvalCard?.querySelector('#pm-va-always')?.addEventListener('click', () => _approveVoiceApproval('always', { source: 'mobile' }));
 
   approvalCard?.querySelector('#pm-va-approve-legacy')?.addEventListener('click', async () => {
     const id = _activeApprovalId;
@@ -14346,11 +16239,7 @@ void main() {
     try { await approveMobileApproval(id); } catch (e) { pmToast('Approve failed: ' + (e?.message || e), 'error'); }
   });
   approvalCard?.querySelector('#pm-va-reject')?.addEventListener('click', async () => {
-    const id = _activeApprovalId;
-    if (!id) return;
-    _hideVoiceApproval();
-    _setStatus('Rejected', '');
-    try { await denyMobileApproval(id); } catch (e) { pmToast('Reject failed: ' + (e?.message || e), 'error'); }
+    await _rejectVoiceApproval({ source: 'mobile' });
   });
 
   const _voiceProcessExitHandler = (msg = {}) => {
@@ -14382,7 +16271,19 @@ void main() {
   };
   wsEventBus?.on?.('timer_done', _voiceTimerDoneHandler);
   const previousVoiceCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
-  page._pmCleanup = () => {
+  page._pmCleanup = (reason = 'page_cleanup') => {
+    const wasActiveVoiceRender = __pmVoice.activeVoiceRenderToken === voiceRenderToken;
+    if (wasActiveVoiceRender) {
+      __pmVoice.activeVoiceRenderToken = null;
+      if (__pmVoice.activeVoiceRenderCleanup === page._pmCleanup) __pmVoice.activeVoiceRenderCleanup = null;
+      try { _ttsStop(); } catch {}
+    }
+    if (__pmRealtimeAgent.submitToWorkerOwner === voiceRenderToken) {
+      __pmRealtimeAgent.submitToWorker = null;
+      __pmRealtimeAgent.submitToWorkerOwner = null;
+    }
+    if (__pmVoice.statusEl === statusEl) __pmVoice.statusEl = null;
+    if (__pmVoice.hintEl === hintEl) __pmVoice.hintEl = null;
     previousVoiceCleanup?.();
     if (voiceWaveRaf) {
       cancelAnimationFrame(voiceWaveRaf);
@@ -14414,18 +16315,250 @@ void main() {
       clearTimeout(__pmVoice.previewTimer);
       __pmVoice.previewTimer = null;
     }
+    voiceTargetRestore = null;
+    if (inlineMode || __pmVoice?.target?.kind !== 'subagent') {
+      _restoreTemporaryMobileSubagentVoiceProfile();
+    }
     window.__pmVoiceTargetPicker = null;
     document.removeEventListener('pm-drawer-closed', _onDrawerClosed);
   };
+  __pmVoice.activeVoiceRenderCleanup = page._pmCleanup;
 
   let _paintVoiceTarget = () => {};
 
   _paintVoiceTarget = () => {
     const sid = String(__pmVoice.targetSessionId || '').trim();
-    const label = String(__pmVoice.targetSessionLabel || sid || 'Latest chat').trim();
+    if (_isVoiceRoomEnabled()) {
+      const room = _normalizeVoiceRoomState(__pmVoice.room || {});
+      const active = _voiceRoomActiveParticipant();
+      const activeLabel = active ? _voiceRoomParticipantLabel(active) : 'Room';
+      const labels = room.participants.map(_voiceRoomParticipantLabel).filter(Boolean);
+      targetBtn.textContent = `Room: ${activeLabel}`;
+      targetBtn.title = labels.length ? `Room participants:\n${labels.join('\n')}` : 'Voice room';
+      targetBtn.classList.add('room');
+      targetBtn.classList.toggle('subagent', active?.kind === 'subagent');
+      return;
+    }
+    const subagentTarget = __pmVoice?.target?.kind === 'subagent' ? __pmVoice.target : null;
+    const label = subagentTarget ? _voiceTargetLabel(subagentTarget) : String(__pmVoice.targetSessionLabel || sid || 'Latest chat').trim();
     targetBtn.textContent = `Target: ${label}`;
-    targetBtn.title = sid ? `${label}\n${sid}` : 'Voice commands will use the latest active chat.';
+    targetBtn.title = subagentTarget
+      ? `${label}\n${sid}`
+      : (sid ? `${label}\n${sid}` : 'Voice commands will use the latest active chat.');
+    targetBtn.classList.toggle('subagent', !!subagentTarget);
+    targetBtn.classList.remove('room');
   };
+
+  function _closeVoiceTargetPicker() {
+    voiceTargetPickerOpen = false;
+    voiceRoomSelectMode = false;
+    targetCard?.classList.remove('room-selecting');
+    if (roomBtn) roomBtn.textContent = 'Room';
+    targetCard?.classList.remove('open');
+    setTimeout(() => {
+      if (!voiceTargetPickerOpen && targetCard) targetCard.hidden = true;
+    }, 220);
+  }
+
+  function _voiceTargetTileHtml(agent, classes = '') {
+    const id = String(agent?.id || '').trim();
+    const label = String(agent?.name || agent?.alias || id || 'Subagent').trim();
+    if (!id) return '';
+    return `
+      <button type="button" class="pm-voice-target-character ${classes}" data-voice-target-kind="subagent" data-agent-id="${escapeHtml(id)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+        <span class="pm-voice-target-avatar">${_drawAgentSVG(id, { scale: 0.72 })}</span>
+      </button>
+    `;
+  }
+
+  async function _paintVoiceTargetPicker() {
+    if (!targetGrid) return;
+    if (!voiceTargetAgents.length) {
+      voiceTargetAgents = await loadMobileSubagents().catch(() => []);
+    }
+    const activeKind = __pmVoice?.target?.kind === 'subagent' ? 'subagent' : 'main';
+    const activeAgentId = String(__pmVoice?.target?.agentId || '').trim();
+    const room = _normalizeVoiceRoomState(__pmVoice.room || {});
+    const participantByKey = new Map([
+      _voiceMainRoomParticipant(),
+      ...voiceTargetAgents.map(_voiceSubagentRoomParticipant).filter(Boolean),
+    ].map((participant) => [participant.key, participant]));
+    const currentKey = _voiceRoomCurrentTargetKey();
+    if (voiceRoomSelectMode && !voiceRoomDraftKeys.size) {
+      const existingKeys = room.enabled ? room.participants.map((participant) => participant.key) : [currentKey];
+      voiceRoomDraftKeys = new Set(existingKeys.filter((key) => participantByKey.has(key)));
+      if (!voiceRoomDraftKeys.size) voiceRoomDraftKeys.add('main');
+    }
+    const mainSelected = voiceRoomSelectMode && voiceRoomDraftKeys.has('main');
+    const mainClasses = [
+      activeKind === 'main' ? 'active' : '',
+      mainSelected ? 'room-selected' : '',
+    ].filter(Boolean).join(' ');
+    targetGrid.innerHTML = `
+      <button type="button" class="pm-voice-target-character ${mainClasses}" data-voice-target-kind="main" aria-label="Main Agent" title="Main Agent">
+        <span class="pm-voice-target-avatar pm-main-agent-avatar">${_voiceMainAgentSvg()}</span>
+      </button>
+      ${voiceTargetAgents.map((agent) => {
+        const key = `subagent:${String(agent?.id || '').trim()}`;
+        const classes = [
+          activeKind === 'subagent' && String(agent?.id || '') === activeAgentId ? 'active' : '',
+          voiceRoomSelectMode && voiceRoomDraftKeys.has(key) ? 'room-selected' : '',
+        ].filter(Boolean).join(' ');
+        return _voiceTargetTileHtml(agent, classes);
+      }).join('')}
+    `;
+    targetCard?.classList.toggle('room-selecting', voiceRoomSelectMode);
+    if (roomBtn) {
+      roomBtn.textContent = voiceRoomSelectMode ? 'Done' : 'Room';
+      roomBtn.classList.toggle('active', room.enabled || voiceRoomSelectMode);
+      roomBtn.title = voiceRoomSelectMode ? 'Start this voice room' : 'Select multiple voice agents';
+    }
+    const participantForButton = (btn) => {
+      const kind = String(btn.getAttribute('data-voice-target-kind') || 'main');
+      if (kind === 'main') return participantByKey.get('main') || _voiceMainRoomParticipant();
+      const agentId = String(btn.getAttribute('data-agent-id') || '').trim();
+      return participantByKey.get(`subagent:${agentId}`) || null;
+    };
+    const toggleRoomParticipant = async (btn) => {
+      const participant = participantForButton(btn);
+      const key = _voiceRoomParticipantKey(participant);
+      if (!key) return;
+      if (voiceRoomDraftKeys.has(key) && voiceRoomDraftKeys.size > 1) voiceRoomDraftKeys.delete(key);
+      else voiceRoomDraftKeys.add(key);
+      await _paintVoiceTargetPicker();
+    };
+    const activateTargetButton = async (btn) => {
+        const kind = String(btn.getAttribute('data-voice-target-kind') || 'main');
+        const agentIdAttr = String(btn.getAttribute('data-agent-id') || '').trim();
+        const activationKey = `${kind}:${agentIdAttr}`;
+        const activationNow = Date.now();
+        if (voiceTargetActivation.key === activationKey && activationNow - voiceTargetActivation.at < 750) {
+          _voiceDebug?.('voice-target-selection-deduped', { activationKey });
+          return;
+        }
+        voiceTargetActivation = { key: activationKey, at: activationNow };
+        const participant = participantForButton(btn);
+        if (!participant) return;
+        __pmVoice.room = _saveVoiceRoomState({ ...(__pmVoice.room || {}), enabled: false, participants: [], activeKey: '', focusUntil: 0 });
+        voiceTargetRestore = null;
+        await _applyMobileVoiceTarget(participant, { restart: true, applyLive: false, paint: _paintVoiceTarget, reason: 'voice_target_changed' });
+        _paintVoiceTarget();
+        pmToast(`Voice target: ${_voiceRoomParticipantLabel(participant)}`, 'info');
+        _closeVoiceTargetPicker();
+    };
+    targetGrid.querySelectorAll('[data-voice-target-kind]').forEach((btn) => {
+      const activate = () => (voiceRoomSelectMode ? toggleRoomParticipant(btn) : activateTargetButton(btn)).catch((err) => {
+        console.warn('[mobile voice] target selection failed:', err);
+        pmToast('Could not change voice target.', 'error');
+      });
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try { pmHaptic?.(12); } catch {}
+        activate();
+      });
+    });
+  }
+
+  async function _commitVoiceRoomSelection() {
+    if (!voiceTargetAgents.length) {
+      voiceTargetAgents = await loadMobileSubagents().catch(() => []);
+    }
+    const participants = [
+      _voiceMainRoomParticipant(),
+      ...voiceTargetAgents.map(_voiceSubagentRoomParticipant).filter(Boolean),
+    ];
+    const selected = participants.filter((participant) => voiceRoomDraftKeys.has(participant.key));
+    voiceRoomSelectMode = false;
+    targetCard?.classList.remove('room-selecting');
+    if (selected.length < 2) {
+      const single = selected[0] || participants.find((participant) => participant.key === _voiceRoomCurrentTargetKey()) || participants[0];
+      __pmVoice.room = _saveVoiceRoomState({ enabled: false, participants: [], activeKey: '', focusUntil: 0, quiet: {}, recentRoutes: [] });
+      if (single) await _applyMobileVoiceTarget(single, { restart: true, applyLive: false, paint: _paintVoiceTarget, reason: 'voice_room_disabled' });
+      _paintVoiceTarget();
+      await _paintVoiceTargetPicker();
+      pmToast('Voice room off', 'info');
+      _closeVoiceTargetPicker();
+      return;
+    }
+    const currentKey = _voiceRoomCurrentTargetKey();
+    const activeKey = selected.some((participant) => participant.key === currentKey) ? currentKey : selected[0].key;
+    const nextRoom = _saveVoiceRoomState({
+      enabled: true,
+      participants: selected,
+      activeKey,
+      focusUntil: Date.now() + PM_VOICE_ROOM_FOCUS_MS,
+      quiet: __pmVoice?.room?.quiet || {},
+      recentRoutes: [],
+    });
+    const active = nextRoom.participants.find((participant) => participant.key === activeKey) || nextRoom.participants[0];
+    await _applyMobileVoiceTarget(active, { restart: true, applyLive: false, paint: _paintVoiceTarget, reason: 'voice_room_enabled' });
+    _paintVoiceTarget();
+    await _paintVoiceTargetPicker();
+    pmToast(`Room ready: ${selected.map(_voiceRoomParticipantLabel).join(', ')}`, 'success');
+    _closeVoiceTargetPicker();
+  }
+
+  roomBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try { pmHaptic?.(14); } catch {}
+    try { navigator.vibrate?.(12); } catch {}
+    if (!voiceRoomSelectMode) {
+      const room = _normalizeVoiceRoomState(__pmVoice.room || {});
+      const keys = room.enabled ? room.participants.map((participant) => participant.key) : [_voiceRoomCurrentTargetKey()];
+      voiceRoomDraftKeys = new Set(keys.filter(Boolean));
+      if (!voiceRoomDraftKeys.size) voiceRoomDraftKeys.add('main');
+      voiceRoomSelectMode = true;
+      _paintVoiceTargetPicker().catch((err) => {
+        console.warn('[mobile voice] room picker failed:', err);
+        pmToast('Could not open room picker.', 'error');
+      });
+      return;
+    }
+    _commitVoiceRoomSelection().catch((err) => {
+      console.warn('[mobile voice] room selection failed:', err);
+      pmToast('Could not start voice room.', 'error');
+    });
+  });
+
+  async function _openVoiceTargetPicker() {
+    if (inlineMode || !targetCard) return;
+    try { pmHaptic?.(10); } catch {}
+    try { navigator.vibrate?.(10); } catch {}
+    voiceTargetPickerOpen = true;
+    targetCard.hidden = false;
+    await _paintVoiceTargetPicker();
+    requestAnimationFrame(() => targetCard.classList.add('open'));
+  }
+
+  async function _toggleVoiceTargetPicker() {
+    if (voiceTargetPickerOpen) _closeVoiceTargetPicker();
+    else await _openVoiceTargetPicker();
+  }
+
+  async function _ensureMicPermissionBeforeOrbPicker() {
+    if (_hasUsableWarmMic()) return true;
+    _setOrbState('thinking');
+    _setStatus('Microphone permission', 'Allow microphone access, then choose an agent');
+    try {
+      await _ensureWarmMic();
+      _setReadyVoiceState();
+      pmToast('Microphone ready', 'success');
+      return true;
+    } catch (err) {
+      _showDictationFallback(err?.message || _voiceCapabilityNote());
+      pmToast('Microphone permission is not available', 'error');
+      return false;
+    }
+  }
+
+  async function _activateVoiceOrbTargetPicker() {
+    if (inlineMode) return;
+    const micReady = await _ensureMicPermissionBeforeOrbPicker();
+    if (!micReady) return;
+    await _toggleVoiceTargetPicker();
+  }
 
   if (inlineMode) {
     __pmVoice.targetSessionId = inlineSessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID;
@@ -14437,6 +16570,14 @@ void main() {
   }
 
   async function _resolveVoiceSessionTarget({ forceRefresh = false } = {}) {
+    if (__pmVoice?.target?.kind === 'subagent') {
+      __pmVoice.targetSessionId = `subagent_chat_${__pmVoice.target.agentId}`;
+      __pmVoice.targetSessionLabel = _voiceTargetLabel(__pmVoice.target);
+      __pmVoice.targetSessionChannel = 'subagent';
+      __pmVoice.targetSessionForced = true;
+      _paintVoiceTarget();
+      return String(__pmVoice.targetSessionId).trim();
+    }
     const forced = __pmVoice.targetSessionForced && String(__pmVoice.targetSessionId || '').trim();
     if (forced) {
       _paintVoiceTarget();
@@ -14465,18 +16606,32 @@ void main() {
   const _onDrawerClosed = () => { window.__pmVoiceTargetPicker = null; };
   document.addEventListener('pm-drawer-closed', _onDrawerClosed);
 
-  targetBtn.addEventListener('click', () => {
+  const activateTargetPickerButton = () => {
     if (inlineMode) return;
-    window.__pmVoiceTargetPicker = async (sessionId) => {
-      const sessionData = await loadMobileChatSession(sessionId).catch(() => null);
-      __pmVoice.targetSessionId = sessionId;
-      __pmVoice.targetSessionLabel = sessionData ? _voiceShortSessionLabel(sessionData) : `Chat - ${sessionId}`;
-      __pmVoice.targetSessionChannel = sessionData?.channel || '';
-      __pmVoice.targetSessionForced = true;
-      _paintVoiceTarget();
-      pmToast(`Voice target: ${__pmVoice.targetSessionLabel}`, 'info');
-    };
-    openDrawer();
+    _toggleVoiceTargetPicker().catch((err) => {
+      console.warn('[mobile voice] target picker failed:', err);
+      pmToast('Could not open voice targets.', 'error');
+    });
+  };
+  targetBtn.addEventListener('click', (event) => {
+    if (inlineMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try { pmHaptic?.(12); } catch {}
+    activateTargetPickerButton();
+  });
+  const activateOrb = () => {
+    _activateVoiceOrbTargetPicker().catch((err) => {
+      console.warn('[mobile voice] orb target picker failed:', err);
+      pmToast('Could not open voice targets.', 'error');
+    });
+  };
+  orbEl?.addEventListener('click', (event) => {
+    if (inlineMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try { pmHaptic?.(12); } catch {}
+    activateOrb();
   });
 
   if (!inlineMode) {
@@ -14797,6 +16952,7 @@ void main() {
   }
   _setMode(__pmVoice.dictation);
   if (!__pmVoice.listening) _setReadyVoiceState();
+  else _syncVoicePageMicMode();
   modeQuiet.addEventListener('click', () => _setMode('quiet'));
   modeMile.addEventListener('click',  () => _setMode('milestone'));
 
@@ -14949,6 +17105,14 @@ void main() {
 
   function _setStatus(s, hint) { _voiceSetStatus(s, hint); }
 
+  function _setVoiceTranscriptStatus(text, hint = 'Transcribing voice') {
+    _voiceShowRealtimeUserTranscript(text, hint);
+  }
+
+  function _setVoiceResponseStatus(text, hint = 'Prometheus is responding') {
+    _voiceShowRealtimeAgentMessage(text, hint);
+  }
+
   function _voiceListenMode() {
     return __pmVoice.settings?.listenMode === 'always_listening' ? 'always_listening' : 'push_to_speak';
   }
@@ -14969,8 +17133,14 @@ void main() {
       : 'Always listening while this page stays open';
   }
 
+  function _syncVoicePageMicMode() {
+    if (!mic || inlineMode) return;
+    mic.classList.toggle('always-listening', _isAlwaysListeningMode());
+  }
+
   function _setReadyVoiceState() {
     _setOrbState(null);
+    _syncVoicePageMicMode();
     _setStatus('Ready', _readyVoiceHint());
   }
 
@@ -15072,8 +17242,17 @@ void main() {
   }
 
   function _submitAlwaysListeningSpeech(text) {
+    if (!_isActiveVoiceRender()) {
+      _voiceDebug('always-listening-submit-ignored-stale-render', { textLen: String(text || '').length });
+      return false;
+    }
     let finalText = _collapseDuplicatedFinalTranscript(text);
     if (!finalText) return false;
+    if (_isLikelyMobileVoiceSelfEcho(finalText)) {
+      _voiceDebug('voice-self-echo-ignored', { textLen: finalText.length, target: __pmVoice?.target?.kind || '' });
+      _setVoiceTranscriptStatus('', 'Ignoring voice output');
+      return false;
+    }
     if (_isMobileWakeUnlockCommand(finalText)) {
       _clearMobileWakePhrase({ speak: true });
       return true;
@@ -15081,7 +17260,7 @@ void main() {
     const wake = _splitMobileWakePhraseRemainder(finalText);
     if (!wake.allowed) {
       _voiceDebug('wake-phrase-gated', { textLen: finalText.length, phraseLen: String(__pmVoice.settings?.wakePhrase || '').length });
-      _setStatus('Listening', `Say "${__pmVoice.settings?.wakePhrase}" to wake Prometheus`);
+      _setVoiceTranscriptStatus('', `Say "${__pmVoice.settings?.wakePhrase}" to wake Prometheus`);
       return false;
     }
     if (wake.woke && !wake.text) {
@@ -15090,6 +17269,10 @@ void main() {
     }
     finalText = wake.text || finalText;
     if (_maybeHandleMobileWakeControl(finalText)) return true;
+    if (_tryHandleVoiceApprovalIntent(finalText, { source: 'always_listening' })) {
+      _setReadyVoiceState();
+      return true;
+    }
     const submitText = finalText;
     const normalized = _normalizeMobileWakePhrase(submitText);
     const previous = String(__pmVoice.realtimeLastAutoSubmitText || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -15297,7 +17480,7 @@ void main() {
     if (itemId && __pmVoice.realtimeDeltas instanceof Map) __pmVoice.realtimeDeltas.delete(itemId);
     __pmVoice.realtimeTranscript = [__pmVoice.realtimeTranscript, clean].filter(Boolean).join(' ').trim();
     __pmVoice.realtimeFinalAt = Date.now();
-    _setStatus('Listening...', __pmVoice.realtimeTranscript.slice(0, 90) || 'Release to send');
+    _setVoiceTranscriptStatus(__pmVoice.realtimeTranscript, 'Release to send');
   }
 
   function _canUseStreamingPcmStt() {
@@ -15343,7 +17526,7 @@ void main() {
       __pmVoice.realtimeDeltas.set('xai', text);
       _scheduleRealtimeAlwaysSubmit('xai_partial_idle', 1800);
     }
-    _setStatus('Listening...', (_currentRealtimeTranscript() || 'Release to send').slice(0, 90));
+    _setVoiceTranscriptStatus(_currentRealtimeTranscript(), 'Release to send');
   }
 
   async function _startXaiStreamingListening() {
@@ -15404,7 +17587,7 @@ void main() {
           _showDictationFallback('Always listening needs a streaming STT provider. xAI streaming did not stay connected.');
           return;
         }
-        _setStatus('Listening...', 'Using xAI batch transcription fallback');
+        _setVoiceTranscriptStatus('', 'Using xAI batch transcription fallback');
         _startBackendListening('xai');
       };
       const readyTimeout = setTimeout(() => {
@@ -15424,7 +17607,7 @@ void main() {
           dictFallback.style.display = 'none';
           __pmVoice.listening = true;
           _setOrbState('listening');
-          _setStatus('xAI listening', 'xAI is streaming microphone audio. Release to send.');
+          _setVoiceTranscriptStatus('', 'xAI is streaming microphone audio. Release to send.');
           _voiceDebug('xai-stream-stt-ready', { elapsedMs: Date.now() - startedAt });
           mic.classList.add('recording');
           _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'xai_stream_stt_started' });
@@ -15632,9 +17815,12 @@ void main() {
           __pmVoice.realtimeUtteranceStartedAt = Date.now();
           __pmVoice.realtimeFirstDeltaLogged = false;
           _voiceDebug('mic-speech-started', { provider: 'openai_realtime' });
-          _captureVoicePlaybackInterrupt('barge_in');
-          _ttsStop();
-          _setStatus('Listening...', 'I hear you');
+          const subagentOutputActive = !!(_currentMobileSubagentVoiceTarget() && (__pmVoice.speaking || __pmVoice.realtimeSpeechActiveResponse));
+          if (!subagentOutputActive) {
+            _captureVoicePlaybackInterrupt('barge_in');
+            _ttsStop();
+          }
+          _setVoiceTranscriptStatus('', 'I hear you');
           _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'realtime_stt_speech_started' });
           return;
         }
@@ -15659,7 +17845,7 @@ void main() {
               textLen: next.length,
             });
           }
-          _setStatus('Listening...', (_currentRealtimeTranscript() || 'Release to send').slice(0, 90));
+          _setVoiceTranscriptStatus(_currentRealtimeTranscript(), 'Release to send');
           _scheduleRealtimeAlwaysSubmit('realtime_delta_idle', 1800);
           return;
         }
@@ -15668,20 +17854,30 @@ void main() {
             clearTimeout(__pmVoice.realtimeAlwaysSubmitTimer);
             __pmVoice.realtimeAlwaysSubmitTimer = null;
           }
+          const transcriptText = String(data?.transcript || '').replace(/\s+/g, ' ').trim();
+          if (_isLikelyMobileVoiceSelfEcho(transcriptText)) {
+            _voiceDebug('realtime-stt-self-echo-ignored', {
+              provider: 'openai_realtime',
+              itemId: String(data?.item_id || ''),
+              textLen: transcriptText.length,
+            });
+            __pmVoice.realtimeTranscript = '';
+            __pmVoice.realtimeDeltas = new Map();
+            return;
+          }
           _captureVoicePlaybackInterrupt('barge_in');
           _ttsStop();
           _voiceDebug('stt-final', {
             provider: 'openai_realtime',
             itemId: String(data?.item_id || ''),
             elapsedMs: Date.now() - Number(__pmVoice.realtimeUtteranceStartedAt || Date.now()),
-            textLen: String(data?.transcript || '').length,
+            textLen: transcriptText.length,
           });
-          _appendRealtimeTranscript(String(data?.item_id || ''), data?.transcript || '');
+          _appendRealtimeTranscript(String(data?.item_id || ''), transcriptText);
           if (_isAlwaysListeningMode()) {
-            const text = String(data?.transcript || '').replace(/\s+/g, ' ').trim();
             __pmVoice.realtimeTranscript = '';
             __pmVoice.realtimeDeltas = new Map();
-            _submitAlwaysListeningSpeech(text);
+            _submitAlwaysListeningSpeech(transcriptText);
           }
           return;
         }
@@ -15790,23 +17986,191 @@ void main() {
   // Bridge: the realtime end-to-end agent lives at module scope and cannot reach
   // this closure-local function directly. Expose it so dispatch_prometheus_worker
   // can run real work through the proven voice→worker streaming path.
-  __pmRealtimeAgent.submitToWorker = (text, options = {}) => _submitSpeech(text, {
-    ...options,
-    source: String(options.source || 'realtime_agent_dispatch'),
-    skipVoiceAgentHandoff: options.skipVoiceAgentHandoff !== false,
-  });
+  __pmRealtimeAgent.submitToWorkerOwner = voiceRenderToken;
+  __pmRealtimeAgent.submitToWorker = (text, options = {}) => {
+    if (!_isActiveVoiceRender() || __pmRealtimeAgent.submitToWorkerOwner !== voiceRenderToken) {
+      _voiceDebug('realtime-agent-submit-ignored-stale-render', {
+        source: String(options?.source || ''),
+        textLen: String(text || '').length,
+      });
+      return Promise.resolve(false);
+    }
+    return _submitSpeech(text, {
+      ...options,
+      source: String(options.source || 'realtime_agent_dispatch'),
+      skipVoiceAgentHandoff: options.skipVoiceAgentHandoff !== false,
+    });
+  };
+
+  async function _submitSpeechToSubagentTarget(target, finalText, options = {}) {
+    const agentId = String(target?.agentId || '').trim();
+    const label = String(target?.label || target?.name || 'Subagent').trim() || 'Subagent';
+    if (!agentId) return;
+    const sid = `subagent_chat_${agentId}`;
+    const sourceKey = String(options?.source || '');
+    const isRoomRoute = options?.roomRouted === true || sourceKey.includes('voice_room_route');
+    const isRealtimeDispatch = sourceKey.includes('realtime_agent_dispatch') || isRoomRoute;
+    const visibleOverride = String(options?.visibleTranscript || options?.visibleText || '').trim();
+    const visibleText = visibleOverride || (isRealtimeDispatch && !isRoomRoute
+      ? (String(__pmRealtimeAgent?.turn?.lastUserTranscript || '').trim() || finalText)
+      : finalText);
+    const runtimeText = finalText;
+    if (!isRealtimeDispatch && _isMobileRealtimeAgentMode() && _realtimeAgentDataChannelOpen()) {
+      _voiceDebug('subagent-voice-submit-ignored-realtime-owner', {
+        agentId,
+        textLen: finalText.length,
+      });
+      return;
+    }
+    const bridgeDetail = {
+      agentId,
+      label,
+      text: visibleText,
+      runtimeMessage: runtimeText,
+      source: 'subagent_voice',
+      accepted: false,
+      promise: null,
+    };
+    try {
+      window.dispatchEvent(new CustomEvent('pm-subagent-voice-submit', { detail: bridgeDetail }));
+    } catch {}
+    if (bridgeDetail.accepted && bridgeDetail.promise) {
+      __pmVoice.lastUser = visibleText;
+      __pmVoice.targetSessionId = sid;
+      __pmVoice.targetSessionLabel = label;
+      __pmVoice.targetSessionChannel = 'subagent';
+      __pmVoice.targetSessionForced = true;
+      _paintVoiceTarget?.();
+      _setOrbState('thinking');
+      _setVoiceResponseStatus('', `${label} is working`);
+      await bridgeDetail.promise.catch((err) => {
+        _setOrbState(null);
+        _setStatus('Subagent failed', err?.message || 'The subagent did not finish');
+        pmToast(err?.message || 'Subagent voice failed', 'error');
+      });
+      if (_isAlwaysListeningMode()) _setReadyVoiceState();
+      return;
+    }
+    __pmVoice.lastUser = visibleText;
+    __pmVoice.targetSessionId = sid;
+    __pmVoice.targetSessionLabel = label;
+    __pmVoice.targetSessionChannel = 'subagent';
+    __pmVoice.targetSessionForced = true;
+    _paintVoiceTarget?.();
+    _setOrbState('thinking');
+    _setVoiceResponseStatus('', `${label} is working`);
+    const liveMsg = {
+      role: 'agent',
+      content: '',
+      _progress: `${label} is thinking...`,
+      createdAt: Date.now(),
+      workStartedAt: Date.now(),
+      streaming: true,
+      processEntries: [],
+      liveTraceEntries: [],
+    };
+    let settled = false;
+    await new Promise((resolve) => {
+      const finish = async (err = null) => {
+        if (settled) return;
+        settled = true;
+        liveMsg.streaming = false;
+        liveMsg.workEndedAt = liveMsg.workEndedAt || Date.now();
+        liveMsg.workDurationMs = Math.max(0, liveMsg.workEndedAt - Number(liveMsg.workStartedAt || liveMsg.createdAt || liveMsg.workEndedAt));
+        const reply = String(liveMsg.content || liveMsg.text || '').trim();
+        __pmVoice.activeVoiceRuntime = null;
+        if (err) {
+          _setOrbState(null);
+          _setStatus('Subagent failed', err?.message || 'The subagent did not finish');
+          pmToast(err?.message || 'Subagent voice failed', 'error');
+          resolve();
+          return;
+        }
+        if (reply) {
+          _setOrbState('speaking');
+          _setStatus('Answered', `${label} replied`);
+          const spokeWithRealtimeAgent = _realtimeAgentDataChannelOpen() && _requestMobileRealtimeAgentFinalSummary(reply);
+          if (!spokeWithRealtimeAgent) await _speakSubagentVoiceReplyOnce(agentId, reply).catch(() => {});
+        } else {
+          _setOrbState(null);
+          _setStatus('Done', `${label} finished`);
+        }
+        resolve();
+      };
+      const stream = streamSubagentChat(agentId, {
+        message: runtimeText,
+        visibleMessage: visibleText,
+        source: 'subagent_voice',
+        voiceTarget: _mobileVoiceTargetPayload(),
+      }, {
+        onEvent: (evt) => {
+          _applyMobileAgentStreamEvent(liveMsg, evt, label);
+          const type = String(evt?.type || '').toLowerCase();
+          if (type === 'progress' || type === 'thinking') {
+            const msg = String(evt.message || liveMsg._progress || '').trim();
+            if (msg) _setStatus('Working...', msg.slice(0, 120));
+          }
+        },
+        onError: (err) => {
+          if (err?.name === 'AbortError') return finish(new Error('Subagent voice request stopped'));
+          finish(err || new Error('Subagent voice failed'));
+        },
+        onDone: () => finish(),
+      });
+      __pmVoice.activeVoiceRuntime = {
+        sessionId: sid,
+        targetKind: 'subagent',
+        agentId,
+        isStreamActive: true,
+        startedAt: Date.now(),
+        abort: () => {
+          try { stream?.abort?.(); } catch {}
+        },
+      };
+    });
+    if (_isAlwaysListeningMode()) _setReadyVoiceState();
+  }
 
   async function _submitSpeech(text, options = {}) {
     const finalText = String(text || '').trim();
     if (!finalText) { _setStatus('Ready', 'Tap and hold the mic to speak'); _setOrbState(null); return; }
+    if (!_isActiveVoiceRender()) {
+      _voiceDebug('voice-submit-ignored-stale-render', {
+        source: String(options?.source || ''),
+        textLen: finalText.length,
+      });
+      return;
+    }
+    if (_tryHandleVoiceApprovalIntent(finalText, { source: String(options?.source || 'push_to_talk') })) {
+      if (_isAlwaysListeningMode()) _setReadyVoiceState();
+      return;
+    }
+    if (options?.roomRouted !== true && _isVoiceRoomEnabled()) {
+      const roomRoute = await _routeMobileVoiceRoomTranscript(finalText, {
+        paint: _paintVoiceTarget,
+        submit: (roomText, roomOptions = {}) => _submitSpeech(roomText, { ...roomOptions, roomRouted: true }),
+      });
+      if (roomRoute.handled) return;
+    }
+    const submitTarget = __pmVoice?.target?.kind === 'subagent'
+      ? `subagent:${String(__pmVoice.target.agentId || '').trim()}`
+      : `main:${String(__pmVoice.targetSessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim()}`;
+    const submitKey = `${submitTarget}:${_normalizeVoiceEchoText(finalText)}`;
+    const now = Date.now();
+    const lastSubmit = __pmVoice.lastVoiceSubmit || {};
+    if (submitKey && lastSubmit.key === submitKey && now - Number(lastSubmit.at || 0) < 8000) {
+      _voiceDebug('voice-submit-dedupe-ignored', {
+        source: String(options?.source || ''),
+        target: submitTarget,
+        textLen: finalText.length,
+      });
+      if (_isAlwaysListeningMode()) _setReadyVoiceState();
+      return;
+    }
+    __pmVoice.lastVoiceSubmit = { key: submitKey, at: now, source: String(options?.source || '') };
     const subagentVoiceTarget = __pmVoice?.target?.kind === 'subagent' ? __pmVoice.target : null;
-    if (subagentVoiceTarget && typeof __pmVoice.subagentSubmit === 'function') {
-      _setOrbState('thinking');
-      _setStatus('Sending...', `Sending to ${subagentVoiceTarget.label || 'subagent'}`);
-      await __pmVoice.subagentSubmit(finalText, { target: subagentVoiceTarget, source: 'subagent_voice' });
-      __pmVoice.lastUser = finalText;
-      _setOrbState(null);
-      _setStatus('Listening...', `${subagentVoiceTarget.label || 'Subagent'} is working.`);
+    if (subagentVoiceTarget) {
+      await _submitSpeechToSubagentTarget(subagentVoiceTarget, finalText, options);
       return;
     }
     let activeVoiceRuntime = __pmVoice.activeVoiceRuntime || null;
@@ -15940,18 +18304,19 @@ void main() {
     if (__pmVoice.recent.length > 30) __pmVoice.recent.length = 30;
     _renderRecent();
     _setOrbState('thinking');
-    _setStatus('Thinking…', 'Prometheus is processing your request');
+    _setVoiceResponseStatus('', 'Prometheus is processing your request');
 
     // Stream chat over SSE — reuse the same plumbing as the chat page.
     let aiBuf = '';
     let lastSpokenMilestone = '';
     let finalSpoken = false;
     const settleVoiceAfterFinalSpeech = () => {
+      const startedAt = Date.now();
       const checkSpeak = setInterval(() => {
-        if (!__pmVoice.speaking) {
+        if (!__pmVoice.speaking || Date.now() - startedAt > 20000) {
           clearInterval(checkSpeak);
           _setOrbState(null);
-          _setStatus('Ready', 'Tap and hold the mic to speak');
+          _setReadyVoiceState();
         }
       }, 500);
     };
@@ -16116,6 +18481,7 @@ void main() {
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_token' });
         cmd.status = 'streaming';
         _updateToolFlip(cmd, 'responding...');
+        _setVoiceResponseStatus(aiBuf, 'Prometheus is responding');
       },
       onVoiceMilestone: (evt) => {
         const text = String(evt?.text || '').trim();
@@ -16137,17 +18503,24 @@ void main() {
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_thinking' });
       },
       onToolCall: (evt) => {
+        _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
+        chatAiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
         const text = `${label}${args ? `: ${args}` : ''}`;
         _appendMobileProcess(chatAiTurn, 'tool', text, evt);
         _appendMobileLiveTrace(chatAiTurn, 'tool', text);
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_call' });
+        if (!realtimeAgentDispatch) {
+          _speakVoiceLiveStatus(_voiceLiveToolStatus(evt, 'start'), { minGapMs: 650, staleMs: 3200 });
+        }
         _updateToolFlip(cmd, label.slice(0, 80));
         cmd.toolStream.push(`⚙ ${text}`);
         if (cmd.expanded) _renderRecent();
       },
       onToolResult: (evt) => {
+        _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
+        chatAiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
         const beforeMedia = _collectMessageMedia(chatAiTurn);
@@ -16163,10 +18536,15 @@ void main() {
         if (cmd.expanded) _renderRecent();
       },
       onToolProgress: (evt) => {
+        _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
+        chatAiTurn.toolActivityStarted = true;
         const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
         _appendMobileProcess(chatAiTurn, 'info', progressText, evt);
         _appendMobileLiveTrace(chatAiTurn, 'tool', progressText);
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_progress' });
+        if (!realtimeAgentDispatch) {
+          _speakVoiceLiveStatus(_voiceLiveToolStatus(evt, 'progress'), { minGapMs: 1200, staleMs: 2600 });
+        }
         cmd.toolStream.push(`… ${progressText}`);
         if (cmd.expanded) _renderRecent();
       },
@@ -16193,6 +18571,8 @@ void main() {
           const modelEvent = evt.event && typeof evt.event === 'object' ? evt.event : {};
           const eventType = String(modelEvent.type || '').trim();
           if (eventType === 'tool_call_start' || eventType === 'tool_call_done') {
+            _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
+            chatAiTurn.toolActivityStarted = true;
             const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
             _appendMobileLiveTrace(chatAiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
           }
@@ -16228,7 +18608,7 @@ void main() {
         const spokeWithRealtimeAgent = realtimeAgentDispatch && _requestMobileRealtimeAgentFinalSummary(aiBuf);
         if (!spokeWithRealtimeAgent && !realtimeAgentDispatch) _ttsSpeak(aiBuf);
         _setOrbState('speaking');
-        _setStatus('Speaking response', realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Tap mic again to follow up');
+        _setVoiceResponseStatus(aiBuf, realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Speaking response');
         settleVoiceAfterFinalSpeech();
       },
       onError: (err) => {
@@ -16281,7 +18661,7 @@ void main() {
             if (!spokeWithRealtimeAgent && !realtimeAgentDispatch) _ttsSpeak(aiBuf);
           }
           _setOrbState('speaking');
-          _setStatus('Speaking response', realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Tap mic again to follow up');
+          _setVoiceResponseStatus(aiBuf, realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Speaking response');
           settleVoiceAfterFinalSpeech();
         }
       },
@@ -16316,6 +18696,10 @@ void main() {
   }
 
   async function _startListening() {
+    if (!_isActiveVoiceRender()) {
+      _voiceDebug('voice-listen-start-ignored-stale-render', { inlineMode });
+      return;
+    }
     if (__pmVoice.listening) return;
     _captureVoicePlaybackInterrupt('barge_in');
     _ttsStop();
@@ -16434,23 +18818,30 @@ void main() {
     rec.continuous = _isAlwaysListeningMode();
     __pmVoice.listening = true;
     _setOrbState('listening');
-    _setStatus('Listening...', _isAlwaysListeningMode() ? 'Always listening. Tap the mic to pause.' : 'Release to send');
+    _setVoiceTranscriptStatus('', _isAlwaysListeningMode() ? 'Always listening. Tap the mic to pause.' : 'Release to send');
     mic.classList.add('recording');
 
     rec.onresult = (evt) => {
       let interim = '', fin = '';
       for (let i = evt.resultIndex; i < evt.results.length; i++) {
         const t = evt.results[i][0].transcript;
-        if (String(t || '').trim()) {
+        if (String(t || '').trim() && !_isLikelyMobileVoiceSelfEcho(t, { allowPartial: true })) {
           _captureVoicePlaybackInterrupt('barge_in');
           _ttsStop();
         }
         if (evt.results[i].isFinal) fin += t; else interim += t;
       }
+      if (fin && _isLikelyMobileVoiceSelfEcho(fin)) {
+        recognitionTranscript = '';
+        recognitionInterim = '';
+        _voiceDebug('browser-stt-self-echo-ignored', { textLen: String(fin || '').length });
+        _setVoiceTranscriptStatus('', 'Ignoring voice output');
+        return;
+      }
       if (fin) recognitionTranscript = (recognitionTranscript + ' ' + fin).trim();
       recognitionInterim = String(interim || '').trim();
       const transcript = _latestBrowserTranscript();
-      _setStatus('Listening...', (transcript || '...').slice(0, 80));
+      _setVoiceTranscriptStatus(transcript, 'Listening');
       if (_isAlwaysListeningMode() && fin) {
         recognitionTranscript = '';
         recognitionInterim = '';
@@ -16525,7 +18916,7 @@ void main() {
       _captureVoicePlaybackInterrupt('barge_in');
       _ttsStop();
       _setOrbState('listening');
-      _setStatus('Listening…', `Release to transcribe with ${provider}`);
+      _setVoiceTranscriptStatus('', `Release to transcribe with ${provider}`);
       mic.classList.add('recording');
       mediaRecorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) mediaChunks.push(event.data);
@@ -16599,7 +18990,7 @@ void main() {
       } else {
         _mobileRealtimeAgentPttRelease();
         _setOrbState('thinking');
-        _setStatus('Thinking...', 'Realtime agent is responding');
+        _setVoiceResponseStatus('', 'Realtime agent is responding');
       }
       return;
     }
@@ -17494,6 +19885,21 @@ function _pushMobileStreamProcessEntry(message, type, text, extra = null) {
   if (message.processEntries.length > 80) {
     message.processEntries.splice(0, message.processEntries.length - 80);
   }
+  const traceType = String(type || 'info').toLowerCase();
+  if (traceType !== 'final' && traceType !== 'user') {
+    _appendMobileLiveTrace(message, traceType, clean);
+  }
+}
+
+function _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message) {
+  if (!message) return;
+  const text = String(message.content || message.text || message.body?.text || '').trim();
+  if (!text) return;
+  _appendMobileLiveTrace(message, message.toolActivityStarted ? 'think' : 'preamble', text);
+  message.content = '';
+  message.text = '';
+  message.body = { ...(message.body || {}), text: '' };
+  message.finalResponseStarted = false;
 }
 
 function _renderMobileStreamProcess(message) {
@@ -17532,12 +19938,24 @@ function _mobileAgentMessageFileChanges(message) {
   return message?.fileChanges || message?.metadata?.fileChanges || message?.body?.fileChanges || null;
 }
 
+function _voiceMessageMeta(message) {
+  const source = [
+    message?.source,
+    message?.metadata?.source,
+    message?.metadata?.channelSource,
+    message?.body?.source,
+  ].map((value) => String(value || '').trim()).filter(Boolean).join(' ');
+  if (!source || !/voice/i.test(source)) return '';
+  return message?.role === 'user' ? 'Voice transcript' : 'Voice response';
+}
+
 function _renderMobileAgentChatBubble(message, options = {}) {
   const role = String(message?.role || message?.from || options.role || 'agent').toLowerCase();
   const fromUser = role === 'user' || role === 'you' || role === 'human';
   const timeValue = message?.createdAt || message?.timestamp || message?.ts;
   const time = timeValue ? _formatTimeAgo(timeValue) : '';
   const text = String(message?.content || message?.message || message?.text || message?.body?.text || '').replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
+  const voiceMeta = _voiceMessageMeta(message);
   const attachments = _mobileAgentMessageAttachments(message);
   const attachmentHtml = attachments.length ? _renderChatAttachmentPreviews(attachments, false) : '';
   const progress = message?._progress ? `<div class="pm-sa-progress">${escapeHtml(message._progress)}</div>` : '';
@@ -17552,18 +19970,38 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       ? explicitStartedAt
       : (streaming ? Number(timeValue || Date.now()) : 0),
   };
+  const traceMessage = {
+    ...assistantLike,
+    content: text,
+    body: { ...(message?.body || {}), text },
+    processEntries: Array.isArray(message?.processEntries) ? message.processEntries : [],
+    liveTraceEntries: Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [],
+    metadata: {
+      ...(message?.metadata || {}),
+      processEntries: Array.isArray(message?.metadata?.processEntries) ? message.metadata.processEntries : [],
+      liveTraceEntries: Array.isArray(message?.metadata?.liveTraceEntries) ? message.metadata.liveTraceEntries : [],
+    },
+  };
   let inner = '';
   if (fromUser) {
-    inner = `<div class="markdown-body">${_renderMobileMarkdown(text)}</div>${attachmentHtml}`;
+    inner = `${voiceMeta ? `<span class="pm-sender">${escapeHtml(voiceMeta)}</span>` : ''}<div class="markdown-body">${_renderMobileMarkdown(text)}</div>${attachmentHtml}`;
   } else {
     const sender = String(options.sender || message?.fromLabel || message?.body?.sender || message?.fromName || 'Agent');
-    inner += _renderMobileWorkTimer(assistantLike);
-    inner += `<span class="pm-sender">${escapeHtml(sender)}</span>`;
-    inner += progress;
+    inner += _renderMobileWorkTimer(traceMessage);
+    inner += `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
+    const hasLiveTrace = streaming && Array.isArray(traceMessage.liveTraceEntries) && traceMessage.liveTraceEntries.length;
+    const completedTraceEntries = !streaming ? _mobileWorkflowTraceEntriesForMessage(traceMessage) : [];
+    if (hasLiveTrace) {
+      inner += _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true });
+    } else if (_mobileTraceHasToolGroup(completedTraceEntries)) {
+      inner += `<div class="pm-trace-drawer">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
+    } else {
+      inner += progress;
+    }
     const hasPendingImageGeneration = _mobileHasPendingImageGeneration(message) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
     inner += text
       ? `<div class="markdown-body">${_renderMobileMarkdown(text)}</div>`
-      : (streaming && !hasPendingImageGeneration ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
+      : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
     inner += attachmentHtml;
     inner += _renderMobileMediaGallery(_collectMessageMedia({
       ...message,
@@ -17638,20 +20076,43 @@ function _mobileVoiceSettingsFromAgentProfile(profile = {}) {
   return null;
 }
 
-function _applyTemporaryMobileSubagentVoiceProfile(profile = null) {
+function _applyTemporaryMobileSubagentVoiceProfile(profile = null, options = {}) {
   const overrides = _mobileVoiceSettingsFromAgentProfile(profile || {});
   if (!overrides) return null;
+  const applyLive = options?.applyLive !== false;
+  const shouldApplyLive = () => applyLive && __pmVoice?.suppressTemporaryVoiceLiveApply !== true;
   const previous = { ...(__pmVoice.settings || {}) };
   const cleanOverrides = Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined));
   __pmVoice.settings = { ...previous, ...cleanOverrides };
   __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
-  try { _applyVoiceSettingsLive(previous, __pmVoice.settings || {}, cleanOverrides); } catch {}
+  if (shouldApplyLive()) {
+    try { _applyVoiceSettingsLive(previous, __pmVoice.settings || {}, cleanOverrides); } catch {}
+  }
   return () => {
     const current = { ...(__pmVoice.settings || {}) };
     __pmVoice.settings = previous;
     __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
-    try { _applyVoiceSettingsLive(current, previous, previous); } catch {}
+    if (shouldApplyLive()) {
+      try { _applyVoiceSettingsLive(current, previous, previous); } catch {}
+    }
   };
+}
+
+function _restoreTemporaryMobileSubagentVoiceProfile(options = {}) {
+  const suppressLive = options?.applyLive === false;
+  const previousSuppress = __pmVoice?.suppressTemporaryVoiceLiveApply === true;
+  if (suppressLive) __pmVoice.suppressTemporaryVoiceLiveApply = true;
+  try { __pmVoice.subagentVoiceRestore?.(); } catch {}
+  finally {
+    __pmVoice.subagentVoiceRestore = null;
+    if (suppressLive) __pmVoice.suppressTemporaryVoiceLiveApply = previousSuppress;
+  }
+}
+
+function _setTemporaryMobileSubagentVoiceProfile(profile = null, options = {}) {
+  _restoreTemporaryMobileSubagentVoiceProfile({ applyLive: options?.applyLive });
+  __pmVoice.subagentVoiceRestore = _applyTemporaryMobileSubagentVoiceProfile(profile, options);
+  return __pmVoice.subagentVoiceRestore;
 }
 
 function _renderMobileAgentComposerHtml(prefix, placeholder) {
@@ -17710,8 +20171,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     voiceShell.hidden = true;
     try { voiceHost._pmCleanup?.(); } catch {}
     voiceHost.innerHTML = '';
-    try { __pmVoice.subagentVoiceRestore?.(); } catch {}
-    __pmVoice.subagentVoiceRestore = null;
+    _restoreTemporaryMobileSubagentVoiceProfile();
     if (__pmVoice?.target?.kind === 'subagent' && __pmVoice.target.agentId === voiceTarget?.agentId) {
       __pmVoice.target = null;
       __pmVoice.subagentSubmit = null;
@@ -17734,8 +20194,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     __pmVoice.targetSessionChannel = 'subagent';
     __pmVoice.targetSessionForced = true;
     __pmVoice.subagentSubmit = async (text) => onVoiceSubmit({ text: String(text || '').trim(), files: [] });
-    try { __pmVoice.subagentVoiceRestore?.(); } catch {}
-    __pmVoice.subagentVoiceRestore = _applyTemporaryMobileSubagentVoiceProfile(target.voice);
+    _setTemporaryMobileSubagentVoiceProfile(target.voice);
     voiceShell.hidden = false;
     voiceHost.innerHTML = '';
     await renderVoicePage(voiceHost, {
@@ -17856,9 +20315,14 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     case 'token': {
       const chunk = String(evt.text || '');
       if (!chunk) return false;
-      message.content = `${message.content || ''}${chunk}`;
-      message.text = message.content;
-      message.body = { ...(message.body || {}), text: message.content };
+      if (!message.finalResponseStarted && !message.toolActivityStarted) {
+        _appendMobileLiveTrace(message, 'preamble', chunk, { append: true });
+      } else {
+        message.finalResponseStarted = true;
+        message.content = `${message.content || ''}${chunk}`;
+        message.text = message.content;
+        message.body = { ...(message.body || {}), text: message.content };
+      }
       message._progress = '';
       return true;
     }
@@ -17899,6 +20363,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       const stepNum = Number(evt.stepNum || 0);
       const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
       const args = evt.args && typeof evt.args === 'object' ? JSON.stringify(evt.args).slice(0, 180) : '';
+      _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
+      message.toolActivityStarted = true;
       message._progress = `Running ${action}...`;
       _pushMobileStreamProcessEntry(message, 'tool', `${stepPrefix}${action}${args ? ` ${args}` : ''}`, evt.actor ? { actor: evt.actor } : null);
       return true;
@@ -17911,11 +20377,15 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
       if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
+      _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
+      message.toolActivityStarted = true;
       message._progress = ok ? '' : `${action} failed`;
       _pushMobileStreamProcessEntry(message, ok ? 'result' : 'error', `${action}${text ? ` -> ${text}` : ' complete'}`, evt.actor ? { actor: evt.actor } : null);
       return true;
     }
     case 'vision_injected': {
+      _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
+      message.toolActivityStarted = true;
       _appendMobileVisionTrace(message, evt);
       return true;
     }
@@ -17924,6 +20394,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       const text = String(evt.message || '').trim();
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (!text) return true;
+      _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
+      message.toolActivityStarted = true;
       message._progress = `${action}: ${text}`.slice(0, 140);
       _pushMobileStreamProcessEntry(message, 'info', `${action}: ${text}`, evt.actor ? { actor: evt.actor } : null);
       return true;
@@ -18016,11 +20488,194 @@ function _mobileBackgroundSpawnId(msg = {}) {
   return String(msg.bgId || msg.backgroundId || msg.serverAgentId || msg.agentId || '').trim();
 }
 
+function _mobileBackgroundSpawnPromptFromMessage(msg = {}, existing = {}) {
+  const direct = String(
+    msg.taskPrompt
+      || msg.task_prompt
+      || msg.browserTaskPrompt
+      || msg.task
+      || msg.prompt
+      || ''
+  ).trim();
+  if (direct) return direct;
+  const args = msg.args && typeof msg.args === 'object' ? msg.args
+    : (msg.params && typeof msg.params === 'object' ? msg.params
+      : (msg.input && typeof msg.input === 'object' ? msg.input : null));
+  const fromArgs = args ? String(args.task_prompt || args.taskPrompt || args.prompt || args.task || '').trim() : '';
+  return fromArgs || String(existing.prompt || existing.task || '').trim();
+}
+
+function _mobileParseBackgroundStatus(value) {
+  if (!value) return null;
+  if (value.status && typeof value.status === 'object') return _mobileParseBackgroundStatus(value.status);
+  if (typeof value === 'object') return value;
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {}
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const parsed = JSON.parse(raw.slice(start, end + 1));
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {}
+  }
+  return null;
+}
+
+function _collectMobileBackgroundSpawnRecoveries(frames = [], sessionId = __pmChat.activeSessionId) {
+  const byId = new Map();
+  const promptQueue = [];
+  const remember = (item = {}) => {
+    const id = _mobileBackgroundSpawnId(item) || String(item.id || '').trim();
+    if (!id || _mobileBackgroundSpawnClearedIds()[id]) return;
+    const existing = byId.get(id) || {};
+    byId.set(id, {
+      ...existing,
+      ...item,
+      id,
+      bgId: id,
+      backgroundId: id,
+      sessionId: String(sessionId || item.sessionId || '').trim(),
+      spawnerSessionId: String(sessionId || item.spawnerSessionId || '').trim(),
+      prompt: String(item.prompt || item.taskPrompt || item.promptPreview || existing.prompt || '').trim(),
+      taskPrompt: String(item.taskPrompt || item.prompt || item.promptPreview || existing.taskPrompt || existing.prompt || '').trim(),
+    });
+  };
+  for (const frame of Array.isArray(frames) ? frames : []) {
+    const evt = {
+      type: String(frame?.type || ''),
+      ...(frame?.data && typeof frame.data === 'object' ? frame.data : {}),
+      seq: frame?.seq,
+      streamId: frame?.streamId,
+      at: frame?.at,
+    };
+    const action = String(evt.action || evt.name || evt.toolName || '').trim();
+    if (action !== 'background_spawn') continue;
+    if (evt.type === 'tool_call') {
+      const prompt = _mobileBackgroundSpawnPromptFromMessage(evt, {});
+      if (prompt) promptQueue.push(prompt);
+      continue;
+    }
+    if (evt.type !== 'tool_result') continue;
+    const parsed = _mobileParseBackgroundStatus(evt.result || evt.output || evt);
+    const prompt = String(parsed?.prompt || parsed?.taskPrompt || parsed?.promptPreview || promptQueue.shift() || '').trim();
+    if (parsed?.id) remember({ ...parsed, prompt, taskPrompt: prompt });
+  }
+  return [...byId.values()];
+}
+
+function _linkMobilePendingApprovalsToBackgroundLanes(sessionId = __pmChat.activeSessionId) {
+  if (!__pmChat.pendingApprovals) return false;
+  let changed = false;
+  const activeSid = String(sessionId || __pmChat.activeSessionId || '').trim();
+  for (const [sid, list] of Object.entries(__pmChat.pendingApprovals || {})) {
+    if (!Array.isArray(list)) continue;
+    let listChanged = false;
+    list.forEach((approval, index) => {
+      const visibleSid = _mobileApprovalVisibleSessionId(approval);
+      if (activeSid && visibleSid !== activeSid) return;
+      const lane = _linkMobileApprovalToBackgroundLane(approval);
+      if (!lane?.approvalRequest) return;
+      list[index] = lane.approvalRequest;
+      listChanged = true;
+      changed = true;
+    });
+    if (listChanged) __pmChat.pendingApprovals[sid] = list;
+  }
+  return changed;
+}
+
+function _applyMobileBackgroundSpawnStatus(statusInput = {}, sessionId = __pmChat.activeSessionId) {
+  const status = _mobileParseBackgroundStatus(statusInput) || {};
+  const id = _mobileBackgroundSpawnId(status) || String(status.id || '').trim();
+  if (!id || _mobileBackgroundSpawnClearedIds()[id]) return false;
+  const sid = String(sessionId || status.spawnerSessionId || status.sessionId || __pmChat.activeSessionId || '').trim();
+  const rawState = String(status.state || status.status || 'running').toLowerCase();
+  const terminalState = rawState === 'completed' || rawState === 'failed' || rawState === 'timed_out';
+  const prompt = String(status.prompt || status.taskPrompt || status.promptPreview || '').trim();
+  const msg = {
+    ...status,
+    bgId: id,
+    backgroundId: id,
+    sessionId: sid,
+    spawnerSessionId: sid,
+    state: rawState === 'timed_out' ? 'failed' : rawState,
+    taskPrompt: prompt,
+    prompt,
+    error: rawState === 'timed_out' ? (status.error || 'Background agent timed out.') : status.error,
+  };
+  if (terminalState) {
+    return _completeMobileBackgroundSpawnLane(msg, sid);
+  }
+  const lane = _upsertMobileBackgroundSpawnLane(msg, sid);
+  if (!lane) return false;
+  lane.status = rawState === 'queued' || rawState === 'in_progress' ? 'running' : (rawState || 'running');
+  lane.message.streaming = true;
+  lane.message._done = false;
+  lane.updatedAt = Date.now();
+  _linkMobilePendingApprovalsToBackgroundLanes(sid);
+  return true;
+}
+
+async function _recoverMobileBackgroundSpawnDock({ sessionId = __pmChat.activeSessionId, frames = [], statuses = [], dock = null } = {}) {
+  const sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+  if (!sid) return false;
+  const byId = new Map();
+  const add = (item, fromStatus = false) => {
+    const status = _mobileParseBackgroundStatus(item) || {};
+    const id = _mobileBackgroundSpawnId(status) || String(status.id || '').trim();
+    if (!id || _mobileBackgroundSpawnClearedIds()[id]) return;
+    const prev = byId.get(id) || {};
+    byId.set(id, {
+      ...prev,
+      ...status,
+      id,
+      bgId: id,
+      backgroundId: id,
+      sessionId: sid,
+      spawnerSessionId: sid,
+      prompt: String(status.prompt || status.taskPrompt || status.promptPreview || prev.prompt || '').trim(),
+      taskPrompt: String(status.taskPrompt || status.prompt || status.promptPreview || prev.taskPrompt || prev.prompt || '').trim(),
+      _fromStatus: prev._fromStatus || fromStatus,
+    });
+  };
+  _collectMobileBackgroundSpawnRecoveries(frames, sid).forEach((item) => add(item, false));
+  (Array.isArray(statuses) ? statuses : []).forEach((status) => add(status, true));
+  const missingStatuses = [...byId.values()].filter((item) => !item._fromStatus);
+  if (missingStatuses.length) {
+    const fetched = await Promise.all(missingStatuses.map((item) =>
+      loadMobileBackgroundStatus(item.id).then((res) => res?.status || res).catch(() => null)
+    ));
+    fetched.filter(Boolean).forEach((status) => add(status, true));
+  }
+  let changed = false;
+  for (const item of byId.values()) {
+    changed = _applyMobileBackgroundSpawnStatus(item, sid) || changed;
+  }
+  changed = _linkMobilePendingApprovalsToBackgroundLanes(sid) || changed;
+  if (changed) {
+    _renderMobileBackgroundSpawnDock(dock || document.getElementById('pm-background-spawn-dock'), sid);
+    try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+  }
+  return changed;
+}
+
 function _mobileBackgroundSpawnMatchesSession(msg = {}, sessionId = __pmChat.activeSessionId) {
   const id = _mobileBackgroundSpawnId(msg);
   if (id && _mobileBackgroundSpawnClearedIds()[id]) return false;
-  const sid = String(msg.sessionId || msg.spawnerSessionId || '').trim();
-  return !sid || sid === String(sessionId || '').trim();
+  const activeSid = String(sessionId || '').trim();
+  const lane = id ? _mobileBackgroundSpawnLanes()[id] : null;
+  const parentSid = String(msg.spawnerSessionId || msg.parentSessionId || msg.mainSessionId || lane?.sessionId || '').trim();
+  if (parentSid) return parentSid === activeSid;
+  const sid = String(msg.sessionId || '').trim();
+  if (!sid) return true;
+  const backgroundId = _mobileBackgroundSpawnIdFromSessionId(sid);
+  if (backgroundId && lane?.sessionId) return lane.sessionId === activeSid;
+  return sid === activeSid;
 }
 
 function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {
@@ -18028,14 +20683,35 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   if (!id) return null;
   const lanes = _mobileBackgroundSpawnLanes();
   const existing = lanes[id] || {};
+  const prompt = _mobileBackgroundSpawnPromptFromMessage(msg, existing);
+  const rawSessionId = String(msg.sessionId || '').trim();
+  const bgSessionId = String(
+    msg.bgSessionId
+      || msg.backgroundSessionId
+      || (_mobileBackgroundSpawnIdFromSessionId(rawSessionId) ? rawSessionId : '')
+      || existing.bgSessionId
+      || ''
+  ).trim();
+  const parentSessionId = String(
+    msg.spawnerSessionId
+      || msg.parentSessionId
+      || msg.mainSessionId
+      || existing.sessionId
+      || (_mobileBackgroundSpawnIdFromSessionId(rawSessionId) ? '' : rawSessionId)
+      || sessionId
+      || ''
+  ).trim();
   const lane = {
     id,
-    sessionId: String(msg.sessionId || existing.sessionId || sessionId || '').trim(),
+    sessionId: parentSessionId,
+    bgSessionId,
     label: String(msg.label || msg.name || existing.label || 'Background Spawn').trim(),
-    task: String(msg.task || msg.prompt || existing.task || '').trim(),
+    task: prompt,
+    prompt,
     status: String(msg.state || existing.status || 'running').trim(),
     expanded: existing.expanded === true,
-    startedAt: Number(existing.startedAt || Date.now()),
+    startedAt: Number(existing.startedAt || msg.startedAt || Date.now()),
+    completedAt: Number(msg.completedAt || existing.completedAt || 0) || null,
     updatedAt: Date.now(),
     message: existing.message || {
       role: 'ai',
@@ -18049,6 +20725,9 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     },
     fileChanges: msg.fileChanges || existing.fileChanges || null,
     plan: existing.plan || null,
+    result: msg.result || existing.result || '',
+    error: msg.error || existing.error || '',
+    approvalRequest: existing.approvalRequest || null,
   };
   lanes[id] = lane;
   return lane;
@@ -18130,18 +20809,111 @@ function _renderMobileBackgroundSpawnPlan(lane) {
   `;
 }
 
+function _renderMobileBackgroundSpawnPrompt(lane) {
+  const prompt = String(lane?.prompt || lane?.task || '').trim();
+  if (!prompt) return '';
+  return `<div class="pm-background-spawn-prompt">
+    <span>Prompt</span>
+    <p>${escapeHtml(prompt)}</p>
+  </div>`;
+}
+
+function _renderMobileBackgroundSpawnFinal(lane) {
+  const failed = String(lane?.status || '').toLowerCase() === 'failed';
+  const text = String(
+    failed
+      ? (lane?.error || lane?.message?.content || 'Background Spawn failed.')
+      : (lane?.result || lane?.message?.content || 'Background task completed with no textual output.')
+  ).trim();
+  return `<div class="pm-background-spawn-final ${failed ? 'failed' : 'completed'}">
+    <div class="pm-background-spawn-final-head">
+      <strong>${failed ? 'Failed' : 'Final response'}</strong>
+    </div>
+    <div class="markdown-body">${_renderMobileMarkdown(text)}</div>
+  </div>`;
+}
+
+function _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml) {
+  const status = String(lane?.status || 'running').toLowerCase();
+  if (status === 'completed' || status === 'failed') {
+    return _renderMobileBackgroundSpawnFinal(lane);
+  }
+  const approval = lane?.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending'
+    ? lane.approvalRequest
+    : null;
+  if (approval) {
+    return `${_renderMobileBackgroundSpawnPrompt(lane)}
+      <div class="pm-background-spawn-approval">${_renderMobileApprovalCard(approval, { compact: false })}</div>`;
+  }
+  return `${_renderMobileBackgroundSpawnPrompt(lane)}${planHtml}${processHtml}`;
+}
+
 function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSessionId) {
   if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
   const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
   const evt = _normalizeMobileBackgroundSpawnEvent(msg);
   if (!lane || !evt) return false;
-  lane.status = lane.status === 'completed' || lane.status === 'failed' ? lane.status : 'running';
+  const hasPendingApproval = lane.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending';
+  lane.status = lane.status === 'completed' || lane.status === 'failed'
+    ? lane.status
+    : (hasPendingApproval ? 'approval_required' : 'running');
   if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
   _updateMobileBackgroundSpawnPlan(lane, msg);
+  let laneChanged = false;
+  if (evt.type === 'approval_created') {
+    const approval = _normalizeMobileApproval(evt.approval || evt, {
+      bgId: lane.id,
+      sessionId: evt.bgSessionId || evt.backgroundSessionId || evt.sourceSessionId || evt.sessionId || lane.bgSessionId,
+      spawnerSessionId: lane.sessionId,
+      visibleSessionId: lane.sessionId,
+    });
+    if (approval?.id) {
+      lane.approvalRequest = {
+        ...approval,
+        bgId: lane.id,
+        backgroundId: lane.id,
+        visibleSessionId: lane.sessionId,
+        spawnerSessionId: lane.sessionId,
+        backgroundSessionId: approval.backgroundSessionId || lane.bgSessionId || approval.sessionId,
+      };
+      lane.status = 'approval_required';
+      lane.expanded = true;
+      _upsertMobilePendingApproval(lane.approvalRequest);
+      laneChanged = true;
+    }
+  } else if (evt.type === 'approval_approved' || evt.type === 'approval_denied' || evt.type === 'approval_expired' || evt.type === 'approval_failed') {
+    const status = evt.type === 'approval_approved' ? 'approved'
+      : evt.type === 'approval_denied' ? 'rejected'
+        : evt.type === 'approval_expired' ? 'expired'
+          : 'failed';
+    const approvalId = String(evt.approvalId || evt.id || evt.approval?.id || lane.approvalRequest?.id || '').trim();
+    if (approvalId && lane.approvalRequest && String(lane.approvalRequest.id || '') === approvalId) {
+      lane.approvalRequest = _normalizeMobileApproval({ ...lane.approvalRequest, ...(evt.approval || evt), status });
+      if (lane.status === 'approval_required') lane.status = 'running';
+      _updateMobilePendingApproval(approvalId, { ...(evt.approval || {}), status });
+      laneChanged = true;
+    }
+  }
   const changed = _applyMobileAgentStreamEvent(lane.message, evt, 'Background Spawn');
+  if (lane.message?.approvalRequest && !lane.approvalRequest) {
+    lane.approvalRequest = {
+      ...lane.message.approvalRequest,
+      bgId: lane.id,
+      backgroundId: lane.id,
+      visibleSessionId: lane.sessionId,
+      spawnerSessionId: lane.sessionId,
+      backgroundSessionId: lane.bgSessionId || lane.message.approvalRequest.sessionId,
+    };
+    if (String(lane.approvalRequest.status || 'pending') === 'pending') {
+      lane.status = 'approval_required';
+      lane.expanded = true;
+      _upsertMobilePendingApproval(lane.approvalRequest);
+      laneChanged = true;
+    }
+  }
   if (lane.message?.fileChanges) lane.fileChanges = lane.message.fileChanges;
   lane.updatedAt = Date.now();
-  return changed;
+  return changed || laneChanged;
 }
 
 function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {
@@ -18150,6 +20922,8 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
   if (!lane) return false;
   const failed = msg.state === 'failed' || !!msg.error;
   lane.status = failed ? 'failed' : 'completed';
+  lane.result = String(msg.result || lane.result || lane.message?.content || '').trim();
+  lane.error = String(msg.error || lane.error || '').trim();
   if (msg.fileChanges) {
     lane.fileChanges = msg.fileChanges;
     lane.message.fileChanges = msg.fileChanges;
@@ -18161,7 +20935,7 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
   if (failed) {
     _appendMobileProcess(lane.message, 'error', `Background Spawn failed${msg.error ? `: ${String(msg.error).slice(0, 260)}` : ''}`, { actor: 'Background Agent', ...msg });
   } else {
-    const result = String(msg.result || '').trim();
+    const result = String(lane.result || '').trim();
     _appendMobileProcess(lane.message, 'final', `Background Spawn complete${result ? `: ${result.slice(0, 260)}` : ''}`, { actor: 'Background Agent', ...msg });
     if (result && !String(lane.message.content || '').trim()) {
       lane.message.content = result;
@@ -18200,12 +20974,21 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
   host.innerHTML = lanes.map((lane) => {
     const entries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
     const latest = entries[entries.length - 1];
-    const latestText = String(latest?.text || latest?.content || lane.task || 'Working in parallel...').trim();
     const status = String(lane.status || 'running').toLowerCase();
+    const pendingApproval = lane.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending';
+    const finalText = status === 'completed' ? String(lane.result || lane.message?.content || '').trim() : '';
+    const errorText = status === 'failed' ? String(lane.error || lane.message?.content || '').trim() : '';
+    const latestText = String(
+      pendingApproval
+        ? `Approval needed: ${_pmApprovalTitle(lane.approvalRequest)}`
+        : (finalText || errorText || latest?.text || latest?.content || lane.task || 'Working in parallel...')
+    ).trim();
     const processHtml = entries.length
       ? _renderMobileProcess(entries).replace('<details class="pm-process-stream"', `<details class="pm-process-stream"${lane.expanded ? ' open' : ''}`)
       : '<div class="pm-background-spawn-empty">Waiting for live events...</div>';
     const planHtml = _renderMobileBackgroundSpawnPlan(lane);
+    const panelHtml = _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml);
+    const statusLabel = status === 'approval_required' ? 'approval' : (status === 'in_progress' ? 'running' : status);
     return `
       <section class="pm-background-spawn-lane ${escapeHtml(status)}${lane.expanded ? ' expanded' : ''}" data-bg-id="${escapeHtml(lane.id)}">
         <button type="button" class="pm-background-spawn-summary" data-pm-bg-toggle="${escapeHtml(lane.id)}">
@@ -18214,11 +20997,11 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
             <strong>${escapeHtml(lane.label || 'Background Spawn')}</strong>
             <em>${escapeHtml(latestText)}</em>
           </span>
-          <span class="pm-background-spawn-status">${escapeHtml(status === 'in_progress' ? 'running' : status)}</span>
+          <span class="pm-background-spawn-status">${escapeHtml(statusLabel)}</span>
           <span class="pm-background-spawn-chevron">${lane.expanded ? '^' : 'v'}</span>
         </button>
-        ${lane.task ? `<div class="pm-background-spawn-task">${escapeHtml(lane.task)}</div>` : ''}
-        <div class="pm-background-spawn-panel">${planHtml}${processHtml}</div>
+        ${!lane.expanded && lane.task ? `<div class="pm-background-spawn-task">${escapeHtml(lane.task)}</div>` : ''}
+        <div class="pm-background-spawn-panel">${panelHtml}</div>
       </section>
     `;
   }).join('');
@@ -18231,6 +21014,10 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
       try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
     });
   });
+  host.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
+    btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
+  });
+  _wireMobileProcessRunActions(host);
   host.querySelectorAll('.pm-background-spawn-lane[data-bg-id]').forEach((node) => {
     const id = String(node.getAttribute('data-bg-id') || '');
     const saved = previousScroll[id];
@@ -18302,12 +21089,15 @@ async function _renderTeamChatTab(slot, teamId) {
     <div class="pm-card" id="pm-team-chat-card" style="padding:0;overflow:hidden;">
       <div id="pm-team-chat-list" style="max-height:55vh;overflow-y:auto;padding:14px 14px 8px;"></div>
       <div id="pm-team-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
+      <div id="pm-team-chat-goal" class="pm-mobile-goal-strip pm-mobile-goal-strip-inline" hidden></div>
       ${_renderMobileAgentComposerHtml('pm-team-chat', 'Message the team manager...')}
     </div>
   `;
 
   const listEl = slot.querySelector('#pm-team-chat-list');
   const queueEl = slot.querySelector('#pm-team-chat-queue');
+  const goalEl = slot.querySelector('#pm-team-chat-goal');
+  _renderMobileGoalPill(goalEl, __pmChat.activeSessionId, { fallbackToLast: true });
   let messages = [];
   let liveMsg = null;
   let currentStream = null;
@@ -18364,7 +21154,7 @@ async function _renderTeamChatTab(slot, teamId) {
     if (!queueEl) return;
     queueEl.hidden = sendQueue.length === 0;
     queueEl.innerHTML = sendQueue.length
-      ? `<div class="pm-mobile-queued-head"><span>Queued messages</span><b>${sendQueue.length}</b></div>
+      ? `<div class="pm-mobile-queued-head"><b aria-label="${sendQueue.length} queued message${sendQueue.length === 1 ? '' : 's'}">${sendQueue.length}</b></div>
          <div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
            <div class="pm-mobile-queued-item">
              <button type="button" class="pm-mobile-queued-text" data-team-queue-edit="${idx}">${escapeHtml(String(item.text || 'Attached file(s)').slice(0, 120))}${item.files?.length ? ` <em>+${item.files.length}</em>` : ''}</button>
@@ -18523,10 +21313,11 @@ async function _renderTeamChatTab(slot, teamId) {
   async function startTeamMobileSend(payload) {
     const rawText = String(payload?.text || '').trim();
     const files = Array.isArray(payload?.files) ? payload.files : [];
+    const source = String(payload?.source || '').trim();
     const userVisibleText = rawText || (files.length ? 'Please review the attached file(s).' : '');
     if (!userVisibleText && !files.length) return;
     if (isBusy()) {
-      sendQueue.push({ text: rawText, files });
+      sendQueue.push({ text: rawText, files, source, speak: payload?.speak === true, voice: payload?.voice === true });
       renderQueue();
       composer?.update?.();
       return;
@@ -20380,7 +23171,7 @@ function _tasksSkeleton() {
 async function _renderTasksPageOld(page, { navigate }) {
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count">…</span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
-    ${renderMobileHeader({ title: 'Tasks', online: true, extras })}
+    ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body" id="pm-tasks-body">
       <div class="pm-tabs" id="pm-tasks-filter" style="margin-top:4px;">
         <button class="active" data-filter="active">Active</button>
@@ -20578,7 +23369,7 @@ function _pmTaskAction(task) {
 export async function renderTasksPage(page, { navigate, taskId = '' }) {
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count">...</span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
-    ${renderMobileHeader({ title: 'Tasks', online: true, extras })}
+    ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body" id="pm-tasks-body">
       <div class="pm-tabs" id="pm-tasks-filter" style="margin-top:4px;overflow-x:auto;justify-content:flex-start;">
         ${PM_TASK_FILTERS.map((f, i) => `<button class="${i === 0 ? 'active' : ''}" data-filter="${f.key}">${escapeHtml(f.label)} <span data-count="${f.key}"></span></button>`).join('')}
@@ -20871,7 +23662,7 @@ export async function renderCreativePage(page, { navigate } = {}) {
   const state = _creativeState();
   const extras = `<button class="pm-icon-btn" id="pm-creative-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
-    ${renderMobileHeader({ title: 'Prometheus', online: true, extras, hideTitle: false })}
+    ${renderMobileHeader({ title: 'Creative', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body pm-creative" id="pm-creative-body">
       <h1 class="pm-creative-title">Creative Studio</h1>
       <div class="pm-creative-status"><span class="pm-creative-dot"></span> Online</div>
@@ -21682,9 +24473,11 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
       <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+      <div class="pm-header-actions">
+        <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+      </div>
     </header>
-    <div class="pm-body" id="pm-detail-body">${subagentDetailSkeleton()}</div>
+    <div class="pm-body pm-subagent-detail-body" id="pm-detail-body">${subagentDetailSkeleton()}</div>
   `;
   wireHeaderActions(page, { onBack: () => navigate?.('#mobile/subagents') });
 
@@ -21995,15 +24788,21 @@ async function _renderSubagentHeartbeatTab(slot, agentId) {
 
 async function _renderSubagentChatTab(slot, agent, attachStream) {
   slot.innerHTML = `
-    <div class="pm-card" id="pm-sa-chat-card" style="padding:0;overflow:hidden;">
-      <div id="pm-sa-chat-list" style="max-height:55vh;overflow-y:auto;padding:14px 14px 8px;"></div>
-      <div id="pm-sa-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
+    <div class="pm-sa-chat-shell" id="pm-sa-chat-card">
+      <div class="pm-sa-chat-scrollport">
+        <div id="pm-sa-chat-list" class="pm-sa-chat-list"></div>
+        <div id="pm-sa-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
+      </div>
+      <div id="pm-sa-chat-goal" class="pm-mobile-goal-strip pm-mobile-goal-strip-inline" hidden></div>
       ${_renderMobileAgentComposerHtml('pm-sa-chat', `Message ${agent.name || 'this subagent'}...`)}
     </div>
   `;
 
   const listEl = slot.querySelector('#pm-sa-chat-list');
+  const scrollportEl = slot.querySelector('.pm-sa-chat-scrollport');
   const queueEl = slot.querySelector('#pm-sa-chat-queue');
+  const goalEl = slot.querySelector('#pm-sa-chat-goal');
+  _renderMobileGoalPill(goalEl, __pmChat.activeSessionId, { fallbackToLast: true });
 
   let messages = [];
   let liveMsg = null;
@@ -22057,7 +24856,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     if (!queueEl) return;
     queueEl.hidden = sendQueue.length === 0;
     queueEl.innerHTML = sendQueue.length
-      ? `<div class="pm-mobile-queued-head"><span>Queued messages</span><b>${sendQueue.length}</b></div>
+      ? `<div class="pm-mobile-queued-head"><b aria-label="${sendQueue.length} queued message${sendQueue.length === 1 ? '' : 's'}">${sendQueue.length}</b></div>
          <div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
            <div class="pm-mobile-queued-item">
              <button type="button" class="pm-mobile-queued-text" data-sa-queue-edit="${idx}">${escapeHtml(String(item.text || 'Attached file(s)').slice(0, 120))}${item.files?.length ? ` <em>+${item.files.length}</em>` : ''}</button>
@@ -22081,16 +24880,48 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     startSubagentMobileSend(next).catch((err) => pmToast(err?.message || 'Send failed', 'error'));
   }
 
+  function normalizeSubagentChatDedupeText(value) {
+    return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 500);
+  }
+
+  function dedupeSubagentChatMessages(items) {
+    const out = [];
+    const seenIds = new Set();
+    const near = new Map();
+    (Array.isArray(items) ? items : []).forEach((msg) => {
+      if (!msg || typeof msg !== 'object') return;
+      const id = String(msg.id || '').trim();
+      if (id) {
+        if (seenIds.has(id)) return;
+        seenIds.add(id);
+      }
+      const content = normalizeSubagentChatDedupeText(msg.content || msg.text || msg.body?.text || '');
+      if (content) {
+        const key = `${String(msg.role || '')}:${content}`;
+        const ts = Number(msg.ts || msg.createdAt || msg.timestamp || Date.now()) || Date.now();
+        const previousTs = Number(near.get(key) || 0);
+        if (previousTs && Math.abs(ts - previousTs) < 30000) return;
+        near.set(key, ts);
+      }
+      out.push(msg);
+    });
+    return out;
+  }
+
   function upsertServerMessages(fresh) {
     const localLive = liveMsg && !liveMsg._done ? liveMsg : null;
-    messages = Array.isArray(fresh) ? fresh.slice() : [];
+    messages = dedupeSubagentChatMessages(fresh);
     if (localLive) {
       const duplicate = messages.some((m) =>
-        String(m.content || m.text || '').trim()
-        && String(m.content || m.text || '').trim() === String(localLive.content || '').trim()
+        (String(localLive.id || '').trim() && String(m.id || '').trim() === String(localLive.id || '').trim())
+        || (
+          String(m.content || m.text || '').trim()
+          && String(m.content || m.text || '').trim() === String(localLive.content || '').trim()
+        )
       );
       if (!duplicate) messages.push(localLive);
     }
+    messages = dedupeSubagentChatMessages(messages);
   }
 
   function renderList() {
@@ -22108,7 +24939,9 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
     });
     _wireMobileProcessRunActions(listEl);
-    listEl.scrollTop = listEl.scrollHeight;
+    const scroller = scrollportEl || listEl;
+    scroller.scrollTop = scroller.scrollHeight;
+    requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
   }
 
   try {
@@ -22188,6 +25021,30 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
   const onApprovalDenied = onApprovalResolved('approval_denied');
   const onApprovalExpired = onApprovalResolved('approval_expired');
   const onApprovalFailed = onApprovalResolved('approval_failed');
+  const onSubagentVoiceSubmit = (event) => {
+    const detail = event?.detail || {};
+    if (detail.accepted === true) return;
+    if (String(detail.agentId || '') !== String(agent.id || '')) return;
+    const text = String(detail.text || '').trim();
+    if (!text) return;
+    const voiceSubmitKey = `${agent.id}:${_normalizeVoiceEchoText(text)}`;
+    const lastVoiceSubmit = __pmVoice.lastSubagentBridgeSubmit || {};
+    if (lastVoiceSubmit.key === voiceSubmitKey && Date.now() - Number(lastVoiceSubmit.at || 0) < 10000) {
+      detail.accepted = true;
+      detail.promise = Promise.resolve();
+      _voiceDebug('subagent-voice-bridge-dedupe-ignored', { agentId: agent.id, textLen: text.length });
+      return;
+    }
+    __pmVoice.lastSubagentBridgeSubmit = { key: voiceSubmitKey, at: Date.now() };
+    detail.accepted = true;
+    detail.promise = startSubagentMobileSend({
+      text,
+      runtimeMessage: String(detail.runtimeMessage || text).trim(),
+      files: [],
+      source: 'subagent_voice',
+      speak: true,
+    });
+  };
   wsEventBus?.on?.('ws:open', onWsOpen);
   wsEventBus?.on?.('subagent_chat_message', onSubagentChatMessage);
   wsEventBus?.on?.('subagent_chat_stream_event', onSubagentStreamEvent);
@@ -22196,6 +25053,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
   wsEventBus?.on?.('approval_denied', onApprovalDenied);
   wsEventBus?.on?.('approval_expired', onApprovalExpired);
   wsEventBus?.on?.('approval_failed', onApprovalFailed);
+  window.addEventListener('pm-subagent-voice-submit', onSubagentVoiceSubmit);
   document.addEventListener('visibilitychange', onVisibility);
   slot._pmCleanup = () => {
     if (cleanupDone) return;
@@ -22209,22 +25067,36 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     wsEventBus?.off?.('approval_denied', onApprovalDenied);
     wsEventBus?.off?.('approval_expired', onApprovalExpired);
     wsEventBus?.off?.('approval_failed', onApprovalFailed);
+    window.removeEventListener('pm-subagent-voice-submit', onSubagentVoiceSubmit);
     document.removeEventListener('visibilitychange', onVisibility);
   };
   reconcile();
 
   async function startSubagentMobileSend(payload) {
     const rawText = String(payload?.text || '').trim();
+    const rawRuntimeText = String(payload?.runtimeMessage || payload?.runtime_message || '').trim();
     const files = Array.isArray(payload?.files) ? payload.files : [];
+    const source = String(payload?.source || '').trim();
+    const isVoiceTurn = source === 'subagent_voice' || payload?.voice === true;
     const userVisibleText = rawText || (files.length ? 'Please review the attached file(s).' : '');
     if (!userVisibleText && !files.length) return;
     if (isBusy()) {
-      sendQueue.push({ text: rawText, files });
+      sendQueue.push({
+        text: rawText,
+        runtimeMessage: rawRuntimeText,
+        files,
+        source,
+        speak: payload?.speak === true,
+        voice: payload?.voice === true,
+      });
       renderQueue();
       composer?.update?.();
       return;
     }
-    let messageForRuntime = userVisibleText;
+    let messageForRuntime = rawRuntimeText || userVisibleText;
+    const clientMessageId = payload?.clientMessageId
+      || payload?.client_message_id
+      || `sa_${String(agent.id || 'agent').replace(/[^a-zA-Z0-9_.:-]/g, '_')}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     let attachmentPreviews = files;
     if (files.length) {
       const uploadResults = await _uploadMobileChatAttachments(files);
@@ -22241,15 +25113,23 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       }));
     }
 
-    const userMsg = { role: 'user', content: userVisibleText, body: { text: userVisibleText, attachments: attachmentPreviews }, attachmentPreviews, createdAt: Date.now() };
+    const userMsg = { id: clientMessageId, role: 'user', content: userVisibleText, body: { text: userVisibleText, attachments: attachmentPreviews, source }, attachmentPreviews, source, createdAt: Date.now() };
     messages.push(userMsg);
-    liveMsg = { role: 'agent', content: '', _progress: `${agent.name} is thinking...`, createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+    liveMsg = { id: `${clientMessageId}_agent`, role: 'agent', content: '', source, _progress: `${agent.name} is thinking...`, createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
     messages.push(liveMsg);
     renderList();
 
     localSseActive = true;
     composer?.update?.();
-    currentStream = streamSubagentChat(agent.id, { message: messageForRuntime }, {
+    let resolveCompletion = () => {};
+    const completionPromise = new Promise((resolve) => { resolveCompletion = resolve; });
+    currentStream = streamSubagentChat(agent.id, {
+      message: messageForRuntime,
+      clientMessageId,
+      ...(isVoiceTurn && userVisibleText && userVisibleText !== messageForRuntime ? { visibleMessage: userVisibleText } : {}),
+      ...(source ? { source } : {}),
+      ...(isVoiceTurn ? { voiceTarget: _mobileVoiceTargetPayload() } : {}),
+    }, {
       onEvent: (evt) => {
         _applyMobileAgentStreamEvent(liveMsg, evt, agent.name || agent.id || 'Subagent');
         renderList();
@@ -22264,6 +25144,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
         currentStream = null;
         composer?.update?.();
         renderList();
+        resolveCompletion();
       },
       onDone: async () => {
         const finalSubagentVoiceReply = String(liveMsg?.content || liveMsg?.text || '').trim();
@@ -22279,16 +25160,19 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
         await reconcile({ forceHistory: true });
         if (
           finalSubagentVoiceReply
+          && isVoiceTurn
           && __pmVoice?.target?.kind === 'subagent'
           && String(__pmVoice.target.agentId || '') === String(agent.id || '')
         ) {
-          __pmVoice.lastAi = finalSubagentVoiceReply;
-          _ttsSpeak(finalSubagentVoiceReply).catch(() => {});
+          const spokeWithRealtimeAgent = _realtimeAgentDataChannelOpen() && _requestMobileRealtimeAgentFinalSummary(finalSubagentVoiceReply);
+          if (!spokeWithRealtimeAgent) await _speakSubagentVoiceReplyOnce(agent.id, finalSubagentVoiceReply).catch(() => {});
         }
         drainQueueSoon();
+        resolveCompletion();
       },
     });
     attachStream?.(currentStream);
+    return completionPromise;
   }
 
   composer = _installMobileAgentComposer(slot, 'pm-sa-chat', {

@@ -24,7 +24,9 @@ Desktop page modules:
 - `web-ui/src/pages/TasksPage.js` - background task board, task detail panel, task chat/replies, task approvals, task state changes, evidence bus, coding workspace/command run panels, manager status, and error response panel.
 - `web-ui/src/pages/SchedulePage.js` - schedules/automations list, Brain schedule cards, create/edit modal, RRULE parsing helpers, run-now/delete/enable controls, schedule reference chips, and schedule websocket refresh behavior.
 - `web-ui/src/pages/TeamsPage.js` - teams canvas/board, team chat, team tabs, manager review/run-all/pause/resume/delete flows, context refs/files, memory, runs, workspace tree/editor, team subagent detail drawers, and team websocket handling.
-- `web-ui/src/pages/SubagentsPage.js` - standalone subagent list/detail, subagent chat, abort/file upload/attachment previews, system prompt editing, heartbeat config/markdown, context references/files, spawned tasks, memory reload, and process toggles.
+- `web-ui/src/pages/SubagentsPage.js` - standalone subagent list/detail, local Agent Profile Pack preview/install/uninstall UI, marketplace provenance badges, subagent chat, abort/file upload/attachment previews, system prompt editing, heartbeat config/markdown, context references/files, spawned tasks, memory reload, and process toggles.
+  - Subagent chat embeds the shared chat composer classes inside a detail panel. Keep `SubagentsPage.js` markup scoped with `subagent-panel-chat-shell`, `subagent-panel-chat-messages`, and `subagent-panel-chat-composer`; `components.css` overrides that scoped composer to `position: static` so it does not inherit the main chat `.chat-input-area` absolute bottom positioning.
+
 - `web-ui/src/pages/ProposalsPage.js` - proposal list/filter, pending badge, approve/deny, jump-to-session, and jump-to-task behavior.
 - `web-ui/src/pages/AuditPage.js` - non-main run audit log, run grouping/status classification, pagination, row expansion, and stats rendering.
 - `web-ui/src/pages/MemoryPage.js` - memory graph canvas, force/layout modes, controls drawer, detail drawer, add-memory composer, attachment handling, graph refresh/indexing, shape/image layout, tooltips, and selection.
@@ -197,7 +199,7 @@ Page globals:
 - `TasksPage.js`: `refreshBgTasks`, task board drag/drop helpers, `openBgtPanel`, `closeBgtPanel`, pause/resume, task chat/reply/delete, approvals, evidence bus, coding workspace, command runs, process run refresh, and error response helpers.
 - `SchedulePage.js`: `refreshSchedules`, `openScheduleCreateModal`, `editSchedule`, `saveSchedule`, `deleteSchedule`, `runScheduleNow`, Brain schedule controls, occurrence/ref helpers.
 - `TeamsPage.js`: `refreshTeams`, `teamsPageActivate`, board/chat/tab/context/memory/runs/workspace/subagent helpers, manager review/run-all/pause/resume/delete, create-team modal, workspace editor helpers.
-- `SubagentsPage.js`: `subagentsPageActivate`, `refreshSubagents`, detail/chat/abort/file/context/system prompt/heartbeat/task/memory/process helpers.
+- `SubagentsPage.js`: `subagentsPageActivate`, `refreshSubagents`, Agent Profile Pack import helpers (`previewAgentProfilePackImport`, `installAgentProfilePackImport`, `uninstallAgentProfilePack`), detail/chat/abort/file/context/system prompt/heartbeat/task/memory/process helpers.
 - `SettingsPage.js`: `openSettings`, `closeSettings`, `setSettingsTab`, settings loaders/savers, provider/model/OAuth handlers, channel tests, MCP/webhook handlers, agent config and heartbeat editors, security/permission handlers, migration handlers, pairing panel handlers.
 - `ConnectionsPage.js`: connector grid/detail/OAuth/credential/browser-login/disconnect/activity and Obsidian handlers.
 - `ProjectsPage.js`: project sidebar/list/card/new/delete/session/file/instructions/memory helpers and project-canvas handoff.

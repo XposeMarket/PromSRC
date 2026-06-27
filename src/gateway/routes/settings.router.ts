@@ -1158,6 +1158,13 @@ function resolveApprovalRequest(req: any, res: any, decision: 'approved' | 'reje
   } : { success: false, error: result.error });
 }
 
+function approvalResolvedBy(req: any, fallback: string): string {
+  const raw = String(req.body?.resolvedBy || req.body?.source || req.body?.resolutionSource || '').trim().toLowerCase();
+  if (raw === 'voice' || raw === 'mobile_voice' || raw === 'voice_approval') return 'voice';
+  if (raw === 'mobile') return 'mobile';
+  return fallback;
+}
+
 router.get('/api/command-permissions', requireGatewayAuth, (req, res) => {
   const sessionId = String(req.query.sessionId || '').trim() || undefined;
   res.json({ grants: listCommandPermissionGrants(sessionId) });
@@ -1259,17 +1266,17 @@ router.patch('/api/approvals/:id', requireGatewayAuth, (req, res) => {
 });
 
 router.post('/api/approvals/:id', requireGatewayAuth, (req, res) => {
-  resolveApprovalRequest(req, res, req.body?.decision, 'web');
+  resolveApprovalRequest(req, res, req.body?.decision, approvalResolvedBy(req, 'web'));
 });
 
 router.post('/api/approvals/:id/approve', requireGatewayAuth, (req, res) => {
   req.body = { ...(req.body || {}), decision: 'approved' };
-  resolveApprovalRequest(req, res, 'approved', 'web');
+  resolveApprovalRequest(req, res, 'approved', approvalResolvedBy(req, 'web'));
 });
 
 router.post('/api/approvals/:id/deny', requireGatewayAuth, (req, res) => {
   req.body = { ...(req.body || {}), decision: 'rejected' };
-  resolveApprovalRequest(req, res, 'rejected', 'web');
+  resolveApprovalRequest(req, res, 'rejected', approvalResolvedBy(req, 'web'));
 });
 
 // ─── Prometheus Questions API ─────────────────────────────────────────────────

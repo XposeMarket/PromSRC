@@ -80,6 +80,11 @@
       "path": "references/recovery/recovery-note-apply-dev-source-patchset-failed-error-text-not-found-in-w-2026-06-13.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
+    },
+    {
+      "path": "references/recovery/recovery-note-apply-workspace-patchset-failed-applied-0-failed-1-results-2026-06-24.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
     }
   ]
 }

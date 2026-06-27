@@ -1,12 +1,14 @@
 # 32A. Mobile Liquid Glass Reference
 
-Last updated: 2026-06-12
+Last updated: 2026-06-19
 
-Prometheus Mobile liquid glass is CSS-variable driven. The current production spec is baked into `web-ui/src/styles/mobile.css` under the `:root` `--pm-lg-*` variables and mirrored into `generated/public-web-ui/static/styles/mobile.css`.
+Prometheus Mobile liquid glass is CSS-variable driven. The current production spec is baked into `web-ui/src/styles/mobile.css` under the `:root` `--pm-lg-*` variables and mirrored into `generated/public-web-ui/static/styles/mobile.css`. Theme accents should use `--pm-accent*`; older `--pm-orange*` variables are compatibility aliases that can resolve to orange, blue, violet, or another skin accent.
 
 2026-06-12 note: the outside-only composer rim and tabbar sibling halo were disabled because they produced a visible/invisible outer ring around the composer and footer. Keep refraction clipped inside the rounded panel unless deliberately reintroducing a temporary dev experiment.
 
 2026-06-13 note: the normal chat composer is intentionally borderless. Do not add `.pm-composer::after` back to the shared inner-border selector, and keep `.pm-composer` / `.pm-composer.is-voice-active` at `border: 0` with no inset top/bottom highlight shadows. The glass should read from its background/lens, not from a visible top/bottom/side outline.
+
+2026-06-19 note: Prometheus Mobile is a web/PWA shell and cannot use Apple native Liquid Glass APIs directly. Keep the footer slider on the stable `.pm-tab-magnify` clipped overlay; do not use duplicate edge-slice clone layers or painted rainbow rims because they create visible icon fragments. Base `.pm-tab.active` stays the normal inactive tab color, and only the clipped overlay content inside the slider turns white.
 
 ## Surfaces
 

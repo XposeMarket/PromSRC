@@ -459,12 +459,12 @@ export function markStartupNotificationDelivered(
  * Gracefully shut down all gateway subsystems.
  * Does NOT exit the process — caller decides what to do next.
  */
-async function shutdownGateway(): Promise<void> {
+async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void> {
   console.log('[lifecycle] Shutting down gateway subsystems...');
 
   // 1. Stop accepting new work
   try {
-    const interrupted = prepareActiveRuntimesForGatewayShutdown('gateway_restart');
+    const interrupted = prepareActiveRuntimesForGatewayShutdown(restartTrigger);
     if (interrupted.length) {
       console.log(`[lifecycle] Preserved ${interrupted.length} active runtime(s) for restart recovery.`);
     }
@@ -545,7 +545,14 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   startPreviousTerminalCleanupWatcher(restartCtx);
 
   // Step 2: Shut down current gateway
-  await shutdownGateway();
+  const restartTrigger = (
+    restartCtx.devEditContinuation
+    || restartCtx.devReload
+    || restartCtx.reason === 'build_deploy'
+  )
+    ? 'prom_apply_dev_changes'
+    : 'gateway_restart';
+  await shutdownGateway(restartTrigger);
 
   // If Electron spawned this gateway, let Electron own the replacement process.
   // That keeps packaged apps on the correct executable, env, data dir, and UI reload path.

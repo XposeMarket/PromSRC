@@ -43,12 +43,19 @@ function isTaskRuntime(runtime: LiveRuntimeSnapshot): boolean {
 }
 
 function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
-  const toolName = String(runtime.checkpoint?.toolName || '').trim();
-  if (!toolName) return undefined;
-  if (toolName === 'gateway_restart') return toolName;
-  if (toolName === 'prom_apply_dev_changes') return toolName;
-  if (/^(prom_)?dev_.*apply/i.test(toolName)) return toolName;
-  if (/^(apply_)?dev_source_(changes|edit|patch)$/i.test(toolName)) return toolName;
+  const candidates = [
+    runtime.checkpoint?.toolName,
+    runtime.interruptReason,
+    runtime.recoveryData?.interruptReason,
+    runtime.recoveryData?.restartTrigger,
+    runtime.recoveryData?.plannedRestartTool,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  for (const toolName of candidates) {
+    if (toolName === 'gateway_restart') return toolName;
+    if (toolName === 'prom_apply_dev_changes') return toolName;
+    if (/^(prom_)?dev_.*apply/i.test(toolName)) return toolName;
+    if (/^(apply_)?dev_source_(changes|edit|patch)$/i.test(toolName)) return toolName;
+  }
   return undefined;
 }
 

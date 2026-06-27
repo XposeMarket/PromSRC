@@ -73,6 +73,13 @@ const RECOVERY_BLOCKED_STATUSES: TaskStatus[] = [
   'awaiting_user_input',
 ];
 
+const SUBAGENT_CHAT_RECOVERY_STATUSES: TaskStatus[] = [
+  'needs_assistance',
+  'stalled',
+  'paused',
+  'awaiting_user_input',
+];
+
 function isRecoveryBlockedTask(task: TaskRecord | null | undefined): boolean {
   if (!task || !isTaskRecoveryEligible(task)) return false;
   if (!RECOVERY_BLOCKED_STATUSES.includes(task.status)) return false;
@@ -108,10 +115,23 @@ function findRecoveryTaskForReplySession(sessionId: string, statuses?: TaskStatu
   return blocked[0] || null;
 }
 
-export function findRecoveryTaskForSubagentChat(agentId: string, statuses?: TaskStatus[]): TaskRecord | null {
+export function findBlockedRecoveryTaskForSubagentChat(agentId: string): TaskRecord | null {
   const cleanAgentId = String(agentId || '').trim();
   if (!cleanAgentId) return null;
-  return listTasks({ status: statuses || RECOVERY_BLOCKED_STATUSES })
+  return listTasks({ status: SUBAGENT_CHAT_RECOVERY_STATUSES })
+    .filter((task) => isRecoveryBlockedTask(task))
+    .filter((task) =>
+      !task.teamSubagent
+      && String(task.subagentProfile || '').trim() === cleanAgentId
+    )
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)[0] || null;
+}
+
+export function findRecoveryTaskForSubagentChat(agentId: string, statuses?: TaskStatus[]): TaskRecord | null {
+  if (!statuses) return findBlockedRecoveryTaskForSubagentChat(agentId);
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+  return listTasks({ status: statuses })
     .filter((task) => isRecoveryBlockedTask(task))
     .filter((task) =>
       !task.teamSubagent

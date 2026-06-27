@@ -162,6 +162,7 @@ const AgentDefinitionSchema = z.object({
   workspace:   z.string().optional(),
   executionWorkspace: z.string().optional(),
   allowedWorkPaths: z.array(z.string()).optional(),
+  marketplaceProfile: z.record(z.unknown()).optional(),
   skillIds:    z.array(z.string()).optional(),
   model:       z.string().optional(),
   tools:       AgentToolPolicySchema.optional(),

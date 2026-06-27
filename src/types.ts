@@ -239,6 +239,21 @@ export interface AgentDefinition {
    */
   allowedWorkPaths?: string[];
 
+  /** Marketplace Agent Profile Pack provenance when this agent was imported from a pack. */
+  marketplaceProfile?: {
+    schema?: string;
+    packId: string;
+    packSlug?: string;
+    packVersion?: string;
+    publisher?: string;
+    sourcePath?: string;
+    importedAt?: string | null;
+    installRecord?: string;
+    verificationStatus?: string;
+    scannerStatus?: string;
+    [key: string]: unknown;
+  };
+
   /**
    * Skill playbooks attached to this agent and surfaced when it runs.
    */

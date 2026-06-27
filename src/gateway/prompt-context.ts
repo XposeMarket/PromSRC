@@ -86,7 +86,7 @@ export interface SkillWindow {
 }
 
 export interface BuildPersonalityContextOptions {
-  profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent';
+  profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent';
   excludedSkillIds?: string[];
 }
 
@@ -1149,6 +1149,7 @@ export async function buildPersonalityContext(
     );
   }
 
+  const isDirectSubagentProfile = profile === 'direct_subagent';
   const allowLongTermSearch = executionMode === 'interactive' || executionMode === 'background_agent' || executionMode === 'team_subagent';
   const memorySearchRouting = allowLongTermSearch
     ? routeMemorySearchMode(messageText)
@@ -1241,11 +1242,44 @@ export async function buildPersonalityContext(
       [cisContext, retrievedMemoryCtx, toolCategoryMatchSwitch, skillCtx, activeSkillCtx],
     );
   }
-  // ── Path SUB: subagents (team + standalone) — full main-chat stack, ────────
-  // but with the subagent identity contract in place of the Prometheus config
-  // soul, and without the managed-team routing policy (a subagent IS a worker,
-  // it does not dispatch to teams). Team role / assignment awareness is layered
-  // on top via callerContext, which has the task/subagent records.
+  if (isDirectSubagentProfile) {
+    const subagentSoul = loadSubagentSoul();
+    const user = loadFullMemoryProfile(workspacePath, 'USER.md');
+    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
+    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
+    const activatedCatsDirectSub = getActivatedToolCategories(sessionId);
+    if (extraCats) {
+      for (const ec of extraCats) {
+        if (ec === 'browser_vision' || ec === 'browser') activatedCatsDirectSub.add('browser');
+        else activatedCatsDirectSub.add(ec);
+      }
+    }
+    const toolCategoryMatchDirectSub = buildToolCategoryMatchContext(messageText, activatedCatsDirectSub);
+    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
+    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    setCurrentTurn(sessionId, historyLength);
+    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    return assembleContext(
+      [
+        subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
+        user ? `[USER]\n${user}` : '',
+        business ? `[BUSINESS]\n${business}` : '',
+        memory ? `[MEMORY]\n${memory}` : '',
+        buildToolsContext(activatedCatsDirectSub),
+      ],
+      [
+        cisContext,
+        retrievedMemoryCtx,
+        toolCategoryMatchDirectSub,
+        skillCtx,
+        activeSkillCtx,
+      ],
+    );
+  }
+
+  // ── Path SUB: background/team subagents ────────────────────────────────────
+  // Subagents receive subagent soul plus their role/task context from callerContext.
+  // They intentionally do not receive main Prometheus SOUL.md/config soul.
   if (executionMode === 'background_agent') {
     const subagentSoul = loadSubagentSoul();
     const activatedCatsBackground = getActivatedToolCategories(sessionId);
@@ -1254,7 +1288,6 @@ export async function buildPersonalityContext(
       ? [mainWorkspacePath]
       : [];
     const user = loadFullMemoryProfile(workspacePath, 'USER.md', undefined, fallbackMemoryRoots);
-    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', undefined, fallbackMemoryRoots);
     const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000, fallbackMemoryRoots);
     const intradayRoot = mainWorkspacePath || workspacePath;
     const todayBackground = new Date().toISOString().split('T')[0];
@@ -1279,10 +1312,8 @@ export async function buildPersonalityContext(
     return assembleContext(
       [
         messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
-        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
         subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
         user ? `[USER]\n${user}` : '',
-        soul ? `[SOUL]\n${soul}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
         buildToolsContext(activatedCatsBackground),
       ],
@@ -1303,9 +1334,7 @@ export async function buildPersonalityContext(
     const fallbackMemoryRoots = mainWorkspacePath && path.resolve(mainWorkspacePath) !== path.resolve(workspacePath)
       ? [mainWorkspacePath]
       : [];
-    // Full main-chat-equivalent memory stack (no per-field caps beyond MEMORY's 8k).
     const user = loadFullMemoryProfile(workspacePath, 'USER.md', undefined, fallbackMemoryRoots);
-    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', undefined, fallbackMemoryRoots);
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
     const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000, fallbackMemoryRoots);
     // Intraday: pull from the main workspace where the user's daily notes live,
@@ -1337,10 +1366,8 @@ export async function buildPersonalityContext(
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
       [
-        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
         subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
         user ? `[USER]\n${user}` : '',
-        soul ? `[SOUL]\n${soul}` : '',
         business ? `[BUSINESS]\n${business}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
         projectContextBlockSub ? `[PROJECT_CONTEXT]\n${projectContextBlockSub}` : '',

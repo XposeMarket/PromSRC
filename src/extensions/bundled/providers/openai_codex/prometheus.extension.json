@@ -11,6 +11,9 @@
     "binding": "providers/openai-codex-adapter",
     "options": {
       "staticModels": [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.5",
         "gpt-5.4-codex",
         "gpt-5.4-codex-mini",
@@ -33,7 +36,7 @@
   },
   "ownership": {
     "providerIds": ["openai_codex"],
-    "modelPrefixes": ["gpt-5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1"],
+    "modelPrefixes": ["gpt-5", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1"],
     "capabilities": ["llm", "desktop_oauth", "image_generation"]
   },
   "setup": {
@@ -42,12 +45,12 @@
   },
   "config": {
     "defaults": {
-      "model": "gpt-5.4",
+      "model": "gpt-5.5",
       "reasoning_effort": "low"
     },
     "schema": {
       "model": "string",
-      "reasoning_effort": "none|minimal|low|medium|high|xhigh?"
+      "reasoning_effort": "none|minimal|low|medium|high|xhigh|max?"
     },
     "uiHints": {
       "model": {

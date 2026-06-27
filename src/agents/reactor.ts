@@ -19,7 +19,7 @@ import path from 'path';
 import { OllamaClient } from './ollama-client.js';
 import { getToolRegistry, ToolProfile } from '../tools/registry.js';
 import { executeSkillTool } from '../tools/skills.js';
-import { buildSystemPrompt, selectSkillSlugsForMessage } from '../config/soul-loader.js';
+import { buildSystemPrompt, loadSubagentSoul, selectSkillSlugsForMessage } from '../config/soul-loader.js';
 import { AgentRole } from '../types.js';
 import { runWithWorkspace, getActiveWorkspace } from '../tools/workspace-context.js';
 
@@ -60,7 +60,7 @@ export interface ReactOptions {
   systemPromptWorkspacePath?: string;
   /** Add the agent identity file on top of the regular runtime prompt. */
   includeAgentSystemPrompt?: boolean;
-  /** Sub-agent mode: identity comes from system_prompt.md only (no SOUL.md injection). */
+  /** Sub-agent mode: identity comes from subagent soul plus system_prompt.md. */
   subagentSystemPromptOnly?: boolean;
 }
 
@@ -432,7 +432,8 @@ function buildNodeCallSystemPrompt(
   const soul = buildSystemPrompt({
     includeSkillSlugs: selectedSkillSlugs,
     includeMemory: subagentSystemPromptOnly ? false : options.promptMode !== 'minimal',
-    includeSoul: !subagentSystemPromptOnly,
+    includeSoul: true,
+    soulOverride: subagentSystemPromptOnly ? loadSubagentSoul() : undefined,
     extraInstructions: mergedExtraInstructions || undefined,
     workspacePath: subagentSystemPromptOnly ? undefined : workspacePath,
     promptMode: subagentSystemPromptOnly ? 'none' : (options.promptMode ?? 'full'),
@@ -543,7 +544,8 @@ function buildNativeToolSystemPrompt(
   const soul = buildSystemPrompt({
     includeSkillSlugs: selectedSkillSlugs,
     includeMemory: false,
-    includeSoul: !subagentSystemPromptOnly,
+    includeSoul: true,
+    soulOverride: subagentSystemPromptOnly ? loadSubagentSoul() : undefined,
     extraInstructions: mergedExtraInstructions || undefined,
     workspacePath: subagentSystemPromptOnly ? undefined : options.workspacePath,
     promptMode: subagentSystemPromptOnly ? 'none' : (options.promptMode ?? 'full'),
@@ -567,9 +569,8 @@ RULES:
  *
  * Fallback chain (first non-empty result wins):
  *   1. system_prompt.md  — canonical identity file for subagents
- *   2. AGENTS.md         — legacy identity file
- *   3. HEARTBEAT.md      — at minimum gives the agent its task schedule as context
- *   4. Minimal stub      — ensures the agent always knows it is a tool-using subagent,
+ *   2. HEARTBEAT.md      — at minimum gives the agent its task schedule as context
+ *   3. Minimal stub      — ensures the agent always knows it is a tool-using subagent,
  *                          not a plain assistant. Prevents "I have no tools" responses.
  *
  * This function is intentionally generic — it does not reference any specific team,
@@ -582,7 +583,6 @@ function loadAgentSystemPrompt(options: ReactOptions): string {
   // Ordered fallback chain
   const candidates = [
     path.join(spLookupPath, 'system_prompt.md'),
-    path.join(spLookupPath, 'AGENTS.md'),
     path.join(spLookupPath, 'HEARTBEAT.md'),
   ];
 

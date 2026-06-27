@@ -534,7 +534,7 @@ export async function buildPersonalityContext(
   historyLength: number,
   skillsManager: any,
   extraCats?: Set<string>,
-  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent'; excludedSkillIds?: string[] },
+  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[] },
 ): Promise<string> {
   return _buildPersonalityContext(
     sessionId,

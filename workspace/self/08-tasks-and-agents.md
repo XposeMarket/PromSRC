@@ -37,8 +37,8 @@ Paused task recovery ownership and chat mirroring:
 - team subagent tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat, the team room, or the matching member direct thread
 - team manager/executor tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat or team manager/team chat
 - `task-recovery.ts` now includes owner reply sessions for main task sessions, standalone `subagent_chat_*` sessions, team member room/direct sessions, and team manager/coordinator sessions
-- `task-router.ts` owns recovery selection and mirroring through `findRecoveryTaskForSubagentChat`, `findRecoveryTaskForTeamChatTarget`, `handleTaskRecoveryMessage`, and task-recovery mirroring into subagent/team chat stores
-- `channels.router.ts` intercepts standalone subagent chat and channel turns when the addressed subagent owns a blocked task, then routes the turn through task recovery instead of starting unrelated subagent work
+- `task-router.ts` owns recovery selection and mirroring through `findBlockedRecoveryTaskForSubagentChat`, `findRecoveryTaskForSubagentChat`, `findRecoveryTaskForTeamChatTarget`, `handleTaskRecoveryMessage`, and task-recovery mirroring into subagent/team chat stores
+- `channels.router.ts` intercepts standalone subagent chat and channel turns only when the addressed subagent currently owns a blocked recovery-eligible task (`needs_assistance`, `stalled`, `paused`, `failed`, or `awaiting_user_input`, excluding user-paused tasks), then routes the turn through task recovery instead of starting unrelated subagent work; once that task/job completes, direct subagent chat must fall back to normal conversational turns
 - `teams.router.ts` intercepts team room/member/manager chat turns when the addressed team or member owns a blocked task, then routes the turn through task recovery instead of starting unrelated team work
 - `TaskRecoveryConversationTurn.source` includes `subagent_chat` and `team_chat` so the task panel can preserve where guidance came from
 - recovery assistant sessions stay constrained to recovery: they may discuss the paused task, synthesize resume guidance, or trigger resume/rerun/cancel, but should not do unrelated work from that recovery session
@@ -87,6 +87,8 @@ Standalone subagents:
   - `verifier`
 - are messaged directly with `message_subagent`
 - standalone subagent task cards must copy the configured agent model into `TaskRecord.executorProvider`; otherwise `background_agent` execution falls through to mode defaults such as `background_spawn`/`main_chat` and can run on the wrong provider
+- can be installed locally from signed/versioned marketplace Agent Profile Packs; imported profiles carry `marketplaceProfile` provenance, install under `.prometheus/subagents/<agent-id>`, preserve attached skill IDs, and can be uninstalled only through marketplace-pack-aware deletion that refuses non-marketplace agents
+
 
 
 Managed teams:

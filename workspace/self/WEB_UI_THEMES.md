@@ -15,7 +15,8 @@ This approach lets you add unlimited named themes (blue, purple, etc.) without t
 | `web-ui/index.html` | FOUC script (~line 45): `window.PROM_THEMES` registry + embed theme list |
 | `web-ui/index.html` | Inline theme functions (~line 6965): `getThemeList()`, `resolveTheme()`, `toggleTheme()`, `applyTheme()`, `selectTheme()` |
 | `web-ui/index.html` | Ember canvas script (~line 7652): `EMBER_THEMES` object keyed by skin ID; particle color palettes |
-| `web-ui/src/styles/themes.css` | All `:root[data-skin="..."]` overrides + theme-picker UI |
+| `web-ui/src/styles/themes.css` | All desktop `:root[data-skin="..."]` overrides + theme-picker UI |
+| `web-ui/src/styles/mobile.css` | Mobile theme adaptation layer: `--pm-*` surfaces plus semantic `--pm-accent*` tokens, with `--pm-orange*` kept as compatibility aliases |
 | `web-ui/src/app.js` | Mirror of theme functions (called from JS, exported to window) |
 | `web-ui/src/pages/SettingsPage.js` | Integrates `renderThemePicker()` into Settings → System → Appearance |
 | `web-ui/service-worker.js` | VERSION string (bump on every web-ui change) |
@@ -29,6 +30,13 @@ light → Light         (base: light)
 blue  → Olympian Blue (base: dark)
 purple→ Aether Violet (base: dark)
 ```
+
+
+## Desktop vs Mobile Token Layers
+
+The desktop web UI owns theme identity through `data-theme`, `data-skin`, and desktop tokens like `--bg`, `--panel`, `--text`, `--brand`, and `--flame`. Prometheus Mobile reuses the same theme selection but adapts it into mobile-only `--pm-*` surface tokens in `web-ui/src/styles/mobile.css` so the phone shell, drawer, tab bar, composer, and liquid-glass panels can be tuned for smaller OLED/mobile surfaces.
+
+Use `--pm-accent`, `--pm-accent-soft`, and `--pm-accent-dark` for new mobile accent work. Older selectors still read `--pm-orange`, `--pm-orange-soft`, and `--pm-orange-dark`; those are compatibility aliases and may resolve to blue/violet/etc. under non-orange skins. Do not add new theme-specific mobile work by redefining `--pm-orange` directly unless maintaining legacy code.
 
 Toggle order: `dark → light → blue → purple → dark` (rotates on top-bar click).
 
@@ -116,7 +124,12 @@ Use this template:
   /* ... etc (copy from existing theme, adjust RGB) */
 
   /* ── OTHER VARS ── */
-  --pm-orange: #YOUR_HEX;     /* reused as "orange" throughout */
+  --pm-accent: #YOUR_HEX;     /* mobile semantic accent */
+  --pm-accent-soft: rgba(R,G,B,0.14);
+  --pm-accent-dark: #DARKER;
+  --pm-orange: var(--pm-accent);       /* compatibility alias only */
+  --pm-orange-soft: var(--pm-accent-soft);
+  --pm-orange-dark: var(--pm-accent-dark);
   --pm-orange-hot: #DARKER;
   --pm-ember: #DARK_SHADE;
   --pm-gold: #LIGHTER;

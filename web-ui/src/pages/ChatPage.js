@@ -5088,7 +5088,8 @@ function renderQueuedPromptsPanel() {
     return;
   }
   panel.style.display = 'block';
-  title.textContent = `Queued prompts (${count})`;
+  title.textContent = String(count);
+  title.setAttribute('aria-label', `${count} queued prompt${count === 1 ? '' : 's'}`);
   list.innerHTML = queue.map((q, i) => `
     <div class="queued-item">
       <span class="queued-item-index">${i + 1}.</span>
@@ -5764,7 +5765,15 @@ function renderAssistantWorkTimer(msg, { active = false, startedAt = 0 } = {}) {
     : (Number.isFinite(Number(msg?.workDurationMs)) && Number(msg.workDurationMs) >= 0
       ? Number(msg.workDurationMs)
       : ((Number.isFinite(endedAt) && endedAt > 0 ? endedAt : Number(msg?.timestamp || Date.now())) - start));
-  return `<div class="assistant-work-timer">${active ? 'Working for' : 'Worked for'} ${escHtml(formatAssistantWorkDuration(duration))}</div>`;
+  const label = `${active ? 'Working for' : 'Worked for'} ${formatAssistantWorkDuration(duration)}`;
+  const traceEntries = active ? [] : desktopWorkflowTraceEntriesForMessage(msg);
+  if (!liveTraceHasToolGroup(traceEntries)) return `<div class="assistant-work-timer">${escHtml(label)}</div>`;
+  const drawerId = traceDrawerIdForMessage(msg);
+  const open = ensureOpenProcessPanelSet().has(drawerId);
+  return `<button type="button" class="assistant-work-timer assistant-work-timer--expandable${open ? ' expanded' : ''}" aria-expanded="${open ? 'true' : 'false'}" aria-controls="${escHtml(drawerId)}" onclick="toggleTraceDrawer('${escHtml(drawerId)}')">
+    <span>${escHtml(label)}</span>
+    <svg class="assistant-work-timer-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>`;
 }
 
 function cloneChatMessageForBranch(msg) {
@@ -6322,6 +6331,67 @@ function getActiveMainChatGoal() {
   return sess?.mainChatGoal || null;
 }
 
+let mainGoalElapsedTimer = null;
+let mainGoalDetailsOpen = false;
+
+function mainGoalTimestampMs(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function mainGoalStartedAtMs(goal) {
+  return mainGoalTimestampMs(goal?.createdAt || goal?.created_at || goal?.startedAt);
+}
+
+function mainGoalFinishedAtMs(goal) {
+  return mainGoalTimestampMs(goal?.completedAt || goal?.failedAt || goal?.blockedAt || goal?.updatedAt);
+}
+
+function mainGoalElapsedMs(goal) {
+  const startedAt = mainGoalStartedAtMs(goal);
+  if (!startedAt) return 0;
+  const status = String(goal?.status || 'active');
+  const endAt = ['completed', 'done', 'failed', 'blocked'].includes(status) ? (mainGoalFinishedAtMs(goal) || Date.now()) : Date.now();
+  return Math.max(0, endAt - startedAt);
+}
+
+function formatGoalElapsed(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function updateMainGoalElapsedLabel() {
+  const goal = getActiveMainChatGoal();
+  const label = document.querySelector('[data-main-goal-elapsed]');
+  if (!label || !goal || goal.status === 'cleared') return;
+  label.textContent = formatGoalElapsed(mainGoalElapsedMs(goal));
+}
+
+function syncMainGoalElapsedTimer() {
+  const goal = getActiveMainChatGoal();
+  const shouldTick = !!goal && goal.status !== 'cleared' && mainGoalStartedAtMs(goal) > 0;
+  if (!shouldTick) {
+    if (mainGoalElapsedTimer) clearInterval(mainGoalElapsedTimer);
+    mainGoalElapsedTimer = null;
+    return;
+  }
+  updateMainGoalElapsedLabel();
+  if (!mainGoalElapsedTimer) mainGoalElapsedTimer = setInterval(updateMainGoalElapsedLabel, 1000);
+}
+
+function toggleMainGoalDetails() {
+  mainGoalDetailsOpen = !mainGoalDetailsOpen;
+  renderMainGoalStrip();
+}
+
 function renderMainGoalStrip() {
   const strip = document.getElementById('main-goal-strip');
   if (!strip) return;
@@ -6331,6 +6401,7 @@ function renderMainGoalStrip() {
     strip.style.display = 'none';
     strip.innerHTML = '';
     chatView?.classList.remove('has-main-goal');
+    syncMainGoalElapsedTimer();
     return;
   }
   const status = String(goal.status || 'active');
@@ -6346,23 +6417,33 @@ function renderMainGoalStrip() {
     deniedActions.length ? `${deniedActions.length} denied` : '',
     reason,
   ].filter(Boolean).join(' · ');
+  const judgeReprompt = String(goal.nextStepDirective || goal.lastJudgeDirective || goal.lastReason || '').trim();
+  const expanded = mainGoalDetailsOpen === true;
   strip.style.display = 'flex';
   strip.setAttribute('data-status', status);
   chatView?.classList.add('has-main-goal');
   strip.innerHTML = `
-    <div class="main-goal-main">
-      <div class="main-goal-kicker">Main chat goal · ${escHtml(status)}</div>
+    <button type="button" class="main-goal-main" onclick="toggleMainGoalDetails()" aria-expanded="${expanded ? 'true' : 'false'}" title="Show goal details">
+      <div class="main-goal-kicker"><span>Pursuing goal</span><span class="main-goal-elapsed" data-main-goal-elapsed>${escHtml(formatGoalElapsed(mainGoalElapsedMs(goal)))}</span></div>
       <div class="main-goal-title" title="${escHtml(goal.goal || '')}">${escHtml(goal.goal || 'Untitled goal')}</div>
       <div class="main-goal-meta">${escHtml(policyMeta)}</div>
       ${latestDenial ? `<div class="main-goal-denial">${escHtml(`Latest denied: ${latestDenial.category || 'policy'} - ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
-    </div>
+      ${expanded ? `
+        <div class="main-goal-details">
+          <div><strong>Turns</strong><span>${escHtml(String(Number(goal.turnsUsed || 0)))}</span></div>
+          <div><strong>Original goal</strong><span>${escHtml(goal.goal || 'Untitled goal')}</span></div>
+          <div><strong>Last judge reprompt</strong><span>${escHtml(judgeReprompt || 'No judge reprompt yet.')}</span></div>
+        </div>
+      ` : ''}
+    </button>
     <div class="main-goal-actions">
-      ${isActive ? `<button class="main-goal-action" type="button" onclick="mainGoalAction('pause')" title="Pause goal">Pause</button>` : ''}
-      ${canResume ? `<button class="main-goal-action" type="button" onclick="mainGoalAction('resume')" title="Resume goal">Resume</button>` : ''}
-      <button class="main-goal-action" type="button" onclick="mainGoalAction('status')" title="Refresh goal">Status</button>
-      <button class="main-goal-action" type="button" onclick="mainGoalAction('clear')" title="Clear goal">Clear</button>
+      ${isActive ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('pause')" title="Pause goal">Pause</button>` : ''}
+      ${canResume ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('resume')" title="Resume goal">Resume</button>` : ''}
+      <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('status')" title="Refresh goal">Status</button>
+      <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('clear')" title="Clear goal">Clear</button>
     </div>
   `;
+  syncMainGoalElapsedTimer();
 }
 
 async function mainGoalAction(action) {
@@ -10293,29 +10374,195 @@ function renderLiveTracePreview(entry) {
   </button>`;
 }
 
-function renderLiveTurnTrace(entries) {
-  const list = (Array.isArray(entries) ? entries : [])
-    .filter((entry) => entry && (String(entry.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim()));
+function normalizeLiveTraceProseText(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length >= 5) {
+    const shortLines = lines.filter((line) => line.split(/\s+/).filter(Boolean).length <= 2).length;
+    if (shortLines / lines.length >= 0.75) return raw.replace(/\s+/g, ' ').trim();
+  }
+  return raw;
+}
+
+function isDesktopPreparedTraceEntry(entry) {
+  const type = String(entry?.type || '').toLowerCase();
+  const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+  return type === 'tool' && /^Prepared\b/i.test(text);
+}
+
+function isDesktopStartupStatusText(text) {
+  return /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)$/i
+    .test(String(text || '').replace(/\s+/g, ' ').trim());
+}
+
+function visibleLiveTraceEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).filter((entry) =>
+    entry
+    && !isDesktopPreparedTraceEntry(entry)
+    && (String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim())
+  );
+}
+
+function renderLiveTraceEntry(entry) {
+  const type = String(entry.type || 'info').toLowerCase();
+  const text = String(entry.text || '').trim();
+  const previewHtml = renderLiveTracePreview(entry);
+  if (type === 'preamble' || type === 'think' || type === 'assistant') {
+    return `<div class="live-turn-prose live-turn-${escHtml(type)}">
+      <div class="live-turn-md">${renderMd(normalizeLiveTraceProseText(text))}</div>
+      ${previewHtml}
+    </div>`;
+  }
+  const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+  const body = text ? `<div class="live-turn-text">${escHtml(text)}</div>` : '';
+  return `<div class="live-turn-segment live-turn-${escHtml(type)}">
+    <span>${escHtml(label)}</span>
+    ${body}
+    ${previewHtml}
+  </div>`;
+}
+
+function renderLiveTraceList(entries) {
+  const list = visibleLiveTraceEntries(entries);
   if (!list.length) return '';
-  return `<div class="live-turn-trace">
-    ${list.map((entry) => {
-      const type = String(entry.type || 'info').toLowerCase();
-      const text = String(entry.text || '').trim();
-      const previewHtml = renderLiveTracePreview(entry);
-      if (type === 'preamble' || type === 'think' || type === 'assistant') {
-        return `<div class="live-turn-prose live-turn-${escHtml(type)}">
-          <div class="live-turn-md">${renderMd(text)}</div>
-          ${previewHtml}
-        </div>`;
-      }
-      const label = type === 'assistant' ? 'Prometheus' : type === 'preamble' ? 'Preamble' : type === 'think' ? 'Reasoning' : type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
-      const body = text ? `<div class="live-turn-text">${escHtml(text)}</div>` : '';
-      return `<div class="live-turn-segment live-turn-${escHtml(type)}">
-        <span>${escHtml(label)}</span>
-        ${body}
-        ${previewHtml}
-      </div>`;
-    }).join('')}
+  return `<div class="live-turn-trace">${list.map(renderLiveTraceEntry).join('')}</div>`;
+}
+
+function isLiveTraceThoughtEntry(entry) {
+  const type = String(entry?.type || 'info').toLowerCase();
+  return type === 'preamble' || type === 'think' || type === 'assistant';
+}
+
+function liveTraceGroupStableKey(group, index = 0) {
+  return `trace_group_${String(group?.kind || 'group')}_${index}`;
+}
+
+function liveTraceGroups(entries) {
+  const list = visibleLiveTraceEntries(entries);
+  const groups = [];
+  let activeToolGroup = null;
+  list.forEach((entry) => {
+    if (isLiveTraceThoughtEntry(entry)) {
+      activeToolGroup = null;
+      groups.push({ kind: 'thought', entries: [entry] });
+      return;
+    }
+    if (!activeToolGroup) {
+      activeToolGroup = { kind: 'tools', entries: [] };
+      groups.push(activeToolGroup);
+    }
+    activeToolGroup.entries.push(entry);
+  });
+  return groups.map((group, index) => ({ ...group, id: liveTraceGroupStableKey(group, index) }));
+}
+
+function liveTraceHasToolGroup(entries) {
+  return liveTraceGroups(entries).some((group) => group.kind === 'tools' && group.entries.length > 0);
+}
+
+function liveTraceToolLabel(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^\s*\d+\.\s+/, '')
+    .replace(/^Preparing\s+/i, '')
+    .replace(/^Prepared\s+/i, '')
+    .replace(/\s*(?:->|→).*/, '')
+    .replace(/:\s+(?!\{).*/, '')
+    .replace(/\s+(?:complete|failed)$/i, '')
+    .replace(/:\s*\{.*$/, '')
+    .trim();
+}
+
+function liveTraceToolSummary(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision'].includes(String(entry?.type || '').toLowerCase()));
+  const labels = [...new Set(toolish.map((entry) => liveTraceToolLabel(entry.text)).filter(Boolean))];
+  const errors = [...new Set(list
+    .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
+    .map((entry) => liveTraceToolLabel(entry.text))
+    .filter(Boolean))].length;
+  const logicalCount = Math.max(labels.length, errors || 0, toolish.length ? 1 : 0);
+  if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
+  if (labels.length === 1) {
+    const count = logicalCount;
+    return `${labels[0]}${count > 1 ? ` x${count}` : ''}`;
+  }
+  const count = logicalCount || list.length;
+  return `Ran ${count} tool${count === 1 ? '' : 's'}`;
+}
+
+function renderLiveTurnTrace(entries, { streaming = false } = {}) {
+  const groups = liveTraceGroups(entries);
+  if (!groups.length) return '';
+  const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
+  return `<div class="live-turn-timeline">${groups.map((group, index) => {
+    if (group.kind === 'thought') {
+      return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
+    }
+    const open = streaming && index === lastToolIndex;
+    const summary = liveTraceToolSummary(group.entries);
+    const eventCount = visibleLiveTraceEntries(group.entries).length;
+    return `<details class="live-turn-tool-group"${open ? ' open data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+      <summary class="live-turn-tool-summary">
+        <span class="live-turn-tool-icon" aria-hidden="true">›</span>
+        <strong>${escHtml(summary)}</strong>
+        <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
+      </summary>
+      <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
+    </details>`;
+  }).join('')}</div>`;
+}
+
+function desktopWorkflowTraceEntriesForMessage(message) {
+  const out = [];
+  const seen = new Set();
+  const finalText = String(message?.content || message?.body?.text || '').replace(/\s+/g, ' ').trim();
+  const add = (entry, fallbackType = 'info') => {
+    if (!entry || typeof entry !== 'object') return;
+    const normalizedEntry = normalizeProcessEntryForRender(entry) || entry;
+    let type = String(normalizedEntry.type || normalizedEntry.kind || fallbackType || 'info').toLowerCase();
+    const text = String(normalizedEntry.text || normalizedEntry.content || normalizedEntry.message || '').trim();
+    const preview = normalizedEntry.preview && typeof normalizedEntry.preview === 'object' ? normalizedEntry.preview : null;
+    const previewData = String(preview?.dataUrl || normalizedEntry.dataUrl || '').trim();
+    if (!text && !previewData) return;
+    if (text && isDesktopStartupStatusText(text)) return;
+    if (type === 'user' || type === 'final' || /^user\s*:/i.test(text)) return;
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    if (finalText && normalizedText === finalText && !previewData) return;
+    if (type === 'process' || type === 'info') {
+      if (/^thinking(?:\.\.\.)?$/i.test(normalizedText)) type = 'think';
+      else if (!previewData) return;
+    }
+    if (type === 'skill') type = 'tool';
+    const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      ...normalizedEntry,
+      type,
+      text,
+      ts: String(normalizedEntry.ts || normalizedEntry.time || normalizedEntry.timestamp || ''),
+    });
+  };
+  (Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : []).forEach((entry) => add(entry, 'info'));
+  processEntriesForMessage(message).forEach((entry) => add(entry, 'process'));
+  const bodyEntries = Array.isArray(message?.body?.processEntries) ? message.body.processEntries : [];
+  bodyEntries.forEach((entry) => add(entry, 'process'));
+  return out;
+}
+
+function traceDrawerIdForMessage(msg) {
+  return `trace_${processPanelIdForMessage(msg)}`;
+}
+
+function renderCompletedAssistantTraceDrawer(msg) {
+  const entries = desktopWorkflowTraceEntriesForMessage(msg);
+  if (!liveTraceHasToolGroup(entries)) return '';
+  const id = traceDrawerIdForMessage(msg);
+  const open = ensureOpenProcessPanelSet().has(id);
+  return `<div id="${escHtml(id)}" class="assistant-trace-drawer${open ? ' open' : ''}">
+    ${renderLiveTurnTrace(entries, { streaming: false })}
   </div>`;
 }
 
@@ -10450,6 +10697,25 @@ function applyEmptyChatStarterPrompt(index) {
   handleSkillTriggerInput(input);
 }
 
+function extractGoalContinuationDirective(content) {
+  const text = String(content || '').replace(/\r\n/g, '\n').trim();
+  if (!text) return '';
+  const match = text.match(/(?:^|\n)Judge next-step directive:\s*\n([\s\S]*?)(?:\n\nDenied actions to avoid:|\n\nAutonomous goal mode policy:|\n\nContinue from the current state\.|$)/i);
+  const directive = String(match?.[1] || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (directive && !/^\(No judge directive yet\./i.test(directive)) return directive;
+  return 'Infer the next concrete step from the active goal, chat context, and current workspace state.';
+}
+
+function renderGoalContinuationMessage(msg) {
+  const directive = extractGoalContinuationDirective(msg?.content);
+  return `<div class="msg-content">
+    <strong>Goal continuation</strong><br>
+    <span style="color:var(--muted);font-size:12px">Judge reprompt: ${escHtml(directive)}</span>
+  </div>`;
+}
+
 function renderVisibleChatHistoryHtml(history = [], options = {}) {
   const visibleHistory = collapseDuplicateAssistantMessageEntries((history || [])
     .map((msg, originalIndex) => ({ msg, originalIndex })))
@@ -10476,7 +10742,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     const userContentHtml = isEditingThisUserMessage
       ? renderUserEditComposer(msg, originalIndex)
       : (isGoalMsg
-        ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
+        ? renderGoalContinuationMessage(msg)
         : `${isWorkerHandoff ? '<div class="msg-role voice-handoff-role">Voice Agent to Worker</div>' : ''}${renderUserMessageContent(msg)}`);
     const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
     // While the turn is live, a pending question is docked in the streaming
@@ -10499,6 +10765,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
           ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
           <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${(msg.approvalRequest || msg.questionRequest) && !msg.content ? ' msg-body-approval-only' : ''}">
                 ${!isUser ? renderAssistantWorkTimer(msg) : ''}
+                ${!isUser ? renderCompletedAssistantTraceDrawer(msg) : ''}
                 ${!isUser && !((msg.approvalRequest || msg.questionRequest) && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
                 ${assistantContentHtml}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderRichArtifacts(msg) : ''}
@@ -10529,13 +10796,13 @@ function renderSessionThinkingHtml(sessionId) {
         ${progressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
       </div>`
     : '';
-  const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || []);
+  const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || [], { streaming: true });
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
   const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
   const pendingQuestionHtml = renderStreamingPrometheusQuestionHtml(sessionId);
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
-  const showLiveTrace = !answerStarted && !!liveTraceHtml;
+  const showLiveTrace = !!liveTraceHtml;
   const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml && !pendingQuestionHtml;
   const currentProcessOpen = !!st.currentTurnProcessOpen;
   const sess = getChatSessionById(sessionId);
@@ -11550,7 +11817,8 @@ function isRestartContextPacketMessage(msg) {
 
 function isGatewayRestartCheckpointMessage(msg) {
   if (!isAssistantLikeMessage(msg)) return false;
-  return /^\[Interrupted by gateway restart\]/i.test(String(msg?.content || '').trim());
+  const content = String(msg?.content || '').trim();
+  return /^\[(?:Interrupted by gateway restart|Hot restart checkpoint: planned by this chat)\]/i.test(content);
 }
 
 function isNoResponseReceivedAssistantMessage(msg) {
@@ -12298,6 +12566,22 @@ function togglePL(id) {
   else set.delete(id);
 }
 
+function toggleTraceDrawer(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const set = ensureOpenProcessPanelSet();
+  const shouldOpen = !el.classList.contains('open');
+  el.classList.toggle('open', shouldOpen);
+  if (shouldOpen) set.add(id);
+  else set.delete(id);
+  const btn = Array.from(document.querySelectorAll('.assistant-work-timer--expandable'))
+    .find((candidate) => candidate.getAttribute('aria-controls') === id);
+  if (btn) {
+    btn.classList.toggle('expanded', shouldOpen);
+    btn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  }
+}
+
 function isFailedTurnReply(text) {
   const t = String(text || '').trim().toLowerCase();
   if (!t) return true;
@@ -12866,19 +13150,19 @@ async function sendChat(queuedMessage = null, options = {}) {
     }
     scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
   };
-  const movePreToolAnswerTextIntoPreamble = () => {
-    if (sawToolActivityThisTurn) return;
+  const moveVisibleAnswerTextIntoWorkflowTrace = () => {
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
-    appendLiveTrace('preamble', text);
+    appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text);
     streamState.streamingAIText = '';
     streamState.finalResponseStarted = false;
     if (window.activeChatSessionId === thisSessionId) window.streamingAIText = '';
   };
+  const movePreToolAnswerTextIntoPreamble = moveVisibleAnswerTextIntoWorkflowTrace;
   const shouldRouteTokenToLiveTrace = () => {
     if (!window.useAgentMode || streamState.finalResponseStarted) return false;
     const mode = String(streamState.agentExecutionMode || '').trim();
-    return mode !== 'chat';
+    return mode !== 'chat' && !sawToolActivityThisTurn;
   };
   const sessionHistoryRef = thisSession ? (thisSession.history || (thisSession.history = [])) : window.chatHistory;
   if (thisSession && window.activeChatSessionId === thisSessionId) {
@@ -18027,10 +18311,60 @@ function finishVoiceAgentRealtimePendingResponse(reason = 'skill_context_ready')
   return sendVoiceAgentRealtimeResponseCreate(reason);
 }
 
+function normalizeVoiceAgentRealtimeContextKey(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sanitizeVoiceAgentRealtimeSkillContext(rawContext) {
+  const context = String(rawContext || '').trim();
+  if (!context) return '';
+  const body = context
+    .split(/\r?\n/)
+    .filter((line) => !/^Latest spoken request\s*:/i.test(String(line || '').trim()))
+    .join('\n')
+    .replace(/^##\s*Realtime Skill Trigger Update\s*/i, '')
+    .trim();
+  if (!body) return '';
+  return [
+    '## Realtime Skill Trigger Update',
+    'Metadata for the current audio turn only. The user did not send a second message. Do not mention duplicate input because of this update.',
+    body,
+  ].join('\n');
+}
+
+function pruneVoiceAgentRealtimeRecentList(list, maxAgeMs) {
+  const now = Date.now();
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (now - Number(list[i]?.at || 0) > maxAgeMs) list.splice(i, 1);
+  }
+  return list;
+}
+
+const voiceAgentRealtimeRecentSkillContextKeys = [];
+
+function shouldInjectVoiceAgentRealtimeSkillContext(sessionId, transcript) {
+  const textKey = normalizeVoiceAgentRealtimeContextKey(transcript);
+  if (!textKey) return false;
+  pruneVoiceAgentRealtimeRecentList(voiceAgentRealtimeRecentSkillContextKeys, 4500);
+  const key = `${sessionId || ''}:${textKey}`;
+  if (voiceAgentRealtimeRecentSkillContextKeys.some((entry) => entry.key === key)) {
+    if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] duplicate skill context ignored', { sessionId, textLen: String(transcript || '').length });
+    return false;
+  }
+  voiceAgentRealtimeRecentSkillContextKeys.push({ key, at: Date.now() });
+  while (voiceAgentRealtimeRecentSkillContextKeys.length > 24) voiceAgentRealtimeRecentSkillContextKeys.shift();
+  return true;
+}
+
 async function injectVoiceAgentRealtimeSkillContext(sessionId, transcript, options = {}) {
   const dc = voiceAgentRealtimeConnection?.dc;
   const text = String(transcript || '').trim();
   if (!dc || dc.readyState !== 'open' || !text) return false;
+  if (!shouldInjectVoiceAgentRealtimeSkillContext(sessionId, text)) return false;
   try {
     const response = await fetch('/api/voice-agent/realtime-skill-context', {
       method: 'POST',
@@ -18042,13 +18376,14 @@ async function injectVoiceAgentRealtimeSkillContext(sessionId, transcript, optio
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data?.success || !data?.matched || !data?.context) return false;
+    const context = sanitizeVoiceAgentRealtimeSkillContext(data?.context);
+    if (!response.ok || !data?.success || !data?.matched || !context) return false;
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
         type: 'message',
         role: 'system',
-        content: [{ type: 'input_text', text: data.context }],
+        content: [{ type: 'input_text', text: context }],
       },
     }));
     addSessionProcessEntry(sessionId, 'skill', `Realtime skill trigger matched: ${(data.skills || []).map(s => s.id).filter(Boolean).join(', ')}`, {
@@ -18203,6 +18538,7 @@ const voiceAgentRealtimeTurn = {
   lastAssistantTranscript: '',
   nudged: false,
   pendingWorkerDispatch: null,
+  recentTranscriptEvents: [],
 };
 const REALTIME_HANDOFF_RECOVERY_ENABLED = false;
 const REALTIME_HANDOFF_CLAIM_RE = /\b(hand(?:ing|ed)?\s*(?:it|that|this)?\s*off|to the worker|kick(?:ing)?\s*(?:it|that)?\s*off|i('?ve|\s*have)?\s*started|getting started|i'?ll\s*(?:start|get|run|handle|take care)|on it|working on (?:it|that)|in progress|started (?:it|that|the|on)|spun? up|firing up)\b/i;
@@ -18256,6 +18592,25 @@ function overlayPendingVoiceAgentRealtimeWorkerPacket(packet, sessionId, reason 
     return packet;
   }
   return makePendingVoiceAgentRealtimeWorkerPacket(sessionId, reason) || packet;
+}
+
+function shouldIgnoreVoiceAgentRealtimeTranscriptEvent(sessionId, event, transcript) {
+  const textKey = normalizeVoiceAgentRealtimeContextKey(transcript);
+  if (!textKey) return true;
+  const itemId = String(event?.item_id || event?.item?.id || '').trim();
+  const list = pruneVoiceAgentRealtimeRecentList(voiceAgentRealtimeTurn.recentTranscriptEvents, 4500);
+  const itemKey = itemId ? `${sessionId || ''}:${itemId}` : '';
+  const duplicate = list.some((entry) => (
+    (itemKey && entry.itemKey === itemKey)
+    || (entry.textKey === textKey && Date.now() - Number(entry.at || 0) < 4500)
+  ));
+  if (duplicate) {
+    if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] duplicate transcript event ignored', { sessionId, itemId, textLen: String(transcript || '').length });
+    return true;
+  }
+  list.push({ itemKey, textKey, at: Date.now() });
+  while (list.length > 24) list.shift();
+  return false;
 }
 
 function markVoiceAgentRealtimeWorkerDispatch(sessionId, task) {
@@ -18737,6 +19092,7 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
   if (type === 'conversation.item.input_audio_transcription.completed') {
     const transcript = String(event.transcript || '').trim();
     if (transcript) {
+      if (shouldIgnoreVoiceAgentRealtimeTranscriptEvent(sessionId, event, transcript)) return;
       if (handleRealtimeAgentQuietTranscript(transcript)) return;
       voiceAgentRealtimeTurn.lastUserTranscript = transcript;
       voiceAgentRealtimeTurn.nudged = false;
@@ -37303,11 +37659,13 @@ window.applyEmptyChatStarterPrompt = applyEmptyChatStarterPrompt;
 window.toggleVoiceSettingsPopover = toggleVoiceSettingsPopover;
 window.closeVoiceSettingsPopover = closeVoiceSettingsPopover;
 window.renderMainGoalStrip = renderMainGoalStrip;
+window.toggleMainGoalDetails = toggleMainGoalDetails;
 window.mainGoalAction = mainGoalAction;
 window.pushProgressLine = pushProgressLine;
 window.renderProcessPill = renderProcessPill;
 window.formatProcessLines = formatProcessLines;
 window.toggleCurrentProcess = toggleCurrentProcess;
+window.toggleTraceDrawer = toggleTraceDrawer;
 window.isNearBottom = isNearBottom;
 window.setupProcessAndRightScrollTracking = setupProcessAndRightScrollTracking;
 window.maybeAutoScrollRightColumn = maybeAutoScrollRightColumn;
@@ -38128,18 +38486,18 @@ function handleMainChatStreamEvent(msg = {}) {
     renderProgressPanel();
     renderChatMessages();
   };
-  const movePreToolAnswerTextIntoPreamble = () => {
-    if (streamState.toolActivityStarted) return;
+  const moveVisibleAnswerTextIntoWorkflowTrace = () => {
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
-    appendLiveTraceToStreamState(streamState, 'preamble', text);
+    appendLiveTraceToStreamState(streamState, streamState.toolActivityStarted ? 'think' : 'preamble', text);
     streamState.streamingAIText = '';
     streamState.finalResponseStarted = false;
   };
+  const movePreToolAnswerTextIntoPreamble = moveVisibleAnswerTextIntoWorkflowTrace;
   const shouldRouteTokenToLiveTrace = () => {
     if (streamState.finalResponseStarted) return false;
     const mode = String(streamState.agentExecutionMode || '').trim();
-    return mode !== 'chat';
+    return mode !== 'chat' && !streamState.toolActivityStarted;
   };
 
   if (evt.type === 'session_title') {

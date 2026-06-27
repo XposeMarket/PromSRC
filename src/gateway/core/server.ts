@@ -43,6 +43,16 @@ import { handleCreativeCommandResult } from '../creative/command-bus';
 import { isProviderStatusChecking, readProviderStatusCache } from '../provider-status';
 import { readCachedGpuInfo } from '../gpu-detector';
 
+function readModelRuntimeStatus(): any | null {
+  try {
+    const filePath = path.join(getConfig().getConfigDir(), 'model-runtime-status.json');
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
 export interface ServerBundle {
   server: http.Server | https.Server;
   wss: WebSocketServer;
@@ -238,6 +248,8 @@ function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerRespon
   const providerCfg = rawCfg.llm?.providers?.[provider] || {};
   const currentModel = providerCfg.model || rawCfg.models?.primary || 'unknown';
   const cachedProviderStatus = readProviderStatusCache();
+  const modelRuntime = readModelRuntimeStatus();
+  const activeModelRuntime = modelRuntime?.provider === provider ? modelRuntime : null;
 
   if (pathname === '/api/status') {
     const connected = isCloudProvider ? true : !!cachedProviderStatus?.connected;
@@ -249,6 +261,12 @@ function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerRespon
       providerChecking: !isCloudProvider && !cachedProviderStatus && isProviderStatusChecking(),
       provider,
       currentModel,
+      configuredModel: activeModelRuntime?.configuredModel || currentModel,
+      requestedModel: activeModelRuntime?.requestedModel || currentModel,
+      actualModel: activeModelRuntime?.actualModel || currentModel,
+      modelFallback: activeModelRuntime?.fallback === true,
+      fallbackFrom: activeModelRuntime?.fallbackFrom,
+      fallbackReason: activeModelRuntime?.fallbackReason,
       workspace: rawCfg.workspace?.path || '',
       search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
       fastPath: true,
@@ -273,6 +291,12 @@ function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerRespon
     gateway_process: { rss_mb: process.memoryUsage().rss / (1024 * 1024) },
     active_provider: provider,
     active_model: currentModel,
+    configured_model: activeModelRuntime?.configuredModel || currentModel,
+    requested_model: activeModelRuntime?.requestedModel || currentModel,
+    actual_model: activeModelRuntime?.actualModel || currentModel,
+    model_fallback: activeModelRuntime?.fallback === true,
+    fallback_from: activeModelRuntime?.fallbackFrom,
+    fallback_reason: activeModelRuntime?.fallbackReason,
     timestamp: new Date().toISOString(),
     fastPath: true,
   });

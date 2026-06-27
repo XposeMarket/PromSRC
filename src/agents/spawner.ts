@@ -33,8 +33,8 @@ export interface SpawnOptions {
    */
   workspacePath?: string;
   /**
-   * Team ID for this dispatch. When set, the agent's identity (system_prompt.md,
-   * AGENTS.md, etc.) is loaded from a per-team isolated directory. This makes
+   * Team ID for this dispatch. When set, the agent's identity (system_prompt.md)
+   * is loaded from a per-team isolated directory. This makes
    * the same agent act as completely
    * separate entities in different teams — no context bleed between teams.
    */
@@ -285,9 +285,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   // to a specific project directory while identity/artifacts stay separate.
   const workspacePath = options.workspacePath || agentExecutionWorkspace;
   const maxSteps = options.maxSteps ?? agent.maxSteps ?? 8;
-  // Subagents use the same full runtime context as main chat, with their
-  // identity layered in from system_prompt.md / HEARTBEAT.md.
-  const promptMode = 'full';
+  // Subagents use the subagent soul plus their own system_prompt.md identity.
+  const promptMode = 'minimal';
   // Sub-agents run with full tool access.
   const agentToolProfile = 'full';
   const toolRegistry = getToolRegistry();
@@ -358,7 +357,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
         role: 'executor',
         promptMode,
         includeAgentSystemPrompt: true,
-        subagentSystemPromptOnly: false,
+        subagentSystemPromptOnly: true,
         workspacePath,
         skillSlugs: agentSkills,
         // When dispatched to a team, load identity from the per-team isolated dir

@@ -52,9 +52,11 @@ Current default LLM config in source:
 
 - active provider default: `ollama`
 - default Ollama model: `qwen3:4b`
-- default OpenAI Codex model: `gpt-5.4`
-- default OpenAI model: `gpt-4o`
-- default Anthropic model: `claude-sonnet-4-6`
+- default OpenAI Codex model: `gpt-5.5`
+- default OpenAI API model: `gpt-5.5`
+- OpenAI Codex and OpenAI API static model lists expose the official GPT-5.6 preview model IDs published by OpenAI: `gpt-5.6-sol` (flagship), `gpt-5.6-terra` (balanced), and `gpt-5.6-luna` (fast/low-cost). Do not expose invented aliases such as `gpt-5.6`, `gpt-5.6-codex`, `gpt-5.6-codex-mini`, or plain `sol`; OpenAI's preview help article lists only the three fully-qualified IDs for API and Codex. GPT-5.6 preview access is separately provisioned for approved API organizations and Codex workspaces, so `gpt-5.5` remains the safe default/fallback until the active account is enabled.
+- Official GPT-5.6 preview pricing per 1M tokens: Sol $5 input / $30 output, Terra $2.50 input / $15 output, Luna $1 input / $6 output. GPT-5.6 cache writes are billed at 1.25x uncached input and cache reads keep the 90% cached-input discount.
+
 - native Anthropic exposed models start with `claude-opus-4-8`, then preserve the current Opus/Sonnet/Haiku models
 - legacy `models.primary`: `qwen3:4b`
 - legacy role defaults (`manager`, `executor`, `verifier`): all `qwen3:4b`
@@ -93,7 +95,7 @@ Other current model facts:
 - `switch_model` is turn-scoped, not a global config save
 - its exposed tiers are `low` and `medium`
 - OpenAI, OpenAI Codex, and Perplexity provider config support `reasoning_effort`
-- validated reasoning efforts include `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`
+- validated reasoning efforts include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; GPT-5.6 introduces `max` reasoning effort, while older providers/models may normalize or ignore unsupported values.
 - Anthropic provider config supports `extended_thinking` and `thinking_budget`
 
 Provider-aware context budgeting lives in `src/gateway/context/model-context.ts`.

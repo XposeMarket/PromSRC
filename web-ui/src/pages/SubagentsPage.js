@@ -30,6 +30,9 @@ let subagentChatPendingFilesByAgent = {}; // agentId -> staged files before send
 let subagentChatFileStagingPromisesByAgent = {}; // agentId -> Promise[]
 let subagentChatApprovalsByAgent = {}; // agentId -> inline approval cards shown in direct chat
 let subagentDesktopVoiceTargetAgentId = '';
+let agentPackImportPath = 'workspace/oss-agents/marketplace-plan/examples/technical-docs-agent';
+let agentPackImportPreview = null;
+let agentPackImportBusy = false;
 
 const SUBAGENT_CHAT_TEXT_EXTENSIONS = new Set([
   'txt','md','csv','json','js','ts','jsx','tsx','html','htm','css','scss','less',
@@ -681,6 +684,37 @@ async function refreshSubagents() {
   }
 }
 
+function renderAgentPackImportPanel() {
+  const preview = agentPackImportPreview?.preview || agentPackImportPreview;
+  const scanner = preview?.scanner;
+  const agent = preview?.agent;
+  const disabled = agentPackImportBusy ? 'disabled' : '';
+  const statusColor = scanner?.status === 'failed' ? '#991b1b' : scanner?.status === 'warning' ? '#92400e' : '#166534';
+  const statusBg = scanner?.status === 'failed' ? '#fee2e2' : scanner?.status === 'warning' ? '#fef3c7' : '#dcfce7';
+  return `
+    <div style="width:100%;border:1px solid var(--line);background:linear-gradient(135deg,var(--panel),var(--panel-2));border-radius:16px;padding:14px;margin-bottom:14px;box-sizing:border-box">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="min-width:220px;flex:1">
+          <div style="font-size:12px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)">Agent Profile Pack Import</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:4px;line-height:1.45">Preview and install local marketplace profile packs as real Prometheus subagents.</div>
+        </div>
+        ${preview ? `<span style="font-size:10px;font-weight:800;border:1px solid ${statusColor};background:${statusBg};color:${statusColor};border-radius:999px;padding:4px 8px">${escHtml(scanner?.status || 'previewed')}</span>` : ''}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap">
+        <input id="agent-pack-import-path" value="${escHtml(agentPackImportPath)}" placeholder="workspace/path/to/agent-profile-pack" style="flex:1;min-width:260px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:12px;background:var(--panel);color:var(--text)" />
+        <button type="button" ${disabled} onclick="previewAgentProfilePackImport()" style="border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:9px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">Preview</button>
+        <button type="button" ${disabled} onclick="installAgentProfilePackImport()" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:9px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">Install</button>
+      </div>
+      ${preview ? `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;font-size:11px;color:var(--muted)">
+        <div><strong style="color:var(--text)">${escHtml(agent?.name || preview?.manifest?.name || 'Profile Pack')}</strong><br>${escHtml(preview?.manifest?.id || '')}</div>
+        <div><strong style="color:var(--text)">Agent ID</strong><br><code>${escHtml(preview?.installPlan?.agentId || agent?.id || '')}</code></div>
+        <div><strong style="color:var(--text)">Skills</strong><br>${escHtml((preview?.skills || []).map(s => s.slug).join(', ') || 'none')}</div>
+        <div><strong style="color:var(--text)">Issues</strong><br>${escHtml(String(scanner?.issues?.length || 0))} finding${(scanner?.issues?.length || 0) === 1 ? '' : 's'}</div>
+      </div>` : ''}
+      ${scanner?.issues?.length ? `<details style="margin-top:10px;font-size:11px;color:var(--muted)"><summary style="cursor:pointer;font-weight:800;color:var(--text)">Scanner findings</summary><ul style="margin:8px 0 0 18px;padding:0">${scanner.issues.map(issue => `<li><strong>${escHtml(issue.severity)}</strong> ${escHtml(issue.code)}: ${escHtml(issue.message)}${issue.file ? ` <code>${escHtml(issue.file)}</code>` : ''}</li>`).join('')}</ul></details>` : ''}
+    </div>`;
+}
+
 function renderSubagentsCanvas() {
   const canvas = document.getElementById('subagents-canvas');
   if (!canvas) return;
@@ -688,22 +722,25 @@ function renderSubagentsCanvas() {
   const countEl = document.getElementById('subagents-count');
   if (countEl) countEl.textContent = `${subagentsData.length} agent${subagentsData.length !== 1 ? 's' : ''}`;
 
+  const importPanel = renderAgentPackImportPanel();
+
   if (subagentsData.length === 0) {
-    canvas.innerHTML = `
+    canvas.innerHTML = `${importPanel}
       <div style="text-align:center;color:var(--muted);padding:80px 24px">
         <div style="font-size:52px;margin-bottom:16px">🤖</div>
         <div style="font-size:18px;font-weight:800;margin-bottom:8px">No subagents configured</div>
-        <div style="font-size:13px;line-height:1.6;max-width:380px;margin:0 auto">Create agents in <strong>Settings → Agents</strong> to add subagents here.</div>
+        <div style="font-size:13px;line-height:1.6;max-width:380px;margin:0 auto">Create agents in <strong>Settings → Agents</strong> or import an Agent Profile Pack.</div>
       </div>`;
     return;
   }
 
-  canvas.innerHTML = subagentsData.map(agent => {
+  canvas.innerHTML = importPanel + subagentsData.map(agent => {
     const isActive = agent.id === activeSubagentId;
     const lastRun = agent.lastRun?.finishedAt ? timeAgo(agent.lastRun.finishedAt) : null;
     const modelLabel = agent.effectiveModel ? agent.effectiveModel.split('/').pop() : null;
     const teamBadge = agent.isTeamMember ? `<div style="position:absolute;top:-4px;left:-4px;font-size:9px;background:#eaf2ff;color:#0d4faf;border:1px solid #bcd4f8;border-radius:999px;padding:1px 5px;font-weight:700;white-space:nowrap">team</div>` : '';
     const schedBadge = agent.cronSchedule ? `<div style="position:absolute;top:-4px;right:-6px;font-size:10px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:999px;padding:1px 5px;font-weight:700">⏰</div>` : '';
+    const marketplaceBadge = agent.marketplaceProfile?.packId ? `<div style="position:absolute;bottom:-4px;right:-6px;font-size:10px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:999px;padding:1px 5px;font-weight:800">pack</div>` : '';
     return `
       <div class="subagent-card" data-agent-id="${agent.id}"
            onclick="openSubagentDetail('${escHtml(agent.id)}')"
@@ -712,6 +749,7 @@ function renderSubagentsCanvas() {
           ${drawAgentSVG(agent, isActive, 0.9)}
           ${teamBadge}
           ${schedBadge}
+          ${marketplaceBadge}
         </div>
         <div style="text-align:center;max-width:90px">
           <div style="font-size:11px;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(agent.name || agent.id)}</div>
@@ -839,6 +877,215 @@ function addSubagentProcessEntry(type, content, extra = undefined, state = subag
   if (!state) return;
   if (!Array.isArray(state.processEntries)) state.processEntries = [];
   state.processEntries.push(newSubagentProcessEntry(type, content, extra));
+  appendSubagentLiveTrace(state, type, content);
+}
+
+function appendSubagentLiveTrace(state, type, text, { append = false } = {}) {
+  if (!state) return;
+  const content = String(text || '');
+  if (!content) return;
+  const normalizedType = String(type || 'info').toLowerCase();
+  if (normalizedType === 'final' || normalizedType === 'user') return;
+  if (!Array.isArray(state.liveTraceEntries)) state.liveTraceEntries = [];
+  const last = state.liveTraceEntries[state.liveTraceEntries.length - 1];
+  if (append && last && String(last.type || '').toLowerCase() === normalizedType) {
+    last.text = `${last.text || ''}${content}`;
+    return;
+  }
+  const trimmed = content.trim();
+  if (!trimmed) return;
+  if (last && String(last.type || '').toLowerCase() === normalizedType && String(last.text || '').trim() === trimmed) return;
+  state.liveTraceEntries.push({
+    type: normalizedType,
+    text: trimmed,
+    ts: new Date().toLocaleTimeString(),
+  });
+}
+
+function moveSubagentVisibleAnswerIntoWorkflowTrace(state) {
+  if (!state) return;
+  const text = String(state.content || '').trim();
+  if (!text) return;
+  appendSubagentLiveTrace(state, state.toolActivityStarted ? 'think' : 'preamble', text);
+  state.content = '';
+  state.finalResponseStarted = false;
+}
+
+function normalizeSubagentTraceProseText(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length >= 5) {
+    const shortLines = lines.filter((line) => line.split(/\s+/).filter(Boolean).length <= 2).length;
+    if (shortLines / lines.length >= 0.75) return raw.replace(/\s+/g, ' ').trim();
+  }
+  return raw;
+}
+
+function isSubagentPreparedTraceEntry(entry) {
+  const type = String(entry?.type || '').toLowerCase();
+  const text = String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim();
+  return type === 'tool' && /^Prepared\b/i.test(text);
+}
+
+function isSubagentStartupTraceText(text) {
+  return /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context|connecting\.\.\.)$/i
+    .test(String(text || '').replace(/\s+/g, ' ').trim());
+}
+
+function normalizeSubagentTraceEntry(entry, finalText = '') {
+  if (!entry || typeof entry !== 'object') return null;
+  let type = String(entry.type || entry.kind || 'info').toLowerCase();
+  const text = String(entry.text || entry.content || entry.message || '').trim();
+  const normalizedText = text.replace(/\s+/g, ' ').trim();
+  if (!text || isSubagentStartupTraceText(text)) return null;
+  if (type === 'user' || type === 'final' || /^user\s*:/i.test(text)) return null;
+  if (finalText && normalizedText === finalText) return null;
+  if (type === 'skill') type = 'tool';
+  if (type === 'process') type = /^thinking(?:\.\.\.)?$/i.test(normalizedText) ? 'think' : 'info';
+  return {
+    ...entry,
+    type,
+    text,
+  };
+}
+
+function subagentWorkflowTraceEntriesForMessage(message) {
+  const finalText = String(message?.content || '').replace(/\s+/g, ' ').trim();
+  const out = [];
+  const seen = new Set();
+  const add = (entry) => {
+    const normalized = normalizeSubagentTraceEntry(entry, finalText);
+    if (!normalized || isSubagentPreparedTraceEntry(normalized)) return;
+    const key = `${normalized.type}|${String(normalized.text || '').replace(/\s+/g, ' ').trim()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(normalized);
+  };
+  (Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : []).forEach(add);
+  (Array.isArray(message?.metadata?.liveTraceEntries) ? message.metadata.liveTraceEntries : []).forEach(add);
+  (Array.isArray(message?.processEntries) ? message.processEntries : []).forEach(add);
+  (Array.isArray(message?.metadata?.processEntries) ? message.metadata.processEntries : []).forEach(add);
+  return out;
+}
+
+function visibleSubagentTraceEntries(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => normalizeSubagentTraceEntry(entry))
+    .filter((entry) => entry && !isSubagentPreparedTraceEntry(entry) && String(entry.text || '').trim());
+}
+
+function renderSubagentTraceEntry(entry) {
+  const type = String(entry?.type || 'info').toLowerCase();
+  const text = String(entry?.text || entry?.content || '').trim();
+  if (type === 'preamble' || type === 'think' || type === 'assistant') {
+    return `<div class="live-turn-prose live-turn-${escHtml(type)}"><div class="live-turn-md">${typeof marked !== 'undefined' ? marked.parse(normalizeSubagentTraceProseText(text)) : escHtml(normalizeSubagentTraceProseText(text))}</div></div>`;
+  }
+  const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+  return `<div class="live-turn-segment live-turn-${escHtml(type)}"><span>${escHtml(label)}</span><div class="live-turn-text">${escHtml(text)}</div></div>`;
+}
+
+function renderSubagentTraceList(entries) {
+  const list = visibleSubagentTraceEntries(entries);
+  if (!list.length) return '';
+  return `<div class="live-turn-trace">${list.map(renderSubagentTraceEntry).join('')}</div>`;
+}
+
+function subagentTraceGroups(entries) {
+  const list = visibleSubagentTraceEntries(entries);
+  const groups = [];
+  let activeToolGroup = null;
+  list.forEach((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    if (type === 'preamble' || type === 'think' || type === 'assistant') {
+      activeToolGroup = null;
+      groups.push({ kind: 'thought', entries: [entry] });
+      return;
+    }
+    if (!activeToolGroup) {
+      activeToolGroup = { kind: 'tools', entries: [] };
+      groups.push(activeToolGroup);
+    }
+    activeToolGroup.entries.push(entry);
+  });
+  return groups;
+}
+
+function subagentTraceHasToolGroup(entries) {
+  return subagentTraceGroups(entries).some((group) => group.kind === 'tools' && group.entries.length > 0);
+}
+
+function subagentTraceToolLabel(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^\s*Step\s+\d+:\s*/i, '')
+    .replace(/^Running\s+/i, '')
+    .replace(/^Preparing\s+/i, '')
+    .replace(/^Prepared\s+/i, '')
+    .replace(/\s*(?:->|=>|→).*/, '')
+    .replace(/:\s+(?!\{).*/, '')
+    .replace(/\s+(?:complete|failed)$/i, '')
+    .replace(/\s+\{.*$/, '')
+    .trim();
+}
+
+function subagentTraceToolSummary(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision', 'info'].includes(String(entry?.type || '').toLowerCase()));
+  const labels = [...new Set(toolish.map((entry) => subagentTraceToolLabel(entry.text)).filter(Boolean))];
+  const errors = [...new Set(list
+    .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
+    .map((entry) => subagentTraceToolLabel(entry.text))
+    .filter(Boolean))].length;
+  const logicalCount = Math.max(labels.length, errors || 0, toolish.length ? 1 : 0);
+  if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
+  if (labels.length === 1) return `${labels[0]}${logicalCount > 1 ? ` x${logicalCount}` : ''}`;
+  const count = logicalCount || list.length;
+  return `Ran ${count} tool${count === 1 ? '' : 's'}`;
+}
+
+function renderSubagentGroupedTrace(entries, { streaming = false } = {}) {
+  const groups = subagentTraceGroups(entries);
+  if (!groups.length) return '';
+  const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
+  return `<div class="live-turn-timeline">${groups.map((group, index) => {
+    if (group.kind === 'thought') {
+      return `<div class="live-turn-thought">${group.entries.map(renderSubagentTraceEntry).join('')}</div>`;
+    }
+    const open = streaming && index === lastToolIndex;
+    const summary = subagentTraceToolSummary(group.entries);
+    const eventCount = visibleSubagentTraceEntries(group.entries).length;
+    return `<details class="live-turn-tool-group"${open ? ' open data-live-trace-current="1"' : ''}>
+      <summary class="live-turn-tool-summary">
+        <span class="live-turn-tool-icon" aria-hidden="true">›</span>
+        <strong>${escHtml(summary)}</strong>
+        <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
+      </summary>
+      <div class="live-turn-tool-body">${renderSubagentTraceList(group.entries)}</div>
+    </details>`;
+  }).join('')}</div>`;
+}
+
+function subagentTraceDrawerId(message) {
+  return `sa_trace_${String(message?.id || message?.ts || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
+
+function renderSubagentWorkTimer(message, durationSec) {
+  if (!durationSec) return '';
+  const entries = subagentWorkflowTraceEntriesForMessage(message);
+  const label = `Worked for ${formatSubagentElapsedSeconds(durationSec)}`;
+  if (!subagentTraceHasToolGroup(entries)) return `<div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:6px">${escHtml(label)}</div>`;
+  const id = subagentTraceDrawerId(message);
+  return `<button type="button" class="assistant-work-timer assistant-work-timer--expandable" aria-expanded="false" aria-controls="${escHtml(id)}" onclick="toggleSubagentTraceDrawer('${escHtml(id)}')">
+    <span>${escHtml(label)}</span>
+    <svg class="assistant-work-timer-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>`;
+}
+
+function renderSubagentTraceDrawer(message) {
+  const entries = subagentWorkflowTraceEntriesForMessage(message);
+  if (!subagentTraceHasToolGroup(entries)) return '';
+  return `<div id="${escHtml(subagentTraceDrawerId(message))}" class="assistant-trace-drawer">${renderSubagentGroupedTrace(entries, { streaming: false })}</div>`;
 }
 
 
@@ -893,6 +1140,7 @@ function mergeStreamingStateIntoMessage(message) {
   const metadata = {
     ...(message.metadata || {}),
     processEntries: Array.isArray(streamState.processEntries) ? [...streamState.processEntries] : [],
+    liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? [...streamState.liveTraceEntries] : [],
     thinking: String(streamState.thinking || '').trim(),
   };
   return { ...message, agentId: messageAgentId, metadata };
@@ -901,6 +1149,7 @@ function mergeStreamingStateIntoMessage(message) {
 function hasSubagentProcessMetadata(message) {
   const metadata = message?.metadata || {};
   return (Array.isArray(metadata.processEntries) && metadata.processEntries.length > 0)
+    || (Array.isArray(metadata.liveTraceEntries) && metadata.liveTraceEntries.length > 0)
     || String(metadata.thinking || '').trim();
 }
 
@@ -930,6 +1179,7 @@ function mergeSubagentChatMessageProcessMetadata(preferred, fallback) {
     metadata: {
       ...(preferred.metadata || {}),
       processEntries: Array.isArray(fallback.metadata?.processEntries) ? [...fallback.metadata.processEntries] : [],
+      liveTraceEntries: Array.isArray(fallback.metadata?.liveTraceEntries) ? [...fallback.metadata.liveTraceEntries] : [],
       thinking: String(fallback.metadata?.thinking || '').trim(),
     },
   };
@@ -1024,6 +1274,7 @@ function renderSubagentStreamingBubble(agent) {
   if (!streamState) return '';
   const color = agentColor(agent.id);
   const emoji = agentEmoji(agent);
+  const liveTraceHtml = renderSubagentGroupedTrace(streamState.liveTraceEntries || streamState.processEntries || [], { streaming: true });
   const progressHtml = Array.isArray(streamState.progressLines) && streamState.progressLines.length
     ? `<div id="subagent-streaming-progress-lines" style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
         ${streamState.progressLines.map((line) => `<div>&bull; ${escHtml(line)}</div>`).join('')}
@@ -1037,11 +1288,11 @@ function renderSubagentStreamingBubble(agent) {
       <div class="msg-avatar" style="background:${color};border-color:${color};font-size:15px">${emoji}</div>
       <div class="msg-body">
         <div class="msg-role">${escHtml(agent.name || agent.id)}</div>
-        ${progressHtml}
         ${workLine}
+        ${liveTraceHtml || progressHtml}
         ${content
           ? `<div id="subagent-streaming-text-content" class="msg-content" style="white-space:pre-wrap;word-break:break-word">${escHtml(content)}</div>`
-          : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`}
+          : (liveTraceHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)}
         <div id="subagent-streaming-process-wrapper">${renderSubagentProcessPill(streamState.processEntries || [], 'sa_stream_proc')}</div>
       </div>
     </div>
@@ -1301,6 +1552,9 @@ function renderSubagentOverviewTab(agent) {
     ['Schedule', nextRun],
     ['Last Run', lastRunEntry ? `<span style="font-size:12px">${timeAgo(lastRunEntry.finishedAt)} · ${lastRunEntry.success?'✅':'❌'} · ${lastRunEntry.stepCount||0} steps</span>` : '<span style="color:var(--muted)">Never</span>'],
   ];
+  if (agent.marketplaceProfile?.packId) {
+    infoRows.splice(1, 0, ['Profile Pack', `<div style="display:flex;flex-direction:column;gap:2px"><strong>${escHtml(agent.marketplaceProfile.packId)}</strong><span style="color:var(--muted);font-size:10px">v${escHtml(agent.marketplaceProfile.packVersion || 'unknown')} · ${escHtml(agent.marketplaceProfile.publisher || 'unknown publisher')} · ${escHtml(agent.marketplaceProfile.scannerStatus || 'local')}</span></div>`]);
+  }
 
   const attachedSkillIds = Array.isArray(agent.skillIds) ? agent.skillIds : [];
   const attachedSkills = attachedSkillIds.map(id => subagentSkillsCache.find(s => s.id === id) || { id, name: id, description: 'Missing from current skill registry' });
@@ -1349,6 +1603,7 @@ function renderSubagentOverviewTab(agent) {
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
             ${agent.cronSchedule ? `<span style="font-size:10px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:999px;padding:2px 8px;font-weight:700">⏰ Scheduled</span>` : ''}
             <span style="font-size:10px;background:#eaf2ff;color:#0d4faf;border-radius:999px;padding:2px 8px;border:1px solid #bcd4f8;font-weight:700">Standalone</span>
+            ${agent.marketplaceProfile?.packId ? `<span style="font-size:10px;background:#fff7ed;color:#9a3412;border-radius:999px;padding:2px 8px;border:1px solid #fed7aa;font-weight:800">Marketplace Pack</span>` : ''}
           </div>
         </div>
       </div>
@@ -1380,6 +1635,7 @@ function renderSubagentOverviewTab(agent) {
         <button onclick="spawnSubagentTask('${escHtml(agent.id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer">▶ Run Task</button>
         <button onclick="switchSubagentTab('chat','${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer">💬 Chat</button>
         <button onclick="refreshSubagentDetail('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">↻</button>
+        ${agent.marketplaceProfile?.packId ? `<button onclick="uninstallAgentProfilePack('${escHtml(agent.id)}')" style="border:1px solid #fecaca;background:#fff1f2;color:#991b1b;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer">Uninstall Pack</button>` : ''}
       </div>
 
       <!-- Context References -->
@@ -1556,7 +1812,8 @@ function renderSubagentChatTab(agent) {
     const contentHtml = isUser
       ? `<div class="msg-content">${!isDirectUserMessage ? `<div style="font-size:11px;font-weight:800;margin-bottom:6px;opacity:0.78">${label}${source ? ` · ${source}` : ''}</div>` : ''}${renderSubagentAttachmentPreviews(attachments, agent.id, m.id)}${visibleContent ? escHtml(visibleContent) : ''}</div>`
       : `<div class="msg-content markdown-body">${typeof marked !== 'undefined' ? marked.parse(m.content) : escHtml(m.content)}</div>`;
-    const workHtml = !isUser && durationSec ? `<div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:6px">Worked for ${formatSubagentElapsedSeconds(durationSec)}</div>` : '';
+    const workHtml = !isUser ? renderSubagentWorkTimer(m, durationSec) : '';
+    const traceDrawerHtml = !isUser ? renderSubagentTraceDrawer(m) : '';
     const metaHtml = stepCount ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${stepCount} steps${durationSec ? ` · ${formatSubagentElapsedSeconds(durationSec)}` : ''}</div>` : '';
     return `
       <div class="msg ${isUser ? 'user' : 'ai'}">
@@ -1564,6 +1821,7 @@ function renderSubagentChatTab(agent) {
         <div class="msg-body">
           ${!isUser ? `<div class="msg-role">${label} · <span style="font-weight:400;opacity:0.75">${timeAgo(m.ts)}${source ? ` · ${source}` : ''}</span></div>` : ''}
           ${workHtml}
+          ${traceDrawerHtml}
           ${contentHtml}
           ${processHtml}
           ${metaHtml}
@@ -1571,8 +1829,8 @@ function renderSubagentChatTab(agent) {
       </div>`;
   }).join('');
   return `
-    <div id="subagent-chat-tab-shell" class="panel-chat-shell" style="position:relative;display:flex;flex-direction:column;height:100%;gap:0">
-      <div id="subagent-chat-messages" style="flex:1;display:flex;flex-direction:column;align-items:center;width:100%;gap:18px;overflow-y:auto;padding:16px 0 8px">
+    <div id="subagent-chat-tab-shell" class="panel-chat-shell subagent-panel-chat-shell" style="position:relative;display:flex;flex-direction:column;height:100%;gap:0">
+      <div id="subagent-chat-messages" class="subagent-panel-chat-messages" style="flex:1;display:flex;flex-direction:column;align-items:center;width:100%;gap:18px;overflow-y:auto;padding:16px 0 8px">
         ${subagentChatHistory.length === 0 && !approvalsHtml ? `
           <div style="text-align:center;color:var(--muted);padding:32px 16px;font-size:13px">
             <div style="font-size:32px;margin-bottom:10px">${emoji}</div>
@@ -1583,7 +1841,7 @@ function renderSubagentChatTab(agent) {
         ${liveStream ? renderSubagentStreamingBubble(agent) : ''}
         ${approvalsHtml}
       </div>
-      <div class="chat-input-area panel-chat-composer" style="flex-shrink:0;border-top:1px solid var(--line);padding:12px 0 0">
+      <div class="chat-input-area panel-chat-composer subagent-panel-chat-composer" style="flex-shrink:0">
         <input id="subagent-chat-file-input" type="file" multiple style="display:none" onchange="onSubagentChatFilesChosen(${subagentChatJsArg(agent.id)}, this)" />
         <div id="subagent-chat-composer" style="flex:1;display:flex;flex-direction:column;gap:6px">
           <div id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-self:flex-start;align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800">${queuedCount} queued</div>
@@ -1771,7 +2029,12 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
           case 'token': {
             const chunk = String(event.text || '');
             if (!chunk) break;
-            streamState.content = `${streamState.content || ''}${chunk}`;
+            if (!streamState.finalResponseStarted && !streamState.toolActivityStarted) {
+              appendSubagentLiveTrace(streamState, 'preamble', chunk, { append: true });
+            } else {
+              streamState.finalResponseStarted = true;
+              streamState.content = `${streamState.content || ''}${chunk}`;
+            }
             refreshSubagentStreamingUI(agentId);
             break;
           }
@@ -1839,6 +2102,8 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
             const args = (event.args && typeof event.args === 'object') ? event.args : null;
             const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
+            moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
+            streamState.toolActivityStarted = true;
             pushSubagentProgressLine(`${stepPrefix}Running ${action}...`, streamState);
             addSubagentProcessEntry(
               'tool',
@@ -1856,6 +2121,8 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
             const text = String(event.result || '').trim();
             const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+            moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
+            streamState.toolActivityStarted = true;
             pushSubagentProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`, streamState);
             addSubagentProcessEntry(
               ok ? 'result' : 'error',
@@ -1871,6 +2138,8 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             const action = String(event.action || '').trim();
             const progressMsg = String(event.message || '').trim();
             if (!action || !progressMsg) break;
+            moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
+            streamState.toolActivityStarted = true;
             pushSubagentProgressLine(`${action}: ${progressMsg}`, streamState);
             addSubagentProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined, streamState);
             refreshSubagentStreamingUI(agentId, true);
@@ -2313,6 +2582,72 @@ function startSubagentPolling(agentId) {
 	  }, 15000);
 	}
 
+async function previewAgentProfilePackImport() {
+  const input = document.getElementById('agent-pack-import-path');
+  agentPackImportPath = String(input?.value || agentPackImportPath || '').trim();
+  if (!agentPackImportPath) return showToast?.('Enter a local pack path');
+  agentPackImportBusy = true;
+  renderSubagentsCanvas();
+  try {
+    const data = await api('/api/agent-profile-packs/preview', {
+      method: 'POST',
+      body: JSON.stringify({ path: agentPackImportPath }),
+      timeoutMs: 12000,
+    });
+    if (!data?.success) throw new Error(data?.error || 'Preview failed');
+    agentPackImportPreview = data.preview;
+    showToast?.('Profile pack preview ready');
+  } catch (err) {
+    showToast?.(`Profile pack preview failed: ${err.message || err}`);
+  } finally {
+    agentPackImportBusy = false;
+    renderSubagentsCanvas();
+  }
+}
+
+async function installAgentProfilePackImport() {
+  const input = document.getElementById('agent-pack-import-path');
+  agentPackImportPath = String(input?.value || agentPackImportPath || '').trim();
+  if (!agentPackImportPath) return showToast?.('Enter a local pack path');
+  agentPackImportBusy = true;
+  renderSubagentsCanvas();
+  try {
+    const data = await api('/api/agent-profile-packs/install', {
+      method: 'POST',
+      body: JSON.stringify({ path: agentPackImportPath, overwrite: true }),
+      timeoutMs: 20000,
+    });
+    if (!data?.success) throw new Error(data?.error || 'Install failed');
+    agentPackImportPreview = data.preview;
+    showToast?.(`Installed ${data.agent?.name || data.agent?.id || 'profile pack'}`);
+    await refreshSubagents();
+    if (data.agent?.id) await openSubagentDetail(data.agent.id);
+  } catch (err) {
+    showToast?.(`Profile pack install failed: ${err.message || err}`);
+    renderSubagentsCanvas();
+  } finally {
+    agentPackImportBusy = false;
+  }
+}
+
+async function uninstallAgentProfilePack(agentId) {
+  if (!agentId) return;
+  try {
+    const data = await api(`/api/agent-profile-packs/${encodeURIComponent(agentId)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ confirm: true }),
+      timeoutMs: 12000,
+    });
+    if (!data?.success) throw new Error(data?.error || 'Uninstall failed');
+    showToast?.(`Uninstalled ${agentId}`);
+    activeSubagentId = null;
+    await refreshSubagents();
+  } catch (err) {
+    showToast?.(`Profile pack uninstall failed: ${err.message || err}`);
+  }
+}
+
+
 function stopSubagentPolling() {
   if (_subagentDetailPolling) { clearInterval(_subagentDetailPolling); _subagentDetailPolling = null; }
 }
@@ -2388,7 +2723,14 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
   switch (event.type) {
     case 'token': {
       const chunk = String(event.text || '');
-      if (chunk) streamState.content = `${streamState.content || ''}${chunk}`;
+      if (chunk) {
+        if (!streamState.finalResponseStarted && !streamState.toolActivityStarted) {
+          appendSubagentLiveTrace(streamState, 'preamble', chunk, { append: true });
+        } else {
+          streamState.finalResponseStarted = true;
+          streamState.content = `${streamState.content || ''}${chunk}`;
+        }
+      }
       break;
     }
     case 'thinking_delta': {
@@ -2432,6 +2774,8 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
         const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
         const args = (event.args && typeof event.args === 'object') ? event.args : null;
         const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
+        moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
+        streamState.toolActivityStarted = true;
         pushSubagentProgressLine(`${stepPrefix}Running ${action}...`, streamState);
         addSubagentProcessEntry(
           'tool',
@@ -2448,6 +2792,8 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
       const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
       const text = String(event.result || '').trim();
       const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+      moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
+      streamState.toolActivityStarted = true;
       pushSubagentProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`, streamState);
       addSubagentProcessEntry(
         ok ? 'result' : 'error',
@@ -2461,6 +2807,8 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
       const action = String(event.action || '').trim();
       const progressMsg = String(event.message || '').trim();
       if (action && progressMsg) {
+        moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
+        streamState.toolActivityStarted = true;
         pushSubagentProgressLine(`${action}: ${progressMsg}`, streamState);
         addSubagentProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined, streamState);
       }
@@ -2549,6 +2897,10 @@ wsEventBus.on('ws:open', () => {
     replaySubagentChatStream(activeSubagentId).catch(() => {});
   }
 });
+
+window.previewAgentProfilePackImport = previewAgentProfilePackImport;
+window.installAgentProfilePackImport = installAgentProfilePackImport;
+window.uninstallAgentProfilePack = uninstallAgentProfilePack;
 
 wsEventBus.on('subagent_chat_message', (data) => {
   if (!data.agentId || !data.message) return;
@@ -2653,6 +3005,18 @@ window.toggleSubagentProcess = function(id) {
   const el = document.getElementById(id);
   if (!el) return;
   el.style.display = el.style.display === 'none' || !el.style.display ? 'block' : 'none';
+};
+window.toggleSubagentTraceDrawer = function(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const shouldOpen = !el.classList.contains('open');
+  el.classList.toggle('open', shouldOpen);
+  const btn = Array.from(document.querySelectorAll('.assistant-work-timer--expandable'))
+    .find((candidate) => candidate.getAttribute('aria-controls') === id);
+  if (btn) {
+    btn.classList.toggle('expanded', shouldOpen);
+    btn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  }
 };
 // Memory
 window.reloadSubagentMemory = reloadSubagentMemory;

@@ -240,12 +240,13 @@ export interface BuildSystemPromptOptions {
   extraInstructions?: string;
   includeMemory?: boolean;
   includeSoul?: boolean;
+  soulOverride?: string;
   /** workspace directory to read bootstrap files from */
   workspacePath?: string;
   /**
    * prompt mode
    * "full"    = all files injected (main agent / user chat)
-   * "minimal" = only AGENTS.md + TOOLS.md injected (sub-agents)
+   * "minimal" = no workspace bootstrap files
    * "none"    = only base identity line
    */
   promptMode?: 'full' | 'minimal' | 'none';
@@ -263,21 +264,14 @@ export function loadWorkspaceBootstrap(
 
   if (promptMode === 'none') return '';
 
-  const sections: Array<{ label: string; content: string }> = [];
-
-  // AGENTS.md - always injected (defines the agent's job)
-  const agentsMd = read('AGENTS.md');
-  if (agentsMd) sections.push({ label: 'AGENTS.md', content: agentsMd });
-
   // TOOLS.md is intentionally NOT injected anywhere — the live tool menu +
   // per-category TOOL_BLOCKS are the source of truth for tool usage.
 
   if (promptMode === 'minimal') {
-    // Sub-agents get AGENTS.md only.
-    return sections
-      .map(s => `### ${s.label}\n${clampText(s.content, 4000)}`)
-      .join('\n\n');
+    return '';
   }
+
+  const sections: Array<{ label: string; content: string }> = [];
 
   // Full mode: inject all bootstrap files
   const fullFiles = [
@@ -313,7 +307,7 @@ export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
     ? PROMPT_BUDGET_MINIMAL
     : PROMPT_BUDGET_FULL;
   const includeSoul = options?.includeSoul ?? true;
-  const soul = includeSoul ? loadSoul() : '';
+  const soul = includeSoul ? (options?.soulOverride ?? loadSoul()) : '';
   const allSkills = loadSkills();
 
   // Skills are opt-in per turn to keep context tight on small models.
