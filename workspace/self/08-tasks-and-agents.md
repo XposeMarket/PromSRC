@@ -29,19 +29,25 @@ Other current task facts:
 - proposal tasks are run with a proposal-specific runtime mode and session ID
 - task delivery knows how to report team proposal results back into team chat
 
-Paused task recovery ownership and chat mirroring:
+Paused task recovery ownership and chat surfaces:
 
 - paused/failed recovery is task-owned, not only session-owned
 - main/background tasks recover through the main paused-task chat and can resume, rerun, cancel, or accept more user guidance as the main agent
-- standalone subagent tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat or on the subagent page
+- standalone subagent Home chat is no longer a task-recovery trap. Normal user messages, voice turns, and handoff/tool conversations with the subagent stay in the subagent Home/chat thread.
+- standalone subagent task recovery now lives under the subagent Runs tab/task card detail, using the task's `recoveryConversation` as the canonical thread.
+- completed subagent run cards remain readable in Runs, but only recovery-eligible tasks expose the recovery composer.
 - team subagent tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat, the team room, or the matching member direct thread
 - team manager/executor tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat or team manager/team chat
-- `task-recovery.ts` now includes owner reply sessions for main task sessions, standalone `subagent_chat_*` sessions, team member room/direct sessions, and team manager/coordinator sessions
-- `task-router.ts` owns recovery selection and mirroring through `findBlockedRecoveryTaskForSubagentChat`, `findRecoveryTaskForSubagentChat`, `findRecoveryTaskForTeamChatTarget`, `handleTaskRecoveryMessage`, and task-recovery mirroring into subagent/team chat stores
-- `channels.router.ts` intercepts standalone subagent chat and channel turns only when the addressed subagent currently owns a blocked recovery-eligible task (`needs_assistance`, `stalled`, `paused`, `failed`, or `awaiting_user_input`, excluding user-paused tasks), then routes the turn through task recovery instead of starting unrelated subagent work; once that task/job completes, direct subagent chat must fall back to normal conversational turns
+- `task-recovery.ts` still includes owner reply sessions for main task sessions, team member room/direct sessions, and team manager/coordinator sessions; standalone subagent recovery should be entered explicitly through run routes rather than inferred from Home chat.
+- `task-router.ts` owns explicit recovery handling through `handleTaskRecoveryMessage`. Standalone subagent recovery turns should not be mirrored into the Home chat store.
+- `channels.router.ts` exposes explicit standalone subagent run APIs: `GET /api/agents/:id/runs`, `GET /api/agents/:id/runs/:taskId`, and `POST /api/agents/:id/runs/:taskId/recovery`.
+- `channels.router.ts` direct standalone subagent chat routes should stay conversational and should not intercept a Home chat turn into a blocked task just because that subagent owns a paused run.
 - `teams.router.ts` intercepts team room/member/manager chat turns when the addressed team or member owns a blocked task, then routes the turn through task recovery instead of starting unrelated team work
-- `TaskRecoveryConversationTurn.source` includes `subagent_chat` and `team_chat` so the task panel can preserve where guidance came from
+- `TaskRecoveryConversationTurn.source` includes `subagent_chat` and `team_chat` so the task panel can preserve where guidance came from; standalone subagent run recovery should use `subagent_chat` only as source metadata, not as permission to pollute Home chat history
+- `TaskRecoveryConversationTurn.attachmentPreviews` can persist uploaded image/video/file preview metadata for recovery turns.
+- explicit subagent run recovery accepts `attachmentPreviews`, builds runtime attachment context, forwards vision attachments to `handleChat`, and persists the visible user message separately from the attachment-expanded runtime prompt
 - recovery assistant sessions stay constrained to recovery: they may discuss the paused task, synthesize resume guidance, or trigger resume/rerun/cancel, but should not do unrelated work from that recovery session
+- `subagent-chat-store.ts` must filter persisted `task_recovery` messages out of Home chat history so old merged recovery turns do not reappear as duplicate/garbled subagent preambles
 
 Proposal sandbox lifecycle details that are now implemented:
 
@@ -73,6 +79,11 @@ Build-failure handling for proposal execution is now more structured:
 
 Prometheus now has multiple agent layers, not one generic "subagent" concept.
 
+Wrapper surface note:
+
+- `agents_and_teams` is wrapper-first for most model-facing agent/team operations. Use `agent_ops` for spawn/list/info/update/delete/deploy analysis team, `agent_chat_ops` for standalone subagent and agent chat turns/watches, `team_ops_wrapper` for managed team/coordinator/dispatch operations, and `team_collab_ops` for in-team collaboration actions.
+- Granular agent/team tools remain executable compatibility handlers behind `normalizeAgentTeamWrapperTool(...)` and the capability executors, so task ownership, team state, recovery routing, approval/audit behavior, and background run tracking stay centralized.
+
 Standalone subagents:
 
 - created or ensured with `spawn_subagent`
@@ -86,6 +97,8 @@ Standalone subagents:
   - `operator`
   - `verifier`
 - are messaged directly with `message_subagent`
+- Home chat is the long-lived conversational thread for direct user/subagent chat, voice-originated subagent turns, and main-agent handoff/tool messages to that subagent.
+- Runs are separate task records, not extra Home chat turns. Use the subagent Runs tab for task cards, status, prompt/output/progress/process detail, and explicit recovery chat.
 - standalone subagent task cards must copy the configured agent model into `TaskRecord.executorProvider`; otherwise `background_agent` execution falls through to mode defaults such as `background_spawn`/`main_chat` and can run on the wrong provider
 - can be installed locally from signed/versioned marketplace Agent Profile Packs; imported profiles carry `marketplaceProfile` provenance, install under `.prometheus/subagents/<agent-id>`, preserve attached skill IDs, and can be uninstalled only through marketplace-pack-aware deletion that refuses non-marketplace agents
 

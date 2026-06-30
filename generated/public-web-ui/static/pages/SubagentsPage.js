@@ -252,6 +252,19 @@ function getSubagentMimeType(ext) {
 function stageSubagentChatFiles(agentId, fileList) {
   const files = Array.from(fileList || []).filter(Boolean);
   if (!agentId || !files.length) return Promise.resolve([]);
+  const promises = subagentFilesToStagedFilePromises(files);
+  const stagingPromise = Promise.all(promises).then((staged) => {
+    getSubagentPendingFiles(agentId).push(...staged);
+    renderSubagentChatAttachmentStaging(agentId);
+    return staged;
+  }).finally(() => {
+    subagentChatFileStagingPromisesByAgent[agentId] = getSubagentStagingPromises(agentId).filter((p) => p !== stagingPromise);
+  });
+  getSubagentStagingPromises(agentId).push(stagingPromise);
+  return stagingPromise;
+}
+
+function subagentFilesToStagedFilePromises(files) {
   const promises = files.map(file => new Promise(resolve => {
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     if (SUBAGENT_CHAT_TEXT_EXTENSIONS.has(ext)) {
@@ -278,15 +291,13 @@ function stageSubagentChatFiles(agentId, fileList) {
     reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true });
     reader.readAsArrayBuffer(file);
   }));
-  const stagingPromise = Promise.all(promises).then((staged) => {
-    getSubagentPendingFiles(agentId).push(...staged);
-    renderSubagentChatAttachmentStaging(agentId);
-    return staged;
-  }).finally(() => {
-    subagentChatFileStagingPromisesByAgent[agentId] = getSubagentStagingPromises(agentId).filter((p) => p !== stagingPromise);
-  });
-  getSubagentStagingPromises(agentId).push(stagingPromise);
-  return stagingPromise;
+  return promises;
+}
+
+function stageSubagentFilesForUpload(fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  if (!files.length) return Promise.resolve([]);
+  return Promise.all(subagentFilesToStagedFilePromises(files));
 }
 
 async function waitForSubagentChatFileStaging(agentId) {
@@ -1033,36 +1044,230 @@ function subagentTraceToolLabel(text) {
     .trim();
 }
 
+function subagentTraceCountPhrase(count) {
+  if (count === 1) return 'once';
+  if (count === 2) return 'twice';
+  return `${count} times`;
+}
+
+function subagentTraceJsonPayload(text) {
+  const raw = String(text || '');
+  const start = raw.search(/[\[{]/);
+  if (start < 0) return null;
+  const opener = raw[start];
+  const closer = opener === '[' ? ']' : '}';
+  const end = raw.lastIndexOf(closer);
+  if (end <= start) return null;
+  try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+}
+
+function subagentTracePayloadValues(payload, keys, limit = 4) {
+  const wanted = new Set((keys || []).map((key) => String(key || '').toLowerCase()));
+  const out = [];
+  const visit = (value, depth = 0) => {
+    if (out.length >= limit || value == null || depth > 5) return;
+    if (Array.isArray(value)) { value.forEach((item) => visit(item, depth + 1)); return; }
+    if (typeof value !== 'object') return;
+    Object.entries(value).forEach(([key, item]) => {
+      if (out.length >= limit) return;
+      if (wanted.has(String(key || '').toLowerCase()) && item != null && typeof item !== 'object') {
+        const text = String(item || '').trim();
+        if (text) out.push(text);
+      } else {
+        visit(item, depth + 1);
+      }
+    });
+  };
+  visit(payload);
+  return [...new Set(out)];
+}
+
+function subagentTraceFirstPayloadValue(payload, keys) {
+  return subagentTracePayloadValues(payload, keys, 1)[0] || '';
+}
+
+function subagentTraceArrowDetail(text) {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  const match = raw.match(/(?:->|=>|→)\s*([^.;\n]+)/);
+  return match ? match[1].replace(/\s+bundle\s+Description.*$/i, '').trim() : '';
+}
+
+function subagentTraceTitleCaseSlug(value) {
+  const raw = String(value || '').trim();
+  if (!raw || !/[-_]/.test(raw)) return raw;
+  return raw.split(/[-_]+/).filter(Boolean).map((part) => {
+    const lower = part.toLowerCase();
+    if (['ai', 'ui', 'api', 'url', 'json', 'html', 'css', 'js', 'ts', 'tsx', 'jsx', 'x'].includes(lower)) return lower.toUpperCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }).join(' ');
+}
+
+function subagentTraceCompactDetail(value, { path = false, url = false, slug = false } = {}) {
+  let raw = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  if (url || /^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      raw = `${parsed.host}${parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : ''}`;
+    } catch {}
+  } else if (path || /[\\/]/.test(raw)) {
+    raw = raw.split(/[\\/]/).filter(Boolean).pop() || raw;
+  } else if (slug) {
+    raw = subagentTraceTitleCaseSlug(raw);
+  }
+  return raw.length > 48 ? `${raw.slice(0, 45)}...` : raw;
+}
+
+function subagentTraceDescriptorFor(rawText, entryType = 'tool') {
+  const raw = String(rawText || '').replace(/\s+/g, ' ').trim();
+  const type = String(entryType || '').toLowerCase();
+  const label = subagentTraceToolLabel(raw);
+  const lower = `${label} ${raw}`.toLowerCase();
+  const payload = subagentTraceJsonPayload(raw);
+  const arrow = subagentTraceArrowDetail(raw);
+  const fileValues = subagentTracePayloadValues(payload, ['file', 'filename', 'path', 'source', 'target', 'to_path', 'from_path'], 3)
+    .map((value) => subagentTraceCompactDetail(value, { path: true }))
+    .filter(Boolean);
+  const make = (key, past, gerund, noun, plural, detail = '', opts = {}) => ({
+    key, past, gerund, noun, plural: plural || `${noun}s`,
+    detail: String(detail || '').trim(),
+    detailPrefix: opts.detailPrefix || '',
+    countStyle: opts.countStyle || 'noun',
+    status: type === 'error' || /\bfailed\b/i.test(raw) ? 'failed' : '',
+  });
+  const urlValue = subagentTraceFirstPayloadValue(payload, ['url', 'href', 'currentUrl', 'pageUrl', 'targetUrl']);
+  const windowValue = subagentTraceFirstPayloadValue(payload, ['window', 'windowTitle', 'title', 'name', 'app']);
+  const commandValue = subagentTraceFirstPayloadValue(payload, ['command', 'cmd', 'script']);
+  const skillValue = subagentTraceFirstPayloadValue(payload, ['id', 'skill', 'skillId', 'name']);
+  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(lower)) return make('vision', 'Viewed', 'Viewing', 'screenshot', 'screenshots', windowValue || arrow);
+  if (/\b(skill read|read skill)\b/.test(lower)) return make('skillRead', 'Read', 'Reading', 'skill', 'skills', subagentTraceCompactDetail(skillValue || arrow, { slug: true }), { detailPrefix: 'skill' });
+  if (/\b(skill list|list skills|skill search|skill match)\b/.test(lower)) return make('skillList', 'Searched', 'Searching', 'skill list', 'skill searches', subagentTraceCompactDetail(subagentTraceFirstPayloadValue(payload, ['query', 'q', 'search']) || arrow), { detailPrefix: 'for' });
+  if (/\b(desktop focus|focus window|desktop window)\b/.test(lower)) return make('desktopFocus', 'Focused', 'Focusing', 'window', 'windows', subagentTraceCompactDetail(windowValue || arrow, { slug: true }));
+  if (/\b(desktop screen|desktop screenshot|screen capture)\b/.test(lower)) return make('desktopScreen', 'Captured', 'Capturing', 'desktop screen', 'desktop screens', subagentTraceCompactDetail(windowValue, { slug: true }));
+  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(lower)) return make('browserScroll', 'Scrolled', 'Scrolling', 'scroll', 'scrolls', subagentTraceCompactDetail(subagentTraceFirstPayloadValue(payload, ['direction', 'dir']) || arrow), { countStyle: 'times' });
+  if (/\b(browser click|clicked?|tap|tapped)\b/.test(lower)) return make('browserClick', 'Clicked', 'Clicking', 'click', 'clicks', subagentTraceCompactDetail(subagentTraceFirstPayloadValue(payload, ['text', 'label', 'selector', 'target', 'ariaLabel']) || arrow), { countStyle: 'times' });
+  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(lower)) return make('browserOpen', 'Opened', 'Opening', 'page', 'pages', subagentTraceCompactDetail(urlValue || arrow, { url: true }));
+  if (/\b(browser extract|get page text|page text|read page|browser read)\b/.test(lower)) return make('browserRead', 'Read', 'Reading', 'page', 'pages', subagentTraceCompactDetail(urlValue || arrow, { url: true }));
+  if (/\b(workspace edit|dev source edit|apply patch|edited?|update file|delete file)\b/.test(lower)) return make('fileEdit', 'Edited', 'Editing', 'file', 'files', fileValues[0] || subagentTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  if (/\b(write note|workspace write|create file|write file|save file)\b/.test(lower)) return make('fileWrite', 'Wrote', 'Writing', 'file', 'files', fileValues[0] || subagentTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  if (/\b(workspace read|dev source read|read files batch|read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(lower)) return make('fileRead', 'Read', 'Reading', 'file', 'files', fileValues[0] || subagentTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(lower)) return make('fileSearch', 'Searched', 'Searching', 'files', 'file searches', subagentTraceCompactDetail(subagentTraceFirstPayloadValue(payload, ['pattern', 'query', 'q', 'search']) || fileValues[0] || arrow), { detailPrefix: 'for' });
+  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(lower)) return make('webSearch', 'Searched', 'Searching', 'web', 'web searches', subagentTraceCompactDetail(subagentTraceFirstPayloadValue(payload, ['q', 'query', 'search']) || arrow), { detailPrefix: 'for' });
+  if (/\b(shell|powershell|command|terminal|run command|workspace run|cmd\.exe)\b/.test(lower)) return make('command', 'Ran', 'Running', 'command', 'commands', subagentTraceCompactDetail(commandValue || arrow || label), { detailPrefix: 'command' });
+  return make(`tool:${label || raw || 'tool'}`, 'Used', 'Using', 'tool', 'tools', subagentTraceCompactDetail(arrow || label || raw));
+}
+
+function subagentTraceJoinSummaryParts(parts) {
+  if (!parts.length) return '';
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
+function subagentTraceLogicalTools(entries) {
+  const list = visibleSubagentTraceEntries(entries);
+  const calls = [];
+  let pending = null;
+  let current = null;
+  list.forEach((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    if (!['tool', 'result', 'error', 'vision', 'info'].includes(type)) return;
+    const raw = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+    if (!raw && type !== 'vision') return;
+    if (/^Processing\.{0,3}$/i.test(raw) || /^Prepared\b/i.test(raw)) return;
+    const descriptor = subagentTraceDescriptorFor(raw, type);
+    if ((type === 'tool' || type === 'info') && /^Preparing\b/i.test(raw)) {
+      pending = (!pending || pending.key !== descriptor.key) ? { ...descriptor, pending: true } : pending;
+      return;
+    }
+    if (type === 'tool' || type === 'vision') {
+      if (pending && pending.key !== descriptor.key) calls.push(pending);
+      pending = null;
+      current = { ...descriptor };
+      calls.push(current);
+      return;
+    }
+    const target = current || pending;
+    if (target && (!descriptor.key || target.key === descriptor.key || /\bcomplete\b|->|=>|→|\bok\b|\bapplied\b/i.test(raw))) {
+      if (!target.detail && descriptor.detail) target.detail = descriptor.detail;
+      if (type === 'error' || descriptor.status) target.status = 'failed';
+      return;
+    }
+    if (type === 'error' || !/\bcomplete\b/i.test(raw)) {
+      current = { ...descriptor };
+      calls.push(current);
+    }
+  });
+  if (pending && !calls.includes(pending)) calls.push(pending);
+  return calls;
+}
+
+function subagentTraceLogicalGroupText(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  if (!list.length) return '';
+  const first = list[0];
+  const count = list.length;
+  const details = [...new Set(list.map((call) => call.detail).filter(Boolean))].slice(0, 2);
+  const failed = list.filter((call) => call.status === 'failed').length;
+  if (failed && failed === count) {
+    if (count === 1) return `${first.noun.charAt(0).toUpperCase()}${first.noun.slice(1)} failed${details[0] ? `: ${details[0]}` : ''}`;
+    return `${count} ${first.plural} failed`;
+  }
+  if (count === 1) {
+    if (first.detailPrefix === 'for' && details[0]) return `${first.past} for ${details[0]}`;
+    const detail = details[0] ? `${first.detailPrefix ? ` ${first.detailPrefix}:` : ''} ${details[0]}` : ` ${first.noun}`;
+    return `${first.past}${detail}`;
+  }
+  if (first.countStyle === 'times') return `${first.past} ${subagentTraceCountPhrase(count)}`;
+  const tail = details.length ? `: ${details.join(', ')}` : '';
+  return `${first.past} ${count} ${first.plural}${tail}`;
+}
+
 function subagentTraceToolSummary(entries) {
-  const list = Array.isArray(entries) ? entries : [];
-  const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision', 'info'].includes(String(entry?.type || '').toLowerCase()));
-  const labels = [...new Set(toolish.map((entry) => subagentTraceToolLabel(entry.text)).filter(Boolean))];
-  const errors = [...new Set(list
-    .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
-    .map((entry) => subagentTraceToolLabel(entry.text))
-    .filter(Boolean))].length;
-  const logicalCount = Math.max(labels.length, errors || 0, toolish.length ? 1 : 0);
-  if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
-  if (labels.length === 1) return `${labels[0]}${logicalCount > 1 ? ` x${logicalCount}` : ''}`;
-  const count = logicalCount || list.length;
-  return `Ran ${count} tool${count === 1 ? '' : 's'}`;
+  const calls = subagentTraceLogicalTools(entries);
+  const groups = new Map();
+  calls.forEach((call) => {
+    const key = `${call.key}|${call.status === 'failed' ? 'failed' : 'ok'}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(call);
+  });
+  const parts = [...groups.values()].map(subagentTraceLogicalGroupText).filter(Boolean);
+  if (parts.length) return subagentTraceJoinSummaryParts(parts.slice(0, 3));
+  const count = visibleSubagentTraceEntries(entries).length;
+  return `Used ${count} tool${count === 1 ? '' : 's'}`;
+}
+
+function subagentTraceCurrentToolLabel(entries) {
+  const calls = subagentTraceLogicalTools(entries);
+  const call = calls[calls.length - 1];
+  if (call) {
+    if (call.status === 'failed') return `${call.noun.charAt(0).toUpperCase()}${call.noun.slice(1)} failed${call.detail ? `: ${call.detail}` : ''}`;
+    if (call.detailPrefix === 'for' && call.detail) return `${call.gerund} for ${call.detail}`;
+    if (call.detail) return `${call.gerund}${call.detailPrefix ? ` ${call.detailPrefix}:` : ''} ${call.detail}`;
+    return `${call.gerund} ${call.noun}`;
+  }
+  return subagentTraceToolSummary(entries);
+}
+
+function subagentTraceSummaryKey(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function renderSubagentGroupedTrace(entries, { streaming = false } = {}) {
   const groups = subagentTraceGroups(entries);
   if (!groups.length) return '';
-  const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
       return `<div class="live-turn-thought">${group.entries.map(renderSubagentTraceEntry).join('')}</div>`;
     }
-    const open = streaming && index === lastToolIndex;
-    const summary = subagentTraceToolSummary(group.entries);
+    const isLiveCurrent = streaming && index === groups.length - 1;
+    const summary = isLiveCurrent ? subagentTraceCurrentToolLabel(group.entries) : subagentTraceToolSummary(group.entries);
+    const summaryKey = subagentTraceSummaryKey(summary);
     const eventCount = visibleSubagentTraceEntries(group.entries).length;
-    return `<details class="live-turn-tool-group"${open ? ' open data-live-trace-current="1"' : ''}>
+    return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''}>
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">›</span>
-        <strong>${escHtml(summary)}</strong>
+        <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
         <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="live-turn-tool-body">${renderSubagentTraceList(group.entries)}</div>
@@ -1801,24 +2006,40 @@ function renderSubagentRunRecovery(task, agentId) {
   const recoveryTurnsHtml = turns.length
     ? turns.map((turn) => {
         const isUser = turn?.role === 'user';
-        return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:92%;background:${isUser ? 'rgba(251,146,60,.14)' : 'var(--panel)'};border:1px solid var(--line);border-radius:8px;padding:8px 10px">
-          <div style="font-size:10px;font-weight:900;text-transform:uppercase;color:var(--muted);margin-bottom:4px">${isUser ? 'You' : 'Recovery'}</div>
-          <div style="font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(turn?.content || '')}</div>
+        const attachments = Array.isArray(turn?.attachmentPreviews) ? turn.attachmentPreviews : [];
+        return `<div class="msg ${isUser ? 'user' : 'ai'}" style="width:100%">
+          ${!isUser ? `<div class="msg-avatar" style="background:${agentColor(agentId)};border-color:${agentColor(agentId)};font-size:14px">${agentEmoji({ id: agentId })}</div>` : ''}
+          <div class="msg-body">
+            ${!isUser ? `<div class="msg-role">Recovery · <span style="font-weight:400;opacity:.75">${timeAgo(turn?.timestamp || Date.now())}</span></div>` : ''}
+            <div class="msg-content ${isUser ? '' : 'markdown-body'}">
+              ${renderSubagentAttachmentPreviews(attachments, agentId, `run_${taskId}_${turn?.timestamp || ''}`)}
+              ${isUser ? escHtml(turn?.content || '') : (typeof marked !== 'undefined' ? marked.parse(String(turn?.content || '')) : escHtml(turn?.content || ''))}
+            </div>
+          </div>
         </div>`;
       }).join('')
     : `<div style="font-size:12px;color:var(--muted)">No recovery messages yet.</div>`;
   return `
-    <section style="border:1px solid ${canRecover ? '#fed7aa' : 'var(--line)'};background:${canRecover ? 'rgba(255,247,237,.7)' : 'var(--panel-2)'};border-radius:10px;padding:11px;display:flex;flex-direction:column;gap:9px">
+    <section style="border:1px solid ${canRecover ? 'rgba(251,146,60,.45)' : 'var(--line)'};background:var(--panel-2);border-radius:10px;padding:11px;display:flex;flex-direction:column;gap:9px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <div style="font-size:12px;font-weight:900;color:${canRecover ? '#9a3412' : 'var(--text)'}">Recovery Chat</div>
+        <div style="font-size:12px;font-weight:900;color:${canRecover ? 'var(--brand)' : 'var(--text)'}">Recovery Chat</div>
         <span style="font-size:10px;color:var(--muted)">${canRecover ? 'task mode' : 'read only'}</span>
       </div>
       ${pending ? `<div style="font-size:12px;line-height:1.45"><strong>Pending question:</strong> ${escHtml(pending)}</div>` : ''}
       ${pauseMessage ? `<div style="font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere"><strong>Pause analysis:</strong><br>${escHtml(pauseMessage.slice(0, 1400))}</div>` : ''}
-      <div style="display:flex;flex-direction:column;gap:8px">${recoveryTurnsHtml}</div>
-      ${canRecover ? `<div style="display:flex;gap:8px;align-items:flex-end">
-        <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="2" placeholder="Reply to this run..." style="flex:1;min-height:54px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel);color:var(--text)"></textarea>
-        <button onclick="sendSubagentRunRecovery('${escHtml(agentId)}','${escHtml(taskId)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">Send</button>
+      <div style="display:flex;flex-direction:column;gap:10px;align-items:stretch">${recoveryTurnsHtml}</div>
+      ${canRecover ? `<div class="panel-chat-composer" style="border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px">
+        <input id="sa-run-recovery-files-${escHtml(taskId)}" type="file" multiple accept="image/*,video/*,.pdf,.txt,.md,.json,.csv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml" style="display:none" onchange="updateSubagentRunRecoveryFileLabel('${escHtml(taskId)}')" />
+        <div id="sa-run-recovery-files-label-${escHtml(taskId)}" style="display:none;margin-bottom:6px;font-size:11px;color:var(--muted)"></div>
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="document.getElementById('sa-run-recovery-files-${escHtml(taskId)}')?.click()">
+            <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
+          </button>
+          <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="1" placeholder="Reply to this run..." class="chat-textarea" style="min-height:42px;max-height:140px"></textarea>
+          <button class="send-btn" onclick="sendSubagentRunRecovery('${escHtml(agentId)}','${escHtml(taskId)}')" title="Send">
+            <iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>
+          </button>
+        </div>
       </div>` : ''}
     </section>`;
 }
@@ -2013,15 +2234,28 @@ async function openSubagentRunDetail(agentId, taskId) {
 async function sendSubagentRunRecovery(agentId, taskId) {
   const id = String(taskId || '').trim();
   const textarea = document.getElementById(`sa-run-recovery-${id}`);
+  const fileInput = document.getElementById(`sa-run-recovery-files-${id}`);
   const message = String(textarea?.value || '').trim();
-  if (!id || !message) return;
+  const selectedFiles = Array.from(fileInput?.files || []);
+  if (!id || (!message && !selectedFiles.length)) return;
   try {
+    let attachmentPreviews = [];
+    if (selectedFiles.length) {
+      const staged = await stageSubagentFilesForUpload(selectedFiles);
+      const uploadResults = await uploadSubagentChatStagedFiles(staged);
+      attachmentPreviews = subagentUploadResultsToAttachmentPreviews(uploadResults);
+    }
     const data = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}/recovery`, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({
+        message: message || (attachmentPreviews.length ? 'Please review the attached file(s).' : ''),
+        attachmentPreviews,
+      }),
       timeoutMs: 300000,
     });
     if (textarea) textarea.value = '';
+    if (fileInput) fileInput.value = '';
+    updateSubagentRunRecoveryFileLabel(id);
     if (data?.task) subagentRunDetails[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
     const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => null);
     if (Array.isArray(runsData?.runs)) subagentRuns = runsData.runs;
@@ -2030,6 +2264,21 @@ async function sendSubagentRunRecovery(agentId, taskId) {
   } catch (err) {
     showToast('Recovery error', err.message || 'Failed to send recovery reply', 'error');
   }
+}
+
+function updateSubagentRunRecoveryFileLabel(taskId) {
+  const id = String(taskId || '').trim();
+  const input = document.getElementById(`sa-run-recovery-files-${id}`);
+  const label = document.getElementById(`sa-run-recovery-files-label-${id}`);
+  if (!label) return;
+  const files = Array.from(input?.files || []);
+  if (!files.length) {
+    label.style.display = 'none';
+    label.textContent = '';
+    return;
+  }
+  label.style.display = 'block';
+  label.textContent = files.length === 1 ? files[0].name : `${files.length} files attached`;
 }
 
 function startSubagentDesktopVoice(agentId) {
@@ -3178,6 +3427,7 @@ window.openSubagentSettings = openSubagentSettings;
 window.reloadSubagentRuns = reloadSubagentRuns;
 window.openSubagentRunDetail = openSubagentRunDetail;
 window.sendSubagentRunRecovery = sendSubagentRunRecovery;
+window.updateSubagentRunRecoveryFileLabel = updateSubagentRunRecoveryFileLabel;
 // Context refs
 window.saveSubagentCtxRef = saveSubagentCtxRef;
 window.addSubagentSkill = addSubagentSkill;

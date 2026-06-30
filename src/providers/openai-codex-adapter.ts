@@ -25,8 +25,8 @@ function envMs(name: string, fallback: number, minimum: number): number {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? Math.max(minimum, value) : fallback;
 }
-const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 240_000, 30_000);
-const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 75_000, 15_000);
+const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 900_000, 60_000);
+const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 300_000, 60_000);
 const DEFAULT_CODEX_INSTRUCTIONS = 'You are Prometheus, a helpful AI assistant. Answer the user directly and follow the conversation context.';
 
 // Models available via Codex OAuth (latest first; official OpenAI IDs only).

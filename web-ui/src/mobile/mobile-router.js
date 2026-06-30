@@ -352,7 +352,13 @@ function renderMobileBootError(err) {
 
 function safeRender() {
   try {
-    render();
+    const result = render();
+    if (result && typeof result.catch === 'function') {
+      result.catch((err) => {
+        console.error('[mobile] async render failed:', err);
+        renderMobileBootError(err);
+      });
+    }
     return true;
   } catch (err) {
     console.error('[mobile] render failed:', err);

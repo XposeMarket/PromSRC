@@ -8,7 +8,7 @@ import {
   updateInternalWatch,
   type InternalWatch,
 } from './internal-watch-store';
-import { isModelBusy, setModelBusy } from '../comms/broadcaster';
+import { getLastMainSessionId, isModelBusy, setModelBusy } from '../comms/broadcaster';
 
 type RunInteractiveTurn = (
   message: string,
@@ -19,7 +19,10 @@ type RunInteractiveTurn = (
   callerContext?: string,
   reasoningOptions?: any,
   attachments?: any,
+  attachmentPreviews?: any,
   modelOverride?: string,
+  flags?: any,
+  turnOriginInput?: any,
 ) => Promise<{ type: string; text: string; thinking?: string; toolResults?: any[]; artifacts?: any[] }>;
 
 export interface InternalWatchRunnerDeps {
@@ -45,6 +48,7 @@ interface Observation {
 }
 
 const TERMINAL_TASK_STATUSES = new Set(['complete', 'failed', 'needs_assistance', 'awaiting_user_input', 'paused', 'stalled']);
+const TOOL_LIMITED_SESSION_RE = /^(task_|task_recovery_|task_resume_brief_|subagent_|run_once_|cron_|schedule_|auto_|team_dispatch_|team_member_room_|team_coord_|proposal_|code_exec|background_)/i;
 
 function normalizeRelPath(raw: any): string {
   return String(raw || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
@@ -87,6 +91,18 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
     if (!taskId) return { exists: false, error: 'task_id_required' };
     const task = loadTask(taskId);
     if (!task) return { exists: false, taskId };
+    const plan = Array.isArray(task.plan) ? task.plan : [];
+    const currentStepIndex = Number.isFinite(Number(task.currentStepIndex)) ? Number(task.currentStepIndex) : 0;
+    const currentStep = plan.find((step: any) => Number(step?.index) === currentStepIndex) || plan[currentStepIndex] || null;
+    const completedSteps = plan.filter((step: any) => step?.status === 'done' || step?.status === 'skipped').length;
+    const unfinishedSteps = plan
+      .filter((step: any) => step?.status !== 'done' && step?.status !== 'skipped')
+      .slice(0, 8)
+      .map((step: any) => ({
+        index: step?.index,
+        status: step?.status,
+        description: String(step?.description || '').slice(0, 240),
+      }));
     return {
       exists: true,
       taskId,
@@ -94,6 +110,22 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
       finalSummary: task.finalSummary || '',
       completedAt: task.completedAt,
       title: task.title,
+      sessionId: task.sessionId,
+      originatingSessionId: task.originatingSessionId || null,
+      subagentProfile: task.subagentProfile || null,
+      teamSubagent: task.teamSubagent || null,
+      currentStepIndex,
+      currentStep: currentStep ? {
+        index: currentStep.index,
+        status: currentStep.status,
+        description: String(currentStep.description || '').slice(0, 240),
+      } : null,
+      totalSteps: plan.length,
+      completedSteps,
+      unfinishedSteps,
+      lastToolCall: task.lastToolCall || null,
+      lastToolCallAt: task.lastToolCallAt || null,
+      lastProgressAt: task.lastProgressAt || null,
     };
   }
 
@@ -206,6 +238,25 @@ function renderInstruction(template: string, watch: InternalWatch, obs: Observat
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) => replacements[key] ?? '');
 }
 
+function isToolLimitedSessionId(sessionId: string): boolean {
+  const sid = String(sessionId || '').trim();
+  return !sid || TOOL_LIMITED_SESSION_RE.test(sid);
+}
+
+function resolveWatchDeliverySessionId(watch: InternalWatch, obs: Observation): string {
+  const candidates = [
+    obs.originatingSessionId,
+    watch.origin?.sessionId,
+    getLastMainSessionId(),
+    'default',
+  ];
+  for (const candidate of candidates) {
+    const sid = String(candidate || '').trim();
+    if (sid && !isToolLimitedSessionId(sid)) return sid;
+  }
+  return String(getLastMainSessionId() || 'default').trim() || 'default';
+}
+
 export class InternalWatchRunner {
   private timer: NodeJS.Timeout | null = null;
   private runningWatchIds = new Set<string>();
@@ -253,7 +304,8 @@ export class InternalWatchRunner {
           await this.fireMatch(watch, obs);
         } else if (matched) {
           updateInternalWatch(watch.id, { lastCheckedAt: new Date().toISOString() });
-          this.broadcast({ type: 'internal_watch_waiting', watchId: watch.id, watch, sessionId: watch.origin.sessionId });
+          const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+          this.broadcast({ type: 'internal_watch_waiting', watchId: watch.id, watch, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
         } else {
           updateInternalWatch(watch.id, {
             lastCheckedAt: new Date().toISOString(),
@@ -284,7 +336,8 @@ export class InternalWatchRunner {
       matchedAt: new Date().toISOString(),
       completedAt: terminal ? new Date().toISOString() : undefined,
     });
-    this.broadcast({ type: 'internal_watch_matched', watchId: watch.id, watch, observation: obs, sessionId: watch.origin.sessionId });
+    const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+    this.broadcast({ type: 'internal_watch_matched', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
     await this.deliver(watch, obs, 'match', watch.onMatch);
     setModelBusy(false);
     this.runningWatchIds.delete(watch.id);
@@ -303,7 +356,8 @@ export class InternalWatchRunner {
       completedAt: new Date().toISOString(),
     });
     const obs = watch.lastObservation || { status: 'timeout' };
-    this.broadcast({ type: 'internal_watch_timeout', watchId: watch.id, watch, observation: obs, sessionId: watch.origin.sessionId });
+    const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+    this.broadcast({ type: 'internal_watch_timeout', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
     const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
     await this.deliver(watch, obs, 'timeout', timeoutInstruction);
     setModelBusy(false);
@@ -312,24 +366,31 @@ export class InternalWatchRunner {
 
   private async deliver(watch: InternalWatch, obs: Observation, kind: 'match' | 'timeout', template: string): Promise<void> {
     const instruction = renderInstruction(template, watch, obs, kind);
+    const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
     const payload = [
       `[Internal watch ${kind}]`,
       `Watch id: ${watch.id}`,
       `Label: ${watch.label}`,
       `Target: ${watch.target.type}`,
+      `Origin session: ${watch.origin.sessionId}`,
+      `Delivery session: ${deliverySessionId}`,
       `Observation: ${JSON.stringify({ ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined }, null, 2)}`,
       '',
       'Instruction:',
       instruction,
       '',
-      'Reply in this same chat session with the concrete outcome. Do not expose this internal payload unless it helps explain the result.',
+      'Proceed as a normal Prometheus main-chat follow-up in this delivery session. This is not task recovery mode and not read-only mode.',
+      'Use the normal tool/category system for this turn. If verification is requested, inspect the task/run state first and then use the appropriate tools directly.',
+      'For agent-owned tasks, use agent_run_ops(action:"get", task_id:"...") before deciding whether recovery chat, resume, rerun, or independent verification is appropriate.',
+      'Do not expose this internal payload unless it helps explain the result.',
     ].join('\n');
 
     const sendSSE = (event: string, data: any) => {
       this.broadcast({
         type: 'internal_watch_sse',
         watchId: watch.id,
-        sessionId: watch.origin.sessionId,
+        sessionId: deliverySessionId,
+        originSessionId: watch.origin.sessionId,
         eventType: event,
         ...(data && typeof data === 'object' ? data : { message: String(data ?? '') }),
       });
@@ -338,16 +399,29 @@ export class InternalWatchRunner {
     try {
       const result = await this.runInteractiveTurn(
         payload,
-        watch.origin.sessionId,
+        deliverySessionId,
         sendSSE,
         undefined,
         { aborted: false },
-        `[InternalWatch ${watch.id}] Bounded internal watcher delivery. Treat as a same-session follow-up.`,
+        `[InternalWatch ${watch.id}] Bounded internal watcher delivery. Run through the normal main-chat tool/category pipeline in the delivery session. Do not use task recovery chat unless you intentionally call agent_run_ops(action:"recover").`,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          channel: 'system',
+          surface: 'automation',
+          device: 'server',
+          label: 'internal_watch',
+          source: 'internal_watch',
+        },
       );
       this.broadcast({
         type: 'internal_watch_delivered',
         watchId: watch.id,
-        sessionId: watch.origin.sessionId,
+        sessionId: deliverySessionId,
+        originSessionId: watch.origin.sessionId,
         message: {
           role: 'assistant',
           content: String(result?.text || ''),
@@ -358,7 +432,7 @@ export class InternalWatchRunner {
       });
     } catch (err: any) {
       updateInternalWatch(watch.id, { status: 'failed', error: String(err?.message || err), completedAt: new Date().toISOString() });
-      this.broadcast({ type: 'internal_watch_failed', watchId: watch.id, sessionId: watch.origin.sessionId, error: String(err?.message || err) });
+      this.broadcast({ type: 'internal_watch_failed', watchId: watch.id, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId, error: String(err?.message || err) });
     }
   }
 }

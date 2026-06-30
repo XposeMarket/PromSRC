@@ -88,10 +88,13 @@ Browser performance telemetry:
 - desktop and mobile context-window rows show live/last-turn elapsed timing per browser tool, which is the preferred way to find slow/heavy browser operations
 - observation mode is the main speed lever: `none` and `compact` are cheapest, `delta` is middle, `snapshot` is heavier, and `screenshot`/vision/scroll collection are the heaviest but highest-confidence
 - cheap browser actions now default to the fast `observe:"none"` ack path (`browser_click`, `browser_fill`, `browser_type`, `browser_drag`, `browser_click_and_download`, `browser_scroll_collect`, and `browser_vision_type`); request `capture_after:true`, `observe:"snapshot"`, or `observe:"screenshot"` only when the next step needs fresh refs or visual proof
+- `browser_act(action:"click"|"key"|"scroll", observe:"none")` is intentionally a true fast path: click/key helpers skip the old 1500ms settle wait, and status broadcasts do not block the tool result on fast ack. Retest on 2026-06-29 showed click ~79ms, key ~6ms, and scroll ~7ms on the simple benchmark page.
 - browser status broadcasts only attach frames for visual/status-critical tools. `browser_snapshot` and `browser_vision_screenshot` attach frames by default; `browser_open` only attaches a frame when `observe:"screenshot"` is explicitly requested, so `observe:"compact"`/`observe:"none"` opens do not pay screenshot cost just to update live UI state
 - `browser_open` uses observation-aware settling: `snapshot`/`screenshot` waits remain safer for SPA hydration, while `compact`/`none` skip long network-idle/hydration waits for fast navigation acks
 - desktop click/scroll/drag verification is opt-in by default for speed; use `verify:"auto"`, `verify:"strict"`, or `verify:true` when before/after probe confirmation is worth the extra screenshot/OCR cost
 - Windows desktop click/scroll verify-off paths combine pointer move plus click/scroll into one PowerShell invocation, avoiding the old two-process move-then-action cost for routine mouse control
+- desktop wrapper schemas expose `modifier:"none"` as the default path. Runtime strips `none`; only preserve `shift|ctrl|alt` when the user explicitly asked for a modified click.
+- `desktop_window` exact-handle actions normalize `window_id`, `window_handle`, and `handle`, then use a fast HWND/bounds path for simple window-coordinate click/scroll instead of doing duplicate full window scans.
 - benchmark real sites by recording each browser tool's elapsed timing plus result size/tokens, then optimize by lowering observation mode, batching scroll/extraction, avoiding duplicate snapshots, and using web_fetch for non-interactive reading
 
 

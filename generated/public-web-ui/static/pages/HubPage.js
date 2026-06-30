@@ -41,7 +41,7 @@ try {
   const m = localStorage.getItem('hub_stats_mode');
   if (m === 'overview' || m === 'models') _stats.mode = m;
   const r = localStorage.getItem('hub_stats_range');
-  if (r === 'all' || r === '30d' || r === '7d') _stats.range = r;
+  if (r === 'all' || r === '30d' || r === '7d' || r === '1d') _stats.range = r;
 } catch {}
 // Current-week bar chart data: 7 entries Sun→Sat for the week containing today.
 // This is independent of the heatmap's navigated month so paging back/forward
@@ -465,12 +465,62 @@ function compactNumber(n) {
   return value.toLocaleString();
 }
 
+function formatCostMicros(micros) {
+  const value = Math.max(0, Number(micros) || 0);
+  const usd = value / 1000000;
+  if (usd <= 0) return '$0';
+  if (usd >= 100) return '$' + usd.toFixed(0);
+  if (usd >= 1) return '$' + usd.toFixed(2);
+  if (usd >= 0.01) return '$' + usd.toFixed(3);
+  return '$' + usd.toFixed(5);
+}
+
+function formatDurationMs(ms) {
+  const value = Math.max(0, Number(ms) || 0);
+  if (value <= 0) return '—';
+  if (value < 1000) return Math.round(value) + 'ms';
+  if (value < 10000) return (value / 1000).toFixed(2) + 's';
+  if (value < 60000) return (value / 1000).toFixed(1) + 's';
+  const minutes = Math.floor(value / 60000);
+  const seconds = Math.round((value % 60000) / 1000);
+  return minutes + 'm' + (seconds ? ' ' + seconds + 's' : '');
+}
+
 function renderStatTile(label, value, sub) {
   return `
     <div class="hub-stat-tile">
       <div class="hub-stat-label">${escHtml(label)}</div>
       <div class="hub-stat-value">${escHtml(String(value))}</div>
       ${sub ? `<div class="hub-stat-sub">${escHtml(sub)}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderToolsCostTable(data) {
+  const rows = Array.isArray(data.expensiveTools) && data.expensiveTools.length
+    ? data.expensiveTools
+    : (Array.isArray(data.topTools) ? data.topTools : []);
+  if (!rows.length) return `<div class="hub-empty">No tool telemetry recorded yet.</div>`;
+  return `
+    <div class="hub-models-table is-tools">
+      <div class="hub-models-row hub-models-head">
+        <div>Tool</div>
+        <div class="hub-models-num">Calls</div>
+        <div class="hub-models-num">Context</div>
+        <div class="hub-models-num">Avg</div>
+        <div class="hub-models-num">Max</div>
+        <div class="hub-models-num">Est. Cost</div>
+      </div>
+      ${rows.slice(0, 10).map(row => `
+        <div class="hub-models-row">
+          <div class="hub-models-name" title="${escHtml(row.name)}">${escHtml(row.name)}</div>
+          <div class="hub-models-num">${escHtml(compactNumber(Number(row.count) || 0))}</div>
+          <div class="hub-models-num">${escHtml(compactNumber(Number(row.contextTokens) || 0))}</div>
+          <div class="hub-models-num">${escHtml(formatDurationMs(row.durationMsAvg))}</div>
+          <div class="hub-models-num">${escHtml(formatDurationMs(row.durationMsMax))}</div>
+          <div class="hub-models-num">${escHtml(formatCostMicros(row.totalCostMicros))}</div>
+        </div>
+      `).join('')}
     </div>
   `;
 }
@@ -496,23 +546,32 @@ function renderStatsTiles() {
     const totalTokens = m.totalTokens || 0;
     const activeDays = t.activeDays || m.activeDays || 0;
     const currentStreak = t.currentStreak || 0;
-    const longestStreak = t.longestStreak || 0;
     const peakHour = t.peakHour && t.peakHour !== '—' ? t.peakHour : (m.peakHour || '—');
     const favoriteModel = m.favorite && m.favorite !== '—' ? m.favorite : (t.favorite || '—');
+    const modelCostMicros = Number(m.totalCostMicros || 0);
+    const toolDirectCostMicros = Number(t.directCostMicros || 0);
+    const toolContextCostMicros = Number(t.contextCostMicros || 0);
+    const estimatedSpendMicros = modelCostMicros + toolDirectCostMicros;
 
     tilesEl.innerHTML = [
+      renderStatTile('Est. spend', formatCostMicros(estimatedSpendMicros), 'model + direct tool'),
+      renderStatTile('Model cost', formatCostMicros(modelCostMicros), compactNumber(totalTokens) + ' tokens'),
+      renderStatTile('Tool context', formatCostMicros(toolContextCostMicros), compactNumber(t.contextTokens || 0) + ' tokens'),
+      renderStatTile('Avg tool', formatDurationMs(t.durationMsAvg), 'max ' + formatDurationMs(t.durationMsMax)),
       renderStatTile('Sessions', compactNumber(sessions)),
       renderStatTile('Messages', compactNumber(messages)),
-      renderStatTile('Total tokens', compactNumber(totalTokens)),
+      renderStatTile('Tool calls', compactNumber(t.toolCalls || t.total || 0)),
       renderStatTile('Active days', String(activeDays)),
       renderStatTile('Current streak', currentStreak + 'd'),
-      renderStatTile('Longest streak', longestStreak + 'd'),
       renderStatTile('Peak hour', String(peakHour)),
       renderStatTile('Favorite model', String(favoriteModel)),
     ].join('');
-    modelsEl.style.display = 'none';
+    modelsEl.innerHTML = renderToolsCostTable(_stats.tools || {});
+    modelsEl.style.display = '';
     if (footnoteEl) {
-      footnoteEl.textContent = (_stats.models && _stats.models.summary) || (_stats.tools && _stats.tools.summary) || '';
+      const modelSummary = (_stats.models && _stats.models.summary) || '';
+      const toolSummary = (_stats.tools && _stats.tools.summary) || '';
+      footnoteEl.textContent = [modelSummary, toolSummary].filter(Boolean).join(' ');
     }
     return;
   }
@@ -525,6 +584,7 @@ function renderStatsTiles() {
   const totalForShare = topModels.reduce((sum, x) => sum + (Number(x.tokens) || 0), 0) || 1;
 
   tilesEl.innerHTML = [
+    renderStatTile('Est. cost', formatCostMicros(s.totalCostMicros || 0)),
     renderStatTile('Total tokens', compactNumber(s.totalTokens || 0)),
     renderStatTile('Input', compactNumber(s.inputTokens || 0)),
     renderStatTile('Output', compactNumber(s.outputTokens || 0)),
@@ -537,9 +597,10 @@ function renderStatsTiles() {
 
   const providersChips = topProviders.length
     ? `<div class="hub-models-providers">${topProviders.map(p => `
-        <span class="hub-models-chip" title="${escHtml(compactNumber(p.tokens) + ' tokens')}">
+        <span class="hub-models-chip" title="${escHtml(compactNumber(p.tokens) + ' tokens · ' + formatCostMicros(p.costMicros))}">
           <span class="hub-models-chip-name">${escHtml(p.name)}</span>
           <span class="hub-models-chip-val">${escHtml(compactNumber(p.tokens))}</span>
+          <span class="hub-models-chip-val">${escHtml(formatCostMicros(p.costMicros))}</span>
         </span>
       `).join('')}</div>`
     : '';
@@ -549,11 +610,12 @@ function renderStatsTiles() {
   } else {
     modelsEl.innerHTML = `
       ${providersChips}
-      <div class="hub-models-table">
+      <div class="hub-models-table is-cost">
         <div class="hub-models-row hub-models-head">
           <div>Model</div>
           <div class="hub-models-num">Calls</div>
           <div class="hub-models-num">Tokens</div>
+          <div class="hub-models-num">Cost</div>
           <div class="hub-models-num">Share</div>
           <div class="hub-models-bar-cell"></div>
         </div>
@@ -565,6 +627,7 @@ function renderStatsTiles() {
               <div class="hub-models-name" title="${escHtml(row.name)}">${escHtml(row.name)}</div>
               <div class="hub-models-num">${escHtml(compactNumber(Number(row.calls) || 0))}</div>
               <div class="hub-models-num">${escHtml(compactNumber(tokens))}</div>
+              <div class="hub-models-num">${escHtml(formatCostMicros(row.costMicros))}</div>
               <div class="hub-models-num">${share.toFixed(1)}%</div>
               <div class="hub-models-bar-cell"><div class="hub-models-bar" style="width:${Math.max(2, Math.min(100, share))}%"></div></div>
             </div>

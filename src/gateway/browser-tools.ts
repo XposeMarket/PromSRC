@@ -5305,13 +5305,14 @@ export async function browserClickAndDownload(
 ): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  let downloadPromise: Promise<any> | null = null;
   try {
     const timeoutMs = Math.min(Math.max(Number(options?.timeout_ms || 15000), 1000), 120000);
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_click_and_download');
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
-    const downloadPromise = session.page.waitForEvent('download', { timeout: timeoutMs });
+    downloadPromise = session.page.waitForEvent('download', { timeout: timeoutMs });
     const clicked = await clickByRef(session.page, ref);
     const download = await downloadPromise;
     const saved = await persistBrowserDownload(sessionId, download, options);
@@ -5334,6 +5335,7 @@ export async function browserClickAndDownload(
     }
     return buildMinimalBrowserAck(session, `Clicked @${ref} (${clicked.role}: "${clicked.name}") and saved download to ${saved.relPath} (${saved.sizeBytes} bytes).`);
   } catch (err: any) {
+    downloadPromise?.catch(() => {});
     return `ERROR: browser_click_and_download failed: ${err.message}`;
   }
 }

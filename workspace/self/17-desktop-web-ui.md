@@ -1,6 +1,6 @@
 # 33) Desktop Web UI Maintenance Reference
 
-Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, `src/gateway/core/app.ts`, and package scripts on: 2026-05-29
+Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, `src/gateway/core/app.ts`, subagent Home chat/Runs recovery routes, and package scripts on: 2026-06-30
 
 This section is for the desktop web UI only: the browser/Electron operator surface served from `web-ui/` and mirrored into `generated/public-web-ui/`. Do not use this section as the mobile app reference. Mobile/PWA code lives under `web-ui/src/mobile/*` and is covered separately in `16-mobile-app.md`.
 
@@ -24,8 +24,11 @@ Desktop page modules:
 - `web-ui/src/pages/TasksPage.js` - background task board, task detail panel, task chat/replies, task approvals, task state changes, evidence bus, coding workspace/command run panels, manager status, and error response panel.
 - `web-ui/src/pages/SchedulePage.js` - schedules/automations list, Brain schedule cards, create/edit modal, RRULE parsing helpers, run-now/delete/enable controls, schedule reference chips, and schedule websocket refresh behavior.
 - `web-ui/src/pages/TeamsPage.js` - teams canvas/board, team chat, team tabs, manager review/run-all/pause/resume/delete flows, context refs/files, memory, runs, workspace tree/editor, team subagent detail drawers, and team websocket handling.
-- `web-ui/src/pages/SubagentsPage.js` - standalone subagent list/detail, local Agent Profile Pack preview/install/uninstall UI, marketplace provenance badges, subagent chat, abort/file upload/attachment previews, system prompt editing, heartbeat config/markdown, context references/files, spawned tasks, memory reload, and process toggles.
+- `web-ui/src/pages/SubagentsPage.js` - standalone subagent list/detail, local Agent Profile Pack preview/install/uninstall UI, marketplace provenance badges, subagent Home chat, abort/file upload/attachment previews, Runs tab task cards/recovery chat, system prompt editing, heartbeat config/markdown, context references/files, spawned tasks, memory reload, and process toggles.
   - Subagent chat embeds the shared chat composer classes inside a detail panel. Keep `SubagentsPage.js` markup scoped with `subagent-panel-chat-shell`, `subagent-panel-chat-messages`, and `subagent-panel-chat-composer`; `components.css` overrides that scoped composer to `position: static` so it does not inherit the main chat `.chat-input-area` absolute bottom positioning.
+  - Subagent Home chat is for direct conversation, voice-originated chat, and main-agent handoff/tool messages. Do not use it as implicit paused-task recovery.
+  - Subagent Runs tab uses task cards backed by `/api/agents/:id/runs` and `/api/agents/:id/runs/:taskId`. Recovery-eligible cards expose a chat thread and composer backed by `/api/agents/:id/runs/:taskId/recovery`.
+  - Run recovery chat should reuse regular chat bubble/composer styling and attachment upload helpers so it matches Home chat visually and supports images/video/files.
 
 - `web-ui/src/pages/ProposalsPage.js` - proposal list/filter, pending badge, approve/deny, jump-to-session, and jump-to-task behavior.
 - `web-ui/src/pages/AuditPage.js` - non-main run audit log, run grouping/status classification, pagination, row expansion, and stats rendering.
@@ -154,7 +157,7 @@ Important backend route groups consumed by the desktop UI:
 - `src/gateway/routes/tasks.router.ts` - background task/task chat/task control APIs consumed by `TasksPage.js`.
 - `src/gateway/routes/processes.router.ts` - managed process/run APIs consumed by `ProcessRunCard.js` and task panels.
 - `src/gateway/routes/teams.router.ts` - team board, team chat, manager actions, team workspace, team memory, team subagent APIs.
-- `src/gateway/routes/channels.router.ts` - channel status/config/test APIs, agents/subagent APIs, persona/team-room Telegram flows, and dispatch.
+- `src/gateway/routes/channels.router.ts` - channel status/config/test APIs, agents/subagent APIs, explicit subagent run/recovery APIs, persona/team-room Telegram flows, and dispatch.
 - `src/gateway/routes/proposals.router.ts` - proposal list/approve/deny APIs.
 - `src/gateway/routes/projects.router.ts` - project list/session/file/instruction/memory APIs.
 - `src/gateway/routes/settings.router.ts` - settings, providers/models, search, heartbeat, security, and related config APIs.
@@ -170,7 +173,7 @@ Important backend route groups consumed by the desktop UI:
 
 WebSocket events enter through `web-ui/src/ws.js` and are consumed by page modules through `window.wsEventBus.addEventListener('message', ...)`. Chat streaming also uses `/api/chat` SSE directly in `ChatPage.js`; retained and cross-surface stream events are also mirrored through websocket/main-chat stream handlers.
 
-Paused task recovery chat is backend-synchronized across task, subagent, and team surfaces. `TasksPage.js` posts to the task message APIs, while `SubagentsPage.js` and `TeamsPage.js` continue to post to their normal chat routes; the backend detects matching blocked task ownership, routes the turn through task recovery, and mirrors recovery turns back as `subagent_chat_message` or `team_chat_message` events. UI code should treat those mirrored messages as canonical chat history for the owner surface instead of creating a separate recovery-only display.
+Paused task recovery is backend-synchronized, but standalone subagent Home chat is intentionally split from task recovery. `TasksPage.js` posts to the task message APIs. `SubagentsPage.js` Home chat posts to normal subagent chat routes, while the Runs tab posts recovery guidance to `POST /api/agents/:id/runs/:taskId/recovery`. Standalone subagent recovery turns should not be mirrored into Home chat history or rendered as normal Home messages. Team surfaces can still route team room/member/manager blocked-task turns through team recovery when that is the intended owner surface.
 
 ## Desktop Globals and Public Function Map
 

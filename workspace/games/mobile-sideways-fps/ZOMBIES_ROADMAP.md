@@ -1,6 +1,6 @@
 # Mobile Sideways FPS — CoD Zombies-Style Roadmap
 
-Status: implemented as a standalone mobile-capable raycast zombies game in `index.html`. Initial checklist items are now marked according to the completed first full build.
+Status: implemented as a standalone mobile-capable raycast zombies game in `index.html`. First audio-HUD polish pass completed: mute toggle wired with localStorage persistence and desktop/mobile-safe HUD updates.
 
 ## Phase 0 — Preserve Current Foundation
 
@@ -132,7 +132,7 @@ Status: implemented as a standalone mobile-capable raycast zombies game in `inde
 - [x] Add power-up pickup sounds.
 - [x] Add round-start/round-end stingers.
 - [x] Ensure mobile browsers unlock audio only after user gesture.
-- [ ] Add mute toggle if audio becomes annoying during testing.
+- [x] Add mute toggle if audio becomes annoying during testing.
 - [x] Add pause/resume control for testing and survivability.
 
 ## Phase 12 — Balancing and Polish

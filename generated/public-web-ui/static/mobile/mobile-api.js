@@ -629,6 +629,9 @@ export function streamTeamChat(teamId, { message, signal }, handlers = {}) {
   (async () => {
     let res;
     try {
+      const connectingEvent = { type: 'ui_preflight', message: 'Connecting to Prometheus...' };
+      cb('onEvent', connectingEvent);
+      cb('onInfo', connectingEvent.message);
       res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -798,10 +801,13 @@ export async function loadSubagentRunDetail(agentId, taskId) {
   return api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}`);
 }
 
-export async function sendSubagentRunRecovery(agentId, taskId, message) {
+export async function sendSubagentRunRecovery(agentId, taskId, message, attachmentPreviews = []) {
   return api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}/recovery`, {
     method: 'POST',
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({
+      message,
+      attachmentPreviews: Array.isArray(attachmentPreviews) ? attachmentPreviews : [],
+    }),
     timeoutMs: 300000,
   });
 }
@@ -840,6 +846,7 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
   const url = (API || '') + `/api/agents/${encodeURIComponent(agentId)}/chat/stream`;
   const cb = (name, ...args) => { try { handlers[name]?.(...args); } catch (e) { console.error('[subagent stream]', name, e); } };
+  let activeRuntimeId = '';
 
   (async () => {
     let res;
@@ -860,7 +867,19 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
       return;
     }
     if (!res.ok || !res.body) {
-      cb('onError', new Error(`Chat HTTP ${res.status}`));
+      let detail = '';
+      try {
+        const raw = await res.text();
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            detail = parsed?.error || parsed?.message || raw;
+          } catch {
+            detail = raw;
+          }
+        }
+      } catch {}
+      cb('onError', new Error(detail ? `Chat HTTP ${res.status}: ${detail}` : `Chat HTTP ${res.status}`));
       cb('onDone');
       return;
     }
@@ -879,6 +898,7 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
           buf = buf.slice(idx + 1);
           if (!line.startsWith('data: ')) continue;
           let evt; try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+          if (evt?.type === 'runtime_registered' && evt.runtimeId) activeRuntimeId = String(evt.runtimeId);
           cb('onEvent', evt);
           switch (evt.type) {
             case 'token':         if (evt.text) cb('onToken', String(evt.text)); break;
@@ -903,7 +923,18 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
     }
   })();
 
-  return { abort: () => ctrl.abort() };
+  return {
+    abort: () => {
+      const runtimeId = String(activeRuntimeId || '').trim();
+      if (runtimeId) {
+        mfetch('/api/mobile/commands/stop', {
+          method: 'POST',
+          body: JSON.stringify({ id: runtimeId, source: 'mobile_subagent_stream_abort' }),
+        }).catch(() => {});
+      }
+      ctrl.abort();
+    },
+  };
 }
 
 function _withTimeout(promise, fallback, timeoutMs = 3500) {
@@ -1130,8 +1161,18 @@ export async function denyMobileProposal(id) {
 }
 
 export async function loadBgTasks() {
-  const r = await api('/api/bg-tasks').catch(() => null);
-  return r?.success && Array.isArray(r.tasks) ? r.tasks : [];
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const r = await api('/api/bg-tasks', { timeoutMs: attempt === 0 ? 15000 : 30000 });
+      if (r?.success && Array.isArray(r.tasks)) return r.tasks;
+      throw new Error(r?.error || 'Invalid tasks response');
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+    }
+  }
+  throw lastError || new Error('Could not load tasks');
 }
 
 export async function loadBgTaskDetail(taskId) {
@@ -1620,12 +1661,13 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
   const toChatStreamError = (err) => {
     if (err?.name === 'AbortError') return err;
     const raw = String(err?.message || err || '').trim();
-    const message = /terminated|load failed|failed to fetch|networkerror/i.test(raw)
+    const disconnected = /terminated|load failed|failed to fetch|networkerror|stream ended before completion/i.test(raw);
+    const message = disconnected
       ? 'Connection dropped. Prometheus may still be working — reopen this chat and I’ll recover the latest result automatically.'
       : (raw || 'Mobile chat stream failed.');
     const normalized = new Error(message);
     normalized.cause = err;
-    normalized.mobileStreamDisconnected = /terminated|load failed|failed to fetch|networkerror/i.test(raw);
+    normalized.mobileStreamDisconnected = disconnected;
     return normalized;
   };
 
@@ -1675,6 +1717,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
     const decoder = new TextDecoder('utf-8');
     let buf = '';
     let gotFinal = false;
+    let gotDone = false;
 
     try {
       while (true) {
@@ -1712,11 +1755,15 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
               break;
             case 'final':         gotFinal = true; cb('onFinal', String(evt.text || ''), evt); break;
             case 'done':
+              gotDone = true;
               if (!gotFinal && evt.reply) cb('onFinal', String(evt.reply), evt);
               cb('onDone'); return;
             case 'error':         cb('onError', new Error(String(evt.message || 'Chat error'))); cb('onDone'); return;
           }
         }
+      }
+      if (!gotDone && !gotFinal && !ctrl.signal.aborted) {
+        cb('onError', toChatStreamError(new Error('stream ended before completion')));
       }
     } catch (err) {
       if (err.name === 'AbortError') { cb('onDone'); return; }

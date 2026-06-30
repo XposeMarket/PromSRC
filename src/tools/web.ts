@@ -131,6 +131,30 @@ export type WebFetchProgressEvent = {
 };
 type WebFetchProgressReporter = (event: WebFetchProgressEvent) => void;
 
+const DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS = Math.max(
+  1000,
+  Math.min(15_000, Number(process.env.PROMETHEUS_WEB_SEARCH_PROVIDER_TIMEOUT_MS || 6_000) || 6_000),
+);
+
+function resolveSearchProviderTimeoutMs(value?: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS;
+  return Math.max(1000, Math.min(15_000, Math.floor(n)));
+}
+
+async function withSearchProviderTimeout<T>(provider: SearchProvider, promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${provider} timed out after ${timeoutMs}ms`)), timeoutMs);
+    if (typeof (timer as any).unref === 'function') (timer as any).unref();
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function normalizeGoogleUrl(url: string): string {
   try {
     const u = new URL(url);
@@ -645,11 +669,11 @@ function getSearchConfig(): {
   return { preferred: 'ddg' };
 }
 // ── Google Custom Search API ─────────────────────────────────────────────---
-async function searchTinyFish(query: string, limit: number, apiKey: string): Promise<ToolResult> {
+async function searchTinyFish(query: string, limit: number, apiKey: string, timeoutMs = DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS): Promise<ToolResult> {
   const url = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}&location=US&language=en`;
   const res = await fetch(url, {
     headers: { 'Accept': 'application/json', 'X-API-Key': apiKey },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`TinyFish HTTP ${res.status}`);
   const data: any = await res.json();
@@ -706,9 +730,9 @@ async function searchXAI(query: string, limit: number): Promise<ToolResult> {
   };
 }
 
-async function searchGoogle(query: string, limit: number, apiKey: string, cx: string): Promise<ToolResult> {
+async function searchGoogle(query: string, limit: number, apiKey: string, cx: string, timeoutMs = DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS): Promise<ToolResult> {
   const url = `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(query)}&key=${apiKey}&cx=${cx}&num=${limit}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   const data: any = await res.json();
   if (!res.ok) {
     const message = data?.error?.message || data?.error?.errors?.[0]?.message || `Google HTTP ${res.status}`;
@@ -740,7 +764,7 @@ async function searchGoogle(query: string, limit: number, apiKey: string, cx: st
 }
 
 // ── Tavily (best for AI agents, free 1k/mo) ───────────────────────────────────
-async function searchTavily(query: string, limit: number, apiKey: string): Promise<ToolResult> {
+async function searchTavily(query: string, limit: number, apiKey: string, timeoutMs = DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS): Promise<ToolResult> {
   const res = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -753,7 +777,7 @@ async function searchTavily(query: string, limit: number, apiKey: string): Promi
       // We synthesize from snippets instead of trusting this shortcut.
       include_answer: !isFreshQuery(query),
     }),
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) throw new Error(`Tavily HTTP ${res.status}`);
@@ -779,11 +803,11 @@ async function searchTavily(query: string, limit: number, apiKey: string): Promi
 }
 
 // ── Brave Search API (free 2k/mo) ─────────────────────────────────────────────
-async function searchBrave(query: string, limit: number, apiKey: string): Promise<ToolResult> {
+async function searchBrave(query: string, limit: number, apiKey: string, timeoutMs = DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS): Promise<ToolResult> {
   const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`;
   const res = await fetch(url, {
     headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) throw new Error(`Brave HTTP ${res.status}`);
@@ -807,12 +831,12 @@ async function searchBrave(query: string, limit: number, apiKey: string): Promis
 }
 
 // ── DuckDuckGo JSON endpoint (no key, more stable than HTML scrape) ───────────
-async function searchDDG(query: string, limit: number): Promise<ToolResult> {
+async function searchDDG(query: string, limit: number, timeoutMs = DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS): Promise<ToolResult> {
   // DDG instant answer API — gives structured results without scraping HTML
   const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Prometheus/1.0' },
-    signal: AbortSignal.timeout(12_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) throw new Error(`DDG JSON HTTP ${res.status}`);
@@ -852,7 +876,7 @@ async function searchDDG(query: string, limit: number): Promise<ToolResult> {
 
   if (results.length === 0) {
     // Fall back to HTML scraper if JSON gave nothing
-    return searchDDGHtml(query, limit);
+    return searchDDGHtml(query, limit, timeoutMs);
   }
   const ranked = rankResults(query, results);
   const answer = buildDirectPriceAnswer(query, ranked);
@@ -867,7 +891,7 @@ async function searchDDG(query: string, limit: number): Promise<ToolResult> {
 }
 
 // ── DDG HTML scraper (last resort fallback) ───────────────────────────────────
-async function searchDDGHtml(query: string, limit: number): Promise<ToolResult> {
+async function searchDDGHtml(query: string, limit: number, timeoutMs = DEFAULT_SEARCH_PROVIDER_TIMEOUT_MS): Promise<ToolResult> {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const res = await fetch(url, {
     headers: {
@@ -875,7 +899,7 @@ async function searchDDGHtml(query: string, limit: number): Promise<ToolResult> 
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.5',
     },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) return { success: false, error: `DDG HTML HTTP ${res.status}` };
 
@@ -952,10 +976,12 @@ export async function executeWebSearch(args: {
   provider?: SearchProviderOption;
   fetch_top_k?: number;
   fetch_max_chars?: number;
+  provider_timeout_ms?: number;
 }): Promise<ToolResult> {
   if (!args.query?.trim()) return { success: false, error: 'query is required' };
   let limit = Math.min(args.max_results ?? 5, 10);
   if (isPriceQuery(args.query)) limit = Math.max(limit, 5);
+  const providerTimeoutMs = resolveSearchProviderTimeoutMs(args.provider_timeout_ms);
 
   const cfg = getSearchConfig();
   const providerRaw = String(args.provider || '').trim().toLowerCase();
@@ -972,11 +998,11 @@ export async function executeWebSearch(args: {
   // Default ON for every configured credentialed provider. Pass multi_engine:false for the Settings preferred provider only.
   if (useMultiEngine) {
     const tasks: { provider: SearchProvider; promise: Promise<ToolResult> }[] = [];
-    if (cfg.tinyfishKey) tasks.push({ provider: 'tinyfish', promise: searchTinyFish(args.query, limit, cfg.tinyfishKey as string) });
-    if (cfg.tavilyKey) tasks.push({ provider: 'tavily', promise: searchTavily(args.query, limit, cfg.tavilyKey as string) });
-    if (cfg.googleKey && cfg.googleCx) tasks.push({ provider: 'google', promise: searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string) });
-    if (cfg.braveKey)  tasks.push({ provider: 'brave',  promise: searchBrave(args.query, limit, cfg.braveKey as string) });
-    if (xaiHasCredentials()) tasks.push({ provider: 'xai', promise: searchXAI(args.query, limit) });
+    if (cfg.tinyfishKey) tasks.push({ provider: 'tinyfish', promise: withSearchProviderTimeout('tinyfish', searchTinyFish(args.query, limit, cfg.tinyfishKey as string, providerTimeoutMs), providerTimeoutMs) });
+    if (cfg.tavilyKey) tasks.push({ provider: 'tavily', promise: withSearchProviderTimeout('tavily', searchTavily(args.query, limit, cfg.tavilyKey as string, providerTimeoutMs), providerTimeoutMs) });
+    if (cfg.googleKey && cfg.googleCx) tasks.push({ provider: 'google', promise: withSearchProviderTimeout('google', searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string, providerTimeoutMs), providerTimeoutMs) });
+    if (cfg.braveKey)  tasks.push({ provider: 'brave',  promise: withSearchProviderTimeout('brave', searchBrave(args.query, limit, cfg.braveKey as string, providerTimeoutMs), providerTimeoutMs) });
+    if (xaiHasCredentials()) tasks.push({ provider: 'xai', promise: withSearchProviderTimeout('xai', searchXAI(args.query, limit), providerTimeoutMs) });
     if (tasks.length >= 1) {
       const diagnostics: SearchDiagnostics = {
         query: args.query,
@@ -1075,7 +1101,7 @@ export async function executeWebSearch(args: {
     const started = Date.now();
     try {
       if (provider === 'tinyfish') {
-        const res = await searchTinyFish(args.query, limit, cfg.tinyfishKey as string);
+        const res = await withSearchProviderTimeout('tinyfish', searchTinyFish(args.query, limit, cfg.tinyfishKey as string, providerTimeoutMs), providerTimeoutMs);
         await augmentEventContract(args.query, res);
         const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
         diagnostics.attempted.push({
@@ -1089,7 +1115,7 @@ export async function executeWebSearch(args: {
         return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'tavily') {
-        const res = await searchTavily(args.query, limit, cfg.tavilyKey as string);
+        const res = await withSearchProviderTimeout('tavily', searchTavily(args.query, limit, cfg.tavilyKey as string, providerTimeoutMs), providerTimeoutMs);
         await augmentEventContract(args.query, res);
         const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
         diagnostics.attempted.push({
@@ -1103,7 +1129,7 @@ export async function executeWebSearch(args: {
         return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'google') {
-        const res = await searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string);
+        const res = await withSearchProviderTimeout('google', searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string, providerTimeoutMs), providerTimeoutMs);
         await augmentEventContract(args.query, res);
         const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
         diagnostics.attempted.push({
@@ -1117,7 +1143,7 @@ export async function executeWebSearch(args: {
         return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'brave') {
-        const res = await searchBrave(args.query, limit, cfg.braveKey as string);
+        const res = await withSearchProviderTimeout('brave', searchBrave(args.query, limit, cfg.braveKey as string, providerTimeoutMs), providerTimeoutMs);
         await augmentEventContract(args.query, res);
         const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
         diagnostics.attempted.push({
@@ -1131,7 +1157,7 @@ export async function executeWebSearch(args: {
         return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'xai') {
-        const res = await searchXAI(args.query, limit);
+        const res = await withSearchProviderTimeout('xai', searchXAI(args.query, limit), providerTimeoutMs);
         const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
         diagnostics.attempted.push({
           provider,
@@ -1144,7 +1170,7 @@ export async function executeWebSearch(args: {
         return maybeAttachFetchedSearchResults(res, args);
       }
       if (provider === 'ddg') {
-        const res = await searchDDG(args.query, limit);
+        const res = await withSearchProviderTimeout('ddg', searchDDG(args.query, limit, providerTimeoutMs), providerTimeoutMs);
         await augmentEventContract(args.query, res);
         const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
         if (!res.success || resultCount === 0) {
@@ -1196,7 +1222,7 @@ export async function executeWebSearch(args: {
   // Final fallback if ddg path threw and wasn't already successful
   const fallbackStarted = Date.now();
   try {
-    const res = await searchDDGHtml(args.query, limit);
+    const res = await withSearchProviderTimeout('ddg_html', searchDDGHtml(args.query, limit, providerTimeoutMs), providerTimeoutMs);
     const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
     diagnostics.attempted.push({
       provider: 'ddg_html',
@@ -1964,6 +1990,7 @@ export const webSearchTool = {
     provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, xai, multi. Use a provider name for single-provider search; use multi for all configured engines',
     fetch_top_k: 'number (optional, default 0, max 10) - Fetch this many top result URLs after search',
     fetch_max_chars: 'number (optional, default 4000) - Max characters per fetched result when fetch_top_k is set',
+    provider_timeout_ms: 'number (optional, default 6000, max 15000) - Per-provider search timeout in milliseconds',
   },
   jsonSchema: {
     type: 'object',
@@ -1979,6 +2006,7 @@ export const webSearchTool = {
       },
       fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
       fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
+      provider_timeout_ms: { type: 'number', description: 'Optional per-provider timeout in milliseconds. Default 6000, max 15000.' },
     },
     additionalProperties: false,
   },
@@ -1989,7 +2017,7 @@ export const webSearchSingleTool = {
   get description() {
     return `Search using one provider only. Defaults to the preferred provider from Settings. Configured providers: ${getSearchProvidersSummary()}. Use provider to override for testing.`;
   },
-  execute: (args: { query: string; max_results?: number; provider?: SearchProviderOption; fetch_top_k?: number; fetch_max_chars?: number }) =>
+  execute: (args: { query: string; max_results?: number; provider?: SearchProviderOption; fetch_top_k?: number; fetch_max_chars?: number; provider_timeout_ms?: number }) =>
     executeWebSearch({ ...args, multi_engine: false }),
   schema: {
     query: 'string (required) - Search query',
@@ -1997,6 +2025,7 @@ export const webSearchSingleTool = {
     provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, xai. Omit to use Settings preferred provider',
     fetch_top_k: 'number (optional, default 0, max 10) - Fetch this many top result URLs after search',
     fetch_max_chars: 'number (optional, default 4000) - Max characters per fetched result when fetch_top_k is set',
+    provider_timeout_ms: 'number (optional, default 6000, max 15000) - Per-provider search timeout in milliseconds',
   },
   jsonSchema: {
     type: 'object',
@@ -2011,6 +2040,7 @@ export const webSearchSingleTool = {
       },
       fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
       fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
+      provider_timeout_ms: { type: 'number', description: 'Optional per-provider timeout in milliseconds. Default 6000, max 15000.' },
     },
     additionalProperties: false,
   },
@@ -2021,13 +2051,14 @@ export const webSearchMultiTool = {
   get description() {
     return `Search using every configured credentialed provider in parallel, including xAI X Search when connected, then merge deduplicated results. Configured providers: ${getSearchProvidersSummary()}.`;
   },
-  execute: (args: { query: string; max_results?: number; fetch_top_k?: number; fetch_max_chars?: number }) =>
+  execute: (args: { query: string; max_results?: number; fetch_top_k?: number; fetch_max_chars?: number; provider_timeout_ms?: number }) =>
     executeWebSearch({ ...args, provider: 'multi' }),
   schema: {
     query: 'string (required) - Search query',
     max_results: 'number (optional, default 5) - Max results to return per provider',
     fetch_top_k: 'number (optional, default 0, max 10) - Fetch this many top result URLs after search',
     fetch_max_chars: 'number (optional, default 4000) - Max characters per fetched result when fetch_top_k is set',
+    provider_timeout_ms: 'number (optional, default 6000, max 15000) - Per-provider search timeout in milliseconds',
   },
   jsonSchema: {
     type: 'object',
@@ -2037,6 +2068,7 @@ export const webSearchMultiTool = {
       max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
       fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
       fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
+      provider_timeout_ms: { type: 'number', description: 'Optional per-provider timeout in milliseconds. Default 6000, max 15000.' },
     },
     additionalProperties: false,
   },
@@ -2731,6 +2763,7 @@ export async function webSearch(query: string, options: {
   provider?: SearchProviderOption;
   fetch_top_k?: number;
   fetch_max_chars?: number;
+  provider_timeout_ms?: number;
 } = {}): Promise<string> {
   const result = await executeWebSearch({ query, ...options });
   if (!result.success) return result.error || `Search failed for "${query}".`;

@@ -56,6 +56,7 @@ export class PrometheusExtensionRuntimeRegistry {
   private extensions = new Map<string, PrometheusExtensionRuntimeRecord>();
   private tools = new Map<string, RegisteredTool>();
   private connectors = new Map<string, PrometheusConnectorRuntime & { extensionId: string }>();
+  private connectorStatusCache: { at: number; text: string } | null = null;
   private providers = new Map<string, PrometheusProviderRuntime & { extensionId: string }>();
   private mcpPresets = new Map<string, PrometheusMcpPresetRuntime & { extensionId: string }>();
   private routes: Array<PrometheusRouteRuntime & { extensionId: string }> = [];
@@ -108,17 +109,21 @@ export class PrometheusExtensionRuntimeRegistry {
       throw new Error(`Tool "${tool.name}" is already registered by extension "${existing.extensionId}"`);
     }
     this.tools.set(tool.name, { ...tool, extensionId });
+    this.connectorStatusCache = null;
   }
 
   unregisterTool(name: string, extensionId?: string): boolean {
     const existing = this.tools.get(name);
     if (!existing) return false;
     if (extensionId && existing.extensionId !== extensionId) return false;
-    return this.tools.delete(name);
+    const deleted = this.tools.delete(name);
+    if (deleted) this.connectorStatusCache = null;
+    return deleted;
   }
 
   registerConnector(extensionId: string, connector: PrometheusConnectorRuntime): void {
     this.connectors.set(connector.id, { ...connector, extensionId });
+    this.connectorStatusCache = null;
   }
 
   registerProvider(extensionId: string, provider: PrometheusProviderRuntime): void {
@@ -192,16 +197,26 @@ export class PrometheusExtensionRuntimeRegistry {
   }
 
   buildConnectorStatus(): string {
+    const now = Date.now();
+    if (this.connectorStatusCache && now - this.connectorStatusCache.at < 5_000) {
+      return this.connectorStatusCache.text;
+    }
     const connectors = this.listConnectors();
-    const connected = connectors.filter((connector) => connector.isConnected?.() === true);
-    const disconnected = connectors.filter((connector) => connector.isConnected?.() !== true);
+    const rows = connectors.map((connector) => ({
+      connector,
+      connected: connector.isConnected?.() === true,
+    }));
+    const connected = rows.filter((row) => row.connected);
+    const disconnected = rows.filter((row) => !row.connected);
 
     if (connected.length === 0) {
-      return `No connectors connected yet (${disconnected.length} available: ${disconnected.map((c) => c.id).join(', ')}).\nConnect them in the Connections panel, then activate the external_apps category to use their tools.`;
+      const text = `No connectors connected yet (${disconnected.length} available: ${disconnected.map((row) => row.connector.id).join(', ')}).\nConnect them in the Connections panel, then activate the external_apps category to use their tools.`;
+      this.connectorStatusCache = { at: now, text };
+      return text;
     }
 
     const lines = [`Connected connectors (${connected.length} of ${connectors.length}):`];
-    for (const connector of connected) {
+    for (const { connector } of connected) {
       const described = connector.describeStatus?.();
       lines.push(`  ${connector.id}${typeof described === 'string' && described ? ` - ${described}` : ''}`);
       if (connector.toolNames?.length) {
@@ -209,10 +224,12 @@ export class PrometheusExtensionRuntimeRegistry {
       }
     }
     if (disconnected.length > 0) {
-      lines.push(`\nNot connected (${disconnected.length}): ${disconnected.map((c) => c.id).join(', ')}`);
+      lines.push(`\nNot connected (${disconnected.length}): ${disconnected.map((row) => row.connector.id).join(', ')}`);
     }
     lines.push('\nUse request_tool_category({"category":"external_apps"}) to unlock connected connector tools for this session.');
-    return lines.join('\n');
+    const text = lines.join('\n');
+    this.connectorStatusCache = { at: now, text };
+    return text;
   }
 }
 

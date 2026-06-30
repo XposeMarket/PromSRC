@@ -119,6 +119,7 @@ export interface TaskRecoveryConversationTurn {
   content: string;
   timestamp: number;
   source?: 'pause_analysis' | 'chat' | 'task_panel' | 'subagent_chat' | 'team_chat' | 'team_manager' | 'system';
+  attachmentPreviews?: any[];
 }
 
 export interface TaskPauseSnapshotStep {

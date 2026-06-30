@@ -916,6 +916,7 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (name === 'connector_list') return null; // core tool — always available
   if (name === 'generate_image' || name === 'generate_video') return null;
   if (name === 'chat_with_subagent') return null; // core direct-chat tool for standalone subagents
+  if (name === 'agent_run_ops') return null; // core run/recovery bridge for subagent autopilot
   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
   if (name === 'save_site_shortcut') return 'browser_automation';
   if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test') return 'browser_automation';
@@ -949,8 +950,31 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   return null; // null = core tool, always included
 }
 
+const TOOL_BUILD_CACHE_TTL_MS = 30_000;
+const TOOL_BUILD_CACHE_MAX_ENTRIES = 64;
+const INCLUDE_DIRECT_CONNECTOR_TOOL_SCHEMAS =
+  String(process.env.PROMETHEUS_DIRECT_CONNECTOR_TOOL_SCHEMAS || '').trim() === '1';
+const DYNAMIC_TOOL_SURFACE_CATEGORIES = new Set<string>([
+  'mcp_server_tools',
+  'composite_tools',
+]);
+const toolBuildCache = new Map<string, { at: number; tools: any[] }>();
+
+function stableCategoryKey(categories: Set<string>): string {
+  return Array.from(categories).sort().join(',');
+}
+
+function trimToolBuildCache(): void {
+  while (toolBuildCache.size > TOOL_BUILD_CACHE_MAX_ENTRIES) {
+    const firstKey = toolBuildCache.keys().next().value;
+    if (!firstKey) return;
+    toolBuildCache.delete(firstKey);
+  }
+}
+
 export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>) {
   const { getMCPManager } = deps;
+  const configSnapshot = getConfig().getConfig() as any;
   const isPublicBuild = getPublicBuildAllowedCategories(['prometheus_source_write'] as const).length === 0;
   const normalizedActiveCategories = new Set<string>();
   if (activatedCategories !== undefined) {
@@ -962,6 +986,28 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   const categoryIsActive = (category: ToolCategory): boolean => (
     activatedCategories === undefined || normalizedActiveCategories.has(category)
   );
+  const cacheable = activatedCategories !== undefined
+    && !Array.from(DYNAMIC_TOOL_SURFACE_CATEGORIES).some((category) => normalizedActiveCategories.has(category));
+  const subagentMode = configSnapshot.orchestration?.subagent_mode === true;
+  const agentBuilderEnabled = configSnapshot?.agent_builder?.enabled === true;
+  const cacheKey = cacheable
+    ? [
+      `public:${isPublicBuild ? '1' : '0'}`,
+      `subagent:${subagentMode ? '1' : '0'}`,
+      `agentBuilder:${agentBuilderEnabled ? '1' : '0'}`,
+      `cats:${stableCategoryKey(normalizedActiveCategories)}`,
+    ].join('|')
+    : '';
+  if (cacheKey) {
+    const cached = toolBuildCache.get(cacheKey);
+    if (cached && Date.now() - cached.at <= TOOL_BUILD_CACHE_TTL_MS) return cached.tools.slice();
+    if (cached) toolBuildCache.delete(cacheKey);
+  }
+  const creativeCategoryActive = categoryIsActive('creative_basic')
+    || categoryIsActive('creative_image')
+    || categoryIsActive('creative_video')
+    || categoryIsActive('creative_hyperframes')
+    || categoryIsActive('creative_quality');
 
   const toolDefs = [
     // ── File, Web, and Memory tools ──────────────────────────────────────────
@@ -1157,12 +1203,12 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
         },
       },
     },
-    // Browser automation tools
-    ...getBrowserToolDefinitions(),
-    ...getDesktopToolDefinitions(),
+    // Browser/desktop schemas are large and category-only. Avoid constructing
+    // them for normal chat/background turns where they will be filtered out.
+    ...(categoryIsActive('browser_automation') ? getBrowserToolDefinitions() : []),
+    ...(categoryIsActive('desktop_automation') ? getDesktopToolDefinitions() : []),
     // ── Sub-agent tools ── shown based on subagent_mode toggle ────────────────────────────────────
     ...(() => {
-      const subagentMode = (getConfig().getConfig() as any).orchestration?.subagent_mode === true;
       if (subagentMode) {
         return [{
           type: 'function' as const,
@@ -1198,11 +1244,10 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     // ── CIS, System, and Self-improvement tools ───────────────────────────────
     ...getCisSystemTools(),
     // ── Creative editor tools ─────────────────────────────────────────────────
-    ...getCreativeToolDefs(),
+    ...(creativeCategoryActive ? getCreativeToolDefs() : []),
     // ── Agent Builder Integration Tools (only when enabled in config) ─────────
   ] as any[];
 
-  const agentBuilderEnabled = (getConfig().getConfig() as any)?.agent_builder?.enabled === true;
   if (agentBuilderEnabled) {
     registerAgentBuilderTools(toolDefs);
   }
@@ -1384,7 +1429,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // Connector, MCP, and composite tools can require status probes or filesystem
   // scans. Avoid touching those dynamic systems unless their category is in the
   // current tool surface; connector_list remains core for discovery.
-  if (categoryIsActive('external_apps')) {
+  if (categoryIsActive('external_apps') && INCLUDE_DIRECT_CONNECTOR_TOOL_SCHEMAS) {
     try {
       ensurePrometheusExtensionRuntimeLoaded();
       dynamicToolDefs.push(...getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions());
@@ -1432,7 +1477,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // ── Filter to core + activated categories ──────────────────────────────────
   // When activatedCategories is provided, only return core tools + those in active categories.
   if (activatedCategories !== undefined) {
-    return visibleToolDefs.filter((t: any) => {
+    const filteredTools = visibleToolDefs.filter((t: any) => {
       const name = String(t?.function?.name || '');
       const cat = getToolCategory(name);
       if (SOURCE_READ_FILE_HELPER_TOOL_NAMES.has(name) && normalizedActiveCategories.has('prometheus_source_read')) {
@@ -1440,6 +1485,11 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       }
       return cat === null || normalizedActiveCategories.has(cat);
     });
+    if (cacheKey) {
+      toolBuildCache.set(cacheKey, { at: Date.now(), tools: filteredTools });
+      trimToolBuildCache();
+    }
+    return filteredTools.slice();
   }
 
   return visibleToolDefs;

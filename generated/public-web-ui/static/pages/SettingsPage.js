@@ -532,6 +532,7 @@ async function loadCredentialsTab() {
 }
 
 async function loadCredFields() {
+  window._settingsCredentialsLoadedToUI = false;
   try {
     const s = await api('/api/settings/search');
     // Server returns '••••••••' if key is set, '' if not
@@ -553,7 +554,9 @@ async function loadCredFields() {
         labelEl.innerHTML = 'Google CSE ID <span style="font-weight:400;color:var(--muted)">(stored in vault for persistence)</span>';
       }
     }
+    window._settingsCredentialsLoadedToUI = true;
   } catch(e) {
+    window._settingsCredentialsLoadedToUI = false;
     console.warn('loadCredFields:', e);
   }
 }
@@ -1063,6 +1066,7 @@ function onProviderChange() {
 }
 
 async function loadModelSettings() {
+  window._llmSettingsLoadedToUI = false;
   try {
     await ensureProviderCatalogUIReady();
     await fetchCredentialedModelProviderIds(true);
@@ -1147,6 +1151,7 @@ async function loadModelSettings() {
       loadSessionCompactionSettings(),
     ]).then(() => { renderModelsUsage(); }).catch(() => {});
   } catch (e) {
+    window._llmSettingsLoadedToUI = false;
     console.warn('loadModelSettings error:', e);
   }
 }
@@ -1213,6 +1218,7 @@ async function renderModelsUsage() {
 window.renderModelsUsage = renderModelsUsage;
 
 async function loadSessionCompactionSettings() {
+  window._settingsSessionLoadedToUI = false;
   try {
     const data = await api('/api/settings/session');
     const s = data?.session || {};
@@ -1228,7 +1234,9 @@ async function loadSessionCompactionSettings() {
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
     renderContextBudgetSummary(s.contextProfile, s.contextBudget, s);
+    window._settingsSessionLoadedToUI = true;
   } catch (e) {
+    window._settingsSessionLoadedToUI = false;
     console.warn('loadSessionCompactionSettings error:', e);
   }
 }
@@ -1313,6 +1321,7 @@ function renderCommandPermissionGrants(grants) {
 
 async function loadSecuritySettings() {
   const statusEl = document.getElementById('settings-security-status');
+  window._settingsSecurityLoadedToUI = false;
   try {
     if (statusEl) statusEl.textContent = 'Loading...';
     const data = await api('/api/settings/security', { timeoutMs: 5000 });
@@ -1324,8 +1333,10 @@ async function loadSecuritySettings() {
     const hardEl = document.getElementById('settings-hard-blocked-patterns');
     if (hardEl) hardEl.textContent = (data?.hardBlockedPatterns || []).join(', ') || 'none configured';
     renderCommandPermissionGrants(data?.commandPermissions || []);
+    window._settingsSecurityLoadedToUI = true;
     if (statusEl) statusEl.textContent = '';
   } catch (err) {
+    window._settingsSecurityLoadedToUI = false;
     if (statusEl) statusEl.textContent = `Failed to load security settings: ${err.message}`;
   }
 }
@@ -2022,6 +2033,8 @@ async function refreshOllamaModels() { await refreshProviderModels(); }
 
 async function openSettings(tab) {
   document.getElementById('settings-modal').style.display = 'flex';
+  window._settingsPathsLoadedToUI = false;
+  window._settingsSearchLoadedToUI = false;
   const saveBtn = document.getElementById('settings-save-btn');
   if (saveBtn) {
     saveBtn.disabled = false;
@@ -2036,16 +2049,27 @@ async function openSettings(tab) {
   } catch {}
   try {
     const paths = await api('/api/settings/paths', { timeoutMs: 5000 });
-    document.getElementById('settings-workspace-path').value = paths.workspace_path || '';
-    document.getElementById('settings-allowed-paths').value = (paths.allowed_paths || []).join('\n');
-    document.getElementById('settings-blocked-paths').value = (paths.blocked_paths || []).join('\n');
-  } catch {}
+    const workspaceEl = document.getElementById('settings-workspace-path');
+    const allowedEl = document.getElementById('settings-allowed-paths');
+    const blockedEl = document.getElementById('settings-blocked-paths');
+    if (workspaceEl) workspaceEl.value = paths.workspace_path || '';
+    if (allowedEl) allowedEl.value = (paths.allowed_paths || []).join('\n');
+    if (blockedEl) blockedEl.value = (paths.blocked_paths || []).join('\n');
+    window._settingsPathsLoadedToUI = true;
+  } catch {
+    window._settingsPathsLoadedToUI = false;
+  }
   try {
     const s = await api('/api/settings/search', { timeoutMs: 5000 });
-    document.getElementById('settings-provider').value = s.preferred_provider || 'tavily';
-    document.getElementById('settings-search-rigor').value = s.search_rigor || 'verified';
+    const providerEl = document.getElementById('settings-provider');
+    const rigorEl = document.getElementById('settings-search-rigor');
+    if (providerEl) providerEl.value = s.preferred_provider || 'tavily';
+    if (rigorEl) rigorEl.value = s.search_rigor || 'verified';
+    window._settingsSearchLoadedToUI = true;
     // Keys are loaded via the Credentials tab — not here
-  } catch {}
+  } catch {
+    window._settingsSearchLoadedToUI = false;
+  }
   try { await loadSessionCompactionSettings(); } catch {}
 }
 
@@ -3424,6 +3448,119 @@ async function sendChannelTest(channel) {
   setButtonBusy(btnId, false, 'Sending...', 'Send Test');
 }
 
+function getActiveSettingsTab() {
+  const fromWindow = String(window.settingsTab || '').trim();
+  if (fromWindow) return fromWindow;
+  const activePanel = Array.from(document.querySelectorAll('[id^="settings-panel-"]'))
+    .find((panel) => panel && panel.style.display !== 'none');
+  return activePanel?.id?.replace(/^settings-panel-/, '') || 'system';
+}
+
+function getSettingsValue(id, fallback = '') {
+  const el = document.getElementById(id);
+  if (!el || !('value' in el)) return fallback;
+  return String(el.value ?? fallback);
+}
+
+function getSettingsLines(id) {
+  return getSettingsValue(id)
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function buildSettingsPathsPayload() {
+  return {
+    workspace_path: getSettingsValue('settings-workspace-path').trim(),
+    allowed_paths: getSettingsLines('settings-allowed-paths'),
+    blocked_paths: getSettingsLines('settings-blocked-paths'),
+  };
+}
+
+function buildSearchTabPayload() {
+  const payload = {};
+  const providerEl = document.getElementById('settings-provider');
+  const rigorEl = document.getElementById('settings-search-rigor');
+  if (providerEl) payload.preferred_provider = providerEl.value || '';
+  if (rigorEl) payload.search_rigor = rigorEl.value || 'verified';
+  return payload;
+}
+
+function buildCredentialTabPayload() {
+  return {
+    tinyfish_api_key: getSettingsValue('cred-tinyfish-key').trim(),
+    tavily_api_key: getSettingsValue('cred-tavily-key').trim(),
+    google_api_key: getSettingsValue('cred-google-key').trim(),
+    google_cx: getSettingsValue('cred-google-cx').trim(),
+    brave_api_key: getSettingsValue('cred-brave-key').trim(),
+  };
+}
+
+function buildLegacyModelPayload() {
+  const primaryModel = getSettingsValue('settings-primary-model').trim();
+  const payload = {
+    ollama_endpoint: getSettingsValue('settings-ollama-endpoint', 'http://localhost:11434') || 'http://localhost:11434',
+  };
+  if (primaryModel) {
+    payload.primary = primaryModel;
+    payload.roles = {
+      manager: primaryModel,
+      executor: primaryModel,
+      verifier: primaryModel,
+    };
+  }
+  return payload;
+}
+
+function buildSessionSettingsPayload() {
+  return {
+    rollingCompactionEnabled: document.getElementById('settings-rolling-compaction-enabled')?.checked !== false,
+    rollingCompactionMessageCount: Number(getSettingsValue('settings-rolling-compaction-count', '20') || 20),
+    rollingCompactionToolTurns: Number(getSettingsValue('settings-rolling-compaction-tools', '5') || 5),
+    rollingCompactionSummaryMaxWords: Number(getSettingsValue('settings-rolling-compaction-words', '900') || 900),
+    rollingCompactionModel: getSettingsValue('settings-rolling-compaction-model').trim(),
+  };
+}
+
+function buildSettingsBulkPayloadForTab(tab) {
+  const activeTab = String(tab || '').trim();
+  if (activeTab === 'search') {
+    if (!window._settingsSearchLoadedToUI) throw new Error('Search settings are still loading.');
+    const search = buildSearchTabPayload();
+    return Object.keys(search).length ? { search } : {};
+  }
+  if (activeTab === 'credentials') {
+    if (!window._settingsCredentialsLoadedToUI) throw new Error('Credential fields are still loading.');
+    return { search: buildCredentialTabPayload() };
+  }
+  if (activeTab === 'security') {
+    if (!window._settingsSecurityLoadedToUI) throw new Error('Security settings are still loading.');
+    const payload = {
+      security: { terminalPermissionMode: getTerminalPermissionModeFromUI() },
+    };
+    if (window._settingsPathsLoadedToUI) {
+      payload.paths = buildSettingsPathsPayload();
+    }
+    return payload;
+  }
+  if (activeTab === 'models') {
+    if (!window._llmSettingsLoadedToUI) throw new Error('Model settings are still loading.');
+    const payload = {
+      model: buildLegacyModelPayload(),
+      llm: buildProviderPayload(),
+    };
+    if (window._settingsSessionLoadedToUI) {
+      payload.session = buildSessionSettingsPayload();
+    }
+    return payload;
+  }
+  return {};
+}
+
+function settingsTabLabel(tab) {
+  return String(tab || 'settings').replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
+}
+
 async function saveSettings() {
   const btn = document.getElementById('settings-save-btn');
   if (btn?.disabled) return; // prevent double-submit
@@ -3433,61 +3570,46 @@ async function saveSettings() {
   // Safety valve — re-enable button after 15s no matter what
   const safetyTimer = setTimeout(resetBtn, 15000);
   try {
-    const workspace_path = document.getElementById('settings-workspace-path').value.trim();
-    const allowed_paths = document.getElementById('settings-allowed-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
-    const blocked_paths = document.getElementById('settings-blocked-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
-    const payload = {
-      preferred_provider: document.getElementById('settings-provider')?.value || '',
-      search_rigor: document.getElementById('settings-search-rigor')?.value || 'verified',
-      tinyfish_api_key: document.getElementById('cred-tinyfish-key')?.value.trim() || '',
-      tavily_api_key: document.getElementById('cred-tavily-key')?.value.trim() || '',
-      google_api_key: document.getElementById('cred-google-key')?.value.trim() || '',
-      google_cx: document.getElementById('cred-google-cx')?.value.trim() || '',
-      brave_api_key: document.getElementById('cred-brave-key')?.value.trim() || '',
-    };
-    const primaryModel = (document.getElementById('settings-primary-model') || {}).value || '';
-    const modelPayload = {
-      ollama_endpoint: (document.getElementById('settings-ollama-endpoint') || {}).value || 'http://localhost:11434',
-      primary: primaryModel,
-      roles: {
-        manager: primaryModel,
-        executor: primaryModel,
-        verifier: primaryModel,
-      }
-    };
-    const providerPayload = buildProviderPayload();
-    const sessionPayload = {
-      rollingCompactionEnabled: document.getElementById('settings-rolling-compaction-enabled')?.checked !== false,
-      rollingCompactionMessageCount: Number(document.getElementById('settings-rolling-compaction-count')?.value || 20),
-      rollingCompactionToolTurns: Number(document.getElementById('settings-rolling-compaction-tools')?.value || 5),
-      rollingCompactionSummaryMaxWords: Number(document.getElementById('settings-rolling-compaction-words')?.value || 900),
-      rollingCompactionModel: (document.getElementById('settings-rolling-compaction-model')?.value || '').trim(),
-    };
-    const securityPayload = {
-      terminalPermissionMode: getTerminalPermissionModeFromUI(),
-    };
-    await api('/api/settings/bulk', {
-      method: 'POST',
-      body: JSON.stringify({
-        paths: { workspace_path, allowed_paths, blocked_paths },
-        search: payload,
-        model: modelPayload,
-        llm: providerPayload,
-        session: sessionPayload,
-        security: securityPayload,
-      }),
-    });
-    // Always save model tab settings unconditionally — agent model defaults and brain
-    // model config must persist regardless of which tab the user is currently viewing.
-    await saveModelTabLiveSettings({ showStatus: false });
-    if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
-      window.applyReasoningPrefsFromProviderConfig(providerPayload, providerPayload.provider);
+    const activeTab = getActiveSettingsTab();
+    const bulkPayload = buildSettingsBulkPayloadForTab(activeTab);
+    let savedAnything = false;
+    if (Object.keys(bulkPayload).length) {
+      await api('/api/settings/bulk', {
+        method: 'POST',
+        body: JSON.stringify(bulkPayload),
+      });
+      savedAnything = true;
     }
-    loadSearchSettingsSummary().catch(() => {});
-    loadCredFields().catch(() => {});
-    quickSearchRigor = payload.search_rigor || quickSearchRigor;
+    if (activeTab === 'models') {
+      await saveModelTabLiveSettings({ showStatus: false });
+      savedAnything = true;
+      if (typeof window.applyReasoningPrefsFromProviderConfig === 'function' && bulkPayload.llm) {
+        window.applyReasoningPrefsFromProviderConfig(bulkPayload.llm, bulkPayload.llm.provider);
+      }
+    } else if (activeTab === 'heartbeat' && typeof saveHeartbeatSettings === 'function') {
+      await saveHeartbeatSettings();
+      savedAnything = true;
+    } else if (activeTab === 'channels' && typeof saveSelectedChannelSettings === 'function') {
+      await saveSelectedChannelSettings();
+      savedAnything = true;
+    } else if (activeTab === 'pairing' && typeof _saveRemoteAccess === 'function') {
+      await _saveRemoteAccess();
+      savedAnything = true;
+    }
+    if (!savedAnything) {
+      addProcessEntry('info', `${settingsTabLabel(activeTab)} has no footer-saved settings.`);
+      resetBtn();
+      return;
+    }
+    if (activeTab === 'search' || activeTab === 'credentials') {
+      loadSearchSettingsSummary().catch(() => {});
+      if (activeTab === 'credentials') loadCredFields().catch(() => {});
+      if (bulkPayload.search?.search_rigor) quickSearchRigor = bulkPayload.search.search_rigor;
+    }
+    const securityStatus = document.getElementById('settings-security-status');
+    if (activeTab === 'security' && securityStatus) setSettingsStatus(securityStatus, 'success', 'Saved');
     updateQuickModeUI();
-    addProcessEntry('final', 'Settings saved.');
+    addProcessEntry('final', `${settingsTabLabel(activeTab)} settings saved.`);
     resetBtn();
     closeSettings();
   } catch (err) {

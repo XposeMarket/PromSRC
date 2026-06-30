@@ -54,7 +54,7 @@ export async function executeAgentList(_args: any): Promise<ToolResult> {
     lines.push('');
   }
 
-  lines.push('Use chat_with_subagent(agent_id, message) for normal persistent chat/check-ins with a standalone non-team subagent. Use message_subagent(agent_id, message) for background task handoff whose chat/result stays in the subagent task panel. Use spawn_subagent(...) to create/run one.');
+  lines.push('Use chat_with_subagent(agent_id, message) for normal persistent chat/check-ins with a standalone non-team subagent. Use agent_run_ops(action:"list"|"get"|"recover", ...) for existing subagent runs and paused task recovery chat. Use message_subagent(agent_id, message) for a new background task handoff whose chat/result stays in the subagent task panel. Use spawn_subagent(...) to create/run one.');
 
   return {
     success: true,

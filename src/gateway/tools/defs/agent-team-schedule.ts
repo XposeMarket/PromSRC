@@ -777,9 +777,9 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'internal_watch',
         description:
-          'Create, list, or cancel bounded internal watches that ping/resume this chat when an internal condition changes. ' +
+          'Create, list, or cancel bounded internal watches that wake a normal tool-capable Prometheus main-chat turn when an internal condition changes. ' +
           'Use after triggering background work, request_team_member_turn(background=true), dispatch_team_agent(background=true), schedule_job(run_now), collectors, build/restart checks, or file-producing jobs so Prometheus does not have to manually poll. ' +
-          'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once.',
+          'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once. Watch delivery uses the regular chat/tool-category path; it is not task recovery chat unless the follow-up intentionally calls agent_run_ops(action:"recover").',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -812,7 +812,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             on_match: {
               type: 'string',
-              description: 'Instruction to run in the originating chat when the watch matches. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
+              description: 'Instruction to run in the resolved main chat when the watch matches. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
             },
             on_timeout: {
               type: 'string',
@@ -884,6 +884,38 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'agent_run_ops',
+        description:
+          'Inspect and operate on existing agent-owned task runs. Use this for subagent Runs/recovery, not normal Home chat. ' +
+          'List/get responses include current step, unfinished/failed steps, runtime progress, last tool call, last journal event, and live runner state. ' +
+          'recover sends a message into the run-attached recovery conversation and returns the recovery reply; it is a chat path, not an automatic resume unless the message explicitly requests resume/rerun. ' +
+          'Use chat_with_subagent for normal persistent subagent chat and message_subagent to start a new background handoff.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['list', 'get', 'recover', 'resume', 'rerun', 'pause', 'cancel'],
+              description: 'list/get inspect runs; recover chats in task recovery mode; resume/rerun/pause/cancel control the existing run.',
+            },
+            agent_id: { type: 'string', description: 'Optional agent ID. Required for agent-scoped lists; optional with task_id because ownership can be derived from the task.' },
+            task_id: { type: 'string', description: 'Task/run ID. Required for get/recover/resume/rerun/pause/cancel.' },
+            status: { type: 'string', description: 'Optional list filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent. Comma/space separated values are allowed.' },
+            recoverable_only: { type: 'boolean', description: 'For list, return only paused/stalled/failed/needs-input runs that can use recovery chat.' },
+            limit: { type: 'number', description: 'For list, max runs returned. Default 20, max 100.' },
+            message: { type: 'string', description: 'Recovery chat message for action="recover". This is added to the run recovery conversation.' },
+            note: { type: 'string', description: 'Optional operator note for resume/rerun/pause/cancel actions.' },
+            include_task: { type: 'boolean', description: 'For get/recover/control responses, include the full raw task record. Default false to keep tool output compact.' },
+            include_evidence: { type: 'boolean', description: 'Include a capped evidence bus snapshot when available. Default true.' },
+            confirm: { type: 'boolean', description: 'Required true for action="cancel".' },
           },
         },
       },

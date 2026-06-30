@@ -30,6 +30,11 @@ export interface ToolObservation {
     argsChars: number;
     resultChars: number;
     resultBytes: number;
+    contextCostMicros?: number;
+    directCostMicros?: number;
+    totalCostMicros?: number;
+    pricingSource?: string;
+    pricingVersion?: string;
   };
   createdAt: number;
 }
@@ -137,6 +142,21 @@ function maybePersistRawResult(sessionId: string, observationId: string, resultT
   return `tool-observation-raw:${safeSessionFileName(sessionId)}/${fileName}`;
 }
 
+function normalizeCostMicros(value: unknown): number | undefined {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.round(n);
+}
+
+function formatCostMicrosForTelemetry(value: unknown): string {
+  const micros = normalizeCostMicros(value) || 0;
+  const usd = micros / 1_000_000;
+  if (usd <= 0) return '0';
+  if (usd >= 1) return usd.toFixed(4);
+  if (usd >= 0.01) return usd.toFixed(5);
+  return usd.toFixed(7);
+}
+
 export function createToolObservation(input: {
   sessionId: string;
   turnId: string;
@@ -164,6 +184,22 @@ export function createToolObservation(input: {
   const argsChars = Number.isFinite(Number(telemetry.argsChars)) ? Number(telemetry.argsChars) : argsText.length;
   const resultChars = Number.isFinite(Number(telemetry.resultChars)) ? Number(telemetry.resultChars) : resultText.length;
   const resultBytes = Number.isFinite(Number(telemetry.resultBytes)) ? Number(telemetry.resultBytes) : Buffer.byteLength(resultText, 'utf8');
+  const contextCostMicros = normalizeCostMicros(telemetry.contextCostMicros ?? telemetry.context_cost_micros);
+  const directCostMicros = normalizeCostMicros(
+    telemetry.directCostMicros
+    ?? telemetry.direct_cost_micros
+    ?? telemetry.costMicros
+    ?? telemetry.cost_micros
+    ?? input.extra?.costMicros
+    ?? input.extra?.cost_micros
+    ?? input.data?.costMicros
+    ?? input.data?.cost_micros,
+  );
+  const totalCostMicros = normalizeCostMicros(
+    telemetry.totalCostMicros
+    ?? telemetry.total_cost_micros
+    ?? ((contextCostMicros || directCostMicros) ? (contextCostMicros || 0) + (directCostMicros || 0) : undefined),
+  );
   return {
     id,
     sessionId: input.sessionId,
@@ -188,6 +224,11 @@ export function createToolObservation(input: {
       argsChars,
       resultChars,
       resultBytes,
+      contextCostMicros,
+      directCostMicros,
+      totalCostMicros,
+      pricingSource: telemetry.pricingSource || telemetry.pricing_source,
+      pricingVersion: telemetry.pricingVersion || telemetry.pricing_version,
     },
     createdAt: Date.now(),
   };
@@ -235,6 +276,30 @@ export function readToolObservations(sessionId: string, maxObservations = 80): T
   return out;
 }
 
+export function readAllToolObservations(maxObservations = 50_000): ToolObservation[] {
+  try {
+    const root = observationRoot();
+    if (!fs.existsSync(root)) return [];
+    const files = fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+      .map((entry) => path.join(root, entry.name));
+    const out: ToolObservation[] = [];
+    for (const filePath of files) {
+      const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        try {
+          out.push(JSON.parse(line) as ToolObservation);
+        } catch {}
+      }
+    }
+    out.sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
+    const limit = Math.max(1, Math.min(250_000, Math.floor(Number(maxObservations || 50_000))));
+    return out.length > limit ? out.slice(out.length - limit) : out;
+  } catch {
+    return [];
+  }
+}
+
 function observationPriority(obs: ToolObservation, newestTurnId: string): number {
   let score = 0;
   if (obs.turnId === newestTurnId) score += 30;
@@ -267,7 +332,18 @@ export function formatToolObservationsForContext(observations: ToolObservation[]
       obs.artifacts?.length ? `artifacts: ${obs.artifacts.map((a: any) => String(a?.path || a?.url || a?.id || a).slice(0, 180)).join(', ')}` : '',
       Number.isFinite(Number(obs.exitCode)) ? `exit_code: ${obs.exitCode}` : '',
       includeTelemetry && Number.isFinite(Number(obs.durationMs)) ? `duration_ms: ${obs.durationMs}` : '',
-      includeTelemetry && obs.tokenEstimate ? `token_estimate: args=${obs.tokenEstimate.argsTokens}, result=${obs.tokenEstimate.resultTokens}, total=${obs.tokenEstimate.totalTokens}, result_bytes=${obs.tokenEstimate.resultBytes}` : '',
+      includeTelemetry && obs.tokenEstimate
+        ? [
+          `token_estimate: args=${obs.tokenEstimate.argsTokens}`,
+          `result=${obs.tokenEstimate.resultTokens}`,
+          `total=${obs.tokenEstimate.totalTokens}`,
+          `result_bytes=${obs.tokenEstimate.resultBytes}`,
+          `context_cost_est_usd=${formatCostMicrosForTelemetry(obs.tokenEstimate.contextCostMicros)}`,
+          obs.tokenEstimate.directCostMicros ? `direct_cost_est_usd=${formatCostMicrosForTelemetry(obs.tokenEstimate.directCostMicros)}` : '',
+          `total_cost_est_usd=${formatCostMicrosForTelemetry(obs.tokenEstimate.totalCostMicros)}`,
+          obs.tokenEstimate.pricingSource ? `pricing_source=${obs.tokenEstimate.pricingSource}` : '',
+        ].filter(Boolean).join(', ')
+        : '',
       obs.argsPreview ? `args: ${obs.argsPreview}` : '',
       obs.resultPreview ? `result: ${obs.resultPreview}` : '',
       obs.resultRawRef ? `raw_ref: ${obs.resultRawRef}` : '',

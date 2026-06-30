@@ -48,6 +48,8 @@ Current connector/plugin architecture facts:
 - active connector tools are surfaced through the extension runtime registry, not directly from `connector-tools.ts`
 - active connector tool calls execute through the extension runtime registry, which currently delegates legacy tools to `handleConnectorTool(...)`
 - `connector_list` is still core/always available, but its status text is built through `getExtensionRuntimeRegistry().buildConnectorStatus()`
+- `connector_list` status is cached briefly inside `PrometheusExtensionRuntimeRegistry` (currently 5 seconds) and built with a single pass over connector `isConnected()` results. This keeps repeated connector discovery calls cheap without making connection state sticky for long.
+- `external_apps` is wrapper-first for the largest bundled surfaces: X/xAI uses `x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, and `x_admin`; Vercel uses `vercel_ops`. Granular connector/extension tools remain executable internals and auth still flows through the connector runtime.
 - the migration target is to convert each connector from the legacy adapter into a native `definePrometheusExtension(...)` module with `runtime.entrypoint`, then remove the duplicate old connector maps/handlers
 - validation command for this layer: `npx tsc --noEmit --pretty false`
 - full backend validation command: `npm run build:backend`

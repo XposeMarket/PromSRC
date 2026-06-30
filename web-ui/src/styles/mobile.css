@@ -3619,6 +3619,7 @@ body.pm-model-badge-pressing * {
   transform: rotate(90deg);
 }
 .pm-trace-tool-summary strong {
+  display: inline-block;
   min-width: 0;
   color: var(--pm-muted);
   font-size: 12px;
@@ -3746,23 +3747,15 @@ body.pm-model-badge-pressing * {
 }
 .pm-live-md > :first-child { margin-top: 0; }
 .pm-live-md > :last-child { margin-bottom: 0; }
-.pm-stream-enter {
-  animation: pm-stream-enter 210ms cubic-bezier(.16,1,.3,1) both;
+.pm-trace-summary-swap {
+  animation: pm-trace-summary-swap 220ms cubic-bezier(.16,1,.3,1) both;
 }
-.pm-stream-text-refresh > :last-child {
-  animation: pm-stream-text-refresh 240ms cubic-bezier(.16,1,.3,1) both;
-}
-@keyframes pm-stream-enter {
-  from { opacity: 0; transform: translateY(5px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes pm-stream-text-refresh {
-  from { opacity: .45; transform: translateY(2px); filter: blur(.25px); }
+@keyframes pm-trace-summary-swap {
+  from { opacity: .18; transform: translateY(4px); filter: blur(.35px); }
   to { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pm-stream-enter,
-  .pm-stream-text-refresh > :last-child {
+  .pm-trace-summary-swap {
     animation: none !important;
   }
 }
@@ -4948,7 +4941,7 @@ body.pm-model-badge-pressing * {
     0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(40,28,16,var(--pm-lg-shadow-alpha, .09)),
     0 1px 4px rgba(40,28,16,.06);
   z-index: 4;
-  transition: bottom .18s ease;
+  transition: bottom .18s ease, padding .16s ease, border-radius .16s ease, min-height .16s ease;
 }
 .pm-composer > * {
   position: relative;
@@ -5859,6 +5852,57 @@ body.pm-model-badge-pressing * {
   align-items: center;
   gap: 8px;
   transform: translateY(-3px);
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 8px;
+  transform: none;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-input-wrap {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  width: 100%;
+  min-height: 34px;
+  align-self: stretch;
+  display: flex;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row > .pm-icon-btn:first-of-type {
+  grid-column: 1;
+  grid-row: 2;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row > .pm-icon-btn:not(:first-of-type) {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
+  margin-left: auto;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row > .pm-send {
+  grid-column: 4;
+  grid-row: 2;
+  justify-self: end;
+  margin-left: 0;
+}
+#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-chat-mic-btn,
+.pm-agent-chat-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) [id$="-mic-btn"] {
+  grid-column: 3;
+  grid-row: 2;
+  margin-left: auto;
+  justify-self: end;
+}
+#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-attach-btn {
+  grid-column: 1;
+  grid-row: 2;
+  margin-left: 0;
+  justify-self: start;
+}
+#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-send-btn,
+.pm-agent-chat-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) [id$="-send-btn"] {
+  grid-column: 4;
+  grid-row: 2;
+  justify-self: end;
 }
 .pm-composer-input-wrap {
   position: relative;
@@ -6847,6 +6891,22 @@ body.pm-model-badge-pressing * {
   white-space: pre-wrap;
   word-break: break-word;
   align-self: center;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) {
+  border-radius: 28px;
+  padding: 10px 12px 9px;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-input {
+  min-height: 34px;
+  max-height: min(50dvh, 280px);
+  padding: 3px 6px 8px;
+  align-self: stretch;
+  overflow-wrap: anywhere;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-rich-preview {
+  min-height: 34px;
+  max-height: min(50dvh, 280px);
+  padding: 3px 6px 8px;
 }
 .pm-composer .pm-send {
   width: 40px; height: 40px; border-radius: 13px;
@@ -10083,6 +10143,33 @@ body.pm-model-badge-pressing * {
   border-right: 0 !important;
   border-bottom: 0 !important;
   box-shadow: var(--pm-lg-panel-shadow, 0 24px 58px rgba(0,0,0,.34)) !important;
+}
+.pm-sa-run-recovery-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--pm-orange) 42%, var(--pm-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pm-surface) 86%, var(--pm-orange) 14%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+.pm-sa-run-recovery-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0;
+}
+.pm-sa-run-recovery-thread .pm-msg {
+  padding-left: 0;
+  padding-right: 0;
+}
+.pm-sa-run-recovery-composer .pm-agent-chat-composer.pm-composer {
+  margin: 4px 0 0 !important;
+  border-radius: 22px !important;
+  box-shadow: none !important;
+  border: 1px solid var(--pm-border) !important;
+  background: var(--pm-surface) !important;
 }
 .pm-tool-chip {
   display: inline-block; padding: 3px 8px; margin: 2px 4px 2px 0;

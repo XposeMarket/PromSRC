@@ -47,6 +47,7 @@ import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/
 import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
+import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { spawnAgent } from '../../agents/spawner';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, type TurnOrigin } from '../session';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
@@ -2322,7 +2323,7 @@ async function handleChat(
     });
     return selected;
   };
-  let tools = buildCurrentTurnTools();
+  let tools: any[] = [];
   const allToolResults: ToolResult[] = [];
   let midWorkflowCompactionsThisTurn = 0;
   const turnCanvasFiles = new Set<string>();
@@ -2538,12 +2539,15 @@ async function handleChat(
     return resolvePrimaryModelCapabilities({ providerId, model });
   };
   htime('before initial provider/model resolution');
+  sendSSE('ui_preflight', { message: 'Selecting model route...' });
   const initialGenerationOverride = resolveProviderModelOverride();
   htime('after initial provider/model resolution');
   currentModelCapabilities = resolveCapabilitiesForGenerationOverride(initialGenerationOverride);
   htime('before initial tool build');
+  sendSSE('ui_preflight', { message: 'Loading tool schemas...' });
   tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
   htime('after initial tool build');
+  sendSSE('ui_preflight', { message: 'Tool schemas ready.' });
   const buildModelCapabilitySystemBlock = (): string => {
     const provider = currentModelCapabilities.provider || 'unknown';
     const model = currentModelCapabilities.model || 'unknown';
@@ -2868,6 +2872,9 @@ async function handleChat(
   htime('before preempt watchdog setup');
   // ── Preempt watchdog setup ─────────────────────────────────────────────────
   const rawCfgForPreempt = (getConfig().getConfig() as any);
+  const toolUsageTelemetryEnabled = process.env.PROMETHEUS_TOOL_USAGE_TELEMETRY !== '0'
+    && rawCfgForPreempt?.observability?.tool_usage !== false
+    && rawCfgForPreempt?.usage_tracking?.tool_usage !== false;
   const primaryProvider = rawCfgForPreempt.llm?.provider || 'ollama';
   // ── Local LLM primary detection (v2.0 local model layer) ──────────────────
   // True when the configured primary is Ollama, LM Studio, or llama.cpp.
@@ -3081,6 +3088,20 @@ async function handleChat(
     const resultTokens = Number.isFinite(Number(existingTelemetry.resultTokens))
       ? Number(existingTelemetry.resultTokens)
       : estimateTextTokensForModel(resultText, 'openai');
+    const tokenTotal = Number.isFinite(Number(existingTelemetry.totalTokens))
+      ? Number(existingTelemetry.totalTokens)
+      : argsTokens + resultTokens;
+    const pricingContext = getToolUsagePricingContext();
+    const pricing = resolveModelPricing(pricingContext.providerId, pricingContext.model);
+    const contextCostMicros = Number.isFinite(Number(existingTelemetry.contextCostMicros ?? existingTelemetry.context_cost_micros))
+      ? normalizeTelemetryCostMicros(existingTelemetry.contextCostMicros ?? existingTelemetry.context_cost_micros)
+      : estimateContextCostMicros(tokenTotal, pricingContext.providerId, pricingContext.model);
+    const directCostMicros = normalizeTelemetryCostMicros(
+      existingTelemetry.directCostMicros
+      ?? existingTelemetry.direct_cost_micros
+      ?? existingTelemetry.costMicros
+      ?? existingTelemetry.cost_micros,
+    );
     const telemetry = {
       ...existingTelemetry,
       startedAt: Number.isFinite(Number(existingTelemetry.startedAt)) ? Number(existingTelemetry.startedAt) : startedAt,
@@ -3091,7 +3112,15 @@ async function handleChat(
       resultBytes: Number.isFinite(Number(existingTelemetry.resultBytes)) ? Number(existingTelemetry.resultBytes) : Buffer.byteLength(resultText, 'utf8'),
       argsTokens,
       resultTokens,
-      totalTokens: Number.isFinite(Number(existingTelemetry.totalTokens)) ? Number(existingTelemetry.totalTokens) : argsTokens + resultTokens,
+      totalTokens: tokenTotal,
+      contextCostMicros,
+      directCostMicros,
+      totalCostMicros: normalizeTelemetryCostMicros(existingTelemetry.totalCostMicros ?? existingTelemetry.total_cost_micros)
+        || (contextCostMicros + directCostMicros),
+      pricingProvider: pricing.provider,
+      pricingModel: pricing.model,
+      pricingSource: pricing.source,
+      pricingVersion: pricing.pricingVersion,
     };
     return {
       ...toolResult,
@@ -3117,6 +3146,32 @@ async function handleChat(
     return Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : undefined;
   };
 
+  const getToolUsagePricingContext = (): { providerId: string; model: string } => {
+    const cfg = getConfig().getConfig() as any;
+    const activeProvider = String(cfg?.llm?.provider || '').trim();
+    const providerId = String(
+      currentModelCapabilities?.provider
+      || providerOverride
+      || activeProvider
+      || primaryProvider
+      || '',
+    ).trim();
+    const providerCfgModel = providerId ? String(cfg?.llm?.providers?.[providerId]?.model || '').trim() : '';
+    const model = String(
+      currentModelCapabilities?.model
+      || modelOverride
+      || providerCfgModel
+      || getPrimaryModel()
+      || '',
+    ).trim();
+    return { providerId: providerId || 'unknown', model: model || 'unknown' };
+  };
+
+  const normalizeTelemetryCostMicros = (value: unknown): number => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+  };
+
   const formatToolElapsedForHumans = (durationMs: number): string => {
     if (!Number.isFinite(durationMs)) return '';
     if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
@@ -3127,10 +3182,42 @@ async function handleChat(
     return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
   };
 
+  const formatCostUsdForTelemetry = (costMicros: number): string => {
+    const usd = Math.max(0, Number(costMicros || 0)) / 1_000_000;
+    if (!Number.isFinite(usd) || usd <= 0) return '0';
+    if (usd >= 1) return usd.toFixed(4);
+    if (usd >= 0.01) return usd.toFixed(5);
+    return usd.toFixed(7);
+  };
+
   const formatToolStopwatchLineForModel = (toolResult: ToolResult | any): string => {
     const elapsedMs = getToolElapsedMs(toolResult);
     if (!Number.isFinite(Number(elapsedMs))) return '';
-    return `[TOOL_STOPWATCH] elapsed_ms=${elapsedMs} elapsed=${formatToolElapsedForHumans(Number(elapsedMs))}`;
+    const telemetry = getToolResultTelemetry(toolResult);
+    if (!toolUsageTelemetryEnabled) {
+      return `[TOOL_STOPWATCH] elapsed_ms=${elapsedMs} elapsed=${formatToolElapsedForHumans(Number(elapsedMs))}`;
+    }
+    const argsTokens = Math.max(0, Math.round(Number(telemetry.argsTokens || 0)));
+    const resultTokens = Math.max(0, Math.round(Number(telemetry.resultTokens || 0)));
+    const totalTokens = Math.max(0, Math.round(Number(telemetry.totalTokens || argsTokens + resultTokens)));
+    const contextCostMicros = normalizeTelemetryCostMicros(telemetry.contextCostMicros ?? telemetry.context_cost_micros);
+    const directCostMicros = normalizeTelemetryCostMicros(telemetry.directCostMicros ?? telemetry.direct_cost_micros);
+    const totalCostMicros = normalizeTelemetryCostMicros(telemetry.totalCostMicros ?? telemetry.total_cost_micros)
+      || contextCostMicros + directCostMicros;
+    const pricingRef = [telemetry.pricingProvider, telemetry.pricingModel].filter(Boolean).join('/');
+    return [
+      '[TOOL_STOPWATCH]',
+      `elapsed_ms=${elapsedMs}`,
+      `elapsed=${formatToolElapsedForHumans(Number(elapsedMs))}`,
+      `args_tokens=${argsTokens}`,
+      `result_tokens=${resultTokens}`,
+      `context_tokens=${totalTokens}`,
+      `context_cost_est_usd=${formatCostUsdForTelemetry(contextCostMicros)}`,
+      directCostMicros ? `direct_cost_est_usd=${formatCostUsdForTelemetry(directCostMicros)}` : '',
+      `total_cost_est_usd=${formatCostUsdForTelemetry(totalCostMicros)}`,
+      pricingRef ? `pricing=${pricingRef}` : '',
+      telemetry.pricingSource ? `pricing_source=${telemetry.pricingSource}` : '',
+    ].filter(Boolean).join(' ');
   };
 
   const executeToolWithTelemetry = async (toolName: string, toolArgs: any): Promise<ToolResult> => {
@@ -6422,12 +6509,16 @@ RULES:
 
         if (typeof toolArgs?.modifier === 'string') {
           const requestedModifier = String(toolArgs.modifier || '').toLowerCase().trim();
-          const hasValidModifier =
-            requestedModifier === 'shift' || requestedModifier === 'ctrl' || requestedModifier === 'alt';
-          const userAskedForModifier = /\b(ctrl|control|shift|alt|modifier|cmd\+|command\+)\b/i.test(String(message || ''));
-          if (hasValidModifier && !userAskedForModifier) {
-            if (toolArgs && typeof toolArgs === 'object') {
-              delete (toolArgs as any).modifier;
+          if (requestedModifier === 'none' || requestedModifier === '') {
+            delete (toolArgs as any).modifier;
+          } else {
+            const hasValidModifier =
+              requestedModifier === 'shift' || requestedModifier === 'ctrl' || requestedModifier === 'alt';
+            const userAskedForModifier = /\b(ctrl|control|shift|alt|modifier|cmd\+|command\+)\b/i.test(String(message || ''));
+            if (hasValidModifier && !userAskedForModifier) {
+              if (toolArgs && typeof toolArgs === 'object') {
+                delete (toolArgs as any).modifier;
+              }
             }
           }
         }
@@ -8270,6 +8361,59 @@ function createSSESender(res: express.Response): (event: string, data: any) => v
       res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
     } catch {}
   };
+}
+
+async function streamExistingMainChatToResponse(params: {
+  res: express.Response;
+  sessionId: string;
+  streamId: string;
+  clientRequestId?: string;
+}): Promise<void> {
+  const { res, sessionId, streamId } = params;
+  const clientRequestId = String(params.clientRequestId || '').trim();
+  let lastSeq = 0;
+  let closed = false;
+  let terminalSeen = false;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const writeFrame = (frame: MainChatStreamFrame) => {
+    if (closed || res.destroyed || res.writableEnded) return;
+    const data = frame.data && typeof frame.data === 'object' ? frame.data : {};
+    const payload = {
+      type: frame.type,
+      ...data,
+      seq: frame.seq,
+      streamId,
+      at: frame.at,
+      ...(clientRequestId && !data.clientRequestId ? { clientRequestId } : {}),
+    };
+    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { closed = true; }
+    lastSeq = Math.max(lastSeq, Number(frame.seq || 0) || 0);
+    if (frame.type === 'done' || frame.type === 'final' || frame.type === 'error') terminalSeen = true;
+  };
+  const writePing = () => {
+    if (closed || res.destroyed || res.writableEnded) return;
+    try { res.write(': ping\n\n'); } catch { closed = true; }
+  };
+  const onClose = () => { closed = true; };
+  res.on('close', onClose);
+  try {
+    while (!closed && !res.destroyed && !res.writableEnded) {
+      const stream = getMainChatStream(sessionId);
+      if (!stream || stream.streamId !== streamId) break;
+      const frames = stream.events.filter((frame) => Number(frame.seq || 0) > lastSeq);
+      for (const frame of frames) writeFrame(frame);
+      if (terminalSeen || !stream.active) break;
+      writePing();
+      await sleep(750);
+    }
+    if (!terminalSeen && !closed && !res.destroyed && !res.writableEnded) {
+      try {
+        res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId: clientRequestId || undefined })}\n\n`);
+      } catch {}
+    }
+  } finally {
+    res.off('close', onClose);
+  }
 }
 
 type VoiceNarrationEmitter = (data: Record<string, any>) => void;
@@ -10498,7 +10642,7 @@ function buildVoiceToolDefinitions(): any[] {
             amount: { type: 'number' },
             button: { type: 'string', enum: ['left', 'right'] },
             double_click: { type: 'boolean' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string' },
             include_screenshot: { type: 'boolean' },
             include_summary: { type: 'boolean' },
@@ -10947,7 +11091,7 @@ function buildVoiceToolDefinitions(): any[] {
             window_handle: { type: 'number', description: 'Optional target window handle for window-relative coordinates.' },
             button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button. Default left.' },
             double_click: { type: 'boolean', description: 'Double click instead of single click. Default false.' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Optional modifier key.' },
+            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string', description: 'Optional desktop verification mode supported by the underlying tool.' },
             include_screenshot: { type: 'boolean', description: 'Capture a fresh desktop screenshot preview after clicking. Default true.' },
           },
@@ -11057,7 +11201,7 @@ function buildVoiceToolDefinitions(): any[] {
             screenshot_id: { type: 'string', description: 'Optional screenshot_id anchoring the coordinate.' },
             button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button. Default left.' },
             double_click: { type: 'boolean', description: 'Double click instead of single click. Default false.' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Optional modifier key.' },
+            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string', description: 'Optional desktop verification mode supported by the underlying tool.' },
             include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after clicking. Default true.' },
           },
@@ -12053,7 +12197,9 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         {
           button: String(args.button || 'left').toLowerCase() === 'right' ? 'right' : 'left',
           double_click: args.double_click === true || args.doubleClick === true,
-          modifier: args.modifier,
+          modifier: args.modifier === 'shift' || args.modifier === 'ctrl' || args.modifier === 'alt'
+            ? args.modifier
+            : undefined,
           verify: args.verify,
         } as any,
         sessionId,
@@ -16159,6 +16305,8 @@ router.post('/api/chat', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
+  try { (res as any).flushHeaders?.(); } catch {}
+  try { res.write(': connected\n\n'); } catch {}
 
   if (clientRequestId) {
     const now = Date.now();
@@ -16168,11 +16316,20 @@ router.post('/api/chat', async (req, res) => {
     if (duplicate && duplicate.message === message) {
       const stream = getMainChatStream(resolvedSessionId);
       res.write(`data: ${JSON.stringify({ type: 'info', message: 'Duplicate chat send ignored; original request is already running.', clientRequestId })}\n\n`);
-      for (const frame of stream?.events || []) {
-        if (stream?.streamId !== duplicate.streamId) continue;
-        res.write(`data: ${JSON.stringify({ type: frame.type, ...(frame.data || {}), seq: frame.seq, streamId: stream.streamId, at: frame.at, clientRequestId })}\n\n`);
+      if (stream?.streamId === duplicate.streamId && stream.active) {
+        await streamExistingMainChatToResponse({
+          res,
+          sessionId: resolvedSessionId,
+          streamId: stream.streamId,
+          clientRequestId,
+        });
+      } else {
+        for (const frame of stream?.events || []) {
+          if (stream?.streamId !== duplicate.streamId) continue;
+          res.write(`data: ${JSON.stringify({ type: frame.type, ...(frame.data || {}), seq: frame.seq, streamId: stream.streamId, at: frame.at, clientRequestId })}\n\n`);
+        }
+        res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId })}\n\n`);
       }
-      res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId })}\n\n`);
       res.end();
       return;
     }
@@ -16206,7 +16363,23 @@ router.post('/api/chat', async (req, res) => {
   __turnTimingLog('request_received');
   sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
   sendSSE('ui_preflight', { message: 'Request received. Starting chat turn...' });
-  const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
+  let lastNonHeartbeatSseAt = Date.now();
+  let lastVisibleHeartbeatAt = 0;
+  const heartbeat = setInterval(() => {
+    const now = Date.now();
+    const idleMs = Math.max(0, now - lastNonHeartbeatSseAt);
+    const payload: Record<string, any> = { state: 'processing', idleMs };
+    if (idleMs >= 12_000 && now - lastVisibleHeartbeatAt >= 15_000) {
+      lastVisibleHeartbeatAt = now;
+      payload.message = idleMs >= 30_000
+        ? `Still connected. Prometheus is working (${Math.round(idleMs / 1000)}s since the last visible update).`
+        : 'Still connected. Prometheus is working...';
+    }
+    try {
+      if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');
+    } catch {}
+    sendSSE('heartbeat', payload);
+  }, 5000);
 
   // ── Model busy guard — block cron scheduler while user chat is running ──
   setModelBusy(true);
@@ -16241,6 +16414,7 @@ router.post('/api/chat', async (req, res) => {
   let runtimeThinkingTail = '';
   let lastRuntimeThinkingCheckpointAt = 0;
   sendSSE = (event, data) => {
+    if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
     rawSendSSE(event, data);
     // Skip per-token checkpointing — token/thinking_delta are high-frequency streaming
     // events that don't need durable persistence. 3 sync fs ops per token was killing

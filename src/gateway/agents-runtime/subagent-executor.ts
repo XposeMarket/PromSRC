@@ -295,7 +295,7 @@ import {
 import { buildConnectorStatus } from '../tool-builder';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
 import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
-import { appendJournal, createTask, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus } from '../tasks/task-store';
+import { appendJournal, createTask, getEvidenceBusSnapshot, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus, type TaskRecord, type TaskStatus } from '../tasks/task-store';
 import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
 import type { SkillWindow } from '../prompt-context';
@@ -1228,6 +1228,230 @@ function getStandaloneSubagentForChat(agentId: string): { agent?: any; error?: s
     return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use target_type="team_member" with team_id for team agents.` };
   }
   return { agent };
+}
+
+const AGENT_RUN_VALID_STATUSES: TaskStatus[] = [
+  'queued',
+  'running',
+  'paused',
+  'stalled',
+  'needs_assistance',
+  'awaiting_user_input',
+  'complete',
+  'failed',
+  'waiting_subagent',
+];
+
+const AGENT_RUN_RECOVERY_STATUSES: TaskStatus[] = [
+  'needs_assistance',
+  'stalled',
+  'paused',
+  'awaiting_user_input',
+  'failed',
+];
+
+function parseAgentRunStatusFilter(raw: any): TaskStatus[] | undefined {
+  const text = String(raw || '').trim().toLowerCase();
+  if (!text || text === 'all' || text === '*') return undefined;
+  if (/\b(recoverable|blocked|paused_or_failed)\b/.test(text)) return AGENT_RUN_RECOVERY_STATUSES;
+  const valid = new Set<TaskStatus>(AGENT_RUN_VALID_STATUSES);
+  const parsed = text
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part): part is TaskStatus => valid.has(part as TaskStatus));
+  return parsed.length > 0 ? Array.from(new Set(parsed)) : undefined;
+}
+
+function inferAgentRunOwner(task: TaskRecord | null | undefined): { agentId: string; ownerKind: 'standalone' | 'team_member' | 'team_manager'; teamId?: string; agentName?: string } | null {
+  if (!task) return null;
+  const standalone = String(task.subagentProfile || '').trim();
+  if (standalone) {
+    const agent = getAgentById(standalone) as any;
+    return {
+      agentId: standalone,
+      ownerKind: 'standalone',
+      agentName: String(agent?.name || standalone).trim(),
+    };
+  }
+  const teamMember = String(task.teamSubagent?.agentId || '').trim();
+  if (teamMember) {
+    const agent = getAgentById(teamMember) as any;
+    return {
+      agentId: teamMember,
+      ownerKind: 'team_member',
+      teamId: String(task.teamSubagent?.teamId || '').trim() || undefined,
+      agentName: String(task.teamSubagent?.agentName || agent?.name || teamMember).trim(),
+    };
+  }
+  const proposalExecutor = String(task.proposalExecution?.teamExecution?.executorAgentId || '').trim();
+  if (proposalExecutor) {
+    const agent = getAgentById(proposalExecutor) as any;
+    return {
+      agentId: proposalExecutor,
+      ownerKind: 'team_manager',
+      teamId: String(task.proposalExecution?.teamExecution?.teamId || '').trim() || undefined,
+      agentName: String(task.proposalExecution?.teamExecution?.executorAgentName || agent?.name || proposalExecutor).trim(),
+    };
+  }
+  return null;
+}
+
+function agentOwnsRunTask(agentId: string, task: TaskRecord | null | undefined): boolean {
+  const owner = inferAgentRunOwner(task);
+  return !!owner && String(owner.agentId || '').trim() === String(agentId || '').trim();
+}
+
+function agentRunCanRecover(task: TaskRecord): boolean {
+  const status = String(task.status || '').trim();
+  if (!['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed'].includes(status)) return false;
+  return status !== 'paused' || task.pauseReason !== 'user_pause';
+}
+
+function normalizeAgentRunStep(step: any): Record<string, any> | null {
+  if (!step || typeof step !== 'object') return null;
+  return {
+    index: Number.isFinite(Number(step.index)) ? Number(step.index) : undefined,
+    description: String(step.description || '').slice(0, 500),
+    status: step.status || null,
+    completed_at: step.completedAt || null,
+    completed_at_iso: step.completedAt ? new Date(step.completedAt).toISOString() : null,
+    notes: step.notes ? String(step.notes).slice(0, 500) : undefined,
+  };
+}
+
+function isTaskRunnerLive(taskId: string): boolean {
+  try {
+    const { BackgroundTaskRunner } = require('../tasks/background-task-runner') as typeof import('../tasks/background-task-runner');
+    return BackgroundTaskRunner.isRunning(taskId);
+  } catch {
+    return false;
+  }
+}
+
+function inferAgentRunRunnerState(task: TaskRecord, liveRunnerActive: boolean): string {
+  const status = String(task.status || '').trim();
+  if (liveRunnerActive) return 'live_runner_active';
+  if (status === 'running') return 'stale_running_no_live_runner';
+  if (status === 'queued') return 'queued_waiting_for_runner';
+  if (status === 'waiting_subagent') return 'waiting_on_child_subagent';
+  if (agentRunCanRecover(task)) return 'blocked_recovery_available';
+  if (status === 'complete') return 'complete';
+  if (status === 'failed') return 'failed';
+  return status || 'unknown';
+}
+
+function summarizeAgentRunForTool(task: TaskRecord, agentIdHint?: string): Record<string, any> {
+  const owner = inferAgentRunOwner(task);
+  const agentId = String(agentIdHint || owner?.agentId || '').trim();
+  const plan = Array.isArray(task.plan) ? task.plan : [];
+  const done = plan.filter((step: any) => step?.status === 'done' || step?.status === 'skipped').length;
+  const pendingSteps = plan.filter((step: any) => step?.status !== 'done' && step?.status !== 'skipped');
+  const failedSteps = plan.filter((step: any) => step?.status === 'failed');
+  const runningSteps = plan.filter((step: any) => step?.status === 'running');
+  const currentStepIndex = Number.isFinite(Number(task.currentStepIndex)) ? Number(task.currentStepIndex) : 0;
+  const activeStep = plan.find((step: any) => Number(step?.index) === currentStepIndex) || plan[currentStepIndex] || pendingSteps[0] || null;
+  const latestJournal = Array.isArray(task.journal) ? task.journal[task.journal.length - 1] : null;
+  const recoveryConversation = Array.isArray(task.recoveryConversation) ? task.recoveryConversation : [];
+  const liveRunnerActive = isTaskRunnerLive(task.id);
+  const lastToolCallAt = Number.isFinite(Number(task.lastToolCallAt)) ? Number(task.lastToolCallAt) : null;
+  const now = Date.now();
+  return {
+    id: task.id,
+    task_id: task.id,
+    taskId: task.id,
+    agent_id: agentId || owner?.agentId || null,
+    agent_name: owner?.agentName || agentId || null,
+    owner_kind: owner?.ownerKind || null,
+    team_id: owner?.teamId || null,
+    title: task.title || task.prompt || 'Task',
+    prompt_preview: String(task.prompt || '').slice(0, 800),
+    status: task.status,
+    pause_reason: task.pauseReason || null,
+    started_at: task.startedAt,
+    started_at_iso: new Date(task.startedAt).toISOString(),
+    completed_at: task.completedAt || null,
+    completed_at_iso: task.completedAt ? new Date(task.completedAt).toISOString() : null,
+    last_progress_at: task.lastProgressAt,
+    last_progress_iso: new Date(task.lastProgressAt).toISOString(),
+    last_progress_age_ms: Number.isFinite(Number(task.lastProgressAt)) ? Math.max(0, now - Number(task.lastProgressAt)) : null,
+    current_step_index: currentStepIndex,
+    step: Math.min(currentStepIndex + 1, Math.max(1, plan.length)),
+    total_steps: Math.max(1, plan.length),
+    completed_steps: done,
+    pending_step_count: pendingSteps.length,
+    failed_step_count: failedSteps.length,
+    running_step_count: runningSteps.length,
+    active_step: normalizeAgentRunStep(activeStep),
+    unfinished_steps: pendingSteps.slice(0, 20).map(normalizeAgentRunStep).filter(Boolean),
+    failed_steps: failedSteps.slice(0, 10).map(normalizeAgentRunStep).filter(Boolean),
+    plan: plan.slice(0, 20),
+    runtime_progress: task.runtimeProgress || null,
+    last_tool_call: typeof task.lastToolCall === 'string' && task.lastToolCall.trim() ? task.lastToolCall : null,
+    last_tool_call_at: lastToolCallAt,
+    last_tool_call_at_iso: lastToolCallAt ? new Date(lastToolCallAt).toISOString() : null,
+    last_tool_call_age_ms: lastToolCallAt ? Math.max(0, now - lastToolCallAt) : null,
+    last_journal_event: latestJournal || null,
+    live_runner_active: liveRunnerActive,
+    runner_state: inferAgentRunRunnerState(task, liveRunnerActive),
+    final_summary: task.finalSummary || '',
+    result_preview: task.finalSummary || task.pauseAnalysis?.message || latestJournal?.content || '',
+    pending_clarification_question: task.pendingClarificationQuestion || '',
+    pause_analysis: task.pauseAnalysis || null,
+    recovery_conversation_count: recoveryConversation.length,
+    latest_recovery_at: recoveryConversation[recoveryConversation.length - 1]?.timestamp || null,
+    can_recover: agentRunCanRecover(task),
+    in_progress: ['queued', 'running', 'waiting_subagent'].includes(String(task.status || '')),
+    source: task.taskKind || task.scheduleId ? 'schedule' : task.originatingSessionId ? 'handoff' : 'manual',
+    session_id: task.sessionId,
+    originating_session_id: task.originatingSessionId || null,
+    executor_provider: task.executorProvider || null,
+    manager_enabled: task.managerEnabled === true,
+  };
+}
+
+function buildAgentRunToolSnapshot(task: TaskRecord, agentIdHint?: string, opts?: { includeTask?: boolean; includeEvidence?: boolean }): Record<string, any> {
+  const recoveryConversation = Array.isArray(task.recoveryConversation) ? task.recoveryConversation.slice(-20) : [];
+  const journalTail = Array.isArray(task.journal) ? task.journal.slice(-20) : [];
+  const evidence = opts?.includeEvidence === false ? null : getEvidenceBusSnapshot(task.id);
+  const evidenceEntries = Array.isArray(evidence?.entries) ? evidence!.entries.slice(-40) : [];
+  return {
+    run: summarizeAgentRunForTool(task, agentIdHint),
+    recovery_conversation: recoveryConversation,
+    journal_tail: journalTail,
+    evidence_bus: evidence
+      ? {
+          taskId: evidence.taskId,
+          createdAt: evidence.createdAt,
+          updatedAt: evidence.updatedAt,
+          total_entries: Array.isArray(evidence.entries) ? evidence.entries.length : 0,
+          entries: evidenceEntries,
+        }
+      : null,
+    task: opts?.includeTask === true ? task : undefined,
+  };
+}
+
+function resolveAgentRunTaskForTool(agentIdRaw: any, taskIdRaw: any): { task?: TaskRecord; agentId?: string; error?: string; code?: string } {
+  const agentId = String(agentIdRaw || '').trim();
+  const taskId = String(taskIdRaw || '').trim();
+  if (!taskId) return { error: 'task_id is required for this agent_run_ops action.', code: 'missing_task_id' };
+  const task = loadTask(taskId);
+  if (!task) return { error: `Task not found: ${taskId}`, code: 'not_found' };
+  const owner = inferAgentRunOwner(task);
+  if (!owner) {
+    return {
+      error: `Task "${taskId}" is not assigned to an agent. Use task_control for non-agent background tasks.`,
+      code: 'not_agent_run',
+    };
+  }
+  if (agentId && !agentOwnsRunTask(agentId, task)) {
+    return {
+      error: `Task "${taskId}" belongs to agent "${owner.agentId}", not "${agentId}".`,
+      code: 'wrong_agent',
+    };
+  }
+  return { task, agentId: agentId || owner.agentId };
 }
 
 async function runStandaloneSubagentChatFromTool(params: {
@@ -4218,6 +4442,160 @@ export async function executeTool(name: string, args: any, workspacePath: string
         // Handled upstream in server-v2 before executeTool is called.
         // This passthrough prevents "unknown tool" errors if it reaches the executor.
         return { name, args, result: 'Plan acknowledged.', error: false };
+      }
+
+      case 'agent_run_ops': {
+        const rawAction = String(args?.action || '').trim().toLowerCase();
+        const action = rawAction === 'details' || rawAction === 'detail' || rawAction === 'status'
+          ? 'get'
+          : rawAction === 'chat' || rawAction === 'message'
+            ? 'recover'
+            : rawAction;
+        const includeTask = args?.include_task === true || args?.includeTask === true;
+        const includeEvidence = args?.include_evidence !== false && args?.includeEvidence !== false;
+        if (!action) return { name, args, result: 'agent_run_ops requires action', error: true };
+
+        if (action === 'list') {
+          const agentId = String(args?.agent_id || args?.agentId || '').trim();
+          if (agentId && !getAgentById(agentId)) {
+            return { name, args, result: `Unknown agent: ${agentId}. Call agent_list first.`, error: true };
+          }
+          const statuses = parseAgentRunStatusFilter(args?.status);
+          const recoverableOnly = args?.recoverable_only === true || args?.recoverableOnly === true;
+          const limitRaw = Number(args?.limit);
+          const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.floor(limitRaw)) : 20;
+          const tasks = listTasks(statuses ? { status: statuses } : undefined)
+            .filter((task) => !!inferAgentRunOwner(task))
+            .filter((task) => !agentId || agentOwnsRunTask(agentId, task))
+            .filter((task) => !recoverableOnly || agentRunCanRecover(task))
+            .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0))
+            .slice(0, limit);
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              action,
+              agent_id: agentId || null,
+              status_filter: statuses || null,
+              recoverable_only: recoverableOnly,
+              runs: tasks.map((task) => summarizeAgentRunForTool(task, agentId || undefined)),
+              message: tasks.length
+                ? `Found ${tasks.length} agent-owned run(s).`
+                : 'No matching agent-owned runs found.',
+            }, null, 2),
+            error: false,
+          };
+        }
+
+        if (action === 'get') {
+          const resolved = resolveAgentRunTaskForTool(args?.agent_id || args?.agentId, args?.task_id || args?.taskId || args?.id);
+          if (!resolved.task) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({ success: false, action, code: resolved.code || 'not_found', message: resolved.error }, null, 2),
+              error: true,
+            };
+          }
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              action,
+              agent_id: resolved.agentId,
+              ...buildAgentRunToolSnapshot(resolved.task, resolved.agentId, { includeTask, includeEvidence }),
+            }, null, 2),
+            error: false,
+          };
+        }
+
+        if (action === 'recover') {
+          const message = String(args?.message || args?.prompt || '').trim();
+          if (!message) return { name, args, result: 'agent_run_ops recover requires message', error: true };
+          const resolved = resolveAgentRunTaskForTool(args?.agent_id || args?.agentId, args?.task_id || args?.taskId || args?.id);
+          if (!resolved.task) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({ success: false, action, code: resolved.code || 'not_found', message: resolved.error }, null, 2),
+              error: true,
+            };
+          }
+          const sourceRaw = String(args?.source || '').trim();
+          const validSources = new Set(['chat', 'subagent_chat', 'team_chat', 'team_manager']);
+          const recoverySource = (validSources.has(sourceRaw) ? sourceRaw : 'chat') as 'chat' | 'subagent_chat' | 'team_chat' | 'team_manager';
+          try {
+            const { handleTaskRecoveryMessage } = await import('../tasks/task-router');
+            const recovery = await handleTaskRecoveryMessage(resolved.task.id, message, {
+              sourceSessionId: String(args?.source_session_id || args?.sourceSessionId || sessionId || '').trim(),
+              source: recoverySource,
+              visibleMessage: String(args?.visible_message || args?.visibleMessage || message).trim(),
+            });
+            const updated = loadTask(resolved.task.id) || resolved.task;
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: recovery.handled === true,
+                action,
+                agent_id: resolved.agentId,
+                task_id: resolved.task.id,
+                handled: recovery.handled,
+                resumed: recovery.resumed,
+                recovery_action: recovery.action || null,
+                reply: recovery.reply,
+                message: recovery.handled
+                  ? 'Recovery conversation updated.'
+                  : `Task "${resolved.task.id}" is not currently eligible for recovery chat.`,
+                ...buildAgentRunToolSnapshot(updated, resolved.agentId, { includeTask, includeEvidence }),
+              }, null, 2),
+              error: recovery.handled !== true,
+            };
+          } catch (err: any) {
+            return { name, args, result: `agent_run_ops recover error: ${err?.message || err}`, error: true };
+          }
+        }
+
+        if (action === 'resume' || action === 'rerun' || action === 'pause' || action === 'cancel') {
+          const resolved = resolveAgentRunTaskForTool(args?.agent_id || args?.agentId, args?.task_id || args?.taskId || args?.id);
+          if (!resolved.task) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({ success: false, action, code: resolved.code || 'not_found', message: resolved.error }, null, 2),
+              error: true,
+            };
+          }
+          const ctl = await deps.handleTaskControlAction(sessionId, {
+            action,
+            task_id: resolved.task.id,
+            note: String(args?.note || args?.message || '').trim(),
+            confirm: args?.confirm === true,
+          });
+          const updated = loadTask(resolved.task.id) || resolved.task;
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: ctl.success === true,
+              action,
+              agent_id: resolved.agentId,
+              task_id: resolved.task.id,
+              control: ctl,
+              ...buildAgentRunToolSnapshot(updated, resolved.agentId, { includeTask, includeEvidence }),
+            }, null, 2),
+            error: ctl.success !== true,
+          };
+        }
+
+        return {
+          name,
+          args,
+          result: `Unsupported agent_run_ops action "${rawAction}". Use list, get, recover, resume, rerun, pause, or cancel.`,
+          error: true,
+        };
       }
 
       case 'chat_with_subagent': {
@@ -11145,6 +11523,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           multi_engine: typeof args.multi_engine === 'boolean' ? args.multi_engine : undefined,
           provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
+          fetch_top_k: args.fetch_top_k != null ? Number(args.fetch_top_k) : undefined,
+          fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
+          provider_timeout_ms: args.provider_timeout_ms != null ? Number(args.provider_timeout_ms) : undefined,
         });
         return { name, args, result, error: false };
       }
@@ -11154,6 +11535,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           multi_engine: false,
           provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
+          fetch_top_k: args.fetch_top_k != null ? Number(args.fetch_top_k) : undefined,
+          fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
+          provider_timeout_ms: args.provider_timeout_ms != null ? Number(args.provider_timeout_ms) : undefined,
         });
         return { name, args, result, error: false };
       }
@@ -11162,6 +11546,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const result = await webSearch(args.query || '', {
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           provider: 'multi' as any,
+          fetch_top_k: args.fetch_top_k != null ? Number(args.fetch_top_k) : undefined,
+          fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
+          provider_timeout_ms: args.provider_timeout_ms != null ? Number(args.provider_timeout_ms) : undefined,
         });
         return { name, args, result, error: false };
       }

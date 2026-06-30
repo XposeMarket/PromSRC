@@ -814,7 +814,11 @@ function _stripMobileInternalUploadContext(value) {
 }
 
 function _isMobileInternalServerMessage(m) {
+  const text = String(m?.content || m?.body?.text || '').trim();
+  const label = String(m?.channelLabel || m?.channel || m?.source || m?.body?.source || '').toLowerCase();
   return m?.sideChatBoundary === true
+    || label === 'internal_watch'
+    || /^\[Internal watch\b/i.test(text)
     || (_isMobileRestartContextPacketText(m?.content) && !Array.isArray(m?.fileChanges?.files));
 }
 
@@ -894,6 +898,22 @@ function _isMobileVoiceAgentWorkerHandoff(msg) {
   return msg?.voiceAgentWorkerHandoff === true
     || label.includes('voice agent handoff')
     || label.includes('realtime agent dispatch');
+}
+
+function _isMobileVoiceTraceTurn(msg) {
+  if (!msg || msg.role !== 'ai') return false;
+  if (msg._voiceWorkerLocalTurn === true || msg._voiceWorkerLocalFinal === true) return true;
+  if (msg.voiceRealtimeActive === true || msg.voiceInterruptionEventId) return true;
+  const source = [
+    msg.source,
+    msg.channel,
+    msg.channelLabel,
+    msg.body?.source,
+    msg.metadata?.source,
+    msg.metadata?.channel,
+    msg.metadata?.channelLabel,
+  ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean).join(' ');
+  return /\bvoice\b/.test(source) || source.includes('voice_agent') || source.includes('realtime_agent');
 }
 
 function _normalizeMobileVoiceWorkerHandoffText(value) {
@@ -2104,6 +2124,26 @@ function _appendVoiceAgentProcessEntriesToTurn(turn, entries) {
     if (!key || seen.has(key)) continue;
     seen.add(key);
     turn.processEntries.push(entry);
+    if (turn.streaming === true) {
+      if (!Array.isArray(turn.liveTraceEntries)) turn.liveTraceEntries = [];
+      const traceType = String(entry.type || 'tool').toLowerCase();
+      const traceText = String(entry.text || entry.content || '').trim();
+      const traceKey = `${traceType}|${traceText.replace(/\s+/g, ' ').trim()}`;
+      const alreadyLive = turn.liveTraceEntries.some((trace) => {
+        const liveType = String(trace?.type || '').toLowerCase();
+        const liveText = String(trace?.text || trace?.content || '').replace(/\s+/g, ' ').trim();
+        return `${liveType}|${liveText}` === traceKey;
+      });
+      if (traceText && !alreadyLive) {
+        turn.liveTraceEntries.push({
+          ...entry,
+          id: entry.id || `voice_trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          type: traceType,
+          text: traceText,
+          time: String(entry.time || entry.ts || _nowTime()),
+        });
+      }
+    }
     added = true;
   }
   if (!added) return false;
@@ -2267,32 +2307,13 @@ function _appendMobileStreamingText(existing, chunk) {
   return `${leftRaw}${rightRaw}`;
 }
 
-const PM_MOBILE_VISUAL_STREAM_DELAY_MS = 46;
-const PM_MOBILE_VISUAL_STREAM_CONTINUE_MS = 58;
-const PM_MOBILE_VISUAL_STREAM_MIN_CHARS = 18;
-const PM_MOBILE_VISUAL_STREAM_MAX_CHARS = 74;
-
 function _clearMobileVisualStreamTimer(message) {
   if (!message || !message._pmVisualStreamTimer) return;
   try { clearTimeout(message._pmVisualStreamTimer); } catch {}
   message._pmVisualStreamTimer = 0;
 }
 
-function _mobileVisualStreamChunkLength(text, force = false) {
-  const raw = String(text || '');
-  if (!raw) return 0;
-  if (force || raw.length <= PM_MOBILE_VISUAL_STREAM_MAX_CHARS) return raw.length;
-  const max = Math.min(raw.length, PM_MOBILE_VISUAL_STREAM_MAX_CHARS);
-  const min = Math.min(PM_MOBILE_VISUAL_STREAM_MIN_CHARS, max);
-  const slice = raw.slice(0, max);
-  const newline = slice.lastIndexOf('\n');
-  const space = slice.lastIndexOf(' ');
-  const punctuation = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf(', '), slice.lastIndexOf('; '), slice.lastIndexOf(': '));
-  const boundary = Math.max(newline, space, punctuation >= 0 ? punctuation + 1 : -1);
-  return boundary >= min ? boundary + 1 : max;
-}
-
-function _flushMobileVisualStreamText(message, renderSoon = null, { force = false } = {}) {
+function _flushMobileVisualStreamText(message, renderSoon = null) {
   if (!message) return;
   const pending = String(message._pmVisualStreamPending || '');
   if (!pending) {
@@ -2300,50 +2321,37 @@ function _flushMobileVisualStreamText(message, renderSoon = null, { force = fals
     return;
   }
   if (!message.body || typeof message.body !== 'object') message.body = { text: '' };
-  const count = _mobileVisualStreamChunkLength(pending, force);
-  if (count <= 0) return;
-  const next = pending.slice(0, count);
+  const previous = String(message.body.text || '');
+  const next = _appendMobileStreamingText(previous, pending);
   message.finalResponseStarted = true;
-  message.body.text = `${String(message.body.text || '')}${next}`;
-  message.content = String(message._pmVisualStreamFull || message.body.text || '');
-  message._pmVisualStreamPending = pending.slice(count);
+  message.body.text = next;
+  message.content = next;
+  message._pmVisualStreamPending = '';
+  message._pmVisualStreamFull = '';
   _clearMobileVisualStreamTimer(message);
   if (typeof renderSoon === 'function') renderSoon();
-  if (message._pmVisualStreamPending && !force && message.streaming) {
-    message._pmVisualStreamTimer = setTimeout(() => {
-      message._pmVisualStreamTimer = 0;
-      _flushMobileVisualStreamText(message, renderSoon, { force: false });
-    }, PM_MOBILE_VISUAL_STREAM_CONTINUE_MS);
-  }
 }
 
 function _scheduleMobileVisualStreamFlush(message, renderSoon) {
-  if (!message || message._pmVisualStreamTimer) return;
-  message._pmVisualStreamTimer = setTimeout(() => {
-    message._pmVisualStreamTimer = 0;
-    _flushMobileVisualStreamText(message, renderSoon, { force: false });
-  }, PM_MOBILE_VISUAL_STREAM_DELAY_MS);
+  _flushMobileVisualStreamText(message, renderSoon);
 }
 
 function _appendMobileVisualStreamToken(message, chunk, renderSoon) {
   if (!message) return;
   const text = String(chunk || '');
   if (!text) return;
+  _clearMobileVisualStreamTimer(message);
   if (!message.body || typeof message.body !== 'object') message.body = { text: '' };
   message.finalResponseStarted = true;
   const previousFull = String(message._pmVisualStreamFull || message.body.text || '');
   const nextFull = _appendMobileStreamingText(previousFull, text);
   const appended = nextFull.length >= previousFull.length ? nextFull.slice(previousFull.length) : '';
   if (!appended) return;
-  message._pmVisualStreamFull = nextFull;
-  message._pmVisualStreamPending = `${String(message._pmVisualStreamPending || '')}${appended}`;
-  message.content = String(message._pmVisualStreamFull || message.body.text || '');
-  const pending = String(message._pmVisualStreamPending || '');
-  if (pending.length >= PM_MOBILE_VISUAL_STREAM_MAX_CHARS) {
-    _flushMobileVisualStreamText(message, renderSoon, { force: false });
-  } else {
-    _scheduleMobileVisualStreamFlush(message, renderSoon);
-  }
+  message.body.text = nextFull;
+  message.content = nextFull;
+  message._pmVisualStreamPending = '';
+  message._pmVisualStreamFull = '';
+  if (typeof renderSoon === 'function') renderSoon();
 }
 
 function _finishMobileVisualStreamText(message, finalText = '', renderSoon = null) {
@@ -2355,7 +2363,7 @@ function _finishMobileVisualStreamText(message, finalText = '', renderSoon = nul
     message.body.text = explicit;
     message.content = explicit;
   } else {
-    _flushMobileVisualStreamText(message, renderSoon, { force: true });
+    _flushMobileVisualStreamText(message, renderSoon);
     message.content = String(message.body.text || message.content || '');
   }
   message._pmVisualStreamPending = '';
@@ -2917,57 +2925,164 @@ function _mobileTraceToolLabel(text) {
     .trim();
 }
 
-function _mobileTraceToolAction(label, entryType = '') {
-  const raw = String(label || '').replace(/\s+/g, ' ').trim();
-  const text = raw.toLowerCase();
-  const type = String(entryType || '').toLowerCase();
-  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(text)) {
-    return { key: 'screenshot', one: 'viewed screenshot', many: 'viewed screenshots', style: 'noun' };
-  }
-  if (/\b(skill read|read skill|skill list|list skills|skill search|skill match)\b/.test(text)) {
-    return { key: 'skill', one: 'read skill', many: 'read skills', style: 'noun' };
-  }
-  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(text)) {
-    return { key: 'fileSearch', one: 'searched files', many: 'searched files', style: 'times' };
-  }
-  if (/\b(read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(text)) {
-    return { key: 'fileRead', one: 'read file', many: 'read files', style: 'noun' };
-  }
-  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(text)) {
-    return { key: 'webSearch', one: 'searched web', many: 'searched web', style: 'times' };
-  }
-  if (/\b(browser click|clicked?|tap|tapped)\b/.test(text)) {
-    return { key: 'click', one: 'clicked', many: 'clicked', style: 'times' };
-  }
-  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(text)) {
-    return { key: 'scroll', one: 'scrolled', many: 'scrolled', style: 'times' };
-  }
-  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(text)) {
-    return { key: 'page', one: 'opened page', many: 'opened pages', style: 'noun' };
-  }
-  if (/\b(shell|powershell|command|terminal|run command|exec|cmd\.exe)\b/.test(text)) {
-    return { key: 'command', one: 'ran command', many: 'ran commands', style: 'noun' };
-  }
-  if (/\b(apply patch|edited?|update file|create file|delete file|write file)\b/.test(text)) {
-    return { key: 'edit', one: 'edited file', many: 'edited files', style: 'noun' };
-  }
-  if (/\b(approval|approve|permission)\b/.test(text)) {
-    return { key: 'approval', one: 'requested approval', many: 'requested approvals', style: 'noun' };
-  }
-  return { key: `tool:${raw || 'tool'}`, one: raw || 'used tool', many: raw || 'used tools', style: 'tool' };
-}
-
 function _mobileTraceCountPhrase(count) {
   if (count === 1) return 'once';
   if (count === 2) return 'twice';
   return `${count} times`;
 }
 
-function _mobileTraceToolActionText(action, count) {
-  const total = Math.max(1, Number(count || 0) || 1);
-  if (action.style === 'times') return `${total === 1 ? action.one : action.many} ${_mobileTraceCountPhrase(total)}`;
-  if (action.style === 'tool') return total === 1 ? action.one : `${action.many} x${total}`;
-  return `${total === 1 ? action.one : action.many.replace(/^(\w+)\s+/, `$1 ${total} `)}`;
+function _mobileTraceJsonPayload(text) {
+  const raw = String(text || '');
+  const start = raw.search(/[\[{]/);
+  if (start < 0) return null;
+  const opener = raw[start];
+  const closer = opener === '[' ? ']' : '}';
+  const end = raw.lastIndexOf(closer);
+  if (end <= start) return null;
+  try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+}
+
+function _mobileTracePayloadValues(payload, keys, limit = 4) {
+  const wanted = new Set((keys || []).map((key) => String(key || '').toLowerCase()));
+  const out = [];
+  const visit = (value, depth = 0) => {
+    if (out.length >= limit || value == null || depth > 5) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    if (typeof value !== 'object') return;
+    Object.entries(value).forEach(([key, item]) => {
+      if (out.length >= limit) return;
+      if (wanted.has(String(key || '').toLowerCase()) && item != null && typeof item !== 'object') {
+        const text = String(item || '').trim();
+        if (text) out.push(text);
+      } else {
+        visit(item, depth + 1);
+      }
+    });
+  };
+  visit(payload);
+  return [...new Set(out)];
+}
+
+function _mobileTraceFirstPayloadValue(payload, keys) {
+  return _mobileTracePayloadValues(payload, keys, 1)[0] || '';
+}
+
+function _mobileTraceArrowDetail(text) {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  const match = raw.match(/(?:->|=>|→)\s*([^.;\n]+)/);
+  return match ? match[1].replace(/\s+bundle\s+Description.*$/i, '').trim() : '';
+}
+
+function _mobileTraceTitleCaseSlug(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!/[-_]/.test(raw)) return raw;
+  return raw.split(/[-_]+/).filter(Boolean).map((part) => {
+    const lower = part.toLowerCase();
+    if (['ai', 'ui', 'api', 'url', 'json', 'html', 'css', 'js', 'ts', 'tsx', 'jsx', 'x'].includes(lower)) return lower.toUpperCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }).join(' ');
+}
+
+function _mobileTraceCompactDetail(value, { path = false, url = false, slug = false } = {}) {
+  let raw = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  if (url || /^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      raw = `${parsed.host}${parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : ''}`;
+    } catch {}
+  } else if (path || /[\\/]/.test(raw)) {
+    raw = raw.split(/[\\/]/).filter(Boolean).pop() || raw;
+  } else if (slug) {
+    raw = _mobileTraceTitleCaseSlug(raw);
+  }
+  return raw.length > 48 ? `${raw.slice(0, 45)}...` : raw;
+}
+
+function _mobileTraceDescriptorFor(rawText, entryType = 'tool') {
+  const raw = String(rawText || '').replace(/\s+/g, ' ').trim();
+  const type = String(entryType || '').toLowerCase();
+  const label = _mobileTraceToolLabel(raw);
+  const lower = `${label} ${raw}`.toLowerCase();
+  const payload = _mobileTraceJsonPayload(raw);
+  const arrow = _mobileTraceArrowDetail(raw);
+  const fileValues = _mobileTracePayloadValues(payload, ['file', 'filename', 'path', 'source', 'target', 'to_path', 'from_path'], 3)
+    .map((value) => _mobileTraceCompactDetail(value, { path: true }))
+    .filter(Boolean);
+  const urlValue = _mobileTraceFirstPayloadValue(payload, ['url', 'href', 'currentUrl', 'pageUrl', 'targetUrl']);
+  const windowValue = _mobileTraceFirstPayloadValue(payload, ['window', 'windowTitle', 'title', 'name', 'app']);
+  const commandValue = _mobileTraceFirstPayloadValue(payload, ['command', 'cmd', 'script']);
+  const skillValue = _mobileTraceFirstPayloadValue(payload, ['id', 'skill', 'skillId', 'name']);
+  const make = (key, past, gerund, noun, plural, detail = '', opts = {}) => ({
+    key,
+    past,
+    gerund,
+    noun,
+    plural: plural || `${noun}s`,
+    detail: String(detail || '').trim(),
+    detailPrefix: opts.detailPrefix || '',
+    countStyle: opts.countStyle || 'noun',
+    status: type === 'error' || /\bfailed\b/i.test(raw) ? 'failed' : '',
+  });
+  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(lower)) {
+    return make('vision', 'Viewed', 'Viewing', 'screenshot', 'screenshots', windowValue || arrow, { detailPrefix: '' });
+  }
+  if (/\b(skill read|read skill)\b/.test(lower)) {
+    return make('skillRead', 'Read', 'Reading', 'skill', 'skills', _mobileTraceCompactDetail(skillValue || arrow, { slug: true }), { detailPrefix: 'skill' });
+  }
+  if (/\b(skill list|list skills|skill search|skill match)\b/.test(lower)) {
+    const query = _mobileTraceFirstPayloadValue(payload, ['query', 'q', 'search']);
+    return make('skillList', 'Searched', 'Searching', 'skill list', 'skill searches', _mobileTraceCompactDetail(query || arrow), { detailPrefix: 'for' });
+  }
+  if (/\b(desktop focus|focus window|desktop window)\b/.test(lower)) {
+    return make('desktopFocus', 'Focused', 'Focusing', 'window', 'windows', _mobileTraceCompactDetail(windowValue || arrow, { slug: true }));
+  }
+  if (/\b(desktop screen|desktop screenshot|screen capture)\b/.test(lower)) {
+    return make('desktopScreen', 'Captured', 'Capturing', 'desktop screen', 'desktop screens', _mobileTraceCompactDetail(windowValue, { slug: true }));
+  }
+  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(lower)) {
+    const direction = _mobileTraceFirstPayloadValue(payload, ['direction', 'dir']);
+    return make('browserScroll', 'Scrolled', 'Scrolling', 'scroll', 'scrolls', _mobileTraceCompactDetail(direction || arrow), { countStyle: 'times' });
+  }
+  if (/\b(browser click|clicked?|tap|tapped)\b/.test(lower)) {
+    const target = _mobileTraceFirstPayloadValue(payload, ['text', 'label', 'selector', 'target', 'ariaLabel']);
+    return make('browserClick', 'Clicked', 'Clicking', 'click', 'clicks', _mobileTraceCompactDetail(target || arrow), { countStyle: 'times' });
+  }
+  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(lower)) {
+    return make('browserOpen', 'Opened', 'Opening', 'page', 'pages', _mobileTraceCompactDetail(urlValue || arrow, { url: true }));
+  }
+  if (/\b(browser extract|get page text|page text|read page|browser read)\b/.test(lower)) {
+    return make('browserRead', 'Read', 'Reading', 'page', 'pages', _mobileTraceCompactDetail(urlValue || arrow, { url: true }));
+  }
+  if (/\b(workspace edit|dev source edit|apply patch|edited?|update file|delete file)\b/.test(lower)) {
+    return make('fileEdit', 'Edited', 'Editing', 'file', 'files', fileValues[0] || _mobileTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  }
+  if (/\b(write note|workspace write|create file|write file|save file)\b/.test(lower)) {
+    return make('fileWrite', 'Wrote', 'Writing', 'file', 'files', fileValues[0] || _mobileTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  }
+  if (/\b(workspace read|dev source read|read files batch|read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(lower)) {
+    return make('fileRead', 'Read', 'Reading', 'file', 'files', fileValues[0] || _mobileTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  }
+  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(lower)) {
+    const query = _mobileTraceFirstPayloadValue(payload, ['pattern', 'query', 'q', 'search']);
+    return make('fileSearch', 'Searched', 'Searching', 'files', 'file searches', _mobileTraceCompactDetail(query || fileValues[0] || arrow), { detailPrefix: 'for' });
+  }
+  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(lower)) {
+    const query = _mobileTraceFirstPayloadValue(payload, ['q', 'query', 'search']);
+    return make('webSearch', 'Searched', 'Searching', 'web', 'web searches', _mobileTraceCompactDetail(query || arrow), { detailPrefix: 'for' });
+  }
+  if (/\b(shell|powershell|command|terminal|run command|workspace run|cmd\.exe)\b/.test(lower)) {
+    const command = _mobileTraceCompactDetail(commandValue || arrow || label);
+    return make('command', 'Ran', 'Running', 'command', 'commands', command, { detailPrefix: 'command' });
+  }
+  if (/\b(approval|approve|permission)\b/.test(lower)) {
+    return make('approval', 'Requested', 'Requesting', 'approval', 'approvals', _mobileTraceCompactDetail(arrow));
+  }
+  return make(`tool:${label || raw || 'tool'}`, 'Used', 'Using', 'tool', 'tools', _mobileTraceCompactDetail(arrow || label || raw));
 }
 
 function _mobileTraceJoinSummaryParts(parts) {
@@ -2977,54 +3092,118 @@ function _mobileTraceJoinSummaryParts(parts) {
   return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
 }
 
-function _mobileTraceToolSummary(entries) {
+function _mobileTraceMergeDetail(target, source) {
+  if (!target || !source) return;
+  if (!target.detail && source.detail) target.detail = source.detail;
+  if (!target.status && source.status) target.status = source.status;
+}
+
+function _mobileTraceLogicalTools(entries) {
   const list = _mobileVisibleTraceEntries(entries);
-  const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision'].includes(String(entry?.type || '').toLowerCase()));
-  const calls = toolish.filter((entry) => {
+  const calls = [];
+  let pending = null;
+  let current = null;
+  list.forEach((entry) => {
     const type = String(entry?.type || '').toLowerCase();
-    return type === 'tool' || type === 'vision';
+    if (!['tool', 'result', 'error', 'vision'].includes(type)) return;
+    const raw = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+    if (!raw && type !== 'vision') return;
+    if (/^Processing\.{0,3}$/i.test(raw) || /^Prepared\b/i.test(raw)) return;
+    const descriptor = _mobileTraceDescriptorFor(raw, type);
+    if (type === 'tool' && /^Preparing\b/i.test(raw)) {
+      pending = (!pending || pending.key !== descriptor.key) ? { ...descriptor, pending: true } : pending;
+      return;
+    }
+    if (type === 'tool' || type === 'vision') {
+      if (pending && pending.key !== descriptor.key) calls.push(pending);
+      pending = null;
+      current = { ...descriptor };
+      calls.push(current);
+      return;
+    }
+    const target = current || pending;
+    if (target && (!descriptor.key || target.key === descriptor.key || /\bcomplete\b|->|=>|→|\bok\b|\bapplied\b/i.test(raw))) {
+      _mobileTraceMergeDetail(target, descriptor);
+      if (type === 'error' || /\bfailed\b/i.test(raw)) target.status = 'failed';
+      return;
+    }
+    if (type === 'error' || !/\bcomplete\b/i.test(raw)) {
+      current = { ...descriptor };
+      calls.push(current);
+    }
   });
-  const source = calls.length ? calls : toolish;
-  const actionCounts = new Map();
-  source.forEach((entry) => {
-    const type = String(entry?.type || '').toLowerCase();
-    const label = _mobileTraceToolLabel(entry.text);
-    if (!label && type !== 'vision') return;
-    const action = _mobileTraceToolAction(label, type);
-    const existing = actionCounts.get(action.key);
-    if (existing) existing.count += 1;
-    else actionCounts.set(action.key, { ...action, count: 1 });
-  });
-  const errors = [...new Set(list
-    .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
-    .map((entry) => _mobileTraceToolLabel(entry.text))
-    .filter(Boolean))].length;
-  if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
-  const actions = [...actionCounts.values()].sort((a, b) => b.count - a.count);
-  if (actions.length) {
-    const summary = _mobileTraceJoinSummaryParts(actions.slice(0, 3).map((action) => _mobileTraceToolActionText(action, action.count)));
-    return summary.charAt(0).toUpperCase() + summary.slice(1);
+  if (pending && !calls.includes(pending)) calls.push(pending);
+  return calls;
+}
+
+function _mobileTraceLogicalGroupText(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  if (!list.length) return '';
+  const first = list[0];
+  const count = list.length;
+  const details = [...new Set(list.map((call) => call.detail).filter(Boolean))].slice(0, 2);
+  const failed = list.filter((call) => call.status === 'failed').length;
+  if (failed && failed === count) {
+    if (count === 1) return `${first.noun.charAt(0).toUpperCase()}${first.noun.slice(1)} failed${details[0] ? `: ${details[0]}` : ''}`;
+    return `${count} ${first.plural} failed`;
   }
-  const count = toolish.length || list.length;
+  if (count === 1) {
+    const detail = details[0] ? `${first.detailPrefix && first.detailPrefix !== 'for' ? ` ${first.detailPrefix}:` : ''} ${details[0]}` : ` ${first.noun}`;
+    if (first.detailPrefix === 'for' && details[0]) return `${first.past} for ${details[0]}`;
+    return `${first.past}${detail}`;
+  }
+  if (first.countStyle === 'times') return `${first.past} ${_mobileTraceCountPhrase(count)}`;
+  const tail = details.length ? `: ${details.join(', ')}` : '';
+  return `${first.past} ${count} ${first.plural}${tail}`;
+}
+
+function _mobileTraceToolSummary(entries) {
+  const calls = _mobileTraceLogicalTools(entries);
+  const groups = new Map();
+  calls.forEach((call) => {
+    const key = `${call.key}|${call.status === 'failed' ? 'failed' : 'ok'}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(call);
+  });
+  const parts = [...groups.values()].map(_mobileTraceLogicalGroupText).filter(Boolean);
+  if (parts.length) return _mobileTraceJoinSummaryParts(parts.slice(0, 3));
+  const count = _mobileVisibleTraceEntries(entries).length;
   return `Used ${count} tool${count === 1 ? '' : 's'}`;
 }
 
-function _renderMobileGroupedTrace(entries, { streaming = false } = {}) {
+function _mobileTraceCurrentToolLabel(entries) {
+  const calls = _mobileTraceLogicalTools(entries);
+  const call = calls[calls.length - 1];
+  if (call) {
+    if (call.status === 'failed') return `${call.noun.charAt(0).toUpperCase()}${call.noun.slice(1)} failed${call.detail ? `: ${call.detail}` : ''}`;
+    if (call.detailPrefix === 'for' && call.detail) return `${call.gerund} for ${call.detail}`;
+    if (call.detail) return `${call.gerund}${call.detailPrefix ? ` ${call.detailPrefix}:` : ''} ${call.detail}`;
+    return `${call.gerund} ${call.noun}`;
+  }
+  return _mobileTraceToolSummary(entries);
+}
+
+function _mobileTraceSummaryKey(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent = false } = {}) {
   const groups = _mobileTraceGroups(entries);
   if (!groups.length) return '';
   if (!streaming && !groups.some((group) => group.kind === 'tools' && group.entries.length > 0)) return '';
-  const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
   return `<div class="pm-trace-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
       return `<div class="pm-trace-thought">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div>`;
     }
-    const open = streaming && index === lastToolIndex;
-    const summary = _mobileTraceToolSummary(group.entries);
+    const isLiveCurrent = streaming && index === groups.length - 1;
+    const summary = isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries);
+    const summaryKey = _mobileTraceSummaryKey(summary);
     const eventCount = _mobileVisibleTraceEntries(group.entries).length;
-    return `<details class="pm-trace-tool-group"${open ? ' open data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
+    const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
+    return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
       <summary class="pm-trace-tool-summary">
         <span class="pm-trace-tool-icon" aria-hidden="true">›</span>
-        <strong>${escapeHtml(summary)}</strong>
+        <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
         <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
@@ -5101,6 +5280,7 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   const b = m.body || {};
   const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
+  const isVoiceTraceTurn = _isMobileVoiceTraceTurn(m);
   const statusDividerHtml = '<div class="pm-msg-status-divider" aria-hidden="true"></div>';
   let inner = _renderMobileWorkTimer(m);
   if (inner) inner += statusDividerHtml;
@@ -5120,8 +5300,8 @@ function _renderChatMessageHtml(m, index = -1) {
     if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
     if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
   }
-  const liveTraceHtml = m.streaming && !answerStarted && Array.isArray(m.liveTraceEntries)
-    ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true })
+  const liveTraceHtml = m.streaming && (!answerStarted || isVoiceTraceTurn) && Array.isArray(m.liveTraceEntries)
+    ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
     : '';
   const hasLiveTrace = !!liveTraceHtml;
   const completedTraceEntries = !m.streaming ? _mobileWorkflowTraceEntriesForMessage(m) : [];
@@ -5536,7 +5716,7 @@ function _renderThread(threadEl) {
       if (idx == null) return;
       const key = `${idx}:${d.getAttribute('data-pm-trace-group') || detailIndex}`;
       if (d.open) {
-        if (d.getAttribute('data-pm-trace-live-current') !== '1') openTraceGroups[key] = true;
+        openTraceGroups[key] = true;
       } else {
         closedTraceGroups.add(key);
       }
@@ -5637,18 +5817,18 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     const closedTraceGroups = new Set();
     const openTerminals = {};
     const stableVisionPreviews = {};
+    const stableTraceSummaryLabels = {};
     const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
     const questionDrafts = _captureMobileQuestionDraftState(currentEl);
-    const existingLiveEntryIds = new Set();
-    const previousAssistantTextLen = String(currentBubble.querySelector('.markdown-body')?.textContent || '').length;
     try {
-      currentEl.querySelectorAll('[data-pm-live-entry-id]').forEach((node) => {
-        const id = String(node.getAttribute('data-pm-live-entry-id') || '').trim();
-        if (id) existingLiveEntryIds.add(id);
-      });
       currentEl.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
         if (key) stableVisionPreviews[key] = node;
+      });
+      currentEl.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key]').forEach((node) => {
+        const groupKey = node.closest('details.pm-trace-tool-group')?.getAttribute('data-pm-trace-group') || '';
+        const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
+        if (groupKey && key) stableTraceSummaryLabels[groupKey] = { key, node };
       });
       currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
         if (d.open) {
@@ -5665,7 +5845,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
           return;
         }
         if (d.open) {
-          if (d.getAttribute('data-pm-trace-live-current') !== '1') openTraceGroups[key] = true;
+          openTraceGroups[key] = true;
         } else {
           closedTraceGroups.add(key);
         }
@@ -5682,19 +5862,20 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     } catch {}
     currentBubble.innerHTML = nextBubble.innerHTML;
     try {
-      currentBubble.querySelectorAll('[data-pm-live-entry-id]').forEach((node) => {
-        const id = String(node.getAttribute('data-pm-live-entry-id') || '').trim();
-        if (id && !existingLiveEntryIds.has(id)) node.classList.add('pm-stream-enter');
-      });
-      const nextAssistantTextLen = String(message?.body?.text || message?.content || '').length;
-      if (nextAssistantTextLen > previousAssistantTextLen) {
-        const markdown = currentBubble.querySelector('.markdown-body');
-        if (markdown) markdown.classList.add('pm-stream-text-refresh');
-      }
       currentBubble.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
         const stable = key ? stableVisionPreviews[key] : null;
         if (stable && stable !== node) node.replaceWith(stable);
+      });
+      currentBubble.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key]').forEach((node) => {
+        const groupKey = node.closest('details.pm-trace-tool-group')?.getAttribute('data-pm-trace-group') || '';
+        const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
+        const stable = groupKey ? stableTraceSummaryLabels[groupKey] : null;
+        if (stable?.node && stable.key === key && stable.node !== node) {
+          node.replaceWith(stable.node);
+        } else if (!stable || stable.key !== key) {
+          node.classList.add('pm-trace-summary-swap');
+        }
       });
     } catch {}
     const nextActions = nextEl.querySelector('[data-msg-action]') ? nextEl.querySelectorAll('[data-msg-action]') : null;
@@ -7347,10 +7528,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
 
   const resizeComposerInput = () => {
     if (!input) return;
-    const maxHeight = Number(input.dataset.maxHeight || 148);
+    const viewportHeight = Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || 640));
+    const dynamicCap = Math.max(96, Math.min(280, Math.floor(viewportHeight * 0.5) - 86));
+    const maxHeight = Number(input.dataset.maxHeight || dynamicCap);
     input.style.height = 'auto';
     const nextHeight = Math.min(input.scrollHeight || 0, maxHeight);
-    input.style.height = `${Math.max(0, nextHeight)}px`;
+    input.style.height = `${Math.max(30, nextHeight)}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   };
   const resetComposerInput = () => {
@@ -7362,7 +7545,9 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     _pmClearSelectedComposerSkills();
     _pmHideSkillTriggerPill(page);
     _pmUpdateComposerRichPreview(page, input);
+    form?.classList.remove('has-text', 'has-attachments');
     requestAnimationFrame(resizeComposerInput);
+    requestAnimationFrame(updateComposerExpandedState);
   };
   let connectionStatusHideTimer = null;
   let connectionStatusSuccessTimer = null;
@@ -7389,6 +7574,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       });
     });
     updateComposerSubmitState();
+  }
+
+  function updateComposerExpandedState() {
+    if (!form) return;
+    const hasText = !!String(input?.value || '').trim();
+    const hasAttachments = getPendingAttachments().length > 0;
+    const focused = document.activeElement === input;
+    form.classList.toggle('is-focused', focused);
+    form.classList.toggle('has-text', hasText);
+    form.classList.toggle('has-attachments', hasAttachments);
+    requestAnimationFrame(() => updateChatComposerSpace());
   }
 
   let attachSheetTarget = 'chat';
@@ -8476,6 +8672,7 @@ void main() {
         ? `<img class="pm-send-voice-icon" src="${PM_CHAT_VOICE_ICON_SRC}" alt="" aria-hidden="true" />`
       : ICONS.send;
     sendBtn.setAttribute('aria-label', shouldAbort ? 'Stop' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send');
+    updateComposerExpandedState();
   }
 
   function setBusy(busy, sessionForBusy = requestedSession) {
@@ -10500,6 +10697,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (incomingClientRequestId && incomingClientRequestId === ownClientRequestId) return;
       const payload = msg.data?.message && typeof msg.data.message === 'object' ? msg.data.message : {};
       const text = _stripMobileInternalUploadContext(payload.content || payload.text || payload.body?.text || '');
+      const channelLabel = String(payload.channelLabel || payload.channel || payload.source || payload.body?.source || '').toLowerCase();
+      const isInternalWatchUserMessage = channelLabel === 'internal_watch' || /^\[Internal watch\b/i.test(text);
       const attachments = Array.isArray(payload.attachmentPreviews)
         ? payload.attachmentPreviews
         : (Array.isArray(payload.body?.attachments) ? payload.body.attachments : []);
@@ -10520,7 +10719,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       const isDuplicate = previousUser
         && previousText === text
         && Math.abs(previousTs - ts) < 10000;
-      if (!isDuplicate && (text || attachments.length)) {
+      if (!isInternalWatchUserMessage && !isDuplicate && (text || attachments.length)) {
         activeThread.push({
           role: 'user',
           time: _nowTime(),
@@ -10953,6 +11152,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     _pmUpdateComposerRichPreview(page, input);
     updateComposerSubmitState();
   });
+  input?.addEventListener('focus', updateComposerExpandedState);
+  input?.addEventListener('blur', () => setTimeout(updateComposerExpandedState, 0));
   input?.addEventListener('scroll', () => _pmUpdateComposerRichPreview(page, input));
   input?.addEventListener('keydown', (e) => {
     const skillSuggestions = _pmSkillCommandSuggestions(input);
@@ -10999,6 +11200,26 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   commandChip?.addEventListener('click', () => _pmClearActiveSlashCommand(page, input));
   window.addEventListener('prometheus:skills-cache-updated', onSkillsCacheUpdated);
   window.addEventListener('prometheus:markdown-ready', onMarkdownReady);
+
+  function syncComposerAfterProgrammaticTextChange() {
+    if (!input) return;
+    resizeComposerInput();
+    _pmHandleSlashInput(page, input);
+    _pmRenderSkillTriggerPill(page, input);
+    _pmUpdateComposerRichPreview(page, input);
+    updateComposerSubmitState();
+    updateComposerExpandedState();
+    try {
+      input.scrollTop = input.scrollHeight;
+      const end = String(input.value || '').length;
+      input.setSelectionRange(end, end);
+    } catch {}
+    requestAnimationFrame(() => {
+      resizeComposerInput();
+      _pmUpdateComposerRichPreview(page, input);
+      updateChatComposerSpace();
+    });
+  }
 
   sideComposer?.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -11178,8 +11399,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           else interim += transcript;
         }
         input.value = `${startValue}${startValue && (finalTranscript || interim) ? ' ' : ''}${finalTranscript || interim}`.trimStart();
-        _pmHandleSlashInput(page, input);
-        updateComposerSubmitState();
+        syncComposerAfterProgrammaticTextChange();
       };
       recognition.onerror = (event) => {
         const msg = event?.error === 'not-allowed'
@@ -11191,7 +11411,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         micBtn.classList.remove('listening');
         chatSpeech = null;
         input.focus();
-        updateComposerSubmitState();
+        syncComposerAfterProgrammaticTextChange();
       };
       recognition.start();
     } catch (err) {
@@ -16008,6 +16228,38 @@ function _finishRealtimeAgentRecentCommand(cmd, ok, summary) {
   } catch {}
 }
 
+function _startMobileRealtimeAgentToolTrace(sessionId, name, args, extra = {}) {
+  const turn = _ensureMobileRealtimeAgentChatTurn(sessionId, 'ai');
+  if (!turn) return null;
+  turn.source = turn.source || 'voice_agent_realtime';
+  turn.channel = turn.channel || 'voice';
+  turn.streaming = true;
+  _appendVoiceAgentProcessEntriesToTurn(turn, [{
+    type: 'tool',
+    text: _realtimeAgentToolLabel(name, args),
+    extra: { type: 'tool_call', toolName: name, args, source: 'realtime_agent_tool_start', ...(extra || {}) },
+  }]);
+  _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_voice_tool_start' });
+  return turn;
+}
+
+function _finishMobileRealtimeAgentToolTrace(sessionId, turn, name, args, ok, summary = '', extra = {}) {
+  const target = turn || _ensureMobileRealtimeAgentChatTurn(sessionId, 'ai');
+  if (!target) return false;
+  const cleanSummary = String(summary || '').replace(/\s+/g, ' ').trim();
+  const label = _realtimeAgentToolLabel(name, args);
+  const text = ok
+    ? `${label}${cleanSummary ? ` -> ${cleanSummary.slice(0, 180)}` : ' complete'}`
+    : `${label} failed${cleanSummary ? `: ${cleanSummary.slice(0, 180)}` : ''}`;
+  const changed = _appendVoiceAgentProcessEntriesToTurn(target, [{
+    type: ok ? 'result' : 'error',
+    text,
+    extra: { type: 'tool_result', toolName: name, args, source: 'realtime_agent_tool_result', ...(extra || {}) },
+  }]);
+  _notifyMobileChatVoiceUpdate(sessionId, { reason: ok ? 'realtime_voice_tool_result' : 'realtime_voice_tool_error' });
+  return changed;
+}
+
 async function _abortMobileActiveWorkerFromRealtime(sessionId, source = 'realtime_agent_interrupt') {
   const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
   if (!sid) return false;
@@ -16133,6 +16385,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
     const message = String(args.message || '').trim();
     let ok = false;
     let error = '';
+    const steerToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args);
     if (_isMobileVoiceStatusQuestion(message)) {
       try {
         const status = await mobileGatewayFetch('/api/voice-agent/realtime-tool', {
@@ -16156,8 +16409,14 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
           }
           : null, sessionId, 'blocked_status_as_steer');
         if (packet) _sendMobileRealtimeAgentContextUpdate(packet, { reason: 'blocked_status_as_steer' });
+        _finishMobileRealtimeAgentToolTrace(sessionId, steerToolTurn, name, args, true, 'worker status checked', {
+          result: status?.result || status?.raw || '',
+        });
         _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: true, steered: false, statusQuestion: true, workerStatus: _overlayPendingMobileRealtimeAgentWorkerPacket(status?.result || null, sessionId, 'blocked_status_as_steer_output') || null }));
       } catch (err) {
+        _finishMobileRealtimeAgentToolTrace(sessionId, steerToolTurn, name, args, false, String(err?.message || err), {
+          error: String(err?.message || err),
+        });
         _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, steered: false, statusQuestion: true, error: String(err?.message || err) }));
       }
       return;
@@ -16174,17 +16433,32 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
         error = String(err?.message || err);
       }
     }
+    _finishMobileRealtimeAgentToolTrace(sessionId, steerToolTurn, name, args, ok, ok ? 'steer sent' : (error || 'steer failed'), {
+      result: { steered: ok, message },
+      error,
+    });
     _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok, steered: ok, message, error }));
     return;
   }
   if (name === 'interrupt_active_worker') {
-    try { await _abortMobileActiveWorkerFromRealtime(sessionId, 'realtime_agent_interrupt'); } catch {}
+    const interruptToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args);
+    let interrupted = true;
+    let interruptError = '';
+    try { await _abortMobileActiveWorkerFromRealtime(sessionId, 'realtime_agent_interrupt'); } catch (err) {
+      interrupted = false;
+      interruptError = String(err?.message || err);
+    }
+    _finishMobileRealtimeAgentToolTrace(sessionId, interruptToolTurn, name, args, interrupted, interrupted ? 'interrupt sent' : interruptError, {
+      result: { interrupted, reason: String(args.reason || '') },
+      error: interruptError,
+    });
     _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: true, interrupted: true, reason: String(args.reason || '') }));
     return;
   }
 
   const recentCmd = _addRealtimeAgentRecentCommand(name, args);
   try {
+    const realtimeToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args);
     const contextPacket = name === 'voice_worker_status'
       ? _overlayPendingMobileRealtimeAgentWorkerPacket(
         _getCachedMobileVoiceWorkerContextPacket(sessionId),
@@ -16203,6 +16477,9 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       }),
     });
     if (!result?.success) {
+      _finishMobileRealtimeAgentToolTrace(sessionId, realtimeToolTurn, name, args, false, result?.error || 'Tool failed', {
+        error: result?.error || 'Tool failed',
+      });
       _finishRealtimeAgentRecentCommand(recentCmd, false, result?.error || 'Tool failed');
       _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, error: result?.error || 'Tool failed' }));
       return;
@@ -16255,7 +16532,13 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       ? result.processEntries.map(_normalizeVoiceAgentProcessEntry).filter(Boolean)
       : [];
     if (realtimeToolEntries.length) {
-      _attachVoiceAgentProcessEntriesToMobileTurn(sessionId, realtimeToolEntries);
+      if (_attachVoiceAgentProcessEntriesToMobileTurn(sessionId, realtimeToolEntries)) {
+        _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_voice_tool_result' });
+      }
+    } else {
+      _finishMobileRealtimeAgentToolTrace(sessionId, realtimeToolTurn, name, args, true, '', {
+        result: result?.result || result?.raw || '',
+      });
     }
     // Overlay any captured screenshot on the voice orb, like other preview cards.
     if (result.preview?.dataUrl && typeof __pmRealtimeAgent.enqueuePreviews === 'function') {
@@ -16302,6 +16585,10 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
     _finishRealtimeAgentRecentCommand(recentCmd, true, summary);
     _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify(toolOutput), { preview: result.preview });
   } catch (err) {
+    _finishMobileRealtimeAgentToolTrace(sessionId, null, name, args, false, String(err?.message || err), {
+      error: String(err?.message || err),
+      source: 'realtime_agent_tool_exception',
+    });
     _finishRealtimeAgentRecentCommand(recentCmd, false, String(err?.message || err));
     _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, error: String(err?.message || err) }));
   }
@@ -21326,6 +21613,7 @@ void main() {
             chatAiTurn.toolActivityStarted = true;
             const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
             _appendMobileLiveTrace(chatAiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
+            _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_model_tool_event' });
           }
           return;
         }
@@ -22740,8 +23028,9 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     inner += _renderMobileWorkTimer(traceMessage);
     inner += `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
     const answerStarted = !!String(text || '').trim();
-    const liveTraceHtml = streaming && !answerStarted && Array.isArray(traceMessage.liveTraceEntries)
-      ? _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true })
+    const isVoiceTraceTurn = _isMobileVoiceTraceTurn(traceMessage);
+    const liveTraceHtml = streaming && (!answerStarted || isVoiceTraceTurn) && Array.isArray(traceMessage.liveTraceEntries)
+      ? _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
       : '';
     const hasLiveTrace = !!liveTraceHtml;
     const completedTraceEntries = !streaming ? _mobileWorkflowTraceEntriesForMessage(traceMessage) : [];
@@ -22878,7 +23167,9 @@ function _renderMobileAgentComposerHtml(prefix, placeholder) {
       <div class="pm-attach-tray" id="${id}-attach-tray" hidden></div>
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn" id="${id}-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
-        <textarea class="pm-composer-input" id="${id}-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+        <div class="pm-composer-input-wrap" id="${id}-input-wrap">
+          <textarea class="pm-composer-input" id="${id}-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+        </div>
         <button type="button" class="pm-icon-btn" id="${id}-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="${id}-send-btn" aria-label="Send">${ICONS.send}</button>
       </div>
@@ -22915,11 +23206,21 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
 
   const resize = () => {
     if (!input) return;
+    const viewportHeight = Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || 640));
+    const dynamicCap = Math.max(96, Math.min(280, Math.floor(viewportHeight * 0.5) - 86));
+    const maxHeight = Number(input.dataset.maxHeight || dynamicCap);
     input.style.height = 'auto';
-    input.style.height = `${Math.min(148, Math.max(30, input.scrollHeight || 30))}px`;
+    input.style.height = `${Math.min(maxHeight, Math.max(30, input.scrollHeight || 30))}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   };
   const hasOutbound = () => !!(String(input?.value || '').trim() || pending.length);
   const hasVoiceTarget = () => voiceTarget && typeof onVoiceSubmit === 'function' && voiceShell && voiceHost;
+  const updateExpandedState = () => {
+    if (!form) return;
+    form.classList.toggle('is-focused', document.activeElement === input);
+    form.classList.toggle('has-text', !!String(input?.value || '').trim());
+    form.classList.toggle('has-attachments', pending.length > 0);
+  };
   const closeVoiceMode = () => {
     if (!voiceShell || !voiceHost) return;
     voiceShell.hidden = true;
@@ -22972,6 +23273,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
         update();
       });
     });
+    updateExpandedState();
   };
   const update = () => {
     const busy = !!isBusy?.();
@@ -22989,6 +23291,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
           ? `<img class="pm-send-voice-icon" src="${PM_CHAT_VOICE_ICON_SRC}" alt="" aria-hidden="true" />`
         : ICONS.send;
     }
+    updateExpandedState();
   };
   const consume = () => {
     const text = String(input?.value || '').trim();
@@ -23008,6 +23311,8 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     resize();
     update();
   });
+  input?.addEventListener('focus', updateExpandedState);
+  input?.addEventListener('blur', () => setTimeout(updateExpandedState, 0));
   input?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -26346,6 +26651,14 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
             x.classList.toggle('active', x.getAttribute('data-filter') === currentFilter);
           });
         }
+      } else if (allTasks.length && !allTasks.some(t => _pmTaskFilter(t.status) === currentFilter)) {
+        const fallbackFilter = PM_TASK_FILTERS.find(f => allTasks.some(t => _pmTaskFilter(t.status) === f.key))?.key;
+        if (fallbackFilter) {
+          currentFilter = fallbackFilter;
+          filterEl.querySelectorAll('button').forEach(x => {
+            x.classList.toggle('active', x.getAttribute('data-filter') === currentFilter);
+          });
+        }
       }
       const activeCount = allTasks.filter(t => !['complete','failed'].includes(_pmTaskFilter(t.status))).length;
       countEl.textContent = `${activeCount} active`;
@@ -27546,6 +27859,34 @@ async function _renderSubagentRunsTab(slot, agentId) {
     wire();
   };
 
+  const recoveryMessagesForTask = (task) => (Array.isArray(task?.recoveryConversation) ? task.recoveryConversation : [])
+    .map((turn, idx) => ({
+      id: `recovery_${task?.id || task?.taskId || 'task'}_${idx}`,
+      role: turn?.role === 'user' ? 'user' : 'agent',
+      content: String(turn?.content || ''),
+      body: {
+        text: String(turn?.content || ''),
+        attachments: Array.isArray(turn?.attachmentPreviews) ? turn.attachmentPreviews : [],
+      },
+      attachmentPreviews: Array.isArray(turn?.attachmentPreviews) ? turn.attachmentPreviews : [],
+      createdAt: Number(turn?.timestamp || Date.now()) || Date.now(),
+    }));
+
+  const renderRecoveryThread = (task, id, canRecover) => {
+    const messages = recoveryMessagesForTask(task);
+    const threadHtml = messages.length
+      ? messages.map((message) => _renderMobileAgentChatBubble(message, { sender: 'Recovery' })).join('')
+      : `<div style="font-size:12px;color:var(--pm-muted);padding:8px 2px;">No recovery messages yet.</div>`;
+    const prefix = `pm-sa-run-${String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    return `<section class="pm-sa-run-recovery-panel">
+      <div class="pm-card-head" style="color:var(--pm-orange);">Recovery Chat</div>
+      ${task?.pendingClarificationQuestion ? `<div class="pm-card-body"><strong>Pending question:</strong> ${escapeHtml(String(task.pendingClarificationQuestion))}</div>` : ''}
+      ${task?.pauseAnalysis?.message ? `<div class="pm-card-body" style="white-space:pre-wrap;"><strong>Pause analysis:</strong><br>${escapeHtml(String(task.pauseAnalysis.message).slice(0, 1200))}</div>` : ''}
+      <div class="pm-sa-run-recovery-thread">${threadHtml}</div>
+      ${canRecover ? `<div class="pm-sa-run-recovery-composer" data-sa-run-composer="${escapeHtml(id)}">${_renderMobileAgentComposerHtml(prefix, 'Reply to this run...')}</div>` : ''}
+    </section>`;
+  };
+
   const renderRunCard = (r) => {
     const id = String(r.id || r.taskId || '');
     const status = String(r.status || r.taskStatus || '').toLowerCase();
@@ -27573,14 +27914,7 @@ async function _renderSubagentRunsTab(slot, agentId) {
         ${isOpen ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--pm-border);display:flex;flex-direction:column;gap:12px;cursor:default;">
           ${loading || !detail ? `<div class="pm-card-body">Loading run details...</div>` : `
             ${detail.finalSummary ? `<section><div class="pm-card-head">Output</div><div class="pm-card-body" style="white-space:pre-wrap;">${escapeHtml(detail.finalSummary)}</div></section>` : ''}
-            ${canRecover ? `<section style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;">
-              <div class="pm-card-head" style="color:#9a3412;">Recovery Chat</div>
-              ${_pmRenderTaskRecovery(detail)}
-              <div style="display:flex;gap:8px;margin-top:10px;">
-                <textarea class="pm-textarea" data-sa-run-reply="${escapeHtml(id)}" rows="2" placeholder="Reply to this run..." style="min-height:58px;"></textarea>
-                <button class="pm-btn primary" data-sa-run-send="${escapeHtml(id)}" style="align-self:flex-end;">Send</button>
-              </div>
-            </section>` : detail.recoveryConversation?.length ? `<section><div class="pm-card-head">Recovery History</div>${_pmRenderTaskRecovery(detail)}</section>` : ''}
+            ${canRecover || detail.recoveryConversation?.length ? renderRecoveryThread(detail, id, canRecover) : ''}
             <section><div class="pm-card-head">Progress</div>${_pmRenderTaskProgress(_pmTaskProgressItems(detail))}</section>
             <section><div class="pm-card-head">Task Prompt</div><div class="pm-card-body" style="white-space:pre-wrap;">${escapeHtml(detail.prompt || detail.title || '')}</div></section>
             <section><div class="pm-card-head">Process Log</div>${_pmRenderTaskJournal(detail.journal)}</section>
@@ -27617,26 +27951,43 @@ async function _renderSubagentRunsTab(slot, agentId) {
         await openDetail(card.getAttribute('data-sa-run-id'));
       });
     });
-    slot.querySelectorAll('[data-sa-run-send]').forEach((btn) => {
-      btn.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        const id = btn.getAttribute('data-sa-run-send');
-        const input = slot.querySelector(`[data-sa-run-reply="${CSS.escape(id)}"]`);
-        const message = String(input?.value || '').trim();
-        if (!message) return;
-        btn.disabled = true;
-        try {
-          const data = await sendSubagentRunRecovery(agentId, id, message);
-          if (input) input.value = '';
+    slot.querySelectorAll('[data-sa-run-composer]').forEach((host) => {
+      const id = String(host.getAttribute('data-sa-run-composer') || '').trim();
+      if (!id) return;
+      const prefix = `pm-sa-run-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      _installMobileAgentComposer(host, prefix, {
+        placeholder: 'Reply to this run...',
+        draftKey: `subagent_run:${agentId}:${id}`,
+        isBusy: () => false,
+        onSubmit: async ({ text, files }) => {
+          const rawText = String(text || '').trim();
+          const rawFiles = Array.isArray(files) ? files : [];
+          if (!rawText && !rawFiles.length) return;
+          let attachmentPreviews = rawFiles;
+          if (rawFiles.length) {
+            const uploadResults = await _uploadMobileChatAttachments(rawFiles);
+            attachmentPreviews = uploadResults.map((r, idx) => ({
+              ...(rawFiles[idx] || {}),
+              name: r.name || rawFiles[idx]?.name || 'attachment',
+              kind: r.isImage ? 'image' : (r.isVideo ? 'video' : (rawFiles[idx]?.kind || 'file')),
+              workspacePath: r.workspacePath || rawFiles[idx]?.workspacePath,
+              path: r.workspacePath || rawFiles[idx]?.path,
+              dataUrl: rawFiles[idx]?.dataUrl,
+              mimeType: rawFiles[idx]?.mimeType,
+              sizeLabel: rawFiles[idx]?.sizeLabel,
+            }));
+          }
+          const data = await sendSubagentRunRecovery(
+            agentId,
+            id,
+            rawText || (attachmentPreviews.length ? 'Please review the attached file(s).' : ''),
+            attachmentPreviews,
+          );
           if (data?.task) details[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
           runs = await loadSubagentRuns(agentId, 50);
           pmToast(data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
           render();
-        } catch (err) {
-          pmToast(err?.message || 'Send failed', 'error');
-        } finally {
-          btn.disabled = false;
-        }
+        },
       });
     });
   }
@@ -28052,6 +28403,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     currentStream = streamSubagentChat(agent.id, {
       message: messageForRuntime,
       clientMessageId,
+      attachmentPreviews,
       ...(isVoiceTurn && userVisibleText && userVisibleText !== messageForRuntime ? { visibleMessage: userVisibleText } : {}),
       ...(source ? { source } : {}),
       ...(isVoiceTurn ? { voiceTarget: _mobileVoiceTargetPayload() } : {}),

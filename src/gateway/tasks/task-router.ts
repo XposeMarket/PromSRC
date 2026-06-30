@@ -217,7 +217,7 @@ function splitExecutorProviderRef(ref?: string): { modelOverride?: string; provi
   return { modelOverride: raw };
 }
 
-async function generateTaskRecoveryReply(task: TaskRecord, userMessage: string): Promise<string> {
+async function generateTaskRecoveryReply(task: TaskRecord, userMessage: string, visionAttachments?: any[]): Promise<string> {
   const liveTask = loadTask(task.id) || task;
   if (!liveTask.pauseSnapshot) {
     liveTask.pauseSnapshot = buildTaskPauseSnapshot(liveTask);
@@ -234,7 +234,7 @@ async function generateTaskRecoveryReply(task: TaskRecord, userMessage: string):
     undefined,
     buildTaskRecoveryCallerContext(liveTask, 'conversation'),
     executorRouting.modelOverride,
-    undefined,
+    Array.isArray(visionAttachments) && visionAttachments.length > 0 ? visionAttachments : undefined,
     getTaskRecoveryNoToolsFilter(),
     undefined,
     undefined,
@@ -365,7 +365,7 @@ function mirrorTaskRecoveryTurnsToOwnerChats(
 
 function persistRecoveryConversationUpdate(
   taskId: string,
-  turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number; source?: RecoveryTurnSource }>,
+  turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number; source?: RecoveryTurnSource; attachmentPreviews?: any[] }>,
   opts?: { resumeBrief?: string; approvedAction?: 'resume' | 'rerun'; clearPendingClarification?: boolean },
 ): TaskRecord | null {
   const liveTask = loadTask(taskId);
@@ -378,6 +378,7 @@ function persistRecoveryConversationUpdate(
       content: String(turn.content || '').trim(),
       timestamp: Number(turn.timestamp) || (Date.now() + idx),
       source: turn.source,
+      attachmentPreviews: Array.isArray(turn.attachmentPreviews) ? turn.attachmentPreviews.slice(0, 8) : undefined,
     }));
   liveTask.recoveryConversation = [...existing, ...appended].slice(-40);
   if (opts?.resumeBrief) {
@@ -877,7 +878,13 @@ export function renderTaskCandidatesForHuman(candidates: Array<Record<string, an
 export async function handleTaskRecoveryMessage(
   taskId: string,
   rawMessage: string,
-  opts?: { sourceSessionId?: string; source?: 'chat' | 'task_panel' | 'subagent_chat' | 'team_chat' | 'team_manager' },
+  opts?: {
+    sourceSessionId?: string;
+    source?: 'chat' | 'task_panel' | 'subagent_chat' | 'team_chat' | 'team_manager';
+    visibleMessage?: string;
+    attachmentPreviews?: any[];
+    visionAttachments?: any[];
+  },
 ): Promise<{ handled: boolean; resumed: boolean; reply: string | null; action?: 'conversation' | 'resume' | 'rerun' | 'cancel' }> {
   const task = loadTask(taskId);
   const message = String(rawMessage || '').trim();
@@ -895,12 +902,14 @@ export async function handleTaskRecoveryMessage(
           ? 'team_manager'
           : 'chat';
   const sourceSessionId = String(opts?.sourceSessionId || task.sessionId || getTaskReplySessionIds(task)[0] || '').trim();
+  const visibleMessage = String(opts?.visibleMessage || message).trim();
+  const attachmentPreviews = Array.isArray(opts?.attachmentPreviews) ? opts.attachmentPreviews.slice(0, 8) : undefined;
 
   if (isCancelIntent(message)) {
     const ctl = await handleTaskControlAction(sourceSessionId, { action: 'pause', task_id: task.id, note: message });
     const reply = ctl.success ? (ctl.message || `Paused task "${task.title}".`) : `Could not pause task "${task.title}".`;
     persistRecoveryConversationUpdate(task.id, [
-      { role: 'user', content: message, source },
+      { role: 'user', content: visibleMessage, source, attachmentPreviews },
       { role: 'assistant', content: reply, source: 'system' },
     ]);
     appendJournal(task.id, { type: 'status_push', content: `Recovery conversation cancelled task: ${message.slice(0, 200)}` });
@@ -924,7 +933,7 @@ export async function handleTaskRecoveryMessage(
     persistRecoveryConversationUpdate(
       task.id,
       [
-        { role: 'user', content: message, source },
+        { role: 'user', content: visibleMessage, source, attachmentPreviews },
         { role: 'assistant', content: summaryReply, source: 'system' },
       ],
       {
@@ -946,7 +955,7 @@ export async function handleTaskRecoveryMessage(
 
   let reply = '';
   try {
-    reply = await generateTaskRecoveryReply(task, message);
+    reply = await generateTaskRecoveryReply(task, message, opts?.visionAttachments);
   } catch (err: any) {
     console.warn(`[TaskRecovery] Conversation reply failed for task ${task.id}:`, err?.message || err);
   }
@@ -954,7 +963,7 @@ export async function handleTaskRecoveryMessage(
     reply = task.pauseAnalysis?.message || buildBlockedTaskStatusMessage(task);
   }
   persistRecoveryConversationUpdate(task.id, [
-    { role: 'user', content: message, source },
+    { role: 'user', content: visibleMessage, source, attachmentPreviews },
     { role: 'assistant', content: reply, source: 'system' },
   ]);
   appendJournal(task.id, {

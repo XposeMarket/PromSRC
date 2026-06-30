@@ -1728,6 +1728,37 @@ function normalizedWindowHandle(windowInfo?: DesktopWindowInfo | null): number {
   return Number.isFinite(handle) ? Math.floor(handle) : 0;
 }
 
+function resolvePreparedWindowPoint(
+  windowInfo: DesktopWindowInfo,
+  x: number,
+  y: number,
+  label: string,
+): { ok: true; x: number; y: number; sourceNote: string } | { ok: false; message: string } {
+  const xx = Math.floor(Number(x));
+  const yy = Math.floor(Number(y));
+  const left = Number(windowInfo.left);
+  const top = Number(windowInfo.top);
+  const width = Number(windowInfo.width);
+  const height = Number(windowInfo.height);
+  if (!Number.isFinite(xx) || !Number.isFinite(yy)) {
+    return { ok: false, message: `${label}: x and y must be valid numbers.` };
+  }
+  if (![left, top, width, height].every(Number.isFinite) || width < 1 || height < 1) {
+    return { ok: false, message: `${label}: target window bounds are unavailable for ${describeDesktopWindowBounds(windowInfo)}.` };
+  }
+  if (xx < 0 || yy < 0 || xx >= width || yy >= height) {
+    return { ok: false, message: `${label}: window-space point (${xx}, ${yy}) is outside ${describeDesktopWindowBounds(windowInfo)}.` };
+  }
+  const vx = Math.floor(left) + xx;
+  const vy = Math.floor(top) + yy;
+  return {
+    ok: true,
+    x: vx,
+    y: vy,
+    sourceNote: `[window ${shortWindowLabel(windowInfo)} (${xx}, ${yy}) -> virtual (${vx}, ${vy})]`,
+  };
+}
+
 function normalizeOcrText(text?: string | null): string {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
@@ -4743,14 +4774,29 @@ export async function desktopWindowClick(
   const prep = await prepareWindowForInput(selector);
   if (!prep.ok) return `ERROR: ${prep.message}`;
   const space = point.coordinate_space || 'window';
-  const resolvedPoint = await resolveDesktopActionPoint(sessionId, {
-    x: Number(point.x),
-    y: Number(point.y),
-    coordinate_space: space,
-    screenshot_id: point.screenshot_id,
-    window_handle: prep.window.handle,
-    window_name: prep.window.title,
-  }, 'desktop_window_click');
+  const fastPoint = space === 'window' && !point.screenshot_id
+    ? resolvePreparedWindowPoint(prep.window, Number(point.x), Number(point.y), 'desktop_window_click')
+    : null;
+  const resolvedPoint = fastPoint?.ok
+    ? {
+        ok: true as const,
+        point: {
+          x: fastPoint.x,
+          y: fastPoint.y,
+          coordinateSpace: 'window' as DesktopCoordinateSpace,
+          sourceNote: fastPoint.sourceNote,
+        },
+      }
+    : fastPoint
+      ? fastPoint
+      : await resolveDesktopActionPoint(sessionId, {
+          x: Number(point.x),
+          y: Number(point.y),
+          coordinate_space: space,
+          screenshot_id: point.screenshot_id,
+          window_handle: prep.window.handle,
+          window_name: prep.window.title,
+        }, 'desktop_window_click');
   if (!resolvedPoint.ok) return `ERROR: ${resolvedPoint.message}`;
   const result = await desktopClick(
     resolvedPoint.point.x,
@@ -4799,18 +4845,30 @@ export async function desktopWindowScroll(
   let y: number | undefined;
   let space: DesktopCoordinateSpace | undefined;
   if (args.x !== undefined && args.y !== undefined) {
-    const resolvedPoint = await resolveDesktopActionPoint(sessionId, {
-      x: Number(args.x),
-      y: Number(args.y),
-      coordinate_space: args.coordinate_space || 'window',
-      screenshot_id: args.screenshot_id,
-      window_handle: prep.window.handle,
-      window_name: prep.window.title,
-    }, 'desktop_window_scroll');
-    if (!resolvedPoint.ok) return `ERROR: ${resolvedPoint.message}`;
-    x = resolvedPoint.point.x;
-    y = resolvedPoint.point.y;
-    space = resolvedPoint.point.coordinateSpace;
+    const requestedSpace = args.coordinate_space || 'window';
+    const fastPoint = requestedSpace === 'window' && !args.screenshot_id
+      ? resolvePreparedWindowPoint(prep.window, Number(args.x), Number(args.y), 'desktop_window_scroll')
+      : null;
+    if (fastPoint?.ok) {
+      x = fastPoint.x;
+      y = fastPoint.y;
+      space = 'window';
+    } else if (fastPoint) {
+      return `ERROR: ${fastPoint.message}`;
+    } else {
+      const resolvedPoint = await resolveDesktopActionPoint(sessionId, {
+        x: Number(args.x),
+        y: Number(args.y),
+        coordinate_space: requestedSpace,
+        screenshot_id: args.screenshot_id,
+        window_handle: prep.window.handle,
+        window_name: prep.window.title,
+      }, 'desktop_window_scroll');
+      if (!resolvedPoint.ok) return `ERROR: ${resolvedPoint.message}`;
+      x = resolvedPoint.point.x;
+      y = resolvedPoint.point.y;
+      space = resolvedPoint.point.coordinateSpace;
+    }
   }
   const result = await desktopScroll(
     dir === 'up' || dir === 'left' ? dir : (dir === 'right' ? 'right' : 'down'),
@@ -4957,7 +5015,7 @@ export function getDesktopToolDefinitions(): any[] {
             screenshot_id: { type: 'string' },
             button: { type: 'string', enum: ['left', 'right'] },
             double_click: { type: 'boolean' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
             final_action_approval_id: { type: 'string' },
             max_depth: { type: 'integer' },
@@ -4991,7 +5049,7 @@ export function getDesktopToolDefinitions(): any[] {
             mode: { type: 'string', enum: ['auto', 'text', 'image', 'files'] },
             button: { type: 'string', enum: ['left', 'right'] },
             double_click: { type: 'boolean' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
             amount: { type: 'number' },
             axis: { type: 'string', enum: ['vertical', 'horizontal'] },
@@ -5190,7 +5248,7 @@ export function getDesktopToolDefinitions(): any[] {
             element: { type: 'number', description: 'Numbered UI element from desktop_screenshot(mode="som") or desktop_window_screenshot(mode="som"). Requires screenshot_id.' },
             button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button (default left)' },
             double_click: { type: 'boolean', description: 'Double-click instead of single-click' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Rare. Only use when the user explicitly wants a modified click such as Shift+click or Ctrl+click.' },
+            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Rarely use shift/ctrl/alt, and only when the user explicitly wants a modified click such as Shift+click or Ctrl+click.' },
             verify: {
               type: 'string',
               enum: ['off', 'auto', 'strict'],
@@ -5751,7 +5809,7 @@ export function getDesktopToolDefinitions(): any[] {
             screenshot_id: { type: 'string', description: 'Required when coordinate_space="capture".' },
             button: { type: 'string', enum: ['left', 'right'] },
             double_click: { type: 'boolean' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
             final_action_approval_id: { type: 'string', description: 'One-shot approval id when this click is a final post/send/publish/purchase/delete/submit action.' },
           },

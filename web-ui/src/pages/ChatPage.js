@@ -6234,7 +6234,10 @@ function isInternalChatSession(session) {
 
 function isInternalChatMessage(msg) {
   const text = String(msg?.content || '').trim();
-  return /^\[BACKGROUND_TASK_RESULT\b/i.test(text)
+  const label = String(msg?.channelLabel || msg?.channel || '').toLowerCase();
+  return label === 'internal_watch'
+    || /^\[Internal watch\b/i.test(text)
+    || /^\[BACKGROUND_TASK_RESULT\b/i.test(text)
     || /^Restart Context Packet\b/i.test(text);
 }
 
@@ -10773,57 +10776,119 @@ function liveTraceToolLabel(text) {
     .trim();
 }
 
-function liveTraceToolAction(label, entryType = '') {
-  const raw = String(label || '').replace(/\s+/g, ' ').trim();
-  const text = raw.toLowerCase();
-  const type = String(entryType || '').toLowerCase();
-  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(text)) {
-    return { key: 'screenshot', one: 'viewed screenshot', many: 'viewed screenshots', style: 'noun' };
-  }
-  if (/\b(skill read|read skill|skill list|list skills|skill search|skill match)\b/.test(text)) {
-    return { key: 'skill', one: 'read skill', many: 'read skills', style: 'noun' };
-  }
-  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(text)) {
-    return { key: 'fileSearch', one: 'searched files', many: 'searched files', style: 'times' };
-  }
-  if (/\b(read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(text)) {
-    return { key: 'fileRead', one: 'read file', many: 'read files', style: 'noun' };
-  }
-  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(text)) {
-    return { key: 'webSearch', one: 'searched web', many: 'searched web', style: 'times' };
-  }
-  if (/\b(browser click|clicked?|tap|tapped)\b/.test(text)) {
-    return { key: 'click', one: 'clicked', many: 'clicked', style: 'times' };
-  }
-  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(text)) {
-    return { key: 'scroll', one: 'scrolled', many: 'scrolled', style: 'times' };
-  }
-  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(text)) {
-    return { key: 'page', one: 'opened page', many: 'opened pages', style: 'noun' };
-  }
-  if (/\b(shell|powershell|command|terminal|run command|exec|cmd\.exe)\b/.test(text)) {
-    return { key: 'command', one: 'ran command', many: 'ran commands', style: 'noun' };
-  }
-  if (/\b(apply patch|edited?|update file|create file|delete file|write file)\b/.test(text)) {
-    return { key: 'edit', one: 'edited file', many: 'edited files', style: 'noun' };
-  }
-  if (/\b(approval|approve|permission)\b/.test(text)) {
-    return { key: 'approval', one: 'requested approval', many: 'requested approvals', style: 'noun' };
-  }
-  return { key: `tool:${raw || 'tool'}`, one: raw || 'used tool', many: raw || 'used tools', style: 'tool' };
-}
-
 function liveTraceCountPhrase(count) {
   if (count === 1) return 'once';
   if (count === 2) return 'twice';
   return `${count} times`;
 }
 
-function liveTraceToolActionText(action, count) {
-  const total = Math.max(1, Number(count || 0) || 1);
-  if (action.style === 'times') return `${total === 1 ? action.one : action.many} ${liveTraceCountPhrase(total)}`;
-  if (action.style === 'tool') return total === 1 ? action.one : `${action.many} x${total}`;
-  return `${total === 1 ? action.one : action.many.replace(/^(\w+)\s+/, `$1 ${total} `)}`;
+function liveTraceJsonPayload(text) {
+  const raw = String(text || '');
+  const start = raw.search(/[\[{]/);
+  if (start < 0) return null;
+  const opener = raw[start];
+  const closer = opener === '[' ? ']' : '}';
+  const end = raw.lastIndexOf(closer);
+  if (end <= start) return null;
+  try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+}
+
+function liveTracePayloadValues(payload, keys, limit = 4) {
+  const wanted = new Set((keys || []).map((key) => String(key || '').toLowerCase()));
+  const out = [];
+  const visit = (value, depth = 0) => {
+    if (out.length >= limit || value == null || depth > 5) return;
+    if (Array.isArray(value)) { value.forEach((item) => visit(item, depth + 1)); return; }
+    if (typeof value !== 'object') return;
+    Object.entries(value).forEach(([key, item]) => {
+      if (out.length >= limit) return;
+      if (wanted.has(String(key || '').toLowerCase()) && item != null && typeof item !== 'object') {
+        const text = String(item || '').trim();
+        if (text) out.push(text);
+      } else {
+        visit(item, depth + 1);
+      }
+    });
+  };
+  visit(payload);
+  return [...new Set(out)];
+}
+
+function liveTraceFirstPayloadValue(payload, keys) {
+  return liveTracePayloadValues(payload, keys, 1)[0] || '';
+}
+
+function liveTraceArrowDetail(text) {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  const match = raw.match(/(?:->|=>|→)\s*([^.;\n]+)/);
+  return match ? match[1].replace(/\s+bundle\s+Description.*$/i, '').trim() : '';
+}
+
+function liveTraceTitleCaseSlug(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!/[-_]/.test(raw)) return raw;
+  return raw.split(/[-_]+/).filter(Boolean).map((part) => {
+    const lower = part.toLowerCase();
+    if (['ai', 'ui', 'api', 'url', 'json', 'html', 'css', 'js', 'ts', 'tsx', 'jsx', 'x'].includes(lower)) return lower.toUpperCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }).join(' ');
+}
+
+function liveTraceCompactDetail(value, { path = false, url = false, slug = false } = {}) {
+  let raw = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  if (url || /^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      raw = `${parsed.host}${parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : ''}`;
+    } catch {}
+  } else if (path || /[\\/]/.test(raw)) {
+    raw = raw.split(/[\\/]/).filter(Boolean).pop() || raw;
+  } else if (slug) {
+    raw = liveTraceTitleCaseSlug(raw);
+  }
+  return raw.length > 48 ? `${raw.slice(0, 45)}...` : raw;
+}
+
+function liveTraceDescriptorFor(rawText, entryType = 'tool') {
+  const raw = String(rawText || '').replace(/\s+/g, ' ').trim();
+  const type = String(entryType || '').toLowerCase();
+  const label = liveTraceToolLabel(raw);
+  const lower = `${label} ${raw}`.toLowerCase();
+  const payload = liveTraceJsonPayload(raw);
+  const arrow = liveTraceArrowDetail(raw);
+  const fileValues = liveTracePayloadValues(payload, ['file', 'filename', 'path', 'source', 'target', 'to_path', 'from_path'], 3)
+    .map((value) => liveTraceCompactDetail(value, { path: true }))
+    .filter(Boolean);
+  const urlValue = liveTraceFirstPayloadValue(payload, ['url', 'href', 'currentUrl', 'pageUrl', 'targetUrl']);
+  const windowValue = liveTraceFirstPayloadValue(payload, ['window', 'windowTitle', 'title', 'name', 'app']);
+  const commandValue = liveTraceFirstPayloadValue(payload, ['command', 'cmd', 'script']);
+  const skillValue = liveTraceFirstPayloadValue(payload, ['id', 'skill', 'skillId', 'name']);
+  const make = (key, past, gerund, noun, plural, detail = '', opts = {}) => ({
+    key, past, gerund, noun, plural: plural || `${noun}s`,
+    detail: String(detail || '').trim(),
+    detailPrefix: opts.detailPrefix || '',
+    countStyle: opts.countStyle || 'noun',
+    status: type === 'error' || /\bfailed\b/i.test(raw) ? 'failed' : '',
+  });
+  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(lower)) return make('vision', 'Viewed', 'Viewing', 'screenshot', 'screenshots', windowValue || arrow);
+  if (/\b(skill read|read skill)\b/.test(lower)) return make('skillRead', 'Read', 'Reading', 'skill', 'skills', liveTraceCompactDetail(skillValue || arrow, { slug: true }), { detailPrefix: 'skill' });
+  if (/\b(skill list|list skills|skill search|skill match)\b/.test(lower)) return make('skillList', 'Searched', 'Searching', 'skill list', 'skill searches', liveTraceCompactDetail(liveTraceFirstPayloadValue(payload, ['query', 'q', 'search']) || arrow), { detailPrefix: 'for' });
+  if (/\b(desktop focus|focus window|desktop window)\b/.test(lower)) return make('desktopFocus', 'Focused', 'Focusing', 'window', 'windows', liveTraceCompactDetail(windowValue || arrow, { slug: true }));
+  if (/\b(desktop screen|desktop screenshot|screen capture)\b/.test(lower)) return make('desktopScreen', 'Captured', 'Capturing', 'desktop screen', 'desktop screens', liveTraceCompactDetail(windowValue, { slug: true }));
+  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(lower)) return make('browserScroll', 'Scrolled', 'Scrolling', 'scroll', 'scrolls', liveTraceCompactDetail(liveTraceFirstPayloadValue(payload, ['direction', 'dir']) || arrow), { countStyle: 'times' });
+  if (/\b(browser click|clicked?|tap|tapped)\b/.test(lower)) return make('browserClick', 'Clicked', 'Clicking', 'click', 'clicks', liveTraceCompactDetail(liveTraceFirstPayloadValue(payload, ['text', 'label', 'selector', 'target', 'ariaLabel']) || arrow), { countStyle: 'times' });
+  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(lower)) return make('browserOpen', 'Opened', 'Opening', 'page', 'pages', liveTraceCompactDetail(urlValue || arrow, { url: true }));
+  if (/\b(browser extract|get page text|page text|read page|browser read)\b/.test(lower)) return make('browserRead', 'Read', 'Reading', 'page', 'pages', liveTraceCompactDetail(urlValue || arrow, { url: true }));
+  if (/\b(workspace edit|dev source edit|apply patch|edited?|update file|delete file)\b/.test(lower)) return make('fileEdit', 'Edited', 'Editing', 'file', 'files', fileValues[0] || liveTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  if (/\b(write note|workspace write|create file|write file|save file)\b/.test(lower)) return make('fileWrite', 'Wrote', 'Writing', 'file', 'files', fileValues[0] || liveTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  if (/\b(workspace read|dev source read|read files batch|read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(lower)) return make('fileRead', 'Read', 'Reading', 'file', 'files', fileValues[0] || liveTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
+  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(lower)) return make('fileSearch', 'Searched', 'Searching', 'files', 'file searches', liveTraceCompactDetail(liveTraceFirstPayloadValue(payload, ['pattern', 'query', 'q', 'search']) || fileValues[0] || arrow), { detailPrefix: 'for' });
+  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(lower)) return make('webSearch', 'Searched', 'Searching', 'web', 'web searches', liveTraceCompactDetail(liveTraceFirstPayloadValue(payload, ['q', 'query', 'search']) || arrow), { detailPrefix: 'for' });
+  if (/\b(shell|powershell|command|terminal|run command|workspace run|cmd\.exe)\b/.test(lower)) return make('command', 'Ran', 'Running', 'command', 'commands', liveTraceCompactDetail(commandValue || arrow || label), { detailPrefix: 'command' });
+  if (/\b(approval|approve|permission)\b/.test(lower)) return make('approval', 'Requested', 'Requesting', 'approval', 'approvals', liveTraceCompactDetail(arrow));
+  return make(`tool:${label || raw || 'tool'}`, 'Used', 'Using', 'tool', 'tools', liveTraceCompactDetail(arrow || label || raw));
 }
 
 function liveTraceJoinSummaryParts(parts) {
@@ -10833,54 +10898,117 @@ function liveTraceJoinSummaryParts(parts) {
   return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
 }
 
-function liveTraceToolSummary(entries) {
+function mergeLiveTraceLogicalDetail(target, source) {
+  if (!target || !source) return;
+  if (!target.detail && source.detail) target.detail = source.detail;
+  if (!target.status && source.status) target.status = source.status;
+}
+
+function liveTraceLogicalTools(entries) {
   const list = visibleLiveTraceEntries(entries);
-  const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision'].includes(String(entry?.type || '').toLowerCase()));
-  const calls = toolish.filter((entry) => {
+  const calls = [];
+  let pending = null;
+  let current = null;
+  list.forEach((entry) => {
     const type = String(entry?.type || '').toLowerCase();
-    return type === 'tool' || type === 'vision';
+    if (!['tool', 'result', 'error', 'vision'].includes(type)) return;
+    const raw = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+    if (!raw && type !== 'vision') return;
+    if (/^Processing\.{0,3}$/i.test(raw) || /^Prepared\b/i.test(raw)) return;
+    const descriptor = liveTraceDescriptorFor(raw, type);
+    if (type === 'tool' && /^Preparing\b/i.test(raw)) {
+      pending = (!pending || pending.key !== descriptor.key) ? { ...descriptor, pending: true } : pending;
+      return;
+    }
+    if (type === 'tool' || type === 'vision') {
+      if (pending && pending.key !== descriptor.key) calls.push(pending);
+      pending = null;
+      current = { ...descriptor };
+      calls.push(current);
+      return;
+    }
+    const target = current || pending;
+    if (target && (!descriptor.key || target.key === descriptor.key || /\bcomplete\b|->|=>|→|\bok\b|\bapplied\b/i.test(raw))) {
+      mergeLiveTraceLogicalDetail(target, descriptor);
+      if (type === 'error' || /\bfailed\b/i.test(raw)) target.status = 'failed';
+      return;
+    }
+    if (type === 'error' || !/\bcomplete\b/i.test(raw)) {
+      current = { ...descriptor };
+      calls.push(current);
+    }
   });
-  const source = calls.length ? calls : toolish;
-  const actionCounts = new Map();
-  source.forEach((entry) => {
-    const type = String(entry?.type || '').toLowerCase();
-    const label = liveTraceToolLabel(entry.text);
-    if (!label && type !== 'vision') return;
-    const action = liveTraceToolAction(label, type);
-    const existing = actionCounts.get(action.key);
-    if (existing) existing.count += 1;
-    else actionCounts.set(action.key, { ...action, count: 1 });
-  });
-  const errors = [...new Set(list
-    .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
-    .map((entry) => liveTraceToolLabel(entry.text))
-    .filter(Boolean))].length;
-  if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
-  const actions = [...actionCounts.values()].sort((a, b) => b.count - a.count);
-  if (actions.length) {
-    const summary = liveTraceJoinSummaryParts(actions.slice(0, 3).map((action) => liveTraceToolActionText(action, action.count)));
-    return summary.charAt(0).toUpperCase() + summary.slice(1);
+  if (pending && !calls.includes(pending)) calls.push(pending);
+  return calls;
+}
+
+function liveTraceLogicalGroupText(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  if (!list.length) return '';
+  const first = list[0];
+  const count = list.length;
+  const details = [...new Set(list.map((call) => call.detail).filter(Boolean))].slice(0, 2);
+  const failed = list.filter((call) => call.status === 'failed').length;
+  if (failed && failed === count) {
+    if (count === 1) return `${first.noun.charAt(0).toUpperCase()}${first.noun.slice(1)} failed${details[0] ? `: ${details[0]}` : ''}`;
+    return `${count} ${first.plural} failed`;
   }
-  const count = toolish.length || list.length;
+  if (count === 1) {
+    if (first.detailPrefix === 'for' && details[0]) return `${first.past} for ${details[0]}`;
+    const detail = details[0] ? `${first.detailPrefix ? ` ${first.detailPrefix}:` : ''} ${details[0]}` : ` ${first.noun}`;
+    return `${first.past}${detail}`;
+  }
+  if (first.countStyle === 'times') return `${first.past} ${liveTraceCountPhrase(count)}`;
+  const tail = details.length ? `: ${details.join(', ')}` : '';
+  return `${first.past} ${count} ${first.plural}${tail}`;
+}
+
+function liveTraceToolSummary(entries) {
+  const calls = liveTraceLogicalTools(entries);
+  const groups = new Map();
+  calls.forEach((call) => {
+    const key = `${call.key}|${call.status === 'failed' ? 'failed' : 'ok'}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(call);
+  });
+  const parts = [...groups.values()].map(liveTraceLogicalGroupText).filter(Boolean);
+  if (parts.length) return liveTraceJoinSummaryParts(parts.slice(0, 3));
+  const count = visibleLiveTraceEntries(entries).length;
   return `Used ${count} tool${count === 1 ? '' : 's'}`;
+}
+
+function liveTraceCurrentToolLabel(entries) {
+  const calls = liveTraceLogicalTools(entries);
+  const call = calls[calls.length - 1];
+  if (call) {
+    if (call.status === 'failed') return `${call.noun.charAt(0).toUpperCase()}${call.noun.slice(1)} failed${call.detail ? `: ${call.detail}` : ''}`;
+    if (call.detailPrefix === 'for' && call.detail) return `${call.gerund} for ${call.detail}`;
+    if (call.detail) return `${call.gerund}${call.detailPrefix ? ` ${call.detailPrefix}:` : ''} ${call.detail}`;
+    return `${call.gerund} ${call.noun}`;
+  }
+  return liveTraceToolSummary(entries);
+}
+
+function liveTraceSummaryKey(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function renderLiveTurnTrace(entries, { streaming = false } = {}) {
   const groups = liveTraceGroups(entries);
   if (!groups.length) return '';
   if (!streaming && !groups.some((group) => group.kind === 'tools' && group.entries.length > 0)) return '';
-  const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
       return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
     }
-    const open = streaming && index === lastToolIndex;
-    const summary = liveTraceToolSummary(group.entries);
+    const isLiveCurrent = streaming && index === groups.length - 1;
+    const summary = isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries);
+    const summaryKey = liveTraceSummaryKey(summary);
     const eventCount = visibleLiveTraceEntries(group.entries).length;
-    return `<details class="live-turn-tool-group"${open ? ' open data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+    return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">›</span>
-        <strong>${escHtml(summary)}</strong>
+        <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
         <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
@@ -11388,12 +11516,23 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
   const key = String(sessionId || window.activeChatSessionId || 'chat');
   const seenBySession = window.__pmLiveStreamEntryIdsBySession || (window.__pmLiveStreamEntryIdsBySession = {});
   const seen = seenBySession[key] || (seenBySession[key] = new Set());
+  const summaryKeysBySession = window.__pmLiveTraceSummaryKeysBySession || (window.__pmLiveTraceSummaryKeysBySession = {});
+  const summaryKeys = summaryKeysBySession[key] || (summaryKeysBySession[key] = {});
   document.querySelectorAll('[data-live-entry-id]').forEach((node) => {
     const id = String(node.getAttribute('data-live-entry-id') || '').trim();
     if (!id) return;
     if (!seen.has(id)) {
       seen.add(id);
       node.classList.add('live-stream-enter');
+    }
+  });
+  document.querySelectorAll('.live-turn-tool-summary strong[data-live-trace-summary-key]').forEach((node) => {
+    const groupKey = node.closest('details.live-turn-tool-group')?.getAttribute('data-live-trace-group') || '';
+    const labelKey = String(node.getAttribute('data-live-trace-summary-key') || '').trim();
+    if (!groupKey || !labelKey) return;
+    if (summaryKeys[groupKey] !== labelKey) {
+      node.classList.add('live-trace-summary-swap');
+      summaryKeys[groupKey] = labelKey;
     }
   });
   const streaming = document.getElementById('streaming-text-content');
@@ -39211,13 +39350,16 @@ function handleMainChatStreamEvent(msg = {}) {
   } else if (evt.type === 'user_message') {
     const raw = evt.message && typeof evt.message === 'object' ? evt.message : {};
     const content = String(raw.content || evt.content || '').trim();
-    if (content) {
+    const channelLabel = raw.channelLabel || raw.channel || inferChannelFromSessionId(sid);
+    const isInternalWatchUserMessage = String(channelLabel || '').toLowerCase() === 'internal_watch'
+      || /^\[Internal watch\b/i.test(content);
+    if (content && !isInternalWatchUserMessage) {
       const next = {
         role: 'user',
         content,
         timestamp: Number(raw.timestamp || Date.now()),
         channel: inferChannelFromSessionId(sid, raw.channel),
-        channelLabel: raw.channelLabel || raw.channel || inferChannelFromSessionId(sid),
+        channelLabel,
         attachmentPreviews: Array.isArray(raw.attachmentPreviews)
           ? raw.attachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage)
           : undefined,

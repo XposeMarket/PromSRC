@@ -15,7 +15,7 @@ type RunInteractiveTurn = (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
+  abortSignal?: { aborted: boolean; signal?: AbortSignal },
   callerContext?: string,
   reasoningOptions?: any,
   attachments?: any,
@@ -94,7 +94,8 @@ export class MainChatTimerRunner {
       sessionId: timer.sessionId,
     });
 
-    const abortSignal = { aborted: false };
+    const abortController = new AbortController();
+    const abortSignal = { aborted: false, signal: abortController.signal };
     const sendSSE = (event: string, data: any) => {
       broadcastWS({
         type: 'timer_sse',

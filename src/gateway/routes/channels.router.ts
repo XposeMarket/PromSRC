@@ -10,6 +10,7 @@ import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-run
 import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
 import { getEvidenceBusSnapshot, listTasks, loadTask, type TaskRecord } from '../tasks/task-store';
+import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -40,7 +41,7 @@ let _runInteractiveTurn: (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
+  abortSignal?: { aborted: boolean; signal?: AbortSignal },
   callerContext?: string,
   reasoningOptions?: any,
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
@@ -61,7 +62,7 @@ export function initChannelsRouter(deps: {
     sessionId: string,
     sendSSE: (event: string, data: any) => void,
     pinnedMessages?: Array<{ role: string; content: string }>,
-    abortSignal?: { aborted: boolean },
+    abortSignal?: { aborted: boolean; signal?: AbortSignal },
     callerContext?: string,
     reasoningOptions?: any,
     attachments?: Array<{ base64: string; mimeType: string; name: string }>,
@@ -822,6 +823,7 @@ function seedSubagentSessionFromChatStore(agentId: string, sessionId: string, wo
 function createSSESender(res: any): (event: string, data: any) => void {
   return (type: string, data: any) => {
     try {
+      if (res.destroyed || res.writableEnded) return;
       res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
     } catch {
       // Ignore broken pipe / closed client writes.
@@ -924,7 +926,7 @@ async function runSubagentChatTurn(
   message: string,
   timeoutMs: number,
   sendSSE?: (event: string, data: any) => void,
-  externalAbortSignal?: { aborted: boolean },
+  externalAbortSignal?: { aborted: boolean; signal?: AbortSignal },
   visionAttachments?: RuntimeVisionAttachment[],
   options?: {
     sessionIdOverride?: string;
@@ -1291,10 +1293,17 @@ router.post('/api/agents/:id/runs/:taskId/recovery', async (req, res) => {
     const task = loadTask(String(req.params.taskId || '').trim());
     if (!task || !agentOwnsTask(agentId, task)) return res.status(404).json({ success: false, error: 'Run not found for this agent' });
     const message = String(req.body?.message || '').trim();
-    if (!message) return res.status(400).json({ success: false, error: 'message is required' });
-    const recovery = await handleTaskRecoveryMessage(task.id, message, {
+    const attachmentPreviews = Array.isArray(req.body?.attachmentPreviews) ? req.body.attachmentPreviews : [];
+    if (!message && attachmentPreviews.length === 0) return res.status(400).json({ success: false, error: 'message is required' });
+    const visibleMessage = message || 'Please review the attached file(s).';
+    const attachmentContext = await getAttachmentContext().buildAttachmentRuntimeContext(attachmentPreviews);
+    const runtimeMessage = getAttachmentContext().appendAttachmentContextToMessage(visibleMessage, attachmentContext.block);
+    const recovery = await handleTaskRecoveryMessage(task.id, runtimeMessage, {
       sourceSessionId: `subagent_run_${agentId}_${task.id}`,
       source: 'task_panel',
+      visibleMessage,
+      attachmentPreviews,
+      visionAttachments: attachmentContext.visionAttachments,
     });
     const updated = loadTask(task.id) || task;
     res.json({
@@ -1447,25 +1456,83 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
+  try { (res as any).flushHeaders?.(); } catch {}
+  try { res.write(': connected\n\n'); } catch {}
 
   const retainedStream = beginSubagentChatStream(agentId);
   const baseSendSSE = createSSESender(res);
+  let lastNonHeartbeatSseAt = Date.now();
+  let lastVisibleHeartbeatAt = 0;
   const sendSSE = (event: string, data: any) => {
+    if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
     baseSendSSE(event, data);
     appendSubagentChatStreamEvent(agentId, retainedStream.streamId, event, data);
   };
   sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
-  const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
-  const abortSignal = { aborted: false };
+  const heartbeat = setInterval(() => {
+    const now = Date.now();
+    const idleMs = Math.max(0, now - lastNonHeartbeatSseAt);
+    const payload: Record<string, any> = { state: 'processing', idleMs };
+    if (idleMs >= 12_000 && now - lastVisibleHeartbeatAt >= 15_000) {
+      lastVisibleHeartbeatAt = now;
+      payload.message = idleMs >= 30_000
+        ? `Still connected. Subagent is working (${Math.round(idleMs / 1000)}s since the last visible update).`
+        : 'Still connected. Subagent is working...';
+    }
+    try {
+      if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');
+    } catch {}
+    sendSSE('heartbeat', payload);
+  }, 5000);
+  const isMobileStreamRequest = !!req.headers['x-pairing-token'];
+  const abortController = new AbortController();
+  const abortSignal = { aborted: false, signal: abortController.signal };
+  const runtimeSessionId = getSubagentChatSessionId(agentId);
+  const runtimeLabel = `Subagent chat - ${agent.name || agentId}`;
+  const abortRun = () => {
+    abortSignal.aborted = true;
+    abortController.abort();
+  };
+  const runtimeId = registerLiveRuntime({
+    kind: 'subagent',
+    label: runtimeLabel,
+    sessionId: runtimeSessionId,
+    agentId,
+    source: isMobileStreamRequest ? 'mobile' : 'web',
+    detail: message.slice(0, 160),
+    abortSignal,
+    onAbort: abortRun,
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: {
+      message,
+      visibleMessage,
+      source: String(req.body?.source || 'subagent_chat').trim() || 'subagent_chat',
+      clientMessageId,
+    },
+  });
+  sendSSE('runtime_registered', {
+    runtimeId,
+    run: {
+      id: runtimeId,
+      kind: 'subagent',
+      label: runtimeLabel,
+      sessionId: runtimeSessionId,
+      agentId,
+      abortable: true,
+      startedAt: Date.now(),
+    },
+  });
   let requestCompleted = false;
   req.on('aborted', () => {
-    if (!requestCompleted) {
-      abortSignal.aborted = true;
-    }
+    if (!requestCompleted && !isMobileStreamRequest) abortRun();
   });
   res.on('close', () => {
     if (!requestCompleted && !res.writableEnded) {
-      abortSignal.aborted = true;
+      if (isMobileStreamRequest) {
+        console.log(`[channels] Mobile subagent stream disconnected - keeping ${agentId} run alive`);
+        return;
+      }
+      abortRun();
     }
   });
 
@@ -1528,9 +1595,10 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
     }
   } finally {
     requestCompleted = true;
+    finishLiveRuntime(runtimeId);
     finishSubagentChatStream(agentId, retainedStream.streamId);
     clearInterval(heartbeat);
-    res.end();
+    if (!res.destroyed && !res.writableEnded) res.end();
   }
 });
 

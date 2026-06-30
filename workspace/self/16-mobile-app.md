@@ -1,6 +1,6 @@
 # 16) Prometheus Mobile App Maintenance Reference
 
-Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, iOS Home Screen Web Push for chat/task/subagent/team/scheduled-job events, and package scripts on: 2026-06-19
+Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, mobile subagent Home chat/Runs recovery surfaces, iOS Home Screen Web Push for chat/task/subagent/team/scheduled-job events, and package scripts on: 2026-06-30
 
 Prometheus Mobile is a hash-routed PWA shell inside the existing web UI. It is not a separate native iOS/Android/Capacitor app in this repo. Treat `web-ui/src/mobile/*` as the canonical mobile app source and treat `generated/public-web-ui/static/mobile/*` as generated public-build output.
 
@@ -165,6 +165,29 @@ Mobile subagent chat layout:
 
 - `mobile-pages.js::_renderSubagentChatTab` wraps the subagent message list and queue in `.pm-sa-chat-scrollport`, then renders the shared `_renderMobileAgentComposerHtml('pm-sa-chat', ...)` composer outside that scrollport.
 - `mobile.css` scopes `.pm-sa-chat-shell` as a flex column with a scrollable `.pm-sa-chat-scrollport` and a sticky `.pm-agent-chat-composer.pm-composer` offset above `--pm-tabbar-h` plus safe-area inset. This prevents the subagent composer from sitting under the bottom tab bar while preserving normal main-chat composer geometry.
+- Subagent Home chat must stay a normal conversational thread. Do not route a Home chat send into a paused/stalled run just because the subagent owns one.
+- `mobile-api.js::streamSubagentChat` sends Home chat through `/api/agents/:id/chat/stream`; it should forward `attachmentPreviews` so images/video/files selected in the shared composer reach the subagent runtime.
+- For non-OK subagent stream responses, read the response body and surface `Chat HTTP <status>: <detail>` when possible. A generic "HTTP failed" hides provider/model/backend errors and makes mobile debugging much harder.
+
+Mobile subagent Runs/recovery layout:
+
+- `mobile-pages.js::_renderSubagentRunsTab` uses `loadSubagentRuns(agentId)` and `loadSubagentRun(agentId, taskId)` from `mobile-api.js` to render task cards for the selected subagent.
+- The Runs tab is the canonical mobile surface for subagent task status, prompt/output/progress/process detail, and paused/stalled/needs-assistance recovery.
+- Recovery chat inside a run card uses the normal mobile agent chat bubble renderer (`_renderMobileAgentChatBubble`) and shared composer (`_renderMobileAgentComposerHtml`) so it visually matches regular chats instead of the old beige task-panel UI.
+- Recovery sends through `sendSubagentRunRecovery(agentId, taskId, message, attachmentPreviews)`, which posts to `POST /api/agents/:id/runs/:taskId/recovery`.
+- The run recovery composer supports the same staged attachment flow as Home subagent chat through `_installMobileAgentComposer` and `_uploadMobileChatAttachments`. On phones, `accept="image/*,video/*,..."` lets the platform offer photo library/camera options without forcing camera-only capture.
+- Recovery replies should reload the specific run detail after send, not append fake local-only state that can diverge from the task store.
+
+Mobile composer expansion behavior:
+
+- The main mobile chat composer and shared agent/task composer stay compact as a single-line pill while idle.
+- `mobile-pages.js` toggles `.is-focused`, `.has-text`, and `.has-attachments` on `.pm-composer`; `mobile.css` uses those classes to expand the panel upward.
+- In expanded mode, `.pm-composer-row` becomes a two-row grid: the textarea/input wrap spans the top row, and attach/mic/send controls sit in the bottom toolbar row.
+- Focused-empty composer state should stay short; the textarea grows with actual line count and caps around half the visible UI before using its own internal scroll.
+- The mic button belongs on the right beside the send/abort button, not beside the attachment button.
+- Browser speech dictation into the composer must call the same post-input sync path as typing: resize the textarea, refresh slash/skill rich preview state, update composer expansion classes, scroll the caret into view, and recalculate composer space.
+- This keeps typed text above the buttons like modern chat apps while preserving the old compact composer when the field is not active and empty.
+- Service worker version for this change: `pm-v117-2026-06-30-mobile-dictation-composer-wrap`.
 
 Mobile drawer behavior:
 

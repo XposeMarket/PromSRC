@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
 import type { ChatMessage, ContentPart, ModelUsage } from './LLMProvider';
+import { estimateModelUsageCost } from './model-pricing';
 
 export interface ModelUsageEvent {
   timestamp: string;
@@ -21,6 +22,14 @@ export interface ModelUsageEvent {
   cacheWriteTokens: number;
   totalTokens: number;
   source: 'provider' | 'estimated';
+  inputCostMicros?: number;
+  outputCostMicros?: number;
+  reasoningCostMicros?: number;
+  cacheReadCostMicros?: number;
+  cacheWriteCostMicros?: number;
+  totalCostMicros?: number;
+  pricingSource?: string;
+  pricingVersion?: string;
   durationMs?: number;
   estimatedMessageInputTokens?: number;
   estimatedSystemPromptTokens?: number;
@@ -38,6 +47,11 @@ function usageLogPath(): string {
 }
 
 function normalizeCount(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+
+function normalizeCostMicros(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
 }
@@ -188,7 +202,7 @@ export function normalizeUsage(usage: ModelUsage | undefined, fallback: {
 
 export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> & { timestamp?: string }): void {
   try {
-    const full: ModelUsageEvent = {
+    const base: ModelUsageEvent = {
       timestamp: event.timestamp || new Date().toISOString(),
       provider: String(event.provider || 'unknown'),
       model: String(event.model || 'unknown'),
@@ -212,6 +226,18 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       estimatedConversationTokens: normalizeCount(event.estimatedConversationTokens),
       estimatedToolSchemaTokens: normalizeCount(event.estimatedToolSchemaTokens),
       estimatedProviderInputTokens: normalizeCount(event.estimatedProviderInputTokens),
+    };
+    const cost = estimateModelUsageCost(base);
+    const full: ModelUsageEvent = {
+      ...base,
+      inputCostMicros: normalizeCostMicros((event as any).inputCostMicros ?? cost.inputCostMicros),
+      outputCostMicros: normalizeCostMicros((event as any).outputCostMicros ?? cost.outputCostMicros),
+      reasoningCostMicros: normalizeCostMicros((event as any).reasoningCostMicros ?? cost.reasoningCostMicros),
+      cacheReadCostMicros: normalizeCostMicros((event as any).cacheReadCostMicros ?? cost.cacheReadCostMicros),
+      cacheWriteCostMicros: normalizeCostMicros((event as any).cacheWriteCostMicros ?? cost.cacheWriteCostMicros),
+      totalCostMicros: normalizeCostMicros((event as any).totalCostMicros ?? cost.totalCostMicros),
+      pricingSource: String((event as any).pricingSource || cost.pricingSource || ''),
+      pricingVersion: String((event as any).pricingVersion || cost.pricingVersion || ''),
     };
     if (full.totalTokens <= 0) return;
     // Phase 0 instrumentation: one concise, human-readable line per provider-reported

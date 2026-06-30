@@ -667,8 +667,8 @@ const mainChatTimerRunner = new MainChatTimerRunner({
 mainChatTimerRunner.start();
 
 const internalWatchRunner = new InternalWatchRunner({
-  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
-    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput),
   broadcast: broadcastWS,
   cronScheduler,
 });

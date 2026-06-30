@@ -87,6 +87,8 @@ const DEFAULT_ROUND_TIMEOUT_MS = 120_000;
 // This resets on every tool_call SSE event so slow-starting models don't
 // burn the budget before their first tool fires.
 const INACTIVITY_TIMEOUT_MS = 120_000;
+const NO_PROGRESS_ROUND_LIMIT = 3;
+const NO_PROGRESS_ROUND_DELAY_MS = 1000;
 // After this many tool calls with no step_complete, inject a nudge.
 const STALL_TOOL_CALL_THRESHOLD = 10;
 // Tools that indicate real write progress — reset stall counter when fired.
@@ -148,6 +150,15 @@ function splitExecutorProviderRef(ref?: string): { modelOverride?: string; provi
     };
   }
   return { modelOverride: raw };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isAbortishNoProgressText(text: string): boolean {
+  const normalized = String(text || '').trim();
+  return !normalized || /^Stopped(?: after \d+ step(?:s)?)?\.?$/i.test(normalized);
 }
 
 function looksLikeClarificationQuestion(text: string): boolean {
@@ -1407,6 +1418,14 @@ export class BackgroundTaskRunner {
     const callerContext = callerContextOverride ?? this._buildCallerContext(task);
 
     for (let attempt = 0; attempt <= MAX_TRANSPORT_RETRIES; attempt++) {
+      if (pauseRequests.has(task.id)) {
+        return { ok: false, reason: 'Task paused by request.', detail: 'A pause request interrupted the running task.' };
+      }
+      if (abortSignal.aborted) {
+        // A prior round timeout uses this flag to stop the in-flight handleChat.
+        // Do not let that stale abort poison the next retry/round.
+        abortSignal.aborted = false;
+      }
       let attemptResult: { type: string; text: string; thinking?: string };
       // Pass the REFERENCE, not a snapshot, so pause requests update it live
       try {
@@ -1428,8 +1447,15 @@ export class BackgroundTaskRunner {
       } catch (retryErr: any) {
         const errMsg = String(retryErr?.message || retryErr || 'unknown');
         appendJournal(task.id, { type: 'error', content: `Attempt ${attempt + 1} threw: ${errMsg.slice(0, 200)}` });
+        if (pauseRequests.has(task.id)) {
+          return { ok: false, reason: 'Task paused by request.', detail: errMsg.slice(0, 600) };
+        }
         if (attempt < MAX_TRANSPORT_RETRIES) {
-          await new Promise(r => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
+          await delay(RETRY_DELAY_MS * (attempt + 1));
+          if (pauseRequests.has(task.id)) {
+            return { ok: false, reason: 'Task paused by request.', detail: errMsg.slice(0, 600) };
+          }
+          if (abortSignal.aborted) abortSignal.aborted = false;
           this._restoreSessionForRetry(sessionId, resumeMessages);
           continue;
         }
@@ -1577,6 +1603,8 @@ export class BackgroundTaskRunner {
     let stallNudgeInjected = false;
     let buildFailureRetryCount = 0;  // NEW: Track build failures in current step
     let lastProgressSignature = '';
+    let currentRoundToolEventCount = 0;
+    let consecutiveNoProgressRounds = 0;
     const abortSignal = { aborted: false };
     taskAbortSignals.set(taskId, abortSignal);  // Store so requestPause can access it
 
@@ -1592,6 +1620,7 @@ export class BackgroundTaskRunner {
       }
       this._broadcast('task_stream_event', { taskId, eventType: event, data });
       if (event === 'tool_call') {
+        currentRoundToolEventCount++;
         this._broadcast('task_panel_update', { taskId });
         const toolName = String(data.action || '');
 	        if (toolName === 'step_complete' || toolName === 'declare_plan') {
@@ -2128,6 +2157,7 @@ export class BackgroundTaskRunner {
         }
       }
 
+      currentRoundToolEventCount = 0;
       const roundOutcome = await this._runRoundWithRetry(
         liveTask,
         prompt,
@@ -2209,6 +2239,7 @@ export class BackgroundTaskRunner {
         toolCallsSinceLastStepComplete = 0;
         stallNudgeInjected = false;
         buildFailureRetryCount = 0;  // NEW: Reset for new step
+        consecutiveNoProgressRounds = 0;
         this._broadcast('task_step_done', {
           taskId,
           completedStep: liveTask.currentStepIndex,
@@ -2232,7 +2263,7 @@ export class BackgroundTaskRunner {
             && /^\s*\[task_complete\]\b/i.test(String(entry?.content || ''))
           );
 
-        if (hasTaskCompleteWriteNote) {
+	        if (hasTaskCompleteWriteNote) {
           const completedStepIndex = reloadedTask.currentStepIndex;
           mutatePlan(taskId, [{
             op: 'complete',
@@ -2253,6 +2284,7 @@ export class BackgroundTaskRunner {
           });
           toolCallsSinceLastStepComplete = 0;
           stallNudgeInjected = false;
+          consecutiveNoProgressRounds = 0;
           this._broadcast('task_step_done', {
             taskId,
             completedStep: completedStepIndex,
@@ -2261,6 +2293,31 @@ export class BackgroundTaskRunner {
           continue;
         }
 	      }
+
+      if (currentRoundToolEventCount === 0) {
+        consecutiveNoProgressRounds++;
+        const noProgressDetail = [
+          `No tool calls or step_complete were produced for ${consecutiveNoProgressRounds} consecutive round(s).`,
+          `Last response: ${String(lastResultSummary || '').slice(0, 500) || '(empty)'}`,
+        ].join('\n');
+        appendJournal(taskId, {
+          type: 'status_push',
+          content: `No-progress round ${consecutiveNoProgressRounds}/${NO_PROGRESS_ROUND_LIMIT} on step ${reloadedTask.currentStepIndex + 1}.`,
+          detail: noProgressDetail,
+        });
+        if (consecutiveNoProgressRounds >= NO_PROGRESS_ROUND_LIMIT || isAbortishNoProgressText(lastResultSummary)) {
+          await this._pauseForAssistance(
+            reloadedTask,
+            `Task paused because the runner made no progress on step ${reloadedTask.currentStepIndex + 1}.`,
+            noProgressDetail,
+          );
+          flushSession(sessionId);
+          return;
+        }
+        await delay(NO_PROGRESS_ROUND_DELAY_MS * consecutiveNoProgressRounds);
+      } else {
+        consecutiveNoProgressRounds = 0;
+      }
 
 	      // Otherwise, continue the loop and let the model keep working this step.
 	      continue;
@@ -2555,7 +2612,7 @@ export class BackgroundTaskRunner {
         clipped.slice(0, 8000),
         `[/SUBAGENT_RESPONSE]`,
         ``,
-        `Main chat note: This response came from standalone subagent "${title}". You can continue normal chat with chat_with_subagent(agent_id: "${agentId}", message: "...") or send another background handoff with message_subagent(agent_id: "${agentId}", message: "...").`,
+        `Main chat note: This response came from standalone subagent "${title}". To inspect or verify this run, use agent_run_ops(action: "get", task_id: "${task.id}") plus the normal workspace/browser/desktop tools needed for verification. Use agent_run_ops(action: "recover", task_id: "${task.id}", message: "...") only if the run is paused, stalled, failed, or awaiting recovery discussion. For normal agent chat/check-ins use chat_with_subagent(agent_id: "${agentId}", message: "..."); for a new background handoff use message_subagent(agent_id: "${agentId}", message: "...").`,
       ].join('\n');
       const userNotice = [
         `Also, your subagent ${title} finished.`,

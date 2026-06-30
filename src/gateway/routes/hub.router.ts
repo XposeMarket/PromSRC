@@ -14,6 +14,8 @@ import * as path from 'path';
 import { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config.js';
 import { readModelUsageEvents } from '../../providers/model-usage.js';
+import { estimateModelUsageCost, resolveModelPricing } from '../../providers/model-pricing.js';
+import { readAllToolObservations } from '../tool-observations';
 import { getAllMainChatGoalRecords } from '../main-chat-goals';
 import { listSessionSummaries, type SessionSummary } from '../session';
 import {
@@ -128,14 +130,28 @@ function dateKeyFromDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function rangeWindow(rawRange: string, timestamps: string[]): { range: 'all' | '30d' | '7d'; sinceMs: number; heatmapStartMs: number; untilMs: number } {
-  const range = rawRange === 'all' || rawRange === '30d' || rawRange === '7d' ? rawRange : 'all';
+type HubStatsRange = 'all' | '30d' | '7d' | '1d';
+
+function normalizeHubStatsRange(rawRange: string): HubStatsRange {
+  const value = String(rawRange || '').trim().toLowerCase();
+  if (value === 'all') return 'all';
+  if (value === '30d' || value === 'month') return '30d';
+  if (value === '7d' || value === 'week') return '7d';
+  if (value === '1d' || value === 'day' || value === '24h') return '1d';
+  return 'all';
+}
+
+function rangeWindow(rawRange: string, timestamps: string[]): { range: HubStatsRange; sinceMs: number; heatmapStartMs: number; untilMs: number } {
+  const range = normalizeHubStatsRange(rawRange);
   const today = dayStart(new Date());
   const untilMs = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime();
   const earliestMs = timestamps
     .map((ts) => Date.parse(ts || ''))
     .filter((t) => Number.isFinite(t))
     .reduce((min, t) => Math.min(min, t), untilMs);
+  if (range === '1d') {
+    return { range, sinceMs: today.getTime(), heatmapStartMs: today.getTime(), untilMs };
+  }
   if (range === '7d') {
     const start = new Date(today);
     start.setDate(start.getDate() - 6);
@@ -201,6 +217,73 @@ function topEntry<T extends string | number>(map: Map<T, number>): { key: T | ''
     if (v > value) { key = k; value = v; }
   }
   return { key, value };
+}
+
+function normalizeCostMicros(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+
+function modelUsageCost(event: any) {
+  const estimated = estimateModelUsageCost({
+    provider: event?.provider,
+    model: event?.model,
+    inputTokens: event?.inputTokens,
+    outputTokens: event?.outputTokens,
+    reasoningTokens: event?.reasoningTokens,
+    cacheReadTokens: event?.cacheReadTokens,
+    cacheWriteTokens: event?.cacheWriteTokens,
+  });
+  return {
+    inputCostMicros: normalizeCostMicros(event?.inputCostMicros ?? estimated.inputCostMicros),
+    outputCostMicros: normalizeCostMicros(event?.outputCostMicros ?? estimated.outputCostMicros),
+    reasoningCostMicros: normalizeCostMicros(event?.reasoningCostMicros ?? estimated.reasoningCostMicros),
+    cacheReadCostMicros: normalizeCostMicros(event?.cacheReadCostMicros ?? estimated.cacheReadCostMicros),
+    cacheWriteCostMicros: normalizeCostMicros(event?.cacheWriteCostMicros ?? estimated.cacheWriteCostMicros),
+    totalCostMicros: normalizeCostMicros(event?.totalCostMicros ?? estimated.totalCostMicros),
+    pricingSource: event?.pricingSource || estimated.pricingSource,
+    pricingVersion: event?.pricingVersion || estimated.pricingVersion,
+  };
+}
+
+function formatUsdFromMicros(value: unknown): string {
+  const micros = normalizeCostMicros(value);
+  const usd = micros / 1_000_000;
+  if (usd <= 0) return '$0';
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  if (usd >= 0.01) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(5)}`;
+}
+
+function primaryPricingContext(): { provider: string; model: string } {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const provider = String(cfg?.llm?.provider || '').trim() || 'unknown';
+    const model = String(cfg?.llm?.providers?.[provider]?.model || cfg?.models?.primary || '').trim() || 'unknown';
+    return { provider, model };
+  } catch {
+    return { provider: 'unknown', model: 'unknown' };
+  }
+}
+
+function contextMicrosPerTokenFromModelEvents(events: any[]): number {
+  let inputCostMicros = 0;
+  let inputishTokens = 0;
+  for (const event of events) {
+    const cost = modelUsageCost(event);
+    const tokens = Math.max(
+      0,
+      Number(event?.estimatedProviderInputTokens || 0)
+      || Number(event?.inputTokens || 0)
+      || Number(event?.estimatedMessageInputTokens || 0),
+    );
+    if (tokens <= 0) continue;
+    inputCostMicros += cost.inputCostMicros + cost.cacheReadCostMicros + cost.cacheWriteCostMicros;
+    inputishTokens += tokens;
+  }
+  if (inputishTokens > 0) return inputCostMicros / inputishTokens;
+  const primary = primaryPricingContext();
+  return resolveModelPricing(primary.provider, primary.model).inputMicrosPerToken;
 }
 
 function isUserChatSessionSummary(summary: SessionSummary): boolean {
@@ -364,20 +447,44 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
       } catch { /* skip malformed */ }
     }
 
-    const window = rangeWindow(String(req.query.range || 'all'), rawEvents.map((e) => e.timestamp));
+    const observations = readAllToolObservations(100_000);
+    const observationTimestamps = observations
+      .map((obs) => Number(obs.createdAt || 0))
+      .filter((t) => Number.isFinite(t) && t > 0)
+      .map((t) => new Date(t).toISOString());
+    const window = rangeWindow(String(req.query.range || 'all'), rawEvents.map((e) => e.timestamp).concat(observationTimestamps));
     const inRange = rawEvents.filter((e) => {
       const t = Date.parse(e.timestamp || '');
       return Number.isFinite(t) && t >= window.sinceMs && t < window.untilMs;
     });
+    const inRangeObservations = observations.filter((obs) => {
+      const t = Number(obs.createdAt || 0);
+      return Number.isFinite(t) && t >= window.sinceMs && t < window.untilMs;
+    });
+    const modelEventsInRange = readModelUsageEvents().filter((e) => {
+      const t = Date.parse(e.timestamp || '');
+      return Number.isFinite(t) && t >= window.sinceMs && t < window.untilMs;
+    });
+    const contextMicrosPerToken = contextMicrosPerTokenFromModelEvents(modelEventsInRange);
 
     const dayCounts: Record<string, number> = {};
     const heatmapCounts: Record<string, number> = {};
     const sessions = new Set<string>();
-    const tools = new Map<string, number>();
+    const tools = new Map<string, any>();
     const hours = new Map<number, number>();
     let readCalls = 0;
     let writeCalls = 0;
     let failedCalls = 0;
+    let observedErrorCalls = 0;
+    let argsTokens = 0;
+    let resultTokens = 0;
+    let contextTokens = 0;
+    let resultBytes = 0;
+    let durationMsTotal = 0;
+    let durationMsMax = 0;
+    let durationCallCount = 0;
+    let contextCostMicros = 0;
+    let directCostMicros = 0;
 
     for (const e of inRange) {
       const key = localDateKey(e.timestamp);
@@ -388,23 +495,116 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
       const sessionId = String(e.sessionId || '').trim();
       if (sessionId && sessionId !== 'unknown') sessions.add(sessionId);
       const toolName = String(e.toolName || 'unknown').trim() || 'unknown';
-      tools.set(toolName, (tools.get(toolName) || 0) + 1);
+      const row = tools.get(toolName) || {
+        name: toolName,
+        count: 0,
+        observedCalls: 0,
+        argsTokens: 0,
+        resultTokens: 0,
+        contextTokens: 0,
+        resultBytes: 0,
+        durationMsTotal: 0,
+        durationMsMax: 0,
+        durationCallCount: 0,
+        contextCostMicros: 0,
+        directCostMicros: 0,
+        totalCostMicros: 0,
+        errorCount: 0,
+      };
+      row.count += 1;
+      if (e.error) row.errorCount += 1;
+      tools.set(toolName, row);
       const hour = localHourKey(e.timestamp);
       if (hour >= 0) hours.set(hour, (hours.get(hour) || 0) + 1);
       if (e.error) failedCalls++;
       if (e.policyTier === 'read') readCalls++; else writeCalls++;
     }
 
-    const topTool = topEntry(tools);
+    for (const obs of inRangeObservations) {
+      const toolName = String(obs?.toolName || 'unknown').trim() || 'unknown';
+      const row = tools.get(toolName) || {
+        name: toolName,
+        count: 0,
+        observedCalls: 0,
+        argsTokens: 0,
+        resultTokens: 0,
+        contextTokens: 0,
+        resultBytes: 0,
+        durationMsTotal: 0,
+        durationMsMax: 0,
+        durationCallCount: 0,
+        contextCostMicros: 0,
+        directCostMicros: 0,
+        totalCostMicros: 0,
+        errorCount: 0,
+      };
+      const estimate = (obs?.tokenEstimate || {}) as any;
+      const obsArgsTokens = Math.max(0, Number(estimate.argsTokens || 0));
+      const obsResultTokens = Math.max(0, Number(estimate.resultTokens || 0));
+      const obsContextTokens = Math.max(0, Number(estimate.totalTokens || obsArgsTokens + obsResultTokens));
+      const obsBytes = Math.max(0, Number(estimate.resultBytes || 0));
+      const obsDuration = Number(obs?.durationMs || 0);
+      const obsContextCost = normalizeCostMicros(estimate.contextCostMicros)
+        || normalizeCostMicros(Math.round(obsContextTokens * contextMicrosPerToken));
+      const obsDirectCost = normalizeCostMicros(estimate.directCostMicros);
+      row.observedCalls += 1;
+      row.count = Math.max(row.count, row.observedCalls);
+      row.argsTokens += obsArgsTokens;
+      row.resultTokens += obsResultTokens;
+      row.contextTokens += obsContextTokens;
+      row.resultBytes += obsBytes;
+      row.contextCostMicros += obsContextCost;
+      row.directCostMicros += obsDirectCost;
+      row.totalCostMicros += obsContextCost + obsDirectCost;
+      if (Number.isFinite(obsDuration) && obsDuration > 0) {
+        const duration = Math.round(obsDuration);
+        row.durationMsTotal += duration;
+        row.durationMsMax = Math.max(row.durationMsMax, duration);
+        row.durationCallCount += 1;
+        durationMsTotal += duration;
+        durationMsMax = Math.max(durationMsMax, duration);
+        durationCallCount += 1;
+      }
+      if (obs.status === 'error') {
+        row.errorCount += row.count > row.observedCalls ? 0 : 1;
+        observedErrorCalls += 1;
+      }
+      argsTokens += obsArgsTokens;
+      resultTokens += obsResultTokens;
+      contextTokens += obsContextTokens;
+      resultBytes += obsBytes;
+      contextCostMicros += obsContextCost;
+      directCostMicros += obsDirectCost;
+      tools.set(toolName, row);
+    }
+
+    const toolCounts = new Map<string, number>();
+    for (const [name, row] of tools.entries()) toolCounts.set(name, Number(row.count || 0));
+    const topTool = topEntry(toolCounts);
     const peakHour = topEntry(hours);
     const streaks = streaksFromCounts(dayCounts);
     const activeDays = Object.values(dayCounts).filter((count) => count > 0).length;
-    const total = inRange.length;
+    const total = Math.max(inRange.length, [...tools.values()].reduce((sum, row) => sum + Number(row.count || 0), 0));
     const daily = buildDailySeries(window.heatmapStartMs, window.untilMs, heatmapCounts);
-    const topTools = [...tools.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    const toolRows = [...tools.values()].map((row) => ({
+      ...row,
+      durationMsAvg: Number(row.durationCallCount || 0) > 0
+        ? Math.round(Number(row.durationMsTotal || 0) / Number(row.durationCallCount || 0))
+        : 0,
+      totalCostMicros: normalizeCostMicros(row.totalCostMicros) || normalizeCostMicros(row.contextCostMicros) + normalizeCostMicros(row.directCostMicros),
+    }));
+    const topTools = toolRows
+      .sort((a, b) => Number(b.count || 0) - Number(a.count || 0) || String(a.name).localeCompare(String(b.name)))
       .slice(0, 10)
-      .map(([name, count]) => ({ name, count }));
+      .map((row) => ({ ...row }));
+    const expensiveTools = [...toolRows]
+      .sort((a, b) => Number(b.totalCostMicros || 0) - Number(a.totalCostMicros || 0) || Number(b.contextTokens || 0) - Number(a.contextTokens || 0))
+      .slice(0, 10);
+    const slowestTools = [...toolRows]
+      .filter((row) => Number(row.durationMsMax || 0) > 0)
+      .sort((a, b) => Number(b.durationMsMax || 0) - Number(a.durationMsMax || 0) || Number(b.durationMsTotal || 0) - Number(a.durationMsTotal || 0))
+      .slice(0, 10);
+    const totalCostMicros = contextCostMicros + directCostMicros;
 
     res.json({
       success: true,
@@ -423,12 +623,26 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
         favorite: topTool.key || '—',
         readCalls,
         writeCalls,
-        failedCalls,
+        failedCalls: failedCalls || observedErrorCalls,
+        observedToolCalls: inRangeObservations.length,
+        argsTokens,
+        resultTokens,
+        contextTokens,
+        resultBytes,
+        durationMsTotal,
+        durationMsMax,
+        durationMsAvg: durationCallCount > 0 ? Math.round(durationMsTotal / durationCallCount) : 0,
+        contextCostMicros,
+        directCostMicros,
+        totalCostMicros,
+        contextMicrosPerToken,
       },
       daily,
       topTools,
+      expensiveTools,
+      slowestTools,
       summary: total > 0
-        ? `You've used ${total.toLocaleString()} tool call${total === 1 ? '' : 's'} across ${activeDays.toLocaleString()} active day${activeDays === 1 ? '' : 's'}.`
+        ? `You've used ${total.toLocaleString()} tool call${total === 1 ? '' : 's'} across ${activeDays.toLocaleString()} active day${activeDays === 1 ? '' : 's'}; observed tool context is ${contextTokens.toLocaleString()} tokens (${formatUsdFromMicros(totalCostMicros)} est.).`
         : 'No tool calls recorded for this range yet.',
     });
   } catch (err: any) {
@@ -450,18 +664,28 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
     const heatmapTokens: Record<string, number> = {};
     const sessions = new Set<string>();
     const models = new Map<string, number>();
+    const modelCosts = new Map<string, number>();
     const modelCalls = new Map<string, number>();
     const providers = new Map<string, number>();
+    const providerCosts = new Map<string, number>();
     const hours = new Map<number, number>();
     const byDayModel = new Map<string, number>();
+    const byDayModelCosts = new Map<string, number>();
     let inputTokens = 0;
     let outputTokens = 0;
     let reasoningTokens = 0;
     let cacheTokens = 0;
     let totalTokens = 0;
+    let inputCostMicros = 0;
+    let outputCostMicros = 0;
+    let reasoningCostMicros = 0;
+    let cacheCostMicros = 0;
+    let totalCostMicros = 0;
 
     for (const e of inRange) {
       const eventTotalTokens = Number(e.totalTokens || 0);
+      const cost = modelUsageCost(e);
+      const eventCacheCostMicros = cost.cacheReadCostMicros + cost.cacheWriteCostMicros;
       const key = localDateKey(e.timestamp);
       if (!key) continue;
       dayTokens[key] = (dayTokens[key] || 0) + eventTotalTokens;
@@ -472,9 +696,13 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
       const provider = String(e.provider || 'unknown');
       const model = String(e.model || 'unknown');
       providers.set(provider, (providers.get(provider) || 0) + eventTotalTokens);
+      providerCosts.set(provider, (providerCosts.get(provider) || 0) + cost.totalCostMicros);
       models.set(model, (models.get(model) || 0) + eventTotalTokens);
+      modelCosts.set(model, (modelCosts.get(model) || 0) + cost.totalCostMicros);
       modelCalls.set(model, (modelCalls.get(model) || 0) + 1);
-      byDayModel.set(`${key}|${provider}|${model}`, (byDayModel.get(`${key}|${provider}|${model}`) || 0) + eventTotalTokens);
+      const dayModelKey = `${key}|${provider}|${model}`;
+      byDayModel.set(dayModelKey, (byDayModel.get(dayModelKey) || 0) + eventTotalTokens);
+      byDayModelCosts.set(dayModelKey, (byDayModelCosts.get(dayModelKey) || 0) + cost.totalCostMicros);
       const hour = localHourKey(e.timestamp);
       if (hour >= 0) hours.set(hour, (hours.get(hour) || 0) + 1);
       inputTokens += Number(e.inputTokens || 0);
@@ -482,6 +710,11 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
       reasoningTokens += Number(e.reasoningTokens || 0);
       cacheTokens += Number(e.cacheReadTokens || 0) + Number(e.cacheWriteTokens || 0);
       totalTokens += eventTotalTokens;
+      inputCostMicros += cost.inputCostMicros;
+      outputCostMicros += cost.outputCostMicros;
+      reasoningCostMicros += cost.reasoningCostMicros;
+      cacheCostMicros += eventCacheCostMicros;
+      totalCostMicros += cost.totalCostMicros;
     }
 
     const favoriteModel = topEntry(models);
@@ -493,15 +726,20 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
     const topModels = [...models.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 10)
-      .map(([name, tokens]) => ({ name, tokens, calls: modelCalls.get(name) || 0 }));
+      .map(([name, tokens]) => ({
+        name,
+        tokens,
+        calls: modelCalls.get(name) || 0,
+        costMicros: normalizeCostMicros(modelCosts.get(name)),
+      }));
     const topProviders = [...providers.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 8)
-      .map(([name, tokens]) => ({ name, tokens }));
+      .map(([name, tokens]) => ({ name, tokens, costMicros: normalizeCostMicros(providerCosts.get(name)) }));
     const dailyModels = [...byDayModel.entries()]
       .map(([compound, tokens]) => {
         const [date, provider, model] = compound.split('|');
-        return { date, provider, model, tokens };
+        return { date, provider, model, tokens, costMicros: normalizeCostMicros(byDayModelCosts.get(compound)) };
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.tokens - a.tokens)
       .slice(0, 40);
@@ -522,6 +760,11 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
         outputTokens,
         reasoningTokens,
         cacheTokens,
+        inputCostMicros,
+        outputCostMicros,
+        reasoningCostMicros,
+        cacheCostMicros,
+        totalCostMicros,
         activeDays,
         currentStreak: streaks.current,
         longestStreak: streaks.longest,
@@ -535,7 +778,7 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
       topProviders,
       dailyModels,
       summary: totalTokens > 0
-        ? `You've used ${totalTokens.toLocaleString()} token${totalTokens === 1 ? '' : 's'} across ${inRange.length.toLocaleString()} model call${inRange.length === 1 ? '' : 's'}.`
+        ? `You've used ${totalTokens.toLocaleString()} token${totalTokens === 1 ? '' : 's'} across ${inRange.length.toLocaleString()} model call${inRange.length === 1 ? '' : 's'} (${formatUsdFromMicros(totalCostMicros)} est.).`
         : 'No model usage recorded yet. New model calls will start filling this tracker.',
     });
   } catch (err: any) {
