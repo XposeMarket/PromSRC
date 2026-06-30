@@ -182,6 +182,16 @@ function getRecentConversationForRestart(previousSessionId?: string): {
   }
 }
 
+function isPlainManualGatewayRestartRequest(value: string): boolean {
+  const normalized = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /^(please )?(quickly )?(just )?(restart|reboot) (the )?(gateway|server|prometheus gateway|prometheus server|prometheus)$/.test(normalized)
+    || /^(please )?(quickly )?(just )?(gateway|server|prometheus gateway|prometheus server|prometheus) (restart|reboot)$/.test(normalized);
+}
+
 function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: string, ctx?: RestartContext): string {
   const devEdit = ctx?.devEditContinuation;
   if (devEdit) {
@@ -205,23 +215,34 @@ function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: s
       'Keep it short and concrete.',
     ].filter(Boolean).join('\n').trim();
   }
+  const plainManualGatewayRestart = isPlainManualGatewayRestartRequest(lastUserRequest)
+    && !ctx?.devEditContinuation
+    && (!Array.isArray(ctx?.affectedFiles) || ctx.affectedFiles.length === 0);
   return [
     'HOT RESTART FOLLOW-UP:',
     'A hot restart just completed and you are resuming an existing conversation.',
     'Write the assistant message that should appear right after the restart.',
-    'Use the restart context, runtime recovery summary, recent conversation, and recent tool observations as factual memory.',
-    'Pay special attention to the latest assistant reply before the restart. The restart message should continue after that reply, not restate only the latest user request.',
-    'Confirm the restart succeeded, state what was just completed when the context shows it, and give the next verification/action for the user.',
+    'Use the restart context, runtime recovery summary, recent conversation, and recent tool observations only as factual memory.',
+    plainManualGatewayRestart
+      ? 'The latest user request was a plain manual gateway restart. Reply with only a concise success confirmation that Prometheus/the gateway is back online. Do not continue unrelated prior work, do not mention desktop screenshots, browsers, tools, unavailable tools, verification steps, or next actions.'
+      : 'Confirm the restart succeeded, state what was just completed when the context shows it, and give the next verification/action only if it is directly relevant to in-flight work.',
     'If the recovery summary marks a planned restart boundary from gateway_restart or a dev/apply tool, that means Prometheus itself triggered the restart from this chat. Treat it as successful application/restart context, not as an unexpected interruption, and do not ask to resume solely because of that checkpoint.',
     'For any other main-chat interruption that was not a planned restart/apply boundary, explicitly acknowledge the checkpoint and ask whether the user wants you to continue from there.',
-    'If any background task, subagent, team run, scheduled task, heartbeat, or brain run was paused/interrupted, mention it briefly and ask whether the user wants it resumed. Include a short identifier when useful.',
-    lastUserRequest
-      ? `If the work is still in flight, refer to the user's latest request naturally: "${lastUserRequest}".`
-      : 'If no prior request is clear, say you are back and ready to continue.',
-    lastAssistantResponse
-      ? `The assistant's latest pre-restart reply was: "${lastAssistantResponse}". Do not ignore it; use it to decide what is already done.`
-      : '',
+    plainManualGatewayRestart
+      ? ''
+      : 'If any background task, subagent, team run, scheduled task, heartbeat, or brain run was paused/interrupted, mention it briefly and ask whether the user wants it resumed. Include a short identifier when useful.',
+    plainManualGatewayRestart
+      ? ''
+      : (lastUserRequest
+        ? `If the work is still in flight, refer to the user's latest request naturally: "${lastUserRequest}".`
+        : 'If no prior request is clear, say you are back and ready to continue.'),
+    plainManualGatewayRestart
+      ? ''
+      : (lastAssistantResponse
+        ? 'The assistant latest pre-restart reply was available for factual continuity only. Do not quote it or continue it unless it is directly relevant to unfinished work.'
+        : ''),
     'Do not claim paused work resumed unless the runtime recovery summary says it auto-resumed.',
+    'Never narrate tool availability or say you cannot call tools in this hot-restart message.',
     'Keep it short, natural, and conversational.',
     'Do not call any tools.',
   ].filter(Boolean).join('\n').trim();
@@ -405,7 +426,7 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
 
   const previousSessionId = String(restartCtx.previousSessionId || '').trim();
   const previousRecovery = previousSessionId ? bySession.get(previousSessionId) : undefined;
-  if (previousSessionId && previousRecovery && !targets.has(previousSessionId)) {
+  if (previousSessionId && !targets.has(previousSessionId)) {
     targets.set(previousSessionId, {
       sessionId: previousSessionId,
       recoverySummary: buildTargetRecoverySummary(previousSessionId, previousRecovery, recoveries),
@@ -439,20 +460,28 @@ export async function runBootMd(
         target.recoverySummary,
       );
       let finalText = '';
-      try {
-        const result = await handleChat(
-          buildHotRestartPrompt(lastUserRequest, lastAssistantResponse, restartCtx),
-          internalSessionId,
-          (evt, data) => {
-            if (evt === 'tool_call') {
-              console.log(`[boot-md]  -> ${String(data?.action || 'unknown')} (unexpected during hot restart)`);
-            }
-          },
-          hotRestartContextPacket,
-        );
-        finalText = String(result.text || '').trim();
-      } catch (err: any) {
-        console.warn(`[boot-md] Hot restart follow-up failed for ${target.sessionId}: ${String(err?.message || err)}`);
+      const plainManualGatewayRestart = isPlainManualGatewayRestartRequest(lastUserRequest)
+        && !restartCtx.devEditContinuation
+        && (!Array.isArray(restartCtx.affectedFiles) || restartCtx.affectedFiles.length === 0);
+
+      if (plainManualGatewayRestart) {
+        finalText = 'Restarted. Prometheus is back online.';
+      } else {
+        try {
+          const result = await handleChat(
+            buildHotRestartPrompt(lastUserRequest, lastAssistantResponse, restartCtx),
+            internalSessionId,
+            (evt, data) => {
+              if (evt === 'tool_call') {
+                console.log(`[boot-md]  -> ${String(data?.action || 'unknown')} (unexpected during hot restart)`);
+              }
+            },
+            hotRestartContextPacket,
+          );
+          finalText = String(result.text || '').trim();
+        } catch (err: any) {
+          console.warn(`[boot-md] Hot restart follow-up failed for ${target.sessionId}: ${String(err?.message || err)}`);
+        }
       }
 
       if (!finalText) {

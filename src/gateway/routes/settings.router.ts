@@ -58,7 +58,8 @@ import { addSessionAllowedPath, addPersistentAllowedPath } from '../path-permiss
 import { appendAuditEntry } from '../audit-log';
 import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth';
 import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
-import { getLastMainSessionId } from '../comms/broadcaster';
+import { broadcastWS, getLastMainSessionId } from '../comms/broadcaster';
+import { reloadAgentSchedules } from '../../scheduler';
 import { createDevSourceEditApprovalScope, grantDevSourceEditApproval } from '../dev-source-approvals';
 import { buildContextBudget, resolveActiveModelContextProfile, selectModelInfoForContextProfile } from '../context/model-context';
 import { resolveApprovalDecision } from '../approval-actions';
@@ -982,6 +983,8 @@ router.patch('/api/agents/:id/model', (req, res) => {
     agents[idx] = rest;
   }
   cm.updateConfig({ agents } as any);
+  reloadAgentSchedules();
+  broadcastWS({ type: 'agents_updated', source: 'agent_model_update', agentId });
   res.json({ success: true, agent: agents[idx] });
 });
 

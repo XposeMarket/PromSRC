@@ -354,7 +354,30 @@ router.post('/api/heartbeat/agents/:agentId/tick', async (req, res) => {
   }
 });
 router.get('/api/bg-tasks', (_req, res) => {
-  const tasks = listTaskSummaries();
+  const tasks = listTaskSummaries().map((task: any) => ({
+    id: task.id,
+    title: task.title,
+    sessionId: task.sessionId,
+    channel: task.channel,
+    telegramChatId: task.telegramChatId,
+    teamSubagent: task.teamSubagent,
+    status: task.status,
+    pauseReason: task.pauseReason,
+    pausedByScheduleId: task.pausedByScheduleId,
+    shouldResumeAfterSchedule: task.shouldResumeAfterSchedule,
+    plan: Array.isArray(task.plan) ? task.plan.slice(0, 20) : [],
+    currentStepIndex: task.currentStepIndex,
+    runtimeProgress: task.runtimeProgress,
+    lastProgressAt: task.lastProgressAt,
+    startedAt: task.startedAt,
+    completedAt: task.completedAt,
+    pendingClarificationQuestion: task.pendingClarificationQuestion,
+    scheduleId: task.scheduleId,
+    taskKind: task.taskKind,
+    verificationStatus: task.verificationStatus,
+    managerEnabled: task.managerEnabled,
+    executorProvider: task.executorProvider,
+  }));
   res.json({ success: true, tasks });
 });
 

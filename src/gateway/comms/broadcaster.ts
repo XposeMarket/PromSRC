@@ -140,7 +140,15 @@ export function broadcastWS(data: object): void {
   wssInstances.forEach((server) => {
     server.clients.forEach((client: any) => {
       if (client.readyState === 1) {
-        try { client.send(msg); } catch {}
+        try {
+          const buffered = Number(client.bufferedAmount || 0);
+          if (buffered > 5 * 1024 * 1024) {
+            try { client.terminate?.(); } catch {}
+            return;
+          }
+          if (buffered > 1024 * 1024) return;
+          client.send(msg);
+        } catch {}
       }
     });
   });

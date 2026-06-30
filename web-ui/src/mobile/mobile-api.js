@@ -46,7 +46,31 @@ async function mfetch(path, opts = {}) {
   const headers = new Headers(opts.headers || {});
   if (!headers.has('Content-Type') && opts.body && !(opts.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (token) headers.set('X-Pairing-Token', token);
-  const res = await fetch(_buildUrl(path), { ...opts, headers });
+  const timeoutMs = Math.max(1000, Math.floor(Number(opts.timeoutMs || 15000) || 15000));
+  const controller = new AbortController();
+  const parentSignal = opts.signal;
+  const onParentAbort = () => controller.abort();
+  if (parentSignal) {
+    if (parentSignal.aborted) controller.abort();
+    else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { timeoutMs: _timeoutMs, signal: _signal, ...fetchOpts } = opts;
+  let res;
+  try {
+    res = await fetch(_buildUrl(path), { ...fetchOpts, headers, signal: controller.signal });
+  } catch (err) {
+    const isAbort = err?.name === 'AbortError';
+    const out = new Error(isAbort
+      ? 'Gateway request timed out. Prometheus may still be starting.'
+      : (err?.message || 'Gateway request failed.'));
+    out.cause = err;
+    out.retryable = true;
+    throw out;
+  } finally {
+    clearTimeout(timeout);
+    if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+  }
   if (res.status === 401 && token) {
     // Device token rejected — invalidate locally so the router sends user to pairing.
     clearDeviceToken();
@@ -723,7 +747,9 @@ export async function loadMobileSubagents() {
       id: a.id,
       name: a.name || a.id,
       description: String(a.description || '').trim(),
-      model: a.effectiveModel ? String(a.effectiveModel).split('/').pop() : (a.model || ''),
+      model: a.model || '',
+      effectiveModel: a.effectiveModel || '',
+      effectiveModelSource: a.effectiveModelSource || '',
       avatar,
       color,
       status: _subagentStatus(a),
@@ -764,8 +790,20 @@ export async function tickSubagentHeartbeat(agentId) {
 }
 
 export async function loadSubagentRuns(agentId, limit = 30) {
-  const r = await api(`/api/agents/history?agentId=${encodeURIComponent(agentId)}&limit=${limit}`).catch(() => null);
-  return Array.isArray(r?.history) ? r.history : [];
+  const r = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=${limit}`).catch(() => null);
+  return Array.isArray(r?.runs) ? r.runs : [];
+}
+
+export async function loadSubagentRunDetail(agentId, taskId) {
+  return api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}`);
+}
+
+export async function sendSubagentRunRecovery(agentId, taskId, message) {
+  return api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}/recovery`, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+    timeoutMs: 300000,
+  });
 }
 
 export async function loadSubagentChat(agentId, limit = 100) {
@@ -1410,8 +1448,10 @@ export async function loadMobileStopTargets() {
 }
 
 export async function loadMobileWorkspaceFiles(root = '') {
-  const qs = root ? `?root=${encodeURIComponent(root)}` : '';
-  return mfetch(`/api/canvas/files${qs}`);
+  const qs = new URLSearchParams();
+  if (root) qs.set('root', root);
+  qs.set('shallow', '1');
+  return mfetch(`/api/canvas/files?${qs.toString()}`);
 }
 
 /* ---------------- creative ---------------- */
@@ -1571,7 +1611,7 @@ export async function restartMobileGateway({ rebuild = false, sessionId = '', or
  *
  * Returns an { abort } controller.
  */
-export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds }, handlers = {}) {
+export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds, selectedSkillIds }, handlers = {}) {
   const ctrl = new AbortController();
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
 
@@ -1614,6 +1654,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
           attachmentPreviews: Array.isArray(attachmentPreviews) && attachmentPreviews.length ? attachmentPreviews : undefined,
           callerContext: typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
           excludedSkillIds: Array.isArray(excludedSkillIds) && excludedSkillIds.length ? excludedSkillIds : undefined,
+          selectedSkillIds: Array.isArray(selectedSkillIds) && selectedSkillIds.length ? selectedSkillIds : undefined,
         }),
         signal: ctrl.signal,
       });

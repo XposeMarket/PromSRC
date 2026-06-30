@@ -192,12 +192,12 @@ Managed-team routing policy:
 
 **Visual grounding (vision):**
 ```
-Visual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots when state likely changed, the UI is ambiguous, or a risky action just ran. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_snapshot/browser_vision_screenshot and desktop_screenshot over repeated browser_run_js probing. Use browser_run_js only when visual/snapshot evidence is insufficient for a concrete action.
+Visual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots when state likely changed, the UI is ambiguous, or a risky action just ran. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_observe(action:"snapshot"|"screenshot") and desktop_screen(action:"screenshot"|"window_screenshot") over repeated browser_extract(action:"run_js") probing. Use browser_extract(action:"run_js") only when visual/snapshot evidence is insufficient for a concrete action.
 ```
 
 **Non-vision adds:**
 ```
-Text-first UI policy: the active model is not vision-capable. For browser/desktop workflows, ground decisions in browser_snapshot, browser_get_page_text, DOM/accessibility data, OCR/window text from desktop screenshots, metadata, and explicit tool outputs. Do not call browser_vision_screenshot, browser_vision_click, browser_vision_type, analyze_image, or analyze_video. Use browser_run_js only when text/snapshot evidence is insufficient for a concrete action.
+Text-first UI policy: the active model is not vision-capable. For browser/desktop workflows, ground decisions in browser_observe(action:"snapshot"|"page_text"), DOM/accessibility data, OCR/window text from desktop screenshots, metadata, and explicit tool outputs. Do not call browser_observe(action:"screenshot"), browser_act(action:"vision_click"|"vision_type"), analyze_image, or analyze_video. Use browser_extract(action:"run_js") only when text/snapshot evidence is insufficient for a concrete action.
 ```
 
 ### 2.4 `[MODEL_CAPABILITIES]`

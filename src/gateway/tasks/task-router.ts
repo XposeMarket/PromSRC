@@ -14,7 +14,6 @@ import {
 } from './task-store';
 import { addMessage, clearHistory } from '../session';
 import { broadcastTeamEvent, broadcastWS } from '../comms/broadcaster';
-import { appendSubagentChatMessage } from '../agents-runtime/subagent-chat-store';
 import { appendTeamChat, getManagedTeam } from '../teams/managed-teams';
 import { BackgroundTaskRunner } from './background-task-runner';
 import { type TaskControlResponse } from '../tool-builder';
@@ -203,6 +202,21 @@ function buildTaskRecoveryCallerContext(task: TaskRecord, objective: 'conversati
   ].filter(Boolean).join('\n');
 }
 
+function splitExecutorProviderRef(ref?: string): { modelOverride?: string; providerOverride?: string } {
+  const raw = String(ref || '').trim();
+  if (!raw) return {};
+  const slashIdx = raw.indexOf('/');
+  if (slashIdx > 0) {
+    const providerOverride = raw.slice(0, slashIdx).trim();
+    const modelOverride = raw.slice(slashIdx + 1).trim();
+    return {
+      providerOverride: providerOverride || undefined,
+      modelOverride: modelOverride || undefined,
+    };
+  }
+  return { modelOverride: raw };
+}
+
 async function generateTaskRecoveryReply(task: TaskRecord, userMessage: string): Promise<string> {
   const liveTask = loadTask(task.id) || task;
   if (!liveTask.pauseSnapshot) {
@@ -211,6 +225,7 @@ async function generateTaskRecoveryReply(task: TaskRecord, userMessage: string):
   }
   syncTaskRecoverySession(liveTask);
   const { handleChat } = getDeps();
+  const executorRouting = splitExecutorProviderRef(liveTask.executorProvider);
   const result = await handleChat(
     userMessage,
     getTaskRecoverySessionId(liveTask.id),
@@ -218,12 +233,12 @@ async function generateTaskRecoveryReply(task: TaskRecord, userMessage: string):
     undefined,
     undefined,
     buildTaskRecoveryCallerContext(liveTask, 'conversation'),
-    undefined,
+    executorRouting.modelOverride,
     undefined,
     getTaskRecoveryNoToolsFilter(),
     undefined,
     undefined,
-    liveTask.executorProvider,
+    executorRouting.providerOverride,
   );
   return String(result?.text || '').trim();
 }
@@ -253,6 +268,7 @@ async function synthesizeTaskResumeBrief(task: TaskRecord, latestUserMessage: st
     'Output plain text only.',
   ].join('\n');
   const { handleChat } = getDeps();
+  const executorRouting = splitExecutorProviderRef(liveTask.executorProvider);
   const result = await handleChat(
     prompt,
     briefSessionId,
@@ -260,12 +276,12 @@ async function synthesizeTaskResumeBrief(task: TaskRecord, latestUserMessage: st
     undefined,
     undefined,
     buildTaskRecoveryCallerContext(liveTask, 'resume_brief'),
-    undefined,
+    executorRouting.modelOverride,
     undefined,
     getTaskRecoveryNoToolsFilter(),
     undefined,
     undefined,
-    liveTask.executorProvider,
+    executorRouting.providerOverride,
   );
   const text = String(result?.text || '').trim();
   if (text) return text;
@@ -293,23 +309,13 @@ function mirrorTaskRecoveryTurnsToOwnerChats(
 
   const standaloneSubagent = String(task.subagentProfile || '').trim();
   if (standaloneSubagent && !task.teamSubagent) {
-    for (const turn of cleanTurns) {
-      try {
-        const message = appendSubagentChatMessage(standaloneSubagent, {
-          role: turn.role === 'user' ? 'user' : 'agent',
-          content: turn.content,
-          ts: turn.timestamp,
-          metadata: {
-            source: 'task_recovery',
-            taskId: task.id,
-            recoverySource: turn.source || 'system',
-          },
-        });
-        broadcastWS({ type: 'subagent_chat_message', agentId: standaloneSubagent, message });
-      } catch (err: any) {
-        console.warn(`[TaskRecovery] Failed to mirror task ${task.id} turn to subagent ${standaloneSubagent}:`, err?.message || err);
-      }
-    }
+    broadcastWS({
+      type: 'subagent_run_updated',
+      agentId: standaloneSubagent,
+      taskId: task.id,
+      status: task.status,
+      recoveryTurns: cleanTurns.length,
+    });
   }
 
   const teamId = String(task.teamSubagent?.teamId || task.proposalExecution?.teamExecution?.teamId || '').trim();

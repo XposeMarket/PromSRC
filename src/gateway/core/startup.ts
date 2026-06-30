@@ -325,6 +325,15 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     if (recovery.inspected > 0) {
       console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), preserved ${recovery.interruptedChats.length} chat checkpoint(s).`);
     }
+    try {
+      const { resumeMainChatGoalsInterruptedForRestart } = require('../routes/chat.router') as typeof import('../routes/chat.router');
+      const resumedGoals = resumeMainChatGoalsInterruptedForRestart();
+      if (resumedGoals.length > 0) {
+        console.log(`[RuntimeRecovery] Auto-resumed ${resumedGoals.length} main-chat goal(s) after restart.`);
+      }
+    } catch (err: any) {
+      console.warn('[RuntimeRecovery] Main-chat goal auto-resume failed:', err?.message || err);
+    }
   } catch (err: any) {
     console.warn('[RuntimeRecovery] Startup recovery failed:', err?.message || err);
   }

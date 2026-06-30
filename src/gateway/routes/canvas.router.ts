@@ -1011,6 +1011,44 @@ function buildWorkspaceTree(dir: string, base = ''): any[] {
   return results;
 }
 
+function buildWorkspaceListing(dir: string, base = ''): any[] {
+  const results: any[] = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const relPath = base ? `${base}/${entry.name}` : entry.name;
+      const absPath = path.join(dir, entry.name);
+      let stat: fs.Stats | null = null;
+      try { stat = fs.statSync(absPath); } catch {}
+      if (entry.isDirectory()) {
+        let itemCount = 0;
+        try { itemCount = fs.readdirSync(absPath).filter((name) => !String(name || '').startsWith('.')).length; } catch {}
+        results.push({
+          type: 'dir',
+          name: entry.name,
+          path: relPath,
+          itemCount,
+          mtime: stat ? stat.mtimeMs : 0,
+          modifiedAt: stat ? stat.mtime.toISOString() : '',
+        });
+      } else {
+        results.push({
+          type: 'file',
+          name: entry.name,
+          path: relPath,
+          size: stat ? stat.size : 0,
+          mtime: stat ? stat.mtimeMs : 0,
+          modifiedAt: stat ? stat.mtime.toISOString() : '',
+        });
+      }
+    }
+  } catch {
+    return results;
+  }
+  return results;
+}
+
 function sanitizeCreativeStorageSegment(raw: string, fallback = 'default'): string {
   const cleaned = String(raw || '')
     .trim()
@@ -4602,6 +4640,7 @@ router.get('/api/canvas/preview-document', (req: any, res: any, next: any) => _r
 router.get('/api/canvas/files', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
   const sessionId = String(req.query?.sessionId || 'default');
   const requestedRoot = String(req.query?.root || '').trim();
+  const shallow = ['1', 'true', 'yes'].includes(String(req.query?.shallow || '').toLowerCase());
   const workspacePath = getWorkspaceRoot();
   let rootAbsPath = workspacePath;
   let rootRelPath = '';
@@ -4631,7 +4670,7 @@ router.get('/api/canvas/files', (req: any, res: any, next: any) => _requireGatew
   }
   res.json({
     success: true,
-    files: buildWorkspaceTree(rootAbsPath, rootRelPath),
+    files: shallow ? buildWorkspaceListing(rootAbsPath, rootRelPath) : buildWorkspaceTree(rootAbsPath, rootRelPath),
     rootPath: rootRelPath || '',
     rootAbsPath,
     projectRoot: getCanvasProjectRoot(sessionId) || null,

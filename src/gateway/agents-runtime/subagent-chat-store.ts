@@ -15,7 +15,6 @@ export interface SubagentChatMessage {
 }
 
 const MAX_MESSAGES_PER_AGENT = 500;
-const RECOVERY_VISIBLE_STATUSES = new Set(['needs_assistance', 'stalled', 'paused', 'awaiting_user_input']);
 
 function sanitizeAgentId(agentId: string): string {
   return String(agentId || '').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'agent';
@@ -47,34 +46,6 @@ function readMessagesFile(file: string): SubagentChatMessage[] {
   }
 }
 
-function isVisibleRecoveryTask(task: any, agentId: string): boolean {
-  if (String(task?.subagentProfile || '').trim() !== agentId || task?.teamSubagent) return false;
-  const status = String(task?.status || '').trim();
-  if (!RECOVERY_VISIBLE_STATUSES.has(status)) return false;
-  return status !== 'paused' || String(task?.pauseReason || '') !== 'user_pause';
-}
-
-function visibleRecoveryTaskIds(agentId: string): Set<string> {
-  const ids = new Set<string>();
-  try {
-    const tasksDir = path.join(getConfig().getConfigDir(), 'tasks');
-    if (!fs.existsSync(tasksDir)) return ids;
-    const files = fs.readdirSync(tasksDir)
-      .filter((file) => file.endsWith('.json') && file !== '_index.json');
-    for (const file of files) {
-      try {
-        const task = JSON.parse(fs.readFileSync(path.join(tasksDir, file), 'utf-8'));
-        if (isVisibleRecoveryTask(task, agentId)) ids.add(String(task?.id || file.replace(/\.json$/i, '')));
-      } catch {
-        // Ignore malformed task records while loading chat history.
-      }
-    }
-  } catch {
-    return ids;
-  }
-  return ids;
-}
-
 function normalizeMessageContentForDedupe(value: string): string {
   return String(value || '')
     .toLowerCase()
@@ -83,67 +54,19 @@ function normalizeMessageContentForDedupe(value: string): string {
     .slice(0, 500);
 }
 
-function recoverTaskRecoveryMessages(agentId: string): SubagentChatMessage[] {
-  try {
-    const tasksDir = path.join(getConfig().getConfigDir(), 'tasks');
-    if (!fs.existsSync(tasksDir)) return [];
-    const messages: SubagentChatMessage[] = [];
-    const files = fs.readdirSync(tasksDir)
-      .filter((file) => file.endsWith('.json') && file !== '_index.json');
-    for (const file of files) {
-      let task: any;
-      try {
-        task = JSON.parse(fs.readFileSync(path.join(tasksDir, file), 'utf-8'));
-      } catch {
-        continue;
-      }
-      if (!isVisibleRecoveryTask(task, agentId)) continue;
-      const turns = Array.isArray(task?.recoveryConversation) ? task.recoveryConversation : [];
-      if (!turns.length) continue;
-      const taskId = String(task?.id || file.replace(/\.json$/i, ''));
-      const fallbackTs = Number(task?.lastProgressAt || task?.updatedAt || task?.createdAt || Date.now()) || Date.now();
-      turns.forEach((turn: any, index: number) => {
-        const role = turn?.role === 'user' ? 'user' : turn?.role === 'assistant' ? 'agent' : null;
-        const content = String(turn?.content || '').trim();
-        if (!role || !content) return;
-        const ts = Number(turn?.timestamp || fallbackTs + index) || fallbackTs + index;
-        messages.push({
-          id: `recovery_${taskId}_${index}_${role}`,
-          agentId,
-          role,
-          content,
-          ts,
-          metadata: {
-            source: 'task_recovery',
-            taskId,
-            recoverySource: turn?.source || 'system',
-            recoveredFromTask: true,
-          },
-        });
-      });
-    }
-    return messages;
-  } catch {
-    return [];
-  }
-}
-
 export function getSubagentChatHistory(agentId: string, limit = 100): SubagentChatMessage[] {
   try {
     const file = chatPath(agentId);
     const legacyFile = chatPath(agentId, legacyChatDir());
     const primaryMessages = readMessagesFile(file);
     const legacyMessages = legacyFile !== file ? readMessagesFile(legacyFile) : [];
-    const recoveryMessages = recoverTaskRecoveryMessages(agentId);
-    const activeRecoveryIds = visibleRecoveryTaskIds(agentId);
     const seen = new Set<string>();
     const messagesNear = new Map<string, number>();
-    const messages = [...recoveryMessages, ...legacyMessages, ...primaryMessages]
+    const messages = [...legacyMessages, ...primaryMessages]
       .filter((msg: any) => msg && typeof msg === 'object')
       .filter((msg: any) => {
-        if (msg?.metadata?.source !== 'task_recovery') return true;
-        const taskId = String(msg?.metadata?.taskId || '').trim();
-        return !!taskId && activeRecoveryIds.has(taskId);
+        // Task-attached recovery conversations belong in Runs, not the Home thread.
+        return msg?.metadata?.source !== 'task_recovery';
       })
       .sort((a: any, b: any) => Number(a?.ts || 0) - Number(b?.ts || 0))
       .filter((msg: any) => {

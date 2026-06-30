@@ -54,7 +54,7 @@ export async function executeAgentList(_args: any): Promise<ToolResult> {
     lines.push('');
   }
 
-  lines.push('Use message_subagent(agent_id, message) to send a background message to a standalone non-team subagent; its chat/result stays in the subagent task panel. Use spawn_subagent(...) to create/run one.');
+  lines.push('Use chat_with_subagent(agent_id, message) for normal persistent chat/check-ins with a standalone non-team subagent. Use message_subagent(agent_id, message) for background task handoff whose chat/result stays in the subagent task panel. Use spawn_subagent(...) to create/run one.');
 
   return {
     success: true,

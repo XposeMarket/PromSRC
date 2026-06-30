@@ -8,7 +8,8 @@ import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastR
 import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
-import { findBlockedRecoveryTaskForSubagentChat, handleTaskRecoveryMessage } from '../tasks/task-router';
+import { handleTaskRecoveryMessage } from '../tasks/task-router';
+import { getEvidenceBusSnapshot, listTasks, loadTask, type TaskRecord } from '../tasks/task-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -1088,27 +1089,6 @@ export async function runSubagentChatTurnFromChannel(params: {
   const sessionId = params.sessionId || getChannelSubagentChatSessionId(source, accountId, agentId, peerId);
   const content = params.userLabel ? `[${params.userLabel}]\n${message}` : message;
 
-  const recoveryTask = findBlockedRecoveryTaskForSubagentChat(agentId);
-  if (recoveryTask) {
-    const recovery = await handleTaskRecoveryMessage(recoveryTask.id, content, {
-      sourceSessionId: sessionId,
-      source: 'subagent_chat',
-    });
-    return {
-      result: { type: 'chat', text: recovery.reply || '' },
-      historyEntry: {
-        agentId,
-        agentName: agent.name || agentId,
-        trigger: source,
-        success: true,
-        taskId: recoveryTask.id,
-        recovery: true,
-        resumed: recovery.resumed,
-      },
-      messages: getSubagentChatHistory(agentId, 100),
-    };
-  }
-
   const userMessage = appendSubagentChatMessage(agentId, {
     role: 'user',
     content,
@@ -1206,6 +1186,132 @@ router.get('/api/agents/history', (req, res) => {
   res.json({ success: true, history: getAgentRunHistory(agentId, limit) });
 });
 
+function agentOwnsTask(agentId: string, task: TaskRecord | null | undefined): boolean {
+  if (!agentId || !task) return false;
+  const standalone = String(task.subagentProfile || '').trim();
+  const teamMember = String(task.teamSubagent?.agentId || '').trim();
+  const proposalExecutor = String(task.proposalExecution?.teamExecution?.executorAgentId || '').trim();
+  return standalone === agentId || teamMember === agentId || proposalExecutor === agentId;
+}
+
+function taskCanRecover(task: TaskRecord): boolean {
+  const status = String(task.status || '').trim();
+  if (!['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed'].includes(status)) return false;
+  return status !== 'paused' || task.pauseReason !== 'user_pause';
+}
+
+function summarizeAgentRunTask(agentId: string, task: TaskRecord): Record<string, any> {
+  const plan = Array.isArray(task.plan) ? task.plan : [];
+  const done = plan.filter((step: any) => step?.status === 'done' || step?.status === 'skipped').length;
+  const latestJournal = Array.isArray(task.journal) ? task.journal[task.journal.length - 1] : null;
+  const recoveryConversation = Array.isArray(task.recoveryConversation) ? task.recoveryConversation : [];
+  const ownerKind = String(task.subagentProfile || '').trim() === agentId
+    ? 'standalone'
+    : String(task.teamSubagent?.agentId || '').trim() === agentId
+      ? 'team_member'
+      : 'team_manager';
+  return {
+    id: task.id,
+    taskId: task.id,
+    title: task.title || task.prompt || 'Task',
+    taskName: task.title || task.prompt || 'Task',
+    prompt: task.prompt || '',
+    status: task.status,
+    taskStatus: task.status,
+    pauseReason: task.pauseReason || null,
+    startedAt: task.startedAt,
+    completedAt: task.completedAt || null,
+    lastProgressAt: task.lastProgressAt,
+    currentStepIndex: task.currentStepIndex || 0,
+    stepCount: plan.length,
+    completedSteps: done,
+    totalSteps: plan.length,
+    plan: plan.slice(0, 20),
+    runtimeProgress: task.runtimeProgress || null,
+    finalSummary: task.finalSummary || '',
+    resultPreview: task.finalSummary || task.pauseAnalysis?.message || latestJournal?.content || '',
+    pendingClarificationQuestion: task.pendingClarificationQuestion || '',
+    pauseAnalysis: task.pauseAnalysis || null,
+    recoveryConversationCount: recoveryConversation.length,
+    latestRecoveryAt: recoveryConversation[recoveryConversation.length - 1]?.timestamp || null,
+    canRecover: taskCanRecover(task),
+    inProgress: ['queued', 'running', 'waiting_subagent'].includes(String(task.status || '')),
+    source: task.taskKind || task.scheduleId ? 'schedule' : task.originatingSessionId ? 'handoff' : 'manual',
+    trigger: task.taskKind || task.scheduleId ? 'schedule' : task.originatingSessionId ? 'handoff' : 'manual',
+    ownerKind,
+    sessionId: task.sessionId,
+    originatingSessionId: task.originatingSessionId || null,
+    teamSubagent: task.teamSubagent || null,
+    executorProvider: task.executorProvider || null,
+    managerEnabled: task.managerEnabled === true,
+  };
+}
+
+router.get('/api/agents/:id/runs', (req, res) => {
+  try {
+    const agentId = _sanitizeAgentId(req.params.id);
+    const agent = getAgentById(agentId);
+    if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const runs = listTasks()
+      .filter((task) => agentOwnsTask(agentId, task))
+      .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0))
+      .slice(0, limit)
+      .map((task) => summarizeAgentRunTask(agentId, task));
+    res.json({ success: true, agentId, runs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/agents/:id/runs/:taskId', (req, res) => {
+  try {
+    const agentId = _sanitizeAgentId(req.params.id);
+    const agent = getAgentById(agentId);
+    if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+    const task = loadTask(String(req.params.taskId || '').trim());
+    if (!task || !agentOwnsTask(agentId, task)) return res.status(404).json({ success: false, error: 'Run not found for this agent' });
+    res.json({
+      success: true,
+      agentId,
+      run: summarizeAgentRunTask(agentId, task),
+      task,
+      evidenceBus: getEvidenceBusSnapshot(task.id) || null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/agents/:id/runs/:taskId/recovery', async (req, res) => {
+  try {
+    const agentId = _sanitizeAgentId(req.params.id);
+    const agent = getAgentById(agentId);
+    if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+    const task = loadTask(String(req.params.taskId || '').trim());
+    if (!task || !agentOwnsTask(agentId, task)) return res.status(404).json({ success: false, error: 'Run not found for this agent' });
+    const message = String(req.body?.message || '').trim();
+    if (!message) return res.status(400).json({ success: false, error: 'message is required' });
+    const recovery = await handleTaskRecoveryMessage(task.id, message, {
+      sourceSessionId: `subagent_run_${agentId}_${task.id}`,
+      source: 'task_panel',
+    });
+    const updated = loadTask(task.id) || task;
+    res.json({
+      success: true,
+      handled: recovery.handled,
+      resumed: recovery.resumed,
+      action: recovery.action,
+      reply: recovery.reply,
+      run: summarizeAgentRunTask(agentId, updated),
+      task: updated,
+      evidenceBus: getEvidenceBusSnapshot(task.id) || null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
 router.get('/api/agents/:id/chat', (req, res) => {
   const agentId = _sanitizeAgentId(req.params.id);
   const agent = getAgentById(agentId);
@@ -1287,29 +1393,6 @@ router.post('/api/agents/:id/chat', async (req, res) => {
   const clientMessageId = String(req.body?.clientMessageId || req.body?.client_message_id || '').replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 160);
   if (!message) return res.status(400).json({ success: false, error: 'message is required' });
 
-  const recoveryTask = findBlockedRecoveryTaskForSubagentChat(agentId);
-  if (recoveryTask) {
-    try {
-      const recovery = await handleTaskRecoveryMessage(recoveryTask.id, message, {
-        sourceSessionId: `subagent_chat_${agentId}`,
-        source: 'subagent_chat',
-      });
-      if (recovery.handled) {
-        return res.json({
-          success: true,
-          recovery: true,
-          taskId: recoveryTask.id,
-          resumed: recovery.resumed,
-          action: recovery.action,
-          reply: recovery.reply,
-          messages: getSubagentChatHistory(agentId, 100),
-        });
-      }
-    } catch (err: any) {
-      return res.status(500).json({ success: false, recovery: true, taskId: recoveryTask.id, error: err.message, messages: getSubagentChatHistory(agentId, 100) });
-    }
-  }
-
   const userMessage = appendSubagentChatMessage(agentId, {
     id: clientMessageId || undefined,
     role: 'user',
@@ -1385,36 +1468,6 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
       abortSignal.aborted = true;
     }
   });
-
-  const recoveryTask = findBlockedRecoveryTaskForSubagentChat(agentId);
-  if (recoveryTask) {
-    try {
-      sendSSE('ui_preflight', { message: 'Routing message to paused subagent task...' });
-      const recovery = await handleTaskRecoveryMessage(recoveryTask.id, message, {
-        sourceSessionId: `subagent_chat_${agentId}`,
-        source: 'subagent_chat',
-      });
-      const reply = recovery.reply || '';
-      if (!abortSignal.aborted) {
-        sendSSE('final', { text: reply });
-        sendSSE('done', {
-          reply,
-          recovery: true,
-          taskId: recoveryTask.id,
-          resumed: recovery.resumed,
-          action: recovery.action,
-        });
-      }
-    } catch (err: any) {
-      if (!abortSignal.aborted) sendSSE('error', { message: err.message || 'Task recovery failed' });
-    } finally {
-      requestCompleted = true;
-      finishSubagentChatStream(agentId, retainedStream.streamId);
-      clearInterval(heartbeat);
-      res.end();
-    }
-    return;
-  }
 
   const userMessage = appendSubagentChatMessage(agentId, {
     id: clientMessageId || undefined,

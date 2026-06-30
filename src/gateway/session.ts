@@ -51,6 +51,30 @@ export interface TurnOrigin {
 
 export type MainChatGoalStatus = 'active' | 'paused' | 'blocked' | 'done' | 'cleared' | 'failed';
 
+export type MainChatGoalPlanStepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped';
+
+export interface MainChatGoalPlanStep {
+  id: string;
+  text: string;
+  status: MainChatGoalPlanStepStatus;
+  note?: string;
+  updatedAt?: number;
+}
+
+export interface MainChatGoalTurnPlan {
+  id: string;
+  turnNumber: number;
+  status: 'planned' | 'in_progress' | 'complete' | 'incomplete' | 'blocked' | 'failed';
+  source: 'declared' | 'tool_sequence' | 'preflight' | 'judge' | 'unknown';
+  activeIndex: number;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  judgeReason?: string;
+  judgeDirective?: string;
+  steps: MainChatGoalPlanStep[];
+}
+
 export interface MainChatGoalState {
   id: string;
   sessionId: string;
@@ -65,10 +89,18 @@ export interface MainChatGoalState {
   lastVerdict?: 'done' | 'continue' | 'blocked' | 'failed';
   lastReason?: string;
   nextStepDirective?: string;
+  lastQualityGrade?: string;
+  lastUnresolvedIssues?: string[];
+  lastMissingAcceptanceCriteria?: string[];
+  lastVerificationGaps?: string[];
+  lastEvidence?: string[];
   blockedReason?: string;
   pausedReason?: string;
   failureReason?: string;
   progressSummary?: string;
+  pauseStartedAt?: number;
+  pausedMs?: number;
+  turnPlans?: MainChatGoalTurnPlan[];
   deniedActions?: Array<{
     at: number;
     toolName: string;
@@ -292,10 +324,32 @@ function scrubMainChatGoal(goal: MainChatGoalState | null | undefined): MainChat
     ...goal,
     goal: scrubPersistedText(goal.goal),
     lastReason: goal.lastReason ? scrubPersistedText(goal.lastReason) : goal.lastReason,
+    nextStepDirective: goal.nextStepDirective ? scrubPersistedText(goal.nextStepDirective) : goal.nextStepDirective,
+    lastQualityGrade: goal.lastQualityGrade ? scrubPersistedText(goal.lastQualityGrade) : goal.lastQualityGrade,
+    lastUnresolvedIssues: Array.isArray(goal.lastUnresolvedIssues) ? goal.lastUnresolvedIssues.map(scrubPersistedText) : goal.lastUnresolvedIssues,
+    lastMissingAcceptanceCriteria: Array.isArray(goal.lastMissingAcceptanceCriteria) ? goal.lastMissingAcceptanceCriteria.map(scrubPersistedText) : goal.lastMissingAcceptanceCriteria,
+    lastVerificationGaps: Array.isArray(goal.lastVerificationGaps) ? goal.lastVerificationGaps.map(scrubPersistedText) : goal.lastVerificationGaps,
+    lastEvidence: Array.isArray(goal.lastEvidence) ? goal.lastEvidence.map(scrubPersistedText) : goal.lastEvidence,
     blockedReason: goal.blockedReason ? scrubPersistedText(goal.blockedReason) : goal.blockedReason,
     pausedReason: goal.pausedReason ? scrubPersistedText(goal.pausedReason) : goal.pausedReason,
     failureReason: goal.failureReason ? scrubPersistedText(goal.failureReason) : goal.failureReason,
     progressSummary: goal.progressSummary ? scrubPersistedText(goal.progressSummary) : goal.progressSummary,
+    pauseStartedAt: Number.isFinite(Number(goal.pauseStartedAt)) ? Number(goal.pauseStartedAt) : undefined,
+    pausedMs: Number.isFinite(Number(goal.pausedMs)) ? Math.max(0, Math.floor(Number(goal.pausedMs))) : undefined,
+    turnPlans: Array.isArray(goal.turnPlans)
+      ? goal.turnPlans.map((plan) => ({
+          ...plan,
+          judgeReason: plan.judgeReason ? scrubPersistedText(plan.judgeReason) : plan.judgeReason,
+          judgeDirective: plan.judgeDirective ? scrubPersistedText(plan.judgeDirective) : plan.judgeDirective,
+          steps: Array.isArray(plan.steps)
+            ? plan.steps.map((step) => ({
+                ...step,
+                text: scrubPersistedText(step.text),
+                note: step.note ? scrubPersistedText(step.note) : step.note,
+              }))
+            : plan.steps,
+        }))
+      : goal.turnPlans,
     deniedActions: Array.isArray(goal.deniedActions)
       ? goal.deniedActions.map((item) => ({
           ...item,
@@ -426,6 +480,72 @@ function normalizeScopedToolCategoryActivations(input: any, fallbackTurn?: numbe
   return normalized.slice(0, 64);
 }
 
+function normalizeTextArray(input: any, maxItems = 12, maxChars = 500): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const values = input
+    .map((item) => String(item || '').replace(/\s+/g, ' ').trim().slice(0, maxChars))
+    .filter(Boolean)
+    .slice(0, maxItems);
+  return values.length ? values : undefined;
+}
+
+function normalizeGoalPlanStepStatus(input: any): MainChatGoalPlanStepStatus {
+  const value = String(input || '').trim().toLowerCase();
+  if (value === 'in_progress' || value === 'done' || value === 'failed' || value === 'skipped') return value;
+  return 'pending';
+}
+
+function normalizeGoalTurnPlanStatus(input: any): MainChatGoalTurnPlan['status'] {
+  const value = String(input || '').trim().toLowerCase();
+  if (value === 'planned' || value === 'in_progress' || value === 'complete' || value === 'incomplete' || value === 'blocked' || value === 'failed') {
+    return value;
+  }
+  return 'planned';
+}
+
+function normalizeGoalTurnPlanSource(input: any): MainChatGoalTurnPlan['source'] {
+  const value = String(input || '').trim().toLowerCase();
+  if (value === 'declared' || value === 'tool_sequence' || value === 'preflight' || value === 'judge') return value;
+  return 'unknown';
+}
+
+function normalizeMainChatGoalTurnPlans(input: any, now: number): MainChatGoalTurnPlan[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const plans = input
+    .map((plan: any, planIndex: number): MainChatGoalTurnPlan | null => {
+      if (!plan || typeof plan !== 'object') return null;
+      const turnNumber = Math.max(1, Math.floor(Number(plan.turnNumber ?? plan.turn_number ?? planIndex + 1) || planIndex + 1));
+      const steps = Array.isArray(plan.steps)
+        ? plan.steps.map((step: any, stepIndex: number): MainChatGoalPlanStep | null => {
+            const text = String(step?.text || step?.description || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+            if (!text) return null;
+            return {
+              id: String(step?.id || `g${turnNumber}_s${stepIndex + 1}`),
+              text,
+              status: normalizeGoalPlanStepStatus(step?.status),
+              note: typeof step?.note === 'string' ? step.note.slice(0, 700) : undefined,
+              updatedAt: Number.isFinite(Number(step?.updatedAt ?? step?.updated_at)) ? Number(step?.updatedAt ?? step?.updated_at) : undefined,
+            };
+          }).filter(Boolean) as MainChatGoalPlanStep[]
+        : [];
+      return {
+        id: String(plan.id || `goal_turn_${turnNumber}`),
+        turnNumber,
+        status: normalizeGoalTurnPlanStatus(plan.status),
+        source: normalizeGoalTurnPlanSource(plan.source),
+        activeIndex: Number.isFinite(Number(plan.activeIndex ?? plan.active_index)) ? Number(plan.activeIndex ?? plan.active_index) : -1,
+        startedAt: Number.isFinite(Number(plan.startedAt ?? plan.started_at)) ? Number(plan.startedAt ?? plan.started_at) : now,
+        updatedAt: Number.isFinite(Number(plan.updatedAt ?? plan.updated_at)) ? Number(plan.updatedAt ?? plan.updated_at) : now,
+        completedAt: Number.isFinite(Number(plan.completedAt ?? plan.completed_at)) ? Number(plan.completedAt ?? plan.completed_at) : undefined,
+        judgeReason: typeof plan.judgeReason === 'string' ? plan.judgeReason : (typeof plan.judge_reason === 'string' ? plan.judge_reason : undefined),
+        judgeDirective: typeof plan.judgeDirective === 'string' ? plan.judgeDirective : (typeof plan.judge_directive === 'string' ? plan.judge_directive : undefined),
+        steps: steps.slice(0, 12),
+      };
+    })
+    .filter(Boolean) as MainChatGoalTurnPlan[];
+  return plans.length ? plans.slice(-50) : undefined;
+}
+
 function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState | null {
   if (!input || typeof input !== 'object') return null;
   const goal = String(input.goal || '').trim();
@@ -468,10 +588,19 @@ function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState
       ? String(input.lastVerdict || input.last_verdict) as MainChatGoalState['lastVerdict']
       : undefined,
     lastReason: typeof input.lastReason === 'string' ? input.lastReason : (typeof input.last_reason === 'string' ? input.last_reason : undefined),
+    nextStepDirective: typeof input.nextStepDirective === 'string' ? input.nextStepDirective : (typeof input.next_step_directive === 'string' ? input.next_step_directive : undefined),
+    lastQualityGrade: typeof input.lastQualityGrade === 'string' ? input.lastQualityGrade : (typeof input.last_quality_grade === 'string' ? input.last_quality_grade : undefined),
+    lastUnresolvedIssues: normalizeTextArray(input.lastUnresolvedIssues ?? input.last_unresolved_issues),
+    lastMissingAcceptanceCriteria: normalizeTextArray(input.lastMissingAcceptanceCriteria ?? input.last_missing_acceptance_criteria),
+    lastVerificationGaps: normalizeTextArray(input.lastVerificationGaps ?? input.last_verification_gaps),
+    lastEvidence: normalizeTextArray(input.lastEvidence ?? input.last_evidence),
     blockedReason: typeof input.blockedReason === 'string' ? input.blockedReason : (typeof input.blocked_reason === 'string' ? input.blocked_reason : undefined),
     pausedReason: typeof input.pausedReason === 'string' ? input.pausedReason : (typeof input.paused_reason === 'string' ? input.paused_reason : undefined),
     failureReason: typeof input.failureReason === 'string' ? input.failureReason : (typeof input.failure_reason === 'string' ? input.failure_reason : undefined),
     progressSummary: typeof input.progressSummary === 'string' ? input.progressSummary : (typeof input.progress_summary === 'string' ? input.progress_summary : undefined),
+    pauseStartedAt: Number.isFinite(Number(input.pauseStartedAt ?? input.pause_started_at)) ? Number(input.pauseStartedAt ?? input.pause_started_at) : undefined,
+    pausedMs: Number.isFinite(Number(input.pausedMs ?? input.paused_ms)) ? Math.max(0, Math.floor(Number(input.pausedMs ?? input.paused_ms))) : undefined,
+    turnPlans: normalizeMainChatGoalTurnPlans(input.turnPlans ?? input.turn_plans, now),
     deniedActions,
     lastSummaryAt: Number.isFinite(Number(input.lastSummaryAt ?? input.last_summary_at)) ? Number(input.lastSummaryAt ?? input.last_summary_at) : undefined,
     lastSummaryMessageIndex: Number.isFinite(Number(input.lastSummaryMessageIndex ?? input.last_summary_message_index))
@@ -918,6 +1047,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       activatedToolCategories: Array.isArray(data?.activatedToolCategories) ? data.activatedToolCategories : [],
       scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data?.scopedToolCategoryActivations, Number(data?.userTurnCounter)),
       activatedSkillIds: Array.isArray(data?.activatedSkillIds) ? data.activatedSkillIds : [],
+      activatedSkillResources: normalizeActivatedSkillResources(data?.activatedSkillResources),
       businessContextEnabled: data?.businessContextEnabled === true,
       creativeMode: normalizeCreativeMode(data?.creativeMode),
       creativeReferences: normalizeCreativeReferences(data?.creativeReferences),
@@ -1485,6 +1615,7 @@ export function getSession(id: string): Session {
         activatedToolCategories: Array.isArray(data.activatedToolCategories) ? data.activatedToolCategories : [],
         scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data.scopedToolCategoryActivations, Number(data.userTurnCounter)),
         activatedSkillIds: Array.isArray(data.activatedSkillIds) ? data.activatedSkillIds : [],
+        activatedSkillResources: normalizeActivatedSkillResources(data.activatedSkillResources),
         businessContextEnabled: data.businessContextEnabled === true,
         creativeMode: normalizeCreativeMode(data.creativeMode),
         creativeReferences: normalizeCreativeReferences(data.creativeReferences),
@@ -1526,6 +1657,7 @@ export function getSession(id: string): Session {
     activatedToolCategories: [],
     scopedToolCategoryActivations: [],
     activatedSkillIds: [],
+    activatedSkillResources: {},
     businessContextEnabled: false,
     creativeMode: null,
     creativeReferences: [],
@@ -2398,6 +2530,22 @@ export function getActivatedToolCategories(id: string): Set<string> {
 
 function normalizeSessionSkillId(input: string): string {
   return String(input || '').trim();
+}
+
+function normalizeActivatedSkillResources(input: any): Record<string, string[]> {
+  if (!input || typeof input !== 'object') return {};
+  const out: Record<string, string[]> = {};
+  for (const [rawSkillId, rawPaths] of Object.entries(input)) {
+    const skillId = normalizeSessionSkillId(String(rawSkillId || ''));
+    if (!skillId || !Array.isArray(rawPaths)) continue;
+    const paths = Array.from(new Set(
+      rawPaths
+        .map((path) => String(path || '').trim())
+        .filter(Boolean),
+    ));
+    if (paths.length) out[skillId] = paths;
+  }
+  return out;
 }
 
 export function activateSkillForSession(id: string, skillId: string): void {

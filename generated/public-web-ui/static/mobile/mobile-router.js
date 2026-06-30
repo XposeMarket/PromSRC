@@ -2,18 +2,19 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=liquid-glass-v20';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=slash-command-style-align-v1';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderCreativePage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=voice-mic-restore-v1';
+} from './mobile-pages.js?v=slash-command-style-align-v1';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   searchMobileChatSessions,
-} from './mobile-api.js?v=mobile-voice-live-update-fix';
+} from './mobile-api.js?v=slash-command-style-align-v1';
+import { connectWS, ensureWSConnected } from '../ws.js';
 
 // Once a device has ever entered mobile mode (or completed pairing), this flag
 // is written to localStorage so we stay in mobile mode even when the URL loses
@@ -124,7 +125,7 @@ export function mobileNavigate(route) {
   // PWA-launch mode through internal navigation. Other query params are kept
   // as-is — we only touch the hash.
   if (window.location.hash === route) {
-    render();
+    safeRender();
   } else {
     window.location.hash = route;
   }
@@ -152,6 +153,9 @@ function openMobileSettings(tab) {
     try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
     return true;
   }
+  import('../pages/SettingsPage.js')
+    .then(() => openMobileSettings(tab))
+    .catch((err) => console.warn('[mobile settings] could not lazy-load SettingsPage.js', err));
   console.warn('[mobile settings] desktop Settings modal not available yet');
   return false;
 }
@@ -274,6 +278,15 @@ function render() {
   window.__pmMobileCleanup = () => {
     if (typeof slot._pmCleanup === 'function') slot._pmCleanup();
   };
+  if (getDeviceToken()) {
+    queueMicrotask(() => {
+      try {
+        ensureWSConnected({ timeoutMs: 6000 });
+      } catch {
+        try { connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 }); } catch {}
+      }
+    });
+  }
 
   switch (page) {
     case 'pair':
@@ -302,11 +315,84 @@ function render() {
   }
 }
 
-window.addEventListener('hashchange', render);
-window.addEventListener('popstate',   render);
-window.addEventListener('pm-device-revoked', render);
-document.addEventListener('DOMContentLoaded', render);
-if (document.readyState !== 'loading') render();
+function renderMobileBootError(err) {
+  const root = document.getElementById('mobile-root');
+  if (!root) return;
+  const message = String(err?.message || err || 'Mobile boot failed.');
+  const safeMessage = message.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
+  document.body.classList.add('pm-mobile-active');
+  document.body.classList.remove('auth-pending');
+  root.hidden = false;
+  root.innerHTML = `
+    <div class="pm-mobile-boot-screen pm-mobile-boot-error">
+      <div class="pm-mobile-boot-mark"><img src="/assets/Prometheus.png" alt="Prometheus" /></div>
+      <div>Prometheus Mobile could not load.</div>
+      <div class="pm-mobile-boot-detail">${safeMessage}</div>
+      <div class="pm-mobile-boot-actions">
+        <button type="button" class="pm-btn primary" id="pm-mobile-retry-boot">Retry</button>
+        <button type="button" class="pm-btn ghost" id="pm-mobile-clear-cache">Clear cache</button>
+      </div>
+    </div>
+  `;
+  root.querySelector('#pm-mobile-retry-boot')?.addEventListener('click', () => safeRender());
+  root.querySelector('#pm-mobile-clear-cache')?.addEventListener('click', async () => {
+    try {
+      const keys = await caches?.keys?.();
+      await Promise.all((keys || []).filter((key) => String(key).startsWith('prometheus-')).map((key) => caches.delete(key)));
+    } catch {}
+    try { location.reload(); } catch { safeRender(); }
+  });
+}
+
+function safeRender() {
+  try {
+    render();
+    return true;
+  } catch (err) {
+    console.error('[mobile] render failed:', err);
+    renderMobileBootError(err);
+    return false;
+  }
+}
+
+function recoverMobileBootSurface() {
+  if (!isMobileRoute()) return;
+  const root = document.getElementById('mobile-root');
+  if (!root || root.hidden || !root.querySelector('.pm-app')) {
+    safeRender();
+  }
+  if (getDeviceToken()) {
+    try { ensureWSConnected({ timeoutMs: 6000 }); } catch {}
+  }
+}
+
+window.addEventListener('hashchange', safeRender);
+window.addEventListener('popstate', safeRender);
+window.addEventListener('pm-device-revoked', safeRender);
+window.addEventListener('online', recoverMobileBootSurface);
+window.addEventListener('pageshow', recoverMobileBootSurface);
+window.addEventListener('focus', recoverMobileBootSurface);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') recoverMobileBootSurface();
+});
+
+if (document.readyState === 'loading') {
+  let renderedBeforeDom = false;
+  if (isMobileRoute() && document.getElementById('mobile-root')) {
+    queueMicrotask(() => { renderedBeforeDom = safeRender(); });
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    if (!renderedBeforeDom) safeRender();
+  });
+} else {
+  safeRender();
+}
 
 // Expose for debugging / future native shells.
-window.PrometheusMobile = { navigate: mobileNavigate, render };
+window.PrometheusMobile = { navigate: mobileNavigate, render: safeRender };

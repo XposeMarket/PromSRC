@@ -19,6 +19,7 @@ import {
   loadTokens as loadOpenAiCodexTokens,
   refreshTokens as refreshOpenAiCodexTokens,
 } from '../../../auth/openai-oauth.js';
+import { OpenAICodexAdapter } from '../../../providers/openai-codex-adapter.js';
 import {
   X_API_ADD_LIST_MEMBER_TOOL_NAME,
   X_API_BLOCK_USER_TOOL_NAME,
@@ -398,6 +399,53 @@ function extractOpenAiResponseText(data: any): string {
   return String(choice?.message?.content || '').trim();
 }
 
+function extractCodexChatResultText(result: any): string {
+  const content = result?.message?.content;
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => String(part?.text || part?.content || '').trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  return String(result?.content || result?.text || '').trim();
+}
+
+async function executeOpenAiCodexVisionFallback(
+  promptText: string,
+  images: string[],
+): Promise<{ success: boolean; summary?: string; model: string; credential_source: 'openai-codex-oauth'; error?: string }> {
+  const model = DEFAULT_XAI_VISION_FALLBACK_MODEL;
+  try {
+    const configDir = getConfigDir();
+    if (!loadOpenAiCodexTokens(configDir)) {
+      return { success: false, model, credential_source: 'openai-codex-oauth', error: 'OpenAI Codex OAuth is not connected.' };
+    }
+    const adapter = new OpenAICodexAdapter(configDir);
+    const content: any[] = [{ type: 'text', text: promptText }];
+    for (const url of images.slice(0, 12)) {
+      content.push({ type: 'image_url', image_url: { url, detail: 'low' } });
+    }
+    const result = await adapter.chat([
+      {
+        role: 'system',
+        content: 'You describe mobile camera images for a live voice assistant. Return only the concise visual summary text.',
+      },
+      { role: 'user', content },
+    ], model, {
+      temperature: 0.1,
+      max_tokens: 260,
+      think: 'low',
+    });
+    const summary = extractCodexChatResultText(result);
+    if (summary) return { success: true, summary, model, credential_source: 'openai-codex-oauth' };
+    return { success: false, model, credential_source: 'openai-codex-oauth', error: 'OpenAI Codex vision fallback returned an empty summary.' };
+  } catch (err: any) {
+    return { success: false, model, credential_source: 'openai-codex-oauth', error: String(err?.message || err || 'OpenAI Codex vision fallback failed.') };
+  }
+}
+
 async function executeOpenAiVisionFallback(
   promptText: string,
   images: string[],
@@ -491,6 +539,17 @@ export async function executeXaiImageVisionSummary(input: {
     xaiError = 'xAI credentials not configured. Connect xAI in Settings -> Models, or set XAI_API_KEY.';
   }
 
+  const codexFallback = await executeOpenAiCodexVisionFallback(promptText, images);
+  if (codexFallback.success) {
+    return {
+      success: true,
+      summary: codexFallback.summary,
+      model: codexFallback.model,
+      credential_source: codexFallback.credential_source,
+      fallback_from: model,
+    };
+  }
+
   const fallback = await executeOpenAiVisionFallback(promptText, images);
   if (fallback.success) {
     return {
@@ -505,7 +564,7 @@ export async function executeXaiImageVisionSummary(input: {
   return {
     success: false,
     model: `${model} -> ${fallback.model}`,
-    error: `xAI vision failed (${xaiError || 'unknown error'}); OpenAI fallback failed (${fallback.error || 'unknown error'}).`,
+    error: `Codex OAuth fallback failed (${codexFallback.error || 'unknown error'}); OpenAI API fallback failed (${fallback.error || 'unknown error'}); xAI vision failed (${xaiError || 'unknown error'}).`,
   };
 }
 

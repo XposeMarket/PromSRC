@@ -855,14 +855,28 @@ export class SkillsManager {
     }).join('\n');
   }
 
-  buildTurnContext(_messageText: string, optionsOrMaxChars: number | BuildTurnContextOptions = 3000): string {
+  buildTurnContext(_messageText: string, optionsOrMaxChars: number | (BuildTurnContextOptions & { forcedSkillIds?: string[] }) = 3000): string {
     const all = this.getAll();
     if (!all.length) return '';
     const excludedSkillIds = typeof optionsOrMaxChars === 'number'
       ? new Set<string>()
       : normalizeSkillIdSet(optionsOrMaxChars?.excludedSkillIds);
-    const matchedSkills = this.findMatchingSkillsForMessage(_messageText)
+    const forcedSkillIds = typeof optionsOrMaxChars === 'number'
+      ? []
+      : (Array.isArray(optionsOrMaxChars?.forcedSkillIds) ? optionsOrMaxChars.forcedSkillIds : []);
+    const matchedIds = [
+      ...forcedSkillIds.map((id) => String(id || '').trim()).filter(Boolean),
+      ...this.findMatchingSkillsForMessage(_messageText),
+    ];
+    const seenSkillIds = new Set<string>();
+    const matchedSkills = matchedIds
       .filter((id) => !excludedSkillIds.has(String(id || '').trim().toLowerCase()))
+      .filter((id) => {
+        const key = String(id || '').trim().toLowerCase();
+        if (!key || seenSkillIds.has(key)) return false;
+        seenSkillIds.add(key);
+        return true;
+      })
       .map((id) => this.get(id))
       .filter((skill): skill is Skill => !!skill)
       .slice(0, 5);

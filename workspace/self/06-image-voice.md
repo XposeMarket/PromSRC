@@ -246,7 +246,7 @@ xAI/Grok Realtime visual note:
 - This layer is only for Prometheus dictation/voice flows. Normal typed desktop/mobile chat and manual queued steering should keep using the ordinary app paths.
 - The Voice Agent can answer immediate voice questions from a fresh worker context packet, steer an active worker, interrupt an active worker, or acknowledge before handing new work to the worker.
 - The Prometheus worker remains the heavy tool-running brain for browser/desktop/files/coding/media/account actions and long reasoning.
-- Correction: the Voice Agent is not tool-less. It may call a small allowlisted `voice_*` tool set directly for fast, low-risk voice support; anything outside that set must be handed to or steered into the normal worker.
+- Correction: the Voice Agent is not tool-less. It may call a small allowlisted `voice_*` wrapper set directly for fast, low-risk voice support; anything outside that set must be handed to or steered into the normal worker.
 
 Canonical source files for this refactor:
 
@@ -321,18 +321,17 @@ Voice Agent role prompt and direct tool boundary:
 
 - "You are Prometheus speaking through the user's voice interface."
 - It has Prometheus identity, memory, preferences, user knowledge, current task context, and current time/date context.
-- It may call only the provided `voice_*` tools from `buildVoiceToolDefinitions()` in `src/gateway/routes/chat.router.ts`.
+- It may call only the provided `voice_*` wrapper tools from `buildVoiceToolDefinitions()` in `src/gateway/routes/chat.router.ts`, plus canonical read-only `skill_*` tools and rich `show_*` cards.
 - Current direct Voice Agent tools:
-  - `voice_web_search`: fast wrapper around Prometheus web search; use for quick factual/current lookup, with multi mode for latest/current/news/compare/sensitive/current-event questions.
-  - `voice_web_fetch`: fast wrapper around `web_fetch` for one clean text/article/docs URL; social/video/media/auth/browser-heavy URLs must escalate to the worker.
-  - `voice_write_note`: fast wrapper around `write_note`; use only for explicit remember/jot/log/save-note requests.
-  - `voice_set_wake_phrase`: runtime wake phrase setter. Use only for wake phrase/word changes; never save wake phrases as notes or memory.
-  - `voice_skill_lookup`: summarized `skill_list`/skill metadata lookup for available workflows; returns summaries, not full skill instructions.
-  - `voice_memory_search`: read-only memory recall wrapper around memory search and optional record read; do not mutate memory through it.
-  - `voice_timer`: one-shot timer create/list/update/reschedule/cancel wrapper; the future timer execution is handled later by the worker.
+  - `voice_ops`: unified wrapper for quick search/fetch, notes, voice-agent memory (`memory_action` read/append/replace), wake/quiet runtime settings, read-only memory recall, one-shot timers (`timer_action` create/list/update/reschedule/cancel), automation/operator dashboard snapshots, Worker status, screenshot delivery, and simple image/video generation.
+  - `voice_browser`: unified live browser wrapper with actions for open, snapshot, screenshot, click, vision click, fill, type, vision type, key press, scroll, and wait.
+  - `voice_desktop`: unified live desktop wrapper with actions for screenshot, app/window discovery, focus, launch, window control (`window_action` minimize/maximize/restore/close), desktop click, window click/type/key/scroll.
+  - `skill_list`, `skill_read`, `skill_resource_list`, and `skill_resource_read`: canonical skill discovery/read tools for workflow instructions.
+  - `show_weather`, `show_market`, `show_stocks`, `show_prediction_market`, `show_map`, `show_sources`, `show_comparison`, `show_chart`, `show_product_carousel`, `show_agent_work`, and `show_run_result`: read-only visual card tools.
+- Granular legacy names such as `voice_web_search`, `voice_browser_open`, `voice_desktop_screenshot`, and `voice_send_screenshot` remain executable compatibility targets inside `executeVoiceAgentTool(...)`, but `buildVoiceToolDefinitions()` hides them from the normal exposed voice schema. `executeVoiceAgentToolWithTrace(...)` normalizes wrapper calls back to those existing handlers so the old browser/desktop/runtime safety checks remain centralized.
 - It can run at most a tiny direct-tool loop: the decision model receives `buildVoiceToolDefinitions()`, may call up to two tool calls per pass for the first two passes, and then must return strict JSON.
 - It answers directly when context or a `voice_*` result is enough.
-- It dispatches/steers/interrupts the Prometheus worker when work requires tools outside `voice_*`, files, browser, desktop, coding, media/account actions, approvals, broad scheduling/automation, long reasoning, or more than the small voice-tool loop should handle.
+- It dispatches/steers/interrupts the Prometheus worker when work requires tools outside the compact voice wrappers, files, non-voice browser/desktop capabilities, coding, media/account actions, approvals, broad scheduling/automation, long reasoning, or more than the small voice-tool loop should handle.
 - It must return strict JSON: `action`, `spokenReply`, optional `workerInstruction`, optional `needsWorkerResponse`, optional `reason`.
 - It should avoid generic acknowledgements and speak like Prometheus with specific context.
 - Guardrail: do not claim the Voice Agent used full worker tools or changed files/accounts from the voice layer. It may truthfully say it searched, fetched, saved a note, checked memory, looked up skills, or set a timer only when the corresponding `voice_*` result confirms it.
@@ -349,8 +348,8 @@ Voice Agent tool execution path:
 
 - Tool schemas are defined by `buildVoiceToolDefinitions()` in `src/gateway/routes/chat.router.ts`.
 - Tool calls execute through `executeVoiceAgentToolWithTrace(...)`, which broadcasts `voice_agent_tool_event` websocket events and appends Voice Agent process entries.
-- The concrete executor is `executeVoiceAgentTool(...)`; it calls the existing Prometheus helper functions for search, fetch, notes, skills, memory search/record read, and timers.
-- `maybeApplyVoiceToolFallback(...)` can rescue old-style "I cannot use tools" voice decisions by detecting matching voice requests and running the relevant `voice_*` wrapper.
+- The concrete executor is `executeVoiceAgentTool(...)`; it calls the existing Prometheus helper functions for search, fetch, notes, skills, memory search/record read, timers, browser, desktop, screenshots, status, and simple media generation.
+- `maybeApplyVoiceToolFallback(...)` can rescue old-style "I cannot use tools" voice decisions by detecting matching voice requests and running the relevant granular compatibility handler; wrapper normalization keeps the exposed schema compact while those fallback calls still work.
 - `findVoiceToolFallbackRequest(...)` provides deterministic fallback routing for obvious voice requests: URL fetch/read, search/latest/current/news, note/remember, skill/workflow/playbook, memory/recall, and simple relative timers.
 - `voice_agent_tool_event` is consumed by `web-ui/src/pages/ChatPage.js` and `web-ui/src/mobile/mobile-pages.js` so desktop/mobile chat process logs show Voice Agent tool calls/results.
 

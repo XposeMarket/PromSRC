@@ -63,7 +63,6 @@ function sendRawJson(res: http.ServerResponse, body: any): void {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Connection', 'close');
   res.setHeader('Content-Length', Buffer.byteLength(json));
   res.end(json);
 }
@@ -86,6 +85,23 @@ const STATIC_MIME: Record<string, string> = {
 };
 
 const RAW_FILE_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
+
+function getRawStaticCacheControl(req: http.IncomingMessage, filePath: string): string {
+  const rawUrl = String(req.url || '/');
+  let pathname = '/';
+  try {
+    pathname = new URL(rawUrl, 'http://localhost').pathname || '/';
+  } catch {}
+  if (pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/')) {
+    return 'no-cache';
+  }
+  if (pathname.startsWith('/static/') || pathname.startsWith('/vendor/') || pathname.startsWith('/assets/')) {
+    return 'public, max-age=86400';
+  }
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.js' || ext === '.css' || ext === '.woff' || ext === '.woff2') return 'no-cache';
+  return 'no-cache';
+}
 
 function isStreamingHttpRequest(req: http.IncomingMessage): boolean {
   const method = String(req.method || '').toUpperCase();
@@ -115,9 +131,22 @@ function sendRawFile(req: http.IncomingMessage, res: http.ServerResponse, filePa
     if (!stat.isFile()) return false;
     res.statusCode = 200;
     res.setHeader('Content-Type', STATIC_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Connection', 'close');
+    const etag = `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+    res.setHeader('Cache-Control', getRawStaticCacheControl(req, filePath));
+    res.setHeader('Last-Modified', stat.mtime.toUTCString());
+    res.setHeader('ETag', etag);
     res.setHeader('Content-Length', stat.size);
+    const ifNoneMatch = String(req.headers['if-none-match'] || '');
+    const ifModifiedSince = String(req.headers['if-modified-since'] || '');
+    if (
+      ifNoneMatch === etag
+      || (ifModifiedSince && Number(new Date(ifModifiedSince)) >= Math.floor(stat.mtimeMs / 1000) * 1000)
+    ) {
+      res.statusCode = 304;
+      res.removeHeader('Content-Length');
+      res.end();
+      return true;
+    }
     if (String(req.method || 'GET').toUpperCase() === 'HEAD') {
       res.end();
       return true;
@@ -213,7 +242,6 @@ function tryHttpsRedirect(
   res.statusCode = 307;
   res.setHeader('Location', location);
   res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Connection', 'close');
   res.end();
   return true;
 }
@@ -227,7 +255,6 @@ function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerRespon
   if (method === 'HEAD') {
     res.statusCode = 200;
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Connection', 'close');
     res.end();
     return true;
   }
@@ -312,19 +339,17 @@ export function createServer(
 ): ServerBundle {
   const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
     const isStreamingRequest = isStreamingHttpRequest(req);
-    if (!isStreamingRequest) {
-      res.setHeader('Connection', 'close');
-      res.shouldKeepAlive = false;
-    }
     const destroyRequestSocket = () => {
       if (isStreamingRequest) return;
       setImmediate(() => {
-        try { req.socket.destroy(); } catch {}
+        if (req.socket.destroyed) return;
+        if (req.socket.readableEnded || req.socket.writableEnded) {
+          try { req.socket.destroy(); } catch {}
+        }
       });
     };
     req.on('aborted', destroyRequestSocket);
     req.on('error', destroyRequestSocket);
-    res.on('finish', destroyRequestSocket);
     res.on('close', destroyRequestSocket);
     if (tryRawGatewayFastPath(req, res)) return;
     if (!tlsOptions && tryHttpsRedirect(req, res, redirectHttpsPort)) return;
@@ -355,7 +380,9 @@ export function createServer(
     socket.setKeepAlive(true, 30_000);
     socket.setTimeout(0);
     const destroyEndedHttpSocket = () => setImmediate(() => {
-      try { socket.destroy(); } catch {}
+      if (socket.readableEnded || socket.writableEnded) {
+        try { socket.destroy(); } catch {}
+      }
     });
     socket.on('end', destroyEndedHttpSocket);
     socket.on('close', () => httpSockets.delete(socket));
@@ -526,7 +553,13 @@ export function createServer(
           });
         };
         if (msg?.type === 'startup_notification_ack' && msg?.notificationId) {
-          markStartupNotificationDelivered(String(msg.notificationId), 'web');
+          const notificationId = String(msg.notificationId);
+          const item = listPendingStartupNotifications().find((n: any) => String(n?.id || '') === notificationId);
+          const targetSessionId = String(item?.previousSessionId || item?.sessionId || '').trim();
+          const ackSurface = String(msg.surface || msg.client || '').trim().toLowerCase();
+          const mobileTarget = targetSessionId.startsWith('mobile_') || targetSessionId === 'mobile_default';
+          if (mobileTarget && ackSurface !== 'mobile') return;
+          markStartupNotificationDelivered(notificationId, 'web');
           return;
         }
         if (msg?.type === 'creative_command_result' && msg?.commandId) {

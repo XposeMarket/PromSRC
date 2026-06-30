@@ -3,6 +3,103 @@
 
 export function getAgentTeamScheduleTools(): any[] {
   return [
+    {
+      type: 'function' as const,
+      function: {
+        name: 'agent_ops',
+        description: 'Unified agent lifecycle wrapper for listing, inspecting, creating/spawning, updating, deleting, and deploying analysis teams.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['spawn', 'list', 'info', 'update', 'delete', 'deploy_analysis_team'] },
+            subagent_id: { type: 'string' },
+            agent_id: { type: 'string' },
+            task_prompt: { type: 'string' },
+            run_now: { type: 'boolean' },
+            from_role: { type: 'string', enum: ['planner', 'orchestrator', 'researcher', 'analyst', 'builder', 'operator', 'verifier'] },
+            specialization: { type: 'string' },
+            create_if_missing: { type: 'object' },
+            context_data: { type: 'object' },
+            patch: { type: 'object' },
+            confirm: { type: 'boolean' },
+            goal: { type: 'string' },
+            context: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function' as const,
+      function: {
+        name: 'agent_chat_ops',
+        description: 'Unified direct/background agent messaging wrapper. chat_with_subagent remains core for ordinary known-agent check-ins.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['talk', 'message', 'send', 'turn_request', 'reply_wait', 'thread_watch'] },
+            agent_id: { type: 'string' },
+            subagent_id: { type: 'string' },
+            message: { type: 'string' },
+            task_prompt: { type: 'string' },
+            context: { type: 'string' },
+            thread_id: { type: 'string' },
+            request_id: { type: 'string' },
+            timeout_ms: { type: 'number' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function' as const,
+      function: {
+        name: 'team_ops_wrapper',
+        description: 'Unified managed-team wrapper for team lifecycle, goals, context refs, dispatches, chat, and member result coordination.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['manage', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'dispatch_team_agent', 'request_member_turn', 'get_agent_result'] },
+            team_action: { type: 'string', description: 'Sub-action for action="manage", e.g. list/create/start/dispatch/pause/resume.' },
+            team_id: { type: 'string' },
+            teamId: { type: 'string' },
+            agent_id: { type: 'string' },
+            subagent_id: { type: 'string' },
+            task: { type: 'string' },
+            task_prompt: { type: 'string' },
+            message: { type: 'string' },
+            content: { type: 'string' },
+            goal: { type: 'string' },
+            context: { type: 'string' },
+            ref: { type: 'string' },
+            request_id: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function' as const,
+      function: {
+        name: 'team_collab_ops',
+        description: 'Unified teammate collaboration wrapper for manager/teammate talk, context/help requests, artifacts, and status updates.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['talk_manager', 'request_context', 'request_manager_help', 'talk_teammate', 'share_artifact', 'update_status'] },
+            team_id: { type: 'string' },
+            teammate_id: { type: 'string' },
+            agent_id: { type: 'string' },
+            message: { type: 'string' },
+            request: { type: 'string' },
+            context: { type: 'string' },
+            artifact: { type: 'object' },
+            status: { type: 'string' },
+          },
+        },
+      },
+    },
     // Modular subagent spawning — create custom specialists on the fly
     {
       type: 'function' as const,
@@ -329,6 +426,140 @@ export function getAgentTeamScheduleTools(): any[] {
             agent_id: { type: 'string', description: 'ID of the standalone subagent to message.' },
             message: { type: 'string', description: 'Plain-language message to send to the subagent in the background. Include the task or question.' },
             context: { type: 'string', description: 'Optional additional context from the main chat.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'chat_with_subagent',
+        description:
+          'Have a normal conversational chat turn with an existing standalone non-team subagent and wait for its reply. ' +
+          'This uses the persistent Subagents chat thread, not a one-off task dispatch. Use it for check-ins, status questions, lightweight collaboration, greetings, planning, or follow-up discussion. ' +
+          'For background task handoff use message_subagent instead. For team members use agent_message_send or agent_turn_request with target_type="team_member".',
+        parameters: {
+          type: 'object',
+          required: ['agent_id', 'message'],
+          properties: {
+            agent_id: { type: 'string', description: 'ID of the standalone non-team subagent to chat with.' },
+            message: { type: 'string', description: 'Conversational message to send.' },
+            context: { type: 'string', description: 'Optional extra context to include below the message.' },
+            timeout_ms: { type: 'number', description: 'How long to wait for the reply. Default 300000, max 1800000.' },
+            user_label: { type: 'string', description: 'Optional label shown to the subagent, default "Main Agent".' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'agent_message_send',
+        description:
+          'Send a mailbox/direct-chat message to another agent without forcing it to be a formal task. ' +
+          'Targets standalone subagents, team members, or a team manager. By default this only delivers/queues the message; set request_turn=true when you want the target to reply now. ' +
+          'Set background=true with request_turn=true to wake/run the target asynchronously where supported.',
+        parameters: {
+          type: 'object',
+          required: ['target_type', 'message'],
+          properties: {
+            target_type: {
+              type: 'string',
+              enum: ['standalone_subagent', 'team_member', 'team_manager'],
+              description: 'Destination kind. standalone_subagent requires agent_id. team_member requires team_id and agent_id. team_manager requires team_id.',
+            },
+            agent_id: { type: 'string', description: 'Target agent ID for standalone_subagent or team_member.' },
+            team_id: { type: 'string', description: 'Target team ID for team_member or team_manager.' },
+            message: { type: 'string', description: 'Message to deliver.' },
+            context: { type: 'string', description: 'Optional extra context appended below the message.' },
+            request_turn: { type: 'boolean', description: 'If true, ask/wake the target to answer. Default false.' },
+            background: { type: 'boolean', description: 'With request_turn=true, start the reply turn asynchronously when supported.' },
+            delay_ms: { type: 'number', description: 'Optional delay before a background team-member direct wake.' },
+            timeout_ms: { type: 'number', description: 'Max wait for synchronous standalone chats. Default 300000, max 1800000.' },
+            user_label: { type: 'string', description: 'Optional sender label. Default "Main Agent".' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'agent_turn_request',
+        description:
+          'Ask another agent to take a conversational turn and reply. This is the compact send+reply shortcut for agent chat, not a formal execution dispatch. ' +
+          'Use standalone_subagent for the persistent Subagents chat thread, team_member for a team direct thread, or team_manager for a direct manager thread.',
+        parameters: {
+          type: 'object',
+          required: ['target_type', 'prompt'],
+          properties: {
+            target_type: {
+              type: 'string',
+              enum: ['standalone_subagent', 'team_member', 'team_manager'],
+              description: 'Destination kind. standalone_subagent requires agent_id. team_member requires team_id and agent_id. team_manager requires team_id.',
+            },
+            agent_id: { type: 'string', description: 'Target agent ID for standalone_subagent or team_member.' },
+            team_id: { type: 'string', description: 'Target team ID for team_member or team_manager.' },
+            prompt: { type: 'string', description: 'What the target should respond to.' },
+            context: { type: 'string', description: 'Optional extra context appended below the prompt.' },
+            background: { type: 'boolean', description: 'For team member/manager targets, request the reply asynchronously.' },
+            delay_ms: { type: 'number', description: 'Optional delay before a background team-member direct wake.' },
+            timeout_ms: { type: 'number', description: 'Max wait for synchronous standalone chats. Default 300000, max 1800000.' },
+            user_label: { type: 'string', description: 'Optional sender label. Default "Main Agent".' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'agent_reply_wait',
+        description:
+          'Wait for or poll replies from an agent chat/thread after a known timestamp. Use after agent_message_send(... request_turn=true/background=true) or when a heartbeat wants to check whether a target replied. ' +
+          'For background task ids returned by message_subagent, dispatch_team_agent, or request_team_member_turn, use get_agent_result instead.',
+        parameters: {
+          type: 'object',
+          required: ['target_type'],
+          properties: {
+            target_type: {
+              type: 'string',
+              enum: ['standalone_subagent', 'team_member', 'team_manager'],
+              description: 'Thread kind to poll.',
+            },
+            agent_id: { type: 'string', description: 'Standalone subagent ID or team member agent ID.' },
+            team_id: { type: 'string', description: 'Team ID for team_member or team_manager.' },
+            thread_id: { type: 'string', description: 'Optional team direct thread id. Omit to read all matching replies after after_ts.' },
+            after_ts: { type: 'number', description: 'Only return replies newer than this timestamp. Use after_ts from agent_message_send or agent_turn_request results.' },
+            block: { type: 'boolean', description: 'If true, wait until a reply arrives or timeout. Default true.' },
+            timeout_ms: { type: 'number', description: 'Max wait when block=true. Default 30000, max 1800000.' },
+            poll_ms: { type: 'number', description: 'Polling interval when block=true. Default 1000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'agent_thread_watch',
+        description:
+          'Create a lightweight watch descriptor for an agent conversation thread, or block once like agent_reply_wait when block=true. ' +
+          'Use the returned fields from a heartbeat or scheduled job to poll with agent_reply_wait. For durable task completion watches, use internal_watch with task ids.',
+        parameters: {
+          type: 'object',
+          required: ['target_type'],
+          properties: {
+            target_type: {
+              type: 'string',
+              enum: ['standalone_subagent', 'team_member', 'team_manager'],
+              description: 'Thread kind to watch.',
+            },
+            agent_id: { type: 'string', description: 'Standalone subagent ID or team member agent ID.' },
+            team_id: { type: 'string', description: 'Team ID for team_member or team_manager.' },
+            thread_id: { type: 'string', description: 'Optional team direct thread id.' },
+            after_ts: { type: 'number', description: 'Watch replies newer than this timestamp. Defaults to now.' },
+            watch_id: { type: 'string', description: 'Optional caller-chosen watch id.' },
+            block: { type: 'boolean', description: 'If true, perform a bounded wait immediately instead of only returning a descriptor.' },
+            timeout_ms: { type: 'number', description: 'Max wait when block=true. Default 30000, max 1800000.' },
+            poll_ms: { type: 'number', description: 'Polling interval when block=true. Default 1000.' },
           },
         },
       },

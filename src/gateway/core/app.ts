@@ -18,6 +18,19 @@ import { listLiveRuntimes } from '../live-runtime-registry';
 
 const startedAt = Date.now();
 
+function setStaticCacheHeaders(res: express.Response, filePath: string): void {
+  const normalized = filePath.replace(/\\/g, '/');
+  if (normalized.endsWith('/index.html')) {
+    res.setHeader('Cache-Control', 'no-cache');
+    return;
+  }
+  if (normalized.includes('/static/') || normalized.includes('/vendor/') || normalized.includes('/assets/')) {
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-cache');
+}
+
 export function createApp(): express.Application {
   const app = express();
 
@@ -47,19 +60,13 @@ export function createApp(): express.Application {
   const webUiPath = isPublicDistributionBuild() && hasPublicWebUiBuild()
     ? getPublicWebUiRoot()
     : path.join(root, 'web-ui');
-  app.use(express.static(webUiPath, { etag: false, lastModified: false, setHeaders: (res) => {
-    res.setHeader('Cache-Control', 'no-store');
-  } }));
+  app.use(express.static(webUiPath, { etag: true, lastModified: true, setHeaders: setStaticCacheHeaders }));
 
   const pretextDistPath = path.join(root, 'node_modules', '@chenglou', 'pretext', 'dist');
-  app.use('/vendor/pretext', express.static(pretextDistPath, { etag: false, lastModified: false, setHeaders: (res) => {
-    res.setHeader('Cache-Control', 'no-store');
-  } }));
+  app.use('/vendor/pretext', express.static(pretextDistPath, { etag: true, lastModified: true, maxAge: '1d' }));
 
   const jsPdfDistPath = path.join(root, 'node_modules', 'jspdf', 'dist');
-  app.use('/vendor/jspdf', express.static(jsPdfDistPath, { etag: false, lastModified: false, setHeaders: (res) => {
-    res.setHeader('Cache-Control', 'no-store');
-  } }));
+  app.use('/vendor/jspdf', express.static(jsPdfDistPath, { etag: true, lastModified: true, maxAge: '1d' }));
 
   // Serve shared assets (icons, images, etc.)
   const assetsPath = path.join(root, 'assets');

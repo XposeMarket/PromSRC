@@ -4,7 +4,7 @@ import {
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
-} from './mobile-shell.js?v=liquid-glass-v20';
+} from './mobile-shell.js?v=slash-command-style-align-v1';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import { attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
@@ -36,7 +36,7 @@ import {
   loadMobileWorkspaceFiles, loadMobileFileScreenshot,
   loadCanvasImageDataUrl, creativeExtractLayers, loadCreativeGallery, buildInlineMediaUrl,
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentHeartbeat,
-  tickSubagentHeartbeat, loadSubagentRuns, loadSubagentChat, loadSubagentContextRefs,
+  tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
   getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications,
 } from './mobile-api.js';
@@ -55,6 +55,9 @@ import {
 } from '../components/agent-voice-picker.js';
 
 // ---------- tiny toast ----------
+const PM_MOBILE_BROWSE_CACHE_TTL_MS = 45_000;
+const pmMobileBrowseCache = new Map();
+
 function pmToast(msg, kind = 'info') {
   let host = document.getElementById('pm-toast-host');
   if (!host) {
@@ -258,6 +261,15 @@ function _mobileGoalStartedAtMs(goal) {
   return _mobileGoalTimestampMs(goal?.createdAt || goal?.created_at || goal?.startedAt);
 }
 
+function _mobileGoalPauseStartedAtMs(goal) {
+  return _mobileGoalTimestampMs(goal?.pauseStartedAt || goal?.pause_started_at);
+}
+
+function _mobileGoalPausedMs(goal) {
+  const value = Number(goal?.pausedMs || goal?.paused_ms);
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 function _mobileGoalFinishedAtMs(goal) {
   return _mobileGoalTimestampMs(goal?.completedAt || goal?.failedAt || goal?.blockedAt || goal?.updatedAt);
 }
@@ -266,8 +278,18 @@ function _mobileGoalElapsedMs(goal) {
   const startedAt = _mobileGoalStartedAtMs(goal);
   if (!startedAt) return 0;
   const status = String(goal?.status || 'active');
-  const endAt = ['completed', 'done', 'failed', 'blocked'].includes(status) ? (_mobileGoalFinishedAtMs(goal) || Date.now()) : Date.now();
-  return Math.max(0, endAt - startedAt);
+  if (status === 'paused') {
+    const pausedMs = _mobileGoalPausedMs(goal);
+    const pauseStartedAt = _mobileGoalPauseStartedAtMs(goal);
+    const totalPausedMs = pauseStartedAt ? pausedMs + Math.max(0, Date.now() - pauseStartedAt) : pausedMs;
+    const endAt = (_mobileGoalFinishedAtMs(goal) || Date.now()) - totalPausedMs;
+    return Math.max(0, endAt - startedAt);
+  }
+  if (['completed', 'done', 'failed', 'blocked', 'cleared'].includes(status)) {
+    const endedAt = _mobileGoalFinishedAtMs(goal) || Date.now();
+    return Math.max(0, endedAt - startedAt - _mobileGoalPausedMs(goal));
+  }
+  return Math.max(0, Date.now() - startedAt - _mobileGoalPausedMs(goal));
 }
 
 function _formatMobileGoalElapsed(ms) {
@@ -278,6 +300,67 @@ function _formatMobileGoalElapsed(ms) {
   if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+function _mobileGoalStatusLabel(status) {
+  const value = String(status || 'active').toLowerCase();
+  if (value === 'done' || value === 'completed') return 'Completed goal';
+  if (value === 'paused') return 'Paused goal';
+  if (value === 'blocked') return 'Blocked goal';
+  if (value === 'failed') return 'Failed goal';
+  return 'Pursuing goal';
+}
+
+function _mobileGoalStepStatus(status) {
+  const value = String(status || '').toLowerCase();
+  if (value === 'done' || value === 'failed' || value === 'in_progress' || value === 'skipped') return value;
+  return 'pending';
+}
+
+function _renderMobileGoalStepList(steps = []) {
+  const safeSteps = Array.isArray(steps) ? steps : [];
+  return safeSteps.map((step, idx) => {
+    const status = _mobileGoalStepStatus(step?.status);
+    const label = status === 'done' || status === 'skipped' ? '&#10003;' : (status === 'failed' ? '&times;' : String(idx + 1));
+    return `<div class="pm-mobile-goal-step ${escapeHtml(status)}">
+      <span>${label}</span>
+      <p>${escapeHtml(String(step?.text || `Step ${idx + 1}`).slice(0, 180))}</p>
+    </div>`;
+  }).join('');
+}
+
+function _renderMobileGoalDiagnostics(goal) {
+  const rows = [
+    ['Quality', goal?.lastQualityGrade || ''],
+    ['Open issues', Array.isArray(goal?.lastUnresolvedIssues) ? goal.lastUnresolvedIssues.join(' | ') : ''],
+    ['Missing', Array.isArray(goal?.lastMissingAcceptanceCriteria) ? goal.lastMissingAcceptanceCriteria.join(' | ') : ''],
+    ['Verification', Array.isArray(goal?.lastVerificationGaps) ? goal.lastVerificationGaps.join(' | ') : ''],
+  ].filter(([, value]) => String(value || '').trim());
+  if (!rows.length) return '';
+  return `<div class="pm-mobile-goal-diagnostics">
+    ${rows.map(([label, value]) => `<div><strong>${escapeHtml(label)}</strong><span>${escapeHtml(String(value).slice(0, 520))}</span></div>`).join('')}
+  </div>`;
+}
+
+function _renderMobileGoalPlans(goal) {
+  const plans = Array.isArray(goal?.turnPlans) ? goal.turnPlans : [];
+  if (!plans.length) return '<div class="pm-mobile-goal-empty">No turn plan has been declared yet.</div>';
+  const total = plans.length;
+  return `<div class="pm-mobile-goal-plans">
+    ${plans.map((plan, index) => {
+      const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+      const done = steps.filter((step) => ['done', 'skipped'].includes(_mobileGoalStepStatus(step?.status))).length;
+      const judge = String(plan?.judgeReason || '').trim();
+      return `<section class="pm-mobile-goal-plan">
+        <div class="pm-mobile-goal-plan-head">
+          <strong>Turn ${escapeHtml(String(index + 1))}/${escapeHtml(String(total))}</strong>
+          <span>${escapeHtml(String(plan?.status || 'planned'))} - ${escapeHtml(String(done))}/${escapeHtml(String(steps.length))}</span>
+        </div>
+        ${steps.length ? _renderMobileGoalStepList(steps) : '<div class="pm-mobile-goal-empty">This turn has no tracked steps.</div>'}
+        ${judge ? `<div class="pm-mobile-goal-judge">${escapeHtml(judge.slice(0, 520))}</div>` : ''}
+      </section>`;
+    }).join('')}
+  </div>`;
 }
 
 function _setMobileSessionGoal(sessionId, goal) {
@@ -319,15 +402,59 @@ function _syncMobileGoalTimer() {
     return;
   }
   _updateMobileGoalElapsedLabels();
-  if (!__pmChat.goalTimer) __pmChat.goalTimer = setInterval(_updateMobileGoalElapsedLabels, 1000);
+  const anyActiveGoal = !!document.querySelector('.pm-mobile-goal-strip[data-status="active"] [data-pm-goal-elapsed][data-session-id]');
+  if (anyActiveGoal && !__pmChat.goalTimer) {
+    __pmChat.goalTimer = setInterval(_updateMobileGoalElapsedLabels, 1000);
+  } else if (!anyActiveGoal && __pmChat.goalTimer) {
+    clearInterval(__pmChat.goalTimer);
+    __pmChat.goalTimer = null;
+  }
+}
+
+async function _mobileGoalAction(sessionId, action) {
+  const sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+  const name = String(action || '').trim().toLowerCase();
+  if (!sid || !name) return;
+  try { pmHaptic?.(12); } catch {}
+  const body = {};
+  if (name === 'pause') {
+    const reason = window.prompt?.('Pause reason (optional)', '') || '';
+    if (reason.trim()) body.text = reason.trim();
+  } else if (name === 'done') {
+    const note = window.prompt?.('Completion note (optional)', '') || '';
+    if (note.trim()) body.text = note.trim();
+  } else if (name === 'clear') {
+    const ok = window.confirm?.('Clear and archive this goal?') ?? true;
+    if (!ok) return;
+    const note = window.prompt?.('Archive note (optional)', '') || '';
+    if (note.trim()) body.text = note.trim();
+  } else if (name === 'revise') {
+    const current = _getMobileGoalForSession(sid);
+    const goal = window.prompt?.('Revise goal', current?.goal || '') || '';
+    if (!goal.trim()) return;
+    body.goal = goal.trim();
+  }
+  try {
+    const result = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sid)}/main-goal/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    _setMobileSessionGoal(sid, result?.goal || null);
+    _refreshVisibleMobileGoalPills(sid);
+    try { window.__pmMobileGoalChanged?.(); } catch {}
+    pmToast(name === 'status' ? (result?.message || 'Goal status refreshed') : (result?.message || 'Goal updated'), name === 'status' ? 'info' : 'success');
+  } catch (err) {
+    pmToast(`Goal action failed: ${err?.message || err}`, 'error');
+  }
 }
 
 function _renderMobileGoalPill(target, sessionId = '', options = {}) {
   if (!target) return;
   let sid = String(sessionId || __pmChat.activeSessionId || '').trim();
   let goal = _getMobileGoalForSession(sid);
-  target.dataset.goalFallback = options.fallbackToLast === true ? 'last' : '';
-  if (!goal && options.fallbackToLast === true) {
+  const fallbackToLast = options.fallbackToLast === true || target.dataset.goalFallback === 'last';
+  target.dataset.goalFallback = fallbackToLast ? 'last' : '';
+  if (!goal && fallbackToLast) {
     const lastSid = _readMobileLastGoalSession();
     const fallbackGoal = lastSid ? _getMobileGoalForSession(lastSid) : null;
     if (fallbackGoal) {
@@ -339,16 +466,24 @@ function _renderMobileGoalPill(target, sessionId = '', options = {}) {
     target.hidden = true;
     target.innerHTML = '';
     delete target.dataset.sessionId;
+    delete target.dataset.expanded;
+    target.removeAttribute('data-status');
     _syncMobileGoalTimer();
     return;
   }
   target.dataset.sessionId = sid;
   const expanded = __pmChat.goalDetailsOpen?.[sid] === true;
   const judgeReprompt = String(goal.nextStepDirective || goal.lastJudgeDirective || goal.lastReason || '').trim();
+  const status = String(goal.status || 'active');
+  const isActive = status === 'active';
+  const canResume = ['paused', 'blocked', 'failed'].includes(status);
   target.hidden = false;
+  target.setAttribute('data-status', status);
+  target.dataset.expanded = expanded ? 'true' : 'false';
   target.innerHTML = `
-    <button type="button" class="pm-mobile-goal-pill" data-mobile-goal-toggle="${escapeHtml(sid)}" aria-expanded="${expanded ? 'true' : 'false'}">
-      <span>Pursuing goal</span>
+    <button type="button" class="pm-mobile-goal-pill" data-mobile-goal-toggle="${escapeHtml(sid)}" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="Toggle goal progress">
+      <span class="pm-mobile-goal-pill-icon" aria-hidden="true"></span>
+      <span class="pm-mobile-goal-pill-label">${escapeHtml(_mobileGoalStatusLabel(status))}</span>
       <b data-pm-goal-elapsed data-session-id="${escapeHtml(sid)}">${escapeHtml(_formatMobileGoalElapsed(_mobileGoalElapsedMs(goal)))}</b>
     </button>
     ${expanded ? `
@@ -356,11 +491,29 @@ function _renderMobileGoalPill(target, sessionId = '', options = {}) {
         <div><strong>Turns</strong><span>${escapeHtml(String(Number(goal.turnsUsed || 0)))}</span></div>
         <div><strong>Original goal</strong><span>${escapeHtml(goal.goal || 'Untitled goal')}</span></div>
         <div><strong>Last judge reprompt</strong><span>${escapeHtml(judgeReprompt || 'No judge reprompt yet.')}</span></div>
+        ${_renderMobileGoalDiagnostics(goal)}
+        ${_renderMobileGoalPlans(goal)}
+        <div class="pm-mobile-goal-actions">
+          ${isActive ? `<button type="button" data-mobile-goal-action="pause">Pause</button>` : ''}
+          ${canResume ? `<button type="button" data-mobile-goal-action="resume">Resume</button>` : ''}
+          <button type="button" data-mobile-goal-action="status">Status</button>
+          <button type="button" data-mobile-goal-action="revise">Revise</button>
+          ${status !== 'done' ? `<button type="button" data-mobile-goal-action="done">Done</button>` : ''}
+          <button type="button" data-mobile-goal-action="clear">Clear</button>
+        </div>
       </div>
     ` : ''}`;
   target.querySelector('[data-mobile-goal-toggle]')?.addEventListener('click', () => {
+    try { pmHaptic?.(12); } catch {}
     __pmChat.goalDetailsOpen[sid] = !__pmChat.goalDetailsOpen[sid];
-    _renderMobileGoalPill(target, sid);
+    _renderMobileGoalPill(target, sid, { fallbackToLast });
+  });
+  target.querySelectorAll('[data-mobile-goal-action]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      _mobileGoalAction(sid, button.getAttribute('data-mobile-goal-action') || '').catch(() => {});
+    });
   });
   _syncMobileGoalTimer();
 }
@@ -415,6 +568,8 @@ function _clearMobileLastChatSession() {
 function _clearMobileDraftSessionState() {
   __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
   __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
+  _clearMobileActiveRun(MOBILE_CHAT_SESSION_ID);
+  _markMobileSessionRunning(MOBILE_CHAT_SESSION_ID, false);
   if (String(__pmChat.activeSessionId || '') === MOBILE_CHAT_SESSION_ID) {
     __pmChat.thread = __pmChat.threads[MOBILE_CHAT_SESSION_ID];
   }
@@ -428,15 +583,29 @@ function _saveMobileThreadCache(sessionId, thread) {
   if (!sid || sid === MOBILE_CHAT_SESSION_ID) return;
   try {
     const safe = (Array.isArray(thread) ? thread : [])
-      .filter((m) => !m.streaming)
+      .filter(_isMobileMessagePersistable)
       .slice(-PM_MOBILE_THREAD_CACHE_MAX)
-      .map((m) => ({
-        role: m.role,
-        content: m.content || m.body?.text || '',
-        timestamp: m.timestamp,
-        body: m.body ? { text: m.body.text || '', sender: m.body.sender || '' } : undefined,
-        attachmentPreviews: Array.isArray(m.attachmentPreviews) && m.attachmentPreviews.length ? m.attachmentPreviews.slice(0, 4) : undefined,
-      }));
+      .map((m) => {
+        const clone = _cloneMobileMessageForBranch(m) || {};
+        clone.role = m.role;
+        clone.content = m.content || m.body?.text || '';
+        clone.timestamp = m.timestamp;
+        clone.body = m.body ? {
+          text: m.body.text || '',
+          sender: m.body.sender || '',
+          attachments: Array.isArray(m.body.attachments) ? m.body.attachments.slice(0, 4) : undefined,
+        } : undefined;
+        clone.attachmentPreviews = Array.isArray(m.attachmentPreviews) && m.attachmentPreviews.length
+          ? m.attachmentPreviews.slice(0, 4)
+          : undefined;
+        clone.processEntries = Array.isArray(m.processEntries) && m.processEntries.length ? m.processEntries : undefined;
+        clone.liveTraceEntries = Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length ? m.liveTraceEntries : undefined;
+        clone.workStartedAt = Number(m.workStartedAt || 0) || undefined;
+        clone.workEndedAt = Number(m.workEndedAt || 0) || undefined;
+        clone.workDurationMs = Number.isFinite(Number(m.workDurationMs)) ? Number(m.workDurationMs) : undefined;
+        clone._clientRequestId = String(m._clientRequestId || '').trim() || undefined;
+        return clone;
+      });
     const store = _readMobileThreadCacheStore();
     store[sid] = { thread: safe, savedAt: Date.now() };
     // Evict oldest entries if store is growing (keep ≤ 10 sessions)
@@ -670,8 +839,14 @@ function _mapServerMessageToMobile(m, index = -1) {
     workEndedAt: Number(m?.workEndedAt || 0) || undefined,
     workDurationMs: Number.isFinite(Number(m?.workDurationMs)) ? Number(m.workDurationMs) : undefined,
     time: m?.timestamp ? _formatChatTime(m.timestamp) : '',
-    body: { sender: role === 'user' ? '' : 'Prometheus', text: content, attachments: attachmentPreviews },
+    body: {
+      sender: role === 'user' ? '' : 'Prometheus',
+      text: content,
+      attachments: attachmentPreviews,
+      selectedSkillRefs: _pmNormalizeSelectedComposerSkillRefs(m?.body?.selectedSkillRefs || m?.selectedSkillRefs || m?.selectedSkills),
+    },
     content,
+    selectedSkillRefs: _pmNormalizeSelectedComposerSkillRefs(m?.body?.selectedSkillRefs || m?.selectedSkillRefs || m?.selectedSkills),
     attachmentPreviews,
     _promptVariants: Array.isArray(m?._promptVariants) ? m._promptVariants : undefined,
     _promptVariantActive: Number.isFinite(Number(m?._promptVariantActive)) ? Number(m._promptVariantActive) : undefined,
@@ -765,10 +940,20 @@ function _isMobileHiddenVoiceDraftMessage(msg, index = -1) {
     && !Array.isArray(msg?.attachmentPreviews);
 }
 
+function _isMobileMessagePersistable(msg) {
+  if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) return false;
+  if (msg.role !== 'ai') return true;
+  if (msg.streaming !== true) return true;
+  const hasAnswer = _mobileAssistantHasVisibleAnswer(msg);
+  const hasEnded = Number(msg.workEndedAt || 0) > 0 || Number.isFinite(Number(msg.workDurationMs));
+  return hasAnswer && hasEnded;
+}
+
 function _mobileHistoryForServer(thread = _activeMobileThread()) {
   return (Array.isArray(thread) ? thread : [])
     .filter((msg, index) => msg && (msg.role === 'user' || msg.role === 'ai') && !_isMobileHiddenVoiceDraftMessage(msg, index))
-    .filter((msg) => !msg.streaming)
+    .filter(_isMobileMessagePersistable)
+    .filter((msg) => msg._voiceWorkerLocalTurn !== true && msg._voiceWorkerLocalFinal !== true)
     .filter((msg) => !_isMobileRestartContextPacketText(_mobileMessageCopyText(msg)))
     .filter((msg) => !msg._isRestartNotification)
     .map((msg) => ({
@@ -874,15 +1059,17 @@ function _attachMobilePromptVariantsToUserMessage(user, variants, activeIndex) {
   return next;
 }
 
-function _makeMobileUserMessage(text, attachments = []) {
+function _makeMobileUserMessage(text, attachments = [], options = {}) {
   const content = _stripMobileInternalUploadContext(text);
   const attachmentPreviews = Array.isArray(attachments) ? attachments.map(_sanitizeMobileAttachmentPreviewForServer) : [];
+  const selectedSkillRefs = _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills);
   return {
     role: 'user',
     time: _nowTime(),
     timestamp: Date.now(),
-    body: { text: content, attachments },
+    body: { text: content, attachments, selectedSkillRefs },
     content,
+    selectedSkillRefs,
     attachmentPreviews,
   };
 }
@@ -985,17 +1172,17 @@ function _rememberMobileActiveRun(sessionId, state = {}) {
   try {
     const runs = JSON.parse(localStorage.getItem(PM_MOBILE_ACTIVE_RUNS_KEY) || '{}') || {};
     const prev = runs[sid] || {};
+    const has = (key) => Object.prototype.hasOwnProperty.call(state || {}, key);
     const entry = {
       sessionId: sid,
       startedAt: Number(state.startedAt || prev.startedAt || Date.now()),
       updatedAt: Date.now(),
-      disconnected: state.disconnected === true || prev.disconnected === true,
-      streamId: state.streamId ? String(state.streamId) : String(prev.streamId || ''),
-      runtimeId: state.runtimeId ? String(state.runtimeId) : String(prev.runtimeId || ''),
-      lastSeq: Math.max(
-        Math.max(0, Math.floor(Number(prev.lastSeq || 0)) || 0),
-        Math.max(0, Math.floor(Number(state.lastSeq || 0)) || 0),
-      ),
+      disconnected: has('disconnected') ? state.disconnected === true : prev.disconnected === true,
+      streamId: has('streamId') ? String(state.streamId || '') : String(prev.streamId || ''),
+      runtimeId: has('runtimeId') ? String(state.runtimeId || '') : String(prev.runtimeId || ''),
+      lastSeq: has('lastSeq')
+        ? Math.max(0, Math.floor(Number(state.lastSeq || 0)) || 0)
+        : Math.max(0, Math.floor(Number(prev.lastSeq || 0)) || 0),
     };
     runs[sid] = entry;
     localStorage.setItem(PM_MOBILE_ACTIVE_RUNS_KEY, JSON.stringify(runs));
@@ -1046,6 +1233,8 @@ function _makeMobileQueuedPrompt(message, files = [], options = {}) {
     message: String(message || '').trim(),
     files: Array.isArray(files) ? files.slice() : [],
     excludedSkillIds: Array.isArray(options.excludedSkillIds) ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
+    selectedSkillIds: _pmNormalizeSelectedSkillIds(options.selectedSkillIds || options.forcedSkillIds || options.matchedSkillIds),
+    selectedSkillRefs: _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills),
     createdAt: Date.now(),
   };
 }
@@ -1057,6 +1246,8 @@ function _moveMobileQueuedPromptToComposer(sessionId, index) {
   const item = queue.splice(index, 1)[0] || {};
   const input = document.getElementById('pm-composer-input');
   if (input) {
+    pmSelectedComposerSkillIds = _pmNormalizeSelectedSkillIds(item.selectedSkillIds || item.forcedSkillIds || item.matchedSkillIds);
+    pmSelectedComposerSkills = _pmNormalizeSelectedComposerSkillRefs(item.selectedSkillRefs || item.selectedSkills);
     input.value = String(item.message || '').trim();
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.focus();
@@ -1188,32 +1379,44 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
   }
   panel.hidden = false;
   panel.innerHTML = `
-    <div class="pm-mobile-queued-head"><b aria-label="${queue.length} queued prompt${queue.length === 1 ? '' : 's'}">${queue.length}</b></div>
     <div class="pm-mobile-queued-list">
       ${queue.map((item, index) => `
         <div class="pm-mobile-queued-item">
           <button type="button" class="pm-mobile-queued-text" data-edit-mobile-queued="${index}" aria-label="Edit queued prompt">${escapeHtml(String(item.message || 'Attached file(s)').slice(0, 140))}${Array.isArray(item.files) && item.files.length ? ` <em>+${item.files.length}</em>` : ''}</button>
           <div class="pm-mobile-queued-actions">
-            <button type="button" class="pm-mobile-queued-icon pm-mobile-queued-steer" data-steer-mobile-queued="${index}" aria-label="Steer queued prompt" title="Steer">${ICONS.send}</button>
-            <button type="button" class="pm-mobile-queued-icon pm-mobile-queued-remove" data-remove-mobile-queued="${index}" aria-label="Remove queued prompt" title="Remove">${ICONS.trash}</button>
+            <div class="pm-mobile-queued-menu-wrap">
+              <button type="button" class="pm-mobile-queued-icon pm-mobile-queued-menu-trigger" data-toggle-mobile-queued-menu="${index}" aria-label="Queued prompt actions" title="Actions">${ICONS.dots}</button>
+              <div class="pm-mobile-queued-popover" data-mobile-queued-menu="${index}" hidden>
+                <button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-steer" data-steer-mobile-queued="${index}">${ICONS.target}<span>Steer</span></button>
+                <button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-remove" data-remove-mobile-queued="${index}">${ICONS.trash}<span>Delete</span></button>
+              </div>
+            </div>
           </div>
         </div>
       `).join('')}
     </div>`;
+  _ensureMobileQueuedPromptMenuDismiss();
   panel.querySelectorAll('[data-edit-mobile-queued]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    attachMobileButtonHaptic(btn, () => {
       const idx = Number(btn.getAttribute('data-edit-mobile-queued'));
       _moveMobileQueuedPromptToComposer(sid, idx);
     });
   });
+  panel.querySelectorAll('[data-toggle-mobile-queued-menu]').forEach((btn) => {
+    attachMobileButtonHaptic(btn, () => {
+      const idx = Number(btn.getAttribute('data-toggle-mobile-queued-menu'));
+      _toggleMobileQueuedPromptMenu(panel, idx);
+    });
+  });
   panel.querySelectorAll('[data-steer-mobile-queued]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    attachMobileButtonHaptic(btn, () => {
       const idx = Number(btn.getAttribute('data-steer-mobile-queued'));
+      _closeMobileQueuedPromptMenus(panel);
       _steerMobileQueuedPrompt(sid, idx);
     });
   });
   panel.querySelectorAll('[data-remove-mobile-queued]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    attachMobileButtonHaptic(btn, () => {
       const idx = Number(btn.getAttribute('data-remove-mobile-queued'));
       if (Number.isInteger(idx) && idx >= 0 && idx < queue.length) {
         queue.splice(idx, 1);
@@ -1224,12 +1427,57 @@ function _renderMobileQueuedPromptsPanel(sessionId = '') {
   try { window.__pmMobileQueuedPromptsChanged?.(); } catch {}
 }
 
+function _closeMobileQueuedPromptMenus(root = document) {
+  root?.querySelectorAll?.('.pm-mobile-queued-popover:not([hidden])').forEach((menu) => {
+    menu.hidden = true;
+  });
+}
+
+function _toggleMobileQueuedPromptMenu(panel, index) {
+  if (!Number.isInteger(index)) return;
+  const menu = panel?.querySelector?.(`[data-mobile-queued-menu="${index}"]`);
+  if (!menu) return;
+  const nextOpen = !!menu.hidden;
+  _closeMobileQueuedPromptMenus(panel);
+  menu.hidden = !nextOpen;
+}
+
+function _ensureMobileQueuedPromptMenuDismiss() {
+  if (document.body?.dataset.pmMobileQueuedMenuDismiss === '1') return;
+  if (document.body) document.body.dataset.pmMobileQueuedMenuDismiss = '1';
+  document.addEventListener('pointerdown', (event) => {
+    const target = event.target;
+    if (target?.closest?.('.pm-mobile-queued-menu-wrap')) return;
+    _closeMobileQueuedPromptMenus(document);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') _closeMobileQueuedPromptMenus(document);
+  });
+}
+
 function _findLatestAssistantTurn(thread) {
   const list = Array.isArray(thread) ? thread : [];
   for (let i = list.length - 1; i >= 0; i -= 1) {
     if (list[i]?.role === 'ai') return list[i];
   }
   return null;
+}
+
+function _mobileHistoryHasCompletedTurnSince(history, startedAt = 0, options = {}) {
+  if (String(options?.activeRunKind || '').trim() === 'main_chat_goal') return false;
+  const list = Array.isArray(history) ? history : [];
+  const start = Math.max(0, Number(startedAt || 0) || 0);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const msg = list[i];
+    const role = String(msg?.role || '').toLowerCase();
+    if (role === 'user') return false;
+    if (role !== 'assistant' && role !== 'ai') continue;
+    const content = String(msg?.content || msg?.body?.text || '').trim();
+    if (!content) continue;
+    const ts = Math.max(0, Number(msg?.timestamp || msg?.workEndedAt || msg?.workStartedAt || 0) || 0);
+    if (!start || !ts || ts >= start - 5000) return true;
+  }
+  return false;
 }
 
 function _mobileAssistantContentKey(msg) {
@@ -1249,6 +1497,77 @@ function _mobileAssistantRichnessScore(msg) {
     Array.isArray(msg.productCarousel?.items) ? msg.productCarousel.items.length : 0,
     Array.isArray(msg.fileChanges?.files) ? msg.fileChanges.files.length : 0,
   ].reduce((sum, value) => sum + value, 0);
+}
+
+function _mobileAssistantTurnIdentity(msg, index = -1, thread = null) {
+  if (!_isMobileAssistantMessage(msg)) return '';
+  const clientRequestId = String(msg?._clientRequestId || '').trim();
+  if (clientRequestId) return `cid:${clientRequestId}`;
+  const text = _mobileMessageCopyText(msg).replace(/\s+/g, ' ').trim().toLowerCase();
+  let prompt = '';
+  if (Array.isArray(thread)) {
+    for (let i = Math.min(Number(index) || 0, thread.length - 1) - 1; i >= 0; i -= 1) {
+      if (String(thread[i]?.role || '') === 'user') {
+        prompt = _mobileMessageCopyText(thread[i]).replace(/\s+/g, ' ').trim().toLowerCase();
+        break;
+      }
+    }
+  }
+  if (prompt && text) return `prompt:${prompt.slice(0, 260)}|answer:${text.slice(0, 260)}`;
+  if (text) return `answer:${text.slice(0, 360)}`;
+  const startedAt = Number(msg?.workStartedAt || msg?.startedAt || msg?.timestamp || 0) || 0;
+  return startedAt ? `started:${Math.round(startedAt / 1000)}` : '';
+}
+
+function _rememberMobileCompletedAssistantTurn(sessionId, message) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || !_isMobileAssistantMessage(message)) return;
+  const thread = __pmChat.threads?.[sid];
+  const index = Array.isArray(thread) ? thread.indexOf(message) : -1;
+  const key = _mobileAssistantTurnIdentity(message, index, thread);
+  if (!key) return;
+  if (!__pmChat.completedAssistantTurns || typeof __pmChat.completedAssistantTurns !== 'object') {
+    __pmChat.completedAssistantTurns = {};
+  }
+  __pmChat.completedAssistantTurns[sid] = {
+    key,
+    at: Date.now(),
+    turn: JSON.parse(JSON.stringify({
+      ...message,
+      streaming: false,
+    })),
+  };
+}
+
+function _mergeMobilePinnedCompletedTurn(sessionId, nextThread) {
+  const sid = String(sessionId || '').trim();
+  const pin = sid ? __pmChat.completedAssistantTurns?.[sid] : null;
+  if (!pin?.turn || Date.now() - Number(pin.at || 0) > 30_000) return nextThread;
+  const list = Array.isArray(nextThread) ? nextThread : [];
+  const pinned = pin.turn;
+  let best = -1;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const msg = list[i];
+    if (!_isMobileAssistantMessage(msg)) continue;
+    const key = _mobileAssistantTurnIdentity(msg, i, list);
+    if (key && key === pin.key) {
+      best = i;
+      break;
+    }
+    const msgText = _mobileMessageCopyText(msg).replace(/\s+/g, ' ').trim();
+    const pinText = _mobileMessageCopyText(pinned).replace(/\s+/g, ' ').trim();
+    if (msgText && pinText && msgText === pinText) {
+      best = i;
+      break;
+    }
+  }
+  if (best >= 0) {
+    _mergeMobileAssistantTurnDetails(list[best], pinned);
+    list[best].streaming = false;
+    return list;
+  }
+  list.push(pinned);
+  return list;
 }
 
 function _mergeMobileAssistantTurnDetails(target, source) {
@@ -1301,16 +1620,54 @@ function _mergeMobileAssistantTurnDetails(target, source) {
       : Number(source.workDurationMs);
   }
   target.timestamp = Math.min(Number(target.timestamp || Date.now()), Number(source.timestamp || Date.now()));
+  const targetHasAnswer = _mobileAssistantHasVisibleAnswer(target);
+  const sourceHasAnswer = _mobileAssistantHasVisibleAnswer(source);
+  const canInheritStreaming = !(targetHasAnswer && !sourceHasAnswer);
   target.streaming = target.streaming === true || (
     source.streaming === true
+    && canInheritStreaming
     && !target.workEndedAt
     && !Number.isFinite(Number(target.workDurationMs))
   );
   return target;
 }
 
+function _mobileAssistantHasVisibleAnswer(msg) {
+  return !!String(msg?.body?.text || msg?.content || msg?.text || '').trim();
+}
+
+function _pruneMobileStaleStreamingTraceTurns(thread = _activeMobileThread()) {
+  const list = Array.isArray(thread) ? thread : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const msg = list[i];
+    if (!_isMobileAssistantMessage(msg) || msg.streaming !== true || _mobileAssistantHasVisibleAnswer(msg)) continue;
+    let previousAssistantIndex = -1;
+    let blockedByUser = false;
+    for (let j = i - 1; j >= 0; j -= 1) {
+      const prev = list[j];
+      if (prev?.role === 'user') {
+        blockedByUser = true;
+        break;
+      }
+      if (_isMobileAssistantMessage(prev)) {
+        previousAssistantIndex = j;
+        break;
+      }
+    }
+    if (blockedByUser || previousAssistantIndex < 0) continue;
+    const previous = list[previousAssistantIndex];
+    if (previous.streaming === true || !_mobileAssistantHasVisibleAnswer(previous)) continue;
+    _mergeMobileAssistantTurnDetails(previous, msg);
+    previous.streaming = false;
+    list.splice(i, 1);
+    i -= 1;
+  }
+  return list;
+}
+
 function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
   const list = Array.isArray(thread) ? thread : [];
+  _pruneMobileStaleStreamingTraceTurns(list);
   const seen = new Map();
   for (let i = 0; i < list.length; i += 1) {
     const msg = list[i];
@@ -1394,10 +1751,128 @@ function _renderMobileWorkTimer(msg, opts = {}) {
 function _renderMobileMarkdown(text) {
   const raw = String(text || '');
   if (!raw.trim()) return '';
+  if (typeof window !== 'undefined' && (!window.marked || typeof window.marked.parse !== 'function')) {
+    Promise.resolve(window.__PROM_EXTERNAL_LIBS_READY || null)
+      .then(() => {
+        if (window.marked && typeof window.marked.parse === 'function') {
+          try { renderThreadNow(); } catch {}
+        }
+      })
+      .catch(() => {});
+  }
   try {
     return renderMd(raw);
   } catch {
     return escapeHtml(raw).replace(/\n/g, '<br>');
+  }
+}
+
+function _renderMobileSkillReferencedMarkdown(text, refs = []) {
+  let html = _renderMobileMarkdown(text);
+  const normalizedRefs = _pmNormalizeSelectedComposerSkillRefs(refs)
+    .sort((a, b) => String(b.title || '').length - String(a.title || '').length);
+  for (const ref of normalizedRefs) {
+    const title = String(ref.title || '').trim();
+    if (!title) continue;
+    const escapedTitle = escapeHtml(title);
+    const replacement = `<button type="button" class="pm-inline-skill-token" data-pm-skill-ref="${escapeHtml(ref.id || title)}" data-pm-skill-title="${escapedTitle}"><span class="pm-inline-skill-token-icon" aria-hidden="true"></span>${escapedTitle}</button>`;
+    html = html.split(escapedTitle).join(replacement);
+  }
+  for (const item of _pmSortedSlashCommandTokens()) {
+    const command = String(item.command || '').trim();
+    if (!command) continue;
+    const escapedCommand = escapeHtml(command);
+    const replacement = `<span class="pm-inline-command-token"><span class="pm-inline-skill-token-icon" aria-hidden="true"></span>${escapedCommand}</span>`;
+    html = html.split(escapedCommand).join(replacement);
+  }
+  return html;
+}
+
+function _pmSkillExcerpt(value, max = 760) {
+  const text = String(value || '')
+    .replace(/^---[\s\S]*?---\s*/m, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#>*_`~\[\]()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return 'No skill instructions preview available.';
+  return text.length > max ? `${text.slice(0, max).trim()}...` : text;
+}
+
+async function _pmResolveSkillIdForPopover(id, title) {
+  const direct = String(id || '').trim();
+  if (direct) return direct;
+  _pmEnsureSkillTriggerCacheLoaded();
+  const wanted = String(title || '').trim().toLowerCase();
+  const skills = Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [];
+  const match = skills.find((skill) => String(skill.name || '').trim().toLowerCase() === wanted)
+    || skills.find((skill) => String(skill.id || '').trim().toLowerCase() === wanted);
+  return String(match?.id || '').trim();
+}
+
+async function _pmShowSkillReferencePopover(id, title) {
+  const skillId = await _pmResolveSkillIdForPopover(id, title);
+  const label = String(title || skillId || 'Skill').trim();
+  document.getElementById('pm-skill-ref-popover')?.remove();
+  const host = el(`
+    <div class="pm-skill-ref-popover" id="pm-skill-ref-popover" role="dialog" aria-modal="true" aria-label="Skill details">
+      <div class="pm-skill-ref-scrim" data-skill-ref-close></div>
+      <section class="pm-skill-ref-panel">
+        <button type="button" class="pm-skill-ref-close" data-skill-ref-close aria-label="Close">&times;</button>
+        <div class="pm-skill-ref-loading">Loading ${escapeHtml(label)}...</div>
+      </section>
+    </div>
+  `);
+  document.body.appendChild(host);
+  const panel = host.querySelector('.pm-skill-ref-panel');
+  const close = () => host.remove();
+  host.querySelectorAll('[data-skill-ref-close]').forEach((node) => node.addEventListener('click', close));
+  try {
+    if (!skillId) throw new Error('Skill metadata is unavailable for this message.');
+    const data = await mobileGatewayFetch(`/api/hub/skills/${encodeURIComponent(skillId)}/content`);
+    const skill = data?.skill || {};
+    const resources = Array.isArray(skill.resources) ? skill.resources : [];
+    panel.innerHTML = `
+      <button type="button" class="pm-skill-ref-close" data-skill-ref-close aria-label="Close">&times;</button>
+      <div class="pm-skill-ref-kicker">Skill</div>
+      <h3>${escapeHtml(skill.name || label)}</h3>
+      <p class="pm-skill-ref-desc">${escapeHtml(skill.description || 'No description available.')}</p>
+      <div class="pm-skill-ref-section">
+        <strong>SKILL.md Preview</strong>
+        <p>${escapeHtml(_pmSkillExcerpt(skill.content || ''))}</p>
+      </div>
+      <div class="pm-skill-ref-section">
+        <strong>Reference Files</strong>
+        ${resources.length ? `<div class="pm-skill-ref-resources">${resources.slice(0, 12).map((resource) => {
+          const path = String(resource?.path || '').trim();
+          return `<button type="button" class="pm-skill-ref-resource" data-skill-resource-path="${escapeHtml(path)}">${escapeHtml(path || 'resource')}</button>`;
+        }).join('')}</div>` : '<p>No reference files listed.</p>'}
+      </div>
+      <div class="pm-skill-ref-resource-preview" id="pm-skill-ref-resource-preview" hidden></div>
+    `;
+    panel.querySelectorAll('[data-skill-ref-close]').forEach((node) => node.addEventListener('click', close));
+    panel.querySelectorAll('[data-skill-resource-path]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const path = String(button.getAttribute('data-skill-resource-path') || '').trim();
+        const preview = panel.querySelector('#pm-skill-ref-resource-preview');
+        if (!path || !preview) return;
+        preview.hidden = false;
+        preview.textContent = 'Loading resource...';
+        try {
+          const result = await mobileGatewayFetch(`/api/hub/skills/${encodeURIComponent(skillId)}/resources/content?path=${encodeURIComponent(path)}`);
+          preview.innerHTML = `<strong>${escapeHtml(path)}</strong><p>${escapeHtml(_pmSkillExcerpt(result?.resource?.content || '', 900))}</p>`;
+        } catch (err) {
+          preview.textContent = `Could not load ${path}: ${err?.message || err}`;
+        }
+      });
+    });
+  } catch (err) {
+    panel.innerHTML = `
+      <button type="button" class="pm-skill-ref-close" data-skill-ref-close aria-label="Close">&times;</button>
+      <h3>${escapeHtml(label)}</h3>
+      <p class="pm-skill-ref-desc">${escapeHtml(err?.message || String(err))}</p>
+    `;
+    panel.querySelectorAll('[data-skill-ref-close]').forEach((node) => node.addEventListener('click', close));
   }
 }
 
@@ -1451,8 +1926,16 @@ function _mobileProcessEntryKey(entry) {
   ].join('|');
 }
 
+function _isInternalMobileRestartProcessEntry(entry) {
+  const packetType = String(entry?.extra?.packetType || '').trim();
+  return packetType === 'hot_restart_context'
+    || packetType === 'restart_context_packet'
+    || packetType === 'runtime_recovery_context';
+}
+
 function _normalizeMobileProcessEntry(entry) {
   if (!entry || typeof entry !== 'object') return null;
+  if (_isInternalMobileRestartProcessEntry(entry)) return null;
   const text = String(entry.text || entry.content || entry.message || '').trim();
   if (!text) return null;
   return {
@@ -1479,6 +1962,48 @@ function _mergeMobileProcessEntries(message, entries) {
   if (message.processEntries.length > 500) {
     message.processEntries.splice(0, message.processEntries.length - 500);
   }
+}
+
+function _filterMobileProcessEntriesForActiveRun(entries, aiTurn, status = null, remembered = null) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (!list.length) return [];
+  const runtimeId = String(
+    status?.run?.id
+    || status?.activeRun?.id
+    || remembered?.runtimeId
+    || aiTurn?.runtimeId
+    || '',
+  ).trim();
+  const clientRequestId = String(
+    aiTurn?._clientRequestId
+    || status?.run?.clientRequestId
+    || status?.activeRun?.clientRequestId
+    || remembered?.clientRequestId
+    || '',
+  ).trim();
+  if (!runtimeId && !clientRequestId) return [];
+  return list.filter((raw) => {
+    const entry = raw && typeof raw === 'object' ? raw : {};
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const entryRuntimeId = String(
+      entry.runtimeId
+      || entry.runId
+      || extra.runtimeId
+      || extra.runId
+      || extra.activeRunId
+      || '',
+    ).trim();
+    const entryClientRequestId = String(
+      entry.clientRequestId
+      || extra.clientRequestId
+      || extra.activeRequestId
+      || '',
+    ).trim();
+    return !!(
+      (runtimeId && entryRuntimeId && entryRuntimeId === runtimeId)
+      || (clientRequestId && entryClientRequestId && entryClientRequestId === clientRequestId)
+    );
+  });
 }
 
 function _appendMobileUserProcess(message, text, extra = null) {
@@ -1554,6 +2079,66 @@ function _voiceAgentProcessEntriesFromResult(sessionId, result) {
   return out;
 }
 
+function _mobileVoiceProcessEntryTextKey(entry) {
+  return `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`;
+}
+
+function _isMobileVoiceAgentAssistantTurn(turn) {
+  if (!turn || turn.role !== 'ai') return false;
+  const source = String(turn.source || '').toLowerCase();
+  const channel = String(turn.channel || turn.channelLabel || '').toLowerCase();
+  return source.includes('voice_agent') || channel.includes('voice') || !!turn.voiceInterruptionEventId;
+}
+
+function _appendVoiceAgentProcessEntriesToTurn(turn, entries) {
+  if (!turn) return false;
+  const normalized = (Array.isArray(entries) ? entries : [])
+    .map(_normalizeVoiceAgentProcessEntry)
+    .filter(Boolean);
+  if (!normalized.length) return false;
+  turn.processEntries = Array.isArray(turn.processEntries) ? turn.processEntries : [];
+  const seen = new Set(turn.processEntries.map(_mobileVoiceProcessEntryTextKey).filter(Boolean));
+  let added = false;
+  for (const entry of normalized) {
+    const key = _mobileVoiceProcessEntryTextKey(entry);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    turn.processEntries.push(entry);
+    added = true;
+  }
+  if (!added) return false;
+  const now = Date.now();
+  turn.workStartedAt = Number(turn.workStartedAt || turn.timestamp || now) || now;
+  if (!turn.streaming && !turn.workEndedAt) turn.workEndedAt = now;
+  if (!turn.streaming) turn.workDurationMs = Math.max(0, Number(turn.workEndedAt || now) - Number(turn.workStartedAt || now));
+  return true;
+}
+
+function _attachVoiceAgentProcessEntriesToMobileTurn(sessionId, entries) {
+  const sid = String(sessionId || '').trim();
+  const normalized = (Array.isArray(entries) ? entries : [])
+    .map(_normalizeVoiceAgentProcessEntry)
+    .filter(Boolean);
+  if (!sid || !normalized.length) return false;
+  const thread = __pmChat.threads?.[sid];
+  let target = null;
+  if (Array.isArray(thread)) {
+    for (let i = thread.length - 1; i >= 0; i -= 1) {
+      const turn = thread[i];
+      if (turn?.role === 'user') break;
+      if (_isMobileVoiceAgentAssistantTurn(turn)) {
+        target = turn;
+        break;
+      }
+    }
+  }
+  if (!target) {
+    normalized.forEach((entry) => _rememberVoiceAgentProcessEntry(sid, entry));
+    return false;
+  }
+  return _appendVoiceAgentProcessEntriesToTurn(target, normalized);
+}
+
 function _renderMobileProcess(entries, options = {}) {
   const list = (Array.isArray(entries) ? entries : []).filter((entry) => !_isMobileImageGenerationStreamEntry(entry));
   if (!list.length) return '';
@@ -1579,16 +2164,62 @@ function _appendMobileLiveTrace(message, type, text, { append = false } = {}) {
   const content = String(text || '');
   if (!content) return;
   if (_isMobileStartupStatusText(content)) return;
+  if (_isMobileBareThinkingTraceText(content)) return;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
+  const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
+  if (!isThoughtLike) _flushMobileTraceThoughtProbe(message);
+  if (isThoughtLike && _mobileTraceShouldProbeThought(message, normalizedType, append)) {
+    const probe = message._pmTraceThoughtProbe;
+    const nextProbeText = _appendMobileStreamingText(
+      probe && probe.type === normalizedType ? String(probe.text || '') : '',
+      content,
+    );
+    message._pmTraceThoughtProbe = {
+      type: normalizedType,
+      text: nextProbeText,
+      time: probe?.time || _nowTime(),
+    };
+    if (_mobileTraceThoughtCoveredByEarlier(message, nextProbeText)) {
+      delete message._pmTraceThoughtProbe;
+      return;
+    }
+    _flushMobileTraceThoughtProbe(message);
+    return;
+  }
   const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
+  const existingThoughtText = isThoughtLike ? message.liveTraceEntries.some((entry) => {
+    const entryType = String(entry?.type || '').toLowerCase();
+    if (!_isMobileTraceThoughtType(entryType)) return false;
+    return _mobileTraceThoughtTextsSimilar(entry?.text || '', content);
+  }) : false;
+  if (existingThoughtText) return;
   if (append && last && last.type === normalizedType) {
-    last.text = `${last.text || ''}${content}`;
+    last.text = _appendMobileStreamingText(last.text || '', content);
+    if (isThoughtLike) {
+      last.text = _dedupeMobileTraceProseText(last.text);
+      if (_mobileTraceThoughtCoveredByEarlier(message, last.text, last)) {
+        message.liveTraceEntries.pop();
+      }
+      _compactMobileTraceThoughtEntries(message);
+    }
   } else {
     const trimmed = content.trim();
     if (!trimmed) return;
     if (last && last.type === normalizedType && String(last.text || '').trim() === trimmed) return;
-    message.liveTraceEntries.push({ type: normalizedType, text: trimmed, time: _nowTime() });
+    if (isThoughtLike && _mobileTraceThoughtCoveredByEarlier(message, trimmed)) return;
+    if (isThoughtLike) {
+      _pushMobileTraceThoughtEntry(message, normalizedType, _dedupeMobileTraceProseText(trimmed));
+      _compactMobileTraceThoughtEntries(message);
+    }
+    else {
+      message.liveTraceEntries.push({
+        id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        type: normalizedType,
+        text: trimmed,
+        time: _nowTime(),
+      });
+    }
   }
 }
 
@@ -1604,6 +2235,7 @@ function _appendMobileVisionTrace(message, evt) {
   const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
   if (last && last.type === 'vision' && String(last.text || '') === text && String(last?.preview?.dataUrl || '') === dataUrl) return;
   message.liveTraceEntries.push({
+    id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: 'vision',
     text,
     time: _nowTime(),
@@ -1611,6 +2243,123 @@ function _appendMobileVisionTrace(message, evt) {
     previewTitle: `${source} screenshot`,
     previewKey: _mobileVisionPreviewKey(dataUrl, preview),
   });
+}
+
+function _appendMobileStreamingText(existing, chunk) {
+  const leftRaw = String(existing || '');
+  const rightRaw = String(chunk || '');
+  if (!leftRaw) return rightRaw;
+  if (!rightRaw) return leftRaw;
+  if (rightRaw.startsWith(leftRaw)) return rightRaw;
+  if (leftRaw.endsWith(rightRaw)) return leftRaw;
+  const left = leftRaw.replace(/\s+$/g, '');
+  const right = rightRaw.replace(/^\s+/g, '');
+  if (!left) return rightRaw;
+  if (!right) return leftRaw;
+  if (right.startsWith(left)) return `${left}${right.slice(left.length)}`;
+  if (left.endsWith(right)) return leftRaw;
+  const max = Math.min(left.length, right.length, 240);
+  for (let len = max; len >= 4; len -= 1) {
+    if (left.slice(-len) === right.slice(0, len)) {
+      return `${left}${right.slice(len)}`;
+    }
+  }
+  return `${leftRaw}${rightRaw}`;
+}
+
+const PM_MOBILE_VISUAL_STREAM_DELAY_MS = 46;
+const PM_MOBILE_VISUAL_STREAM_CONTINUE_MS = 58;
+const PM_MOBILE_VISUAL_STREAM_MIN_CHARS = 18;
+const PM_MOBILE_VISUAL_STREAM_MAX_CHARS = 74;
+
+function _clearMobileVisualStreamTimer(message) {
+  if (!message || !message._pmVisualStreamTimer) return;
+  try { clearTimeout(message._pmVisualStreamTimer); } catch {}
+  message._pmVisualStreamTimer = 0;
+}
+
+function _mobileVisualStreamChunkLength(text, force = false) {
+  const raw = String(text || '');
+  if (!raw) return 0;
+  if (force || raw.length <= PM_MOBILE_VISUAL_STREAM_MAX_CHARS) return raw.length;
+  const max = Math.min(raw.length, PM_MOBILE_VISUAL_STREAM_MAX_CHARS);
+  const min = Math.min(PM_MOBILE_VISUAL_STREAM_MIN_CHARS, max);
+  const slice = raw.slice(0, max);
+  const newline = slice.lastIndexOf('\n');
+  const space = slice.lastIndexOf(' ');
+  const punctuation = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf(', '), slice.lastIndexOf('; '), slice.lastIndexOf(': '));
+  const boundary = Math.max(newline, space, punctuation >= 0 ? punctuation + 1 : -1);
+  return boundary >= min ? boundary + 1 : max;
+}
+
+function _flushMobileVisualStreamText(message, renderSoon = null, { force = false } = {}) {
+  if (!message) return;
+  const pending = String(message._pmVisualStreamPending || '');
+  if (!pending) {
+    _clearMobileVisualStreamTimer(message);
+    return;
+  }
+  if (!message.body || typeof message.body !== 'object') message.body = { text: '' };
+  const count = _mobileVisualStreamChunkLength(pending, force);
+  if (count <= 0) return;
+  const next = pending.slice(0, count);
+  message.finalResponseStarted = true;
+  message.body.text = `${String(message.body.text || '')}${next}`;
+  message.content = String(message._pmVisualStreamFull || message.body.text || '');
+  message._pmVisualStreamPending = pending.slice(count);
+  _clearMobileVisualStreamTimer(message);
+  if (typeof renderSoon === 'function') renderSoon();
+  if (message._pmVisualStreamPending && !force && message.streaming) {
+    message._pmVisualStreamTimer = setTimeout(() => {
+      message._pmVisualStreamTimer = 0;
+      _flushMobileVisualStreamText(message, renderSoon, { force: false });
+    }, PM_MOBILE_VISUAL_STREAM_CONTINUE_MS);
+  }
+}
+
+function _scheduleMobileVisualStreamFlush(message, renderSoon) {
+  if (!message || message._pmVisualStreamTimer) return;
+  message._pmVisualStreamTimer = setTimeout(() => {
+    message._pmVisualStreamTimer = 0;
+    _flushMobileVisualStreamText(message, renderSoon, { force: false });
+  }, PM_MOBILE_VISUAL_STREAM_DELAY_MS);
+}
+
+function _appendMobileVisualStreamToken(message, chunk, renderSoon) {
+  if (!message) return;
+  const text = String(chunk || '');
+  if (!text) return;
+  if (!message.body || typeof message.body !== 'object') message.body = { text: '' };
+  message.finalResponseStarted = true;
+  const previousFull = String(message._pmVisualStreamFull || message.body.text || '');
+  const nextFull = _appendMobileStreamingText(previousFull, text);
+  const appended = nextFull.length >= previousFull.length ? nextFull.slice(previousFull.length) : '';
+  if (!appended) return;
+  message._pmVisualStreamFull = nextFull;
+  message._pmVisualStreamPending = `${String(message._pmVisualStreamPending || '')}${appended}`;
+  message.content = String(message._pmVisualStreamFull || message.body.text || '');
+  const pending = String(message._pmVisualStreamPending || '');
+  if (pending.length >= PM_MOBILE_VISUAL_STREAM_MAX_CHARS) {
+    _flushMobileVisualStreamText(message, renderSoon, { force: false });
+  } else {
+    _scheduleMobileVisualStreamFlush(message, renderSoon);
+  }
+}
+
+function _finishMobileVisualStreamText(message, finalText = '', renderSoon = null) {
+  if (!message) return;
+  _clearMobileVisualStreamTimer(message);
+  if (!message.body || typeof message.body !== 'object') message.body = { text: '' };
+  const explicit = String(finalText || '');
+  if (explicit) {
+    message.body.text = explicit;
+    message.content = explicit;
+  } else {
+    _flushMobileVisualStreamText(message, renderSoon, { force: true });
+    message.content = String(message.body.text || message.content || '');
+  }
+  message._pmVisualStreamPending = '';
+  message._pmVisualStreamFull = '';
 }
 
 function _mobileVisionPreviewKey(dataUrl, preview = {}) {
@@ -1629,8 +2378,25 @@ function _isMobileStartupStatusText(value) {
     .test(String(value || '').trim());
 }
 
+function _isMobileBareThinkingTraceText(value) {
+  return /^thinking(?:\.\.\.)?$/i.test(String(value || '').replace(/\s+/g, ' ').trim());
+}
+
+function _mobileTraceTextLooksLikeFinalAnswer(text, finalText) {
+  const trace = String(text || '').replace(/\s+/g, ' ').trim();
+  const final = String(finalText || '').replace(/\s+/g, ' ').trim();
+  if (!trace || !final) return false;
+  if (trace === final) return true;
+  const traceLower = trace.toLowerCase();
+  const finalLower = final.toLowerCase();
+  if (trace.length >= 32 && finalLower.startsWith(traceLower)) return true;
+  if (final.length >= 32 && traceLower.startsWith(finalLower)) return true;
+  return false;
+}
+
 function _mergeMobileLiveTraceIntoProcess(message) {
   if (!message) return;
+  _flushMobileTraceThoughtProbe(message, { force: true });
   const traces = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
   if (!traces.length) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
@@ -1639,7 +2405,10 @@ function _mergeMobileLiveTraceIntoProcess(message) {
   ));
   for (const trace of traces) {
     const type = String(trace?.type || 'info').toLowerCase();
-    const text = String(trace?.text || '').trim();
+    const rawText = String(trace?.text || '').trim();
+    const text = (type === 'preamble' || type === 'think' || type === 'assistant')
+      ? _dedupeMobileTraceProseText(rawText)
+      : rawText;
     if (!text || (type !== 'preamble' && type !== 'think')) continue;
     const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
@@ -1663,7 +2432,10 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
   const liveEntries = [];
   for (const trace of traces) {
     const type = String(trace?.type || 'info').toLowerCase();
-    const text = String(trace?.text || '').trim();
+    const rawText = String(trace?.text || '').trim();
+    const text = (type === 'preamble' || type === 'think' || type === 'assistant')
+      ? _dedupeMobileTraceProseText(rawText)
+      : rawText;
     if (!text || (type !== 'preamble' && type !== 'think')) continue;
     const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
@@ -1684,18 +2456,22 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
   const finalText = String(message?.body?.text || message?.content || '').replace(/\s+/g, ' ').trim();
   const add = (entry, fallbackType = 'info') => {
     if (!entry || typeof entry !== 'object') return;
+    if (_isInternalMobileRestartProcessEntry(entry)) return;
     let type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
-    const text = String(entry.text || entry.content || entry.message || '').trim();
+    let text = String(entry.text || entry.content || entry.message || '').trim();
+    if (type === 'preamble' || type === 'think' || type === 'assistant') {
+      text = _dedupeMobileTraceProseText(text);
+    }
     const preview = entry.preview && typeof entry.preview === 'object' ? entry.preview : null;
     const previewData = String(preview?.dataUrl || entry.dataUrl || '').trim();
     if (!text && !previewData) return;
     if (text && _isMobileStartupStatusText(text)) return;
-    if (type === 'user' || /^user\s*:/i.test(text)) return;
+    if (type === 'user' || type === 'final' || /^user\s*:/i.test(text)) return;
     const normalizedText = text.replace(/\s+/g, ' ').trim();
-    if (finalText && normalizedText === finalText && !previewData) return;
+    if (_isMobileBareThinkingTraceText(normalizedText) && !previewData) return;
+    if (_mobileTraceTextLooksLikeFinalAnswer(normalizedText, finalText) && !previewData) return;
     if (type === 'process' || type === 'info') {
-      if (/^thinking(?:\.\.\.)?$/i.test(normalizedText)) type = 'think';
-      else if (!previewData) return;
+      if (!previewData) return;
     }
     const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
@@ -1714,8 +2490,54 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
   return out;
 }
 
+function _mergeMobileWorkflowTraceFromProcessEntries(message) {
+  if (!message) return false;
+  if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  const derived = _mobileWorkflowTraceEntriesForMessage({
+    ...message,
+    liveTraceEntries: [],
+  });
+  if (!derived.length) return false;
+  const traceDedupeKey = (entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim();
+    const preview = String(entry?.preview?.dataUrl || entry?.dataUrl || '').slice(0, 120);
+    const thoughtType = type === 'preamble' || type === 'think' || type === 'assistant';
+    return `${thoughtType ? 'thought' : type}|${text}|${preview}`;
+  };
+  const isThoughtTraceEntry = (entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    return type === 'preamble' || type === 'think' || type === 'assistant';
+  };
+  const existing = new Set(message.liveTraceEntries.map((entry) =>
+    traceDedupeKey(entry)
+  ));
+  const existingThoughts = message.liveTraceEntries
+    .filter(isThoughtTraceEntry)
+    .map((entry) => _dedupeMobileTraceProseText(entry?.text || entry?.content || ''))
+    .filter(Boolean);
+  let changed = false;
+  for (const entry of derived) {
+    const key = traceDedupeKey(entry);
+    if (!key || existing.has(key)) continue;
+    if (isThoughtTraceEntry(entry)) {
+      const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '');
+      if (existingThoughts.some((seen) => _mobileTraceThoughtTextsSimilar(seen, text))) continue;
+      existingThoughts.push(text);
+    }
+    existing.add(key);
+    message.liveTraceEntries.push({
+      ...entry,
+      id: entry.id || `mtrace_proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    });
+    changed = true;
+  }
+  return changed;
+}
+
 function _moveMobilePreToolAnswerIntoPreamble(message) {
   if (!message || message.toolActivityStarted) return;
+  _finishMobileVisualStreamText(message);
   const text = String(message.body?.text || message.content || '').trim();
   if (!text) return;
   _appendMobileLiveTrace(message, 'preamble', text);
@@ -1726,6 +2548,7 @@ function _moveMobilePreToolAnswerIntoPreamble(message) {
 
 function _moveMobileAnswerTextIntoTrace(message, type = 'think') {
   if (!message) return;
+  _finishMobileVisualStreamText(message);
   const text = String(message.body?.text || message.content || '').trim();
   if (!text) return;
   _appendMobileLiveTrace(message, type, text);
@@ -1741,6 +2564,7 @@ function _moveMobileVisibleAnswerIntoWorkflowTrace(message) {
 function _shouldRouteMobileTokenToLiveTrace(message) {
   if (!message || message.finalResponseStarted) return false;
   const mode = String(message.agentExecutionMode || '').trim();
+  if (message._pmRecoveryReplay === true && mode !== 'chat') return true;
   return mode !== 'chat' && !message.toolActivityStarted;
 }
 
@@ -1762,24 +2586,252 @@ function _renderMobileLiveTracePreview(entry) {
 function _normalizeMobileTraceProseText(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
+  if (/```/.test(raw)) return raw;
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length >= 5) {
-    const shortLines = lines.filter((line) => line.split(/\s+/).filter(Boolean).length <= 2).length;
-    if (shortLines / lines.length >= 0.75) return raw.replace(/\s+/g, ' ').trim();
+  if (lines.length < 5) return raw;
+
+  const isShortWrappedLine = (line) => {
+    const clean = String(line || '').trim();
+    if (!clean) return false;
+    if (/^[-*+]\s+/.test(clean) || /^\d+[.)]\s+/.test(clean)) return false;
+    if (/^#{1,6}\s+/.test(clean)) return false;
+    if (/^[,.;:!?)]$/.test(clean)) return true;
+    const words = clean.split(/\s+/).filter(Boolean);
+    return words.length <= 3 && clean.length <= 42;
+  };
+  const collapseWrappedLines = (items) => items
+    .join(' ')
+    .replace(/\s+([,.;:!?)])/g, '$1')
+    .replace(/([([{])\s+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const out = [];
+  let run = [];
+  const flushRun = () => {
+    if (!run.length) return;
+    if (run.length >= 2) out.push(collapseWrappedLines(run));
+    else out.push(...run);
+    run = [];
+  };
+  for (const line of lines) {
+    if (isShortWrappedLine(line)) {
+      run.push(line);
+    } else {
+      if (
+        run.length >= 2
+        && out.length
+        && /^[a-z0-9'"(]/.test(String(run[0] || '').trim())
+        && !/[.!?:]$/.test(String(out[out.length - 1] || '').trim())
+      ) {
+        out[out.length - 1] = collapseWrappedLines([out[out.length - 1], ...run, line]);
+        run = [];
+        continue;
+      }
+      flushRun();
+      out.push(line);
+    }
   }
-  return raw;
+  flushRun();
+  return out.join('\n').trim();
+}
+
+function _mobileTraceComparableText(value) {
+  return _normalizeMobileTraceProseText(value)
+    .replace(/\s+/g, ' ')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .trim()
+    .toLowerCase();
+}
+
+function _mobileTraceThoughtTextsSimilar(a, b) {
+  const left = _mobileTraceComparableText(a);
+  const right = _mobileTraceComparableText(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) >= 40 && (left.includes(right) || right.includes(left))) return true;
+  const leftTokens = new Set(left.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
+  const rightTokens = new Set(right.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
+  const smaller = Math.min(leftTokens.size, rightTokens.size);
+  if (smaller < 8) return false;
+  let overlap = 0;
+  leftTokens.forEach((token) => { if (rightTokens.has(token)) overlap += 1; });
+  return overlap / smaller >= 0.72;
+}
+
+function _isMobileTraceThoughtFragmentText(value) {
+  const raw = String(value || '').trim();
+  const comparable = _mobileTraceComparableText(raw);
+  if (!comparable) return true;
+  const words = comparable.split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  if (words.length <= 2 && comparable.length <= 24) return true;
+  if (words.length <= 5 && comparable.length <= 64) return true;
+  if (/[.!?]\s*$/.test(raw) || /\n\s*\n/.test(raw)) return false;
+  return false;
+}
+
+function _compactMobileTraceThoughtEntries(message) {
+  const entries = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+  if (entries.length < 2) return false;
+  const kept = [];
+  let changed = false;
+  for (const entry of entries) {
+    if (!_isMobileTraceThoughtType(entry?.type)) {
+      kept.push(entry);
+      continue;
+    }
+    const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '');
+    const comparable = _mobileTraceComparableText(text);
+    if (!comparable) {
+      changed = true;
+      continue;
+    }
+    if (_isMobileTraceThoughtFragmentText(text)) {
+      changed = true;
+      continue;
+    }
+    const existingIndex = kept.findIndex((candidate) => {
+      if (!_isMobileTraceThoughtType(candidate?.type)) return false;
+      const existing = _mobileTraceComparableText(candidate?.text || candidate?.content || '');
+      if (!existing) return false;
+      return existing === comparable
+        || (Math.min(existing.length, comparable.length) >= 18 && (existing.includes(comparable) || comparable.includes(existing)))
+        || _mobileTraceThoughtTextsSimilar(existing, comparable);
+    });
+    if (existingIndex >= 0) {
+      const existing = kept[existingIndex];
+      const existingText = _dedupeMobileTraceProseText(existing?.text || existing?.content || '');
+      const existingComparable = _mobileTraceComparableText(existingText);
+      if (comparable.length > existingComparable.length && comparable.includes(existingComparable)) {
+        kept[existingIndex] = { ...entry, text };
+      }
+      changed = true;
+      continue;
+    }
+    kept.push({ ...entry, text });
+  }
+  if (changed) message.liveTraceEntries = kept;
+  return changed;
+}
+
+function _isMobileTraceThoughtType(type) {
+  const value = String(type || '').toLowerCase();
+  return value === 'preamble' || value === 'think' || value === 'assistant';
+}
+
+function _mobileTraceThoughtCoveredByEarlier(message, text, excludeEntry = null) {
+  const candidate = _mobileTraceComparableText(text);
+  if (!message || !candidate) return false;
+  const candidateWords = candidate.split(/\s+/).filter(Boolean).length;
+  const canUseContainedTail = candidate.length >= 18 && candidateWords >= 3;
+  const canUseSimilarity = candidate.length >= 36;
+  if (!canUseContainedTail && !canUseSimilarity) return false;
+  const entries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
+  return entries.some((entry) => {
+    if (!entry || entry === excludeEntry) return false;
+    if (!_isMobileTraceThoughtType(entry.type)) return false;
+    const existing = _mobileTraceComparableText(entry.text || entry.content || '');
+    if (!existing || existing === candidate) return !!existing;
+    if (canUseContainedTail && existing.length >= candidate.length && existing.includes(candidate)) return true;
+    return canUseSimilarity && _mobileTraceThoughtTextsSimilar(existing, candidate);
+  });
+}
+
+function _mobileTraceShouldProbeThought(message, type, append) {
+  if (!message || !append || !_isMobileTraceThoughtType(type)) return false;
+  const entries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
+  const last = entries[entries.length - 1];
+  if (last && String(last.type || '').toLowerCase() === String(type || '').toLowerCase()) return false;
+  if (!entries.some((entry) => _isMobileTraceThoughtType(entry?.type))) return false;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const hasContent = String(entry.text || entry.content || '').trim()
+      || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim();
+    if (!hasContent) continue;
+    return !_isMobileTraceThoughtType(entry.type);
+  }
+  return false;
+}
+
+function _pushMobileTraceThoughtEntry(message, type, text, time = '') {
+  const trimmed = String(text || '').trim();
+  if (!message || !trimmed) return null;
+  if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  const entry = {
+    id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: String(type || 'preamble').toLowerCase(),
+    text: trimmed,
+    time: String(time || _nowTime()),
+  };
+  message.liveTraceEntries.push(entry);
+  return entry;
+}
+
+function _flushMobileTraceThoughtProbe(message, { force = false } = {}) {
+  const probe = message?._pmTraceThoughtProbe;
+  if (!message || !probe || !probe.text) return false;
+  const type = String(probe.type || 'think').toLowerCase();
+  const text = String(probe.text || '');
+  delete message._pmTraceThoughtProbe;
+  if (_mobileTraceThoughtCoveredByEarlier(message, text)) return false;
+  const comparable = _mobileTraceComparableText(text);
+  const ready = force || comparable.length >= 48 || /[.!?]\s*$/.test(text) || /\n\s*\n/.test(text);
+  if (!ready) {
+    message._pmTraceThoughtProbe = { type, text, time: probe.time || _nowTime() };
+    return false;
+  }
+  _pushMobileTraceThoughtEntry(message, type, _dedupeMobileTraceProseText(text), probe.time || _nowTime());
+  return true;
+}
+
+function _dedupeMobileTraceProseText(value) {
+  const normalized = _normalizeMobileTraceProseText(value);
+  if (!normalized || /```/.test(normalized)) return normalized;
+  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 3) return normalized;
+  const isTitleLike = (line) => {
+    const clean = String(line || '').replace(/^[#*_`\s]+|[*_`\s]+$/g, '').trim();
+    if (!clean || clean.length > 96 || /[.!?]$/.test(clean)) return false;
+    const words = clean.split(/\s+/).filter(Boolean);
+    return words.length > 0 && words.length <= 9;
+  };
+  for (let i = 0; i < lines.length - 2; i += 1) {
+    if (!isTitleLike(lines[i])) continue;
+    const titleKey = _mobileTraceComparableText(lines[i]);
+    if (!titleKey) continue;
+    for (let j = i + 2; j < lines.length; j += 1) {
+      const repeatedLineKey = _mobileTraceComparableText(lines[j]);
+      if (repeatedLineKey !== titleKey && !repeatedLineKey.startsWith(`${titleKey} `)) continue;
+      const firstBlock = lines.slice(i, j).join('\n');
+      const duplicateTail = lines.slice(j).join('\n');
+      const firstComparable = _mobileTraceComparableText(firstBlock);
+      const tailComparable = _mobileTraceComparableText(duplicateTail);
+      if (!tailComparable) continue;
+      if (
+        _mobileTraceThoughtTextsSimilar(firstBlock, duplicateTail)
+        || (tailComparable.length >= titleKey.length && firstComparable.startsWith(tailComparable))
+      ) {
+        return lines.slice(0, j).join('\n').trim();
+      }
+    }
+  }
+  return normalized;
 }
 
 function _renderMobileLiveTraceEntry(entry) {
   const type = String(entry.type || 'info').toLowerCase();
   const text = String(entry.text || '').trim();
+  const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.time || entry.ts || '')}`).trim();
+  const attr = entryId ? ` data-pm-live-entry-id="${escapeHtml(entryId)}"` : '';
   const previewHtml = _renderMobileLiveTracePreview(entry);
   if (type === 'preamble' || type === 'think' || type === 'assistant') {
-    return `<div class="pm-live-prose ${escapeHtml(type)}"><div class="pm-live-md">${_renderMobileMarkdown(_normalizeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
+    return `<div class="pm-live-prose ${escapeHtml(type)}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
   }
   const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
   const body = text ? `<div class="pm-live-text">${escapeHtml(text)}</div>` : '';
-  return `<div class="pm-live-segment ${escapeHtml(type)}"><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
+  return `<div class="pm-live-segment ${escapeHtml(type)}"${attr}><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
 }
 
 function _isMobilePreparedTraceEntry(entry) {
@@ -1789,11 +2841,30 @@ function _isMobilePreparedTraceEntry(entry) {
 }
 
 function _mobileVisibleTraceEntries(entries) {
-  return (Array.isArray(entries) ? entries : []).filter((entry) =>
-    !_isMobileImageGenerationStreamEntry(entry)
-    && !_isMobilePreparedTraceEntry(entry)
-    && (String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim())
-  );
+  const thoughtTexts = [];
+  return (Array.isArray(entries) ? entries : []).filter((entry) => {
+    if (_isMobileImageGenerationStreamEntry(entry)) return false;
+    if (_isMobilePreparedTraceEntry(entry)) return false;
+    if (_isMobileBareThinkingTraceText(entry?.text)) return false;
+    const hasContent = String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim();
+    if (!hasContent) return false;
+    const type = String(entry?.type || '').toLowerCase();
+    if (_isMobileTraceThoughtType(type)) {
+      const text = _dedupeMobileTraceProseText(entry?.text || '');
+      if (text) {
+        if (_isMobileTraceThoughtFragmentText(text)) return false;
+        const comparable = _mobileTraceComparableText(text);
+        const words = comparable.split(/\s+/).filter(Boolean).length;
+        if (thoughtTexts.some((seen) => {
+          const seenComparable = _mobileTraceComparableText(seen);
+          return _mobileTraceThoughtTextsSimilar(seen, text)
+            || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
+        })) return false;
+        thoughtTexts.push(text);
+      }
+    }
+    return true;
+  });
 }
 
 function _renderMobileLiveTrace(entries) {
@@ -1846,27 +2917,102 @@ function _mobileTraceToolLabel(text) {
     .trim();
 }
 
+function _mobileTraceToolAction(label, entryType = '') {
+  const raw = String(label || '').replace(/\s+/g, ' ').trim();
+  const text = raw.toLowerCase();
+  const type = String(entryType || '').toLowerCase();
+  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(text)) {
+    return { key: 'screenshot', one: 'viewed screenshot', many: 'viewed screenshots', style: 'noun' };
+  }
+  if (/\b(skill read|read skill|skill list|list skills|skill search|skill match)\b/.test(text)) {
+    return { key: 'skill', one: 'read skill', many: 'read skills', style: 'noun' };
+  }
+  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(text)) {
+    return { key: 'fileSearch', one: 'searched files', many: 'searched files', style: 'times' };
+  }
+  if (/\b(read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(text)) {
+    return { key: 'fileRead', one: 'read file', many: 'read files', style: 'noun' };
+  }
+  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(text)) {
+    return { key: 'webSearch', one: 'searched web', many: 'searched web', style: 'times' };
+  }
+  if (/\b(browser click|clicked?|tap|tapped)\b/.test(text)) {
+    return { key: 'click', one: 'clicked', many: 'clicked', style: 'times' };
+  }
+  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(text)) {
+    return { key: 'scroll', one: 'scrolled', many: 'scrolled', style: 'times' };
+  }
+  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(text)) {
+    return { key: 'page', one: 'opened page', many: 'opened pages', style: 'noun' };
+  }
+  if (/\b(shell|powershell|command|terminal|run command|exec|cmd\.exe)\b/.test(text)) {
+    return { key: 'command', one: 'ran command', many: 'ran commands', style: 'noun' };
+  }
+  if (/\b(apply patch|edited?|update file|create file|delete file|write file)\b/.test(text)) {
+    return { key: 'edit', one: 'edited file', many: 'edited files', style: 'noun' };
+  }
+  if (/\b(approval|approve|permission)\b/.test(text)) {
+    return { key: 'approval', one: 'requested approval', many: 'requested approvals', style: 'noun' };
+  }
+  return { key: `tool:${raw || 'tool'}`, one: raw || 'used tool', many: raw || 'used tools', style: 'tool' };
+}
+
+function _mobileTraceCountPhrase(count) {
+  if (count === 1) return 'once';
+  if (count === 2) return 'twice';
+  return `${count} times`;
+}
+
+function _mobileTraceToolActionText(action, count) {
+  const total = Math.max(1, Number(count || 0) || 1);
+  if (action.style === 'times') return `${total === 1 ? action.one : action.many} ${_mobileTraceCountPhrase(total)}`;
+  if (action.style === 'tool') return total === 1 ? action.one : `${action.many} x${total}`;
+  return `${total === 1 ? action.one : action.many.replace(/^(\w+)\s+/, `$1 ${total} `)}`;
+}
+
+function _mobileTraceJoinSummaryParts(parts) {
+  if (!parts.length) return '';
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
 function _mobileTraceToolSummary(entries) {
-  const list = Array.isArray(entries) ? entries : [];
+  const list = _mobileVisibleTraceEntries(entries);
   const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision'].includes(String(entry?.type || '').toLowerCase()));
-  const labels = [...new Set(toolish.map((entry) => _mobileTraceToolLabel(entry.text)).filter(Boolean))];
+  const calls = toolish.filter((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    return type === 'tool' || type === 'vision';
+  });
+  const source = calls.length ? calls : toolish;
+  const actionCounts = new Map();
+  source.forEach((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    const label = _mobileTraceToolLabel(entry.text);
+    if (!label && type !== 'vision') return;
+    const action = _mobileTraceToolAction(label, type);
+    const existing = actionCounts.get(action.key);
+    if (existing) existing.count += 1;
+    else actionCounts.set(action.key, { ...action, count: 1 });
+  });
   const errors = [...new Set(list
     .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
     .map((entry) => _mobileTraceToolLabel(entry.text))
     .filter(Boolean))].length;
-  const logicalCount = Math.max(labels.length, errors || 0, toolish.length ? 1 : 0);
   if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
-  if (labels.length === 1) {
-    const count = logicalCount;
-    return `${labels[0]}${count > 1 ? ` x${count}` : ''}`;
+  const actions = [...actionCounts.values()].sort((a, b) => b.count - a.count);
+  if (actions.length) {
+    const summary = _mobileTraceJoinSummaryParts(actions.slice(0, 3).map((action) => _mobileTraceToolActionText(action, action.count)));
+    return summary.charAt(0).toUpperCase() + summary.slice(1);
   }
-  const count = logicalCount || list.length;
-  return `Ran ${count} tool${count === 1 ? '' : 's'}`;
+  const count = toolish.length || list.length;
+  return `Used ${count} tool${count === 1 ? '' : 's'}`;
 }
 
 function _renderMobileGroupedTrace(entries, { streaming = false } = {}) {
   const groups = _mobileTraceGroups(entries);
   if (!groups.length) return '';
+  if (!streaming && !groups.some((group) => group.kind === 'tools' && group.entries.length > 0)) return '';
   const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
   return `<div class="pm-trace-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
@@ -1982,8 +3128,7 @@ function _collectMessageMedia(m) {
   const fromImages = _collectMessageGeneratedImages(m);
   const fromVideos = _collectMessageGeneratedVideos(m);
   const fromFiles = _normalizeMobileMediaList(b.files || m.files);
-  const fromArtifacts = _normalizeMobileMediaList((Array.isArray(m.artifacts) ? m.artifacts : []).flatMap((a) => [a?.path, a?.to_path, a?.from_path].filter(Boolean)));
-  return _dedupeMobileMediaList([...fromImages, ...fromVideos, ...fromFiles, ...fromArtifacts]);
+  return _dedupeMobileMediaList([...fromImages, ...fromVideos, ...fromFiles]);
 }
 
 function _mergeMobileMediaIntoMessage(message, items) {
@@ -2061,11 +3206,34 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
     _mergeMobileMediaIntoMessage(nextLatest, _collectMessageMedia(localLatest));
     _mergeMobileProductCarouselIntoMessage(nextLatest, localLatest.productCarousel);
   }
+  const previousUserTextBefore = (list, index) => {
+    for (let i = Math.min(Number(index) || 0, list.length - 1) - 1; i >= 0; i -= 1) {
+      if (String(list[i]?.role || '') === 'user') {
+        return _mobileMessageCopyText(list[i]).replace(/\s+/g, ' ').trim().toLowerCase();
+      }
+    }
+    return '';
+  };
+  const hasCompletedServerTurnForLocalAssistant = (candidate) => {
+    if (!candidate || String(candidate.role || '') !== 'ai') return false;
+    if (candidate.streaming !== true && !String(candidate._clientRequestId || '').trim()) return false;
+    const candidateIndex = local.indexOf(candidate);
+    const localPrompt = previousUserTextBefore(local, candidateIndex);
+    const candidateStartedAt = Number(candidate.workStartedAt || candidate.startedAt || candidate.timestamp || 0) || 0;
+    return next.some((msg, index) => {
+      if (!msg || String(msg.role || '') !== 'ai' || msg.streaming === true || !_mobileAssistantHasVisibleAnswer(msg)) return false;
+      const nextPrompt = previousUserTextBefore(next, index);
+      if (localPrompt && nextPrompt && localPrompt === nextPrompt) return true;
+      const serverStartedAt = Number(msg.workStartedAt || msg.startedAt || msg.timestamp || 0) || 0;
+      return !!candidateStartedAt && !!serverStartedAt && Math.abs(candidateStartedAt - serverStartedAt) < 30_000;
+    });
+  };
   const hasMatchingTurn = (candidate) => {
     if (!candidate || typeof candidate !== 'object') return true;
     const role = String(candidate.role || '');
     const clientRequestId = String(candidate._clientRequestId || '').trim();
     const text = _mobileMessageCopyText(candidate).replace(/\s+/g, ' ').trim();
+    if (role === 'ai' && hasCompletedServerTurnForLocalAssistant(candidate)) return true;
     return next.some((msg) => {
       if (!msg || String(msg.role || '') !== role) return false;
       if (clientRequestId && String(msg._clientRequestId || '').trim() === clientRequestId) return true;
@@ -2077,12 +3245,22 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
     if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) continue;
     if (_isMobileHiddenVoiceDraftMessage(msg, -1)) continue;
     const isPendingAssistant = msg.role === 'ai' && (msg.streaming || String(msg._clientRequestId || '').trim());
+    const isRecentCompletedAssistant = msg.role === 'ai'
+      && msg.streaming !== true
+      && _mobileAssistantHasVisibleAnswer(msg)
+      && Date.now() - Number(msg.workEndedAt || msg.timestamp || 0) < 45_000;
     const isPendingUser = msg.role === 'user' && !hasMatchingTurn(msg);
-    if ((isPendingAssistant || isPendingUser) && !hasMatchingTurn(msg)) {
+    if ((isPendingAssistant || isRecentCompletedAssistant || isPendingUser) && !hasMatchingTurn(msg)) {
       next.push(msg);
     }
   }
   return next;
+}
+
+function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread) {
+  const mapped = _mapServerHistoryToMobile(serverHistory);
+  const merged = _mergeMobileThreadLocalArtifacts(mapped, localThread);
+  return _mergeMobilePinnedCompletedTurn(sessionId, merged);
 }
 
 function _clearMobileLiveRunForSession(sessionId) {
@@ -2112,9 +3290,8 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   _rememberMobileSessionGoal(session, sid);
   try { window.__pmMobileGoalChanged?.(); } catch {}
   const history = Array.isArray(session?.history) ? session.history : [];
-  const mapped = _mapServerHistoryToMobile(history);
   const localThread = __pmChat.threads?.[sid] || [];
-  __pmChat.threads[sid] = _mergeMobileThreadLocalArtifacts(mapped, localThread);
+  __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread);
   const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
   for (const approval of Array.isArray(pendingApprovals) ? pendingApprovals : []) {
     const approvalSid = String(approval?.sessionId || approval?.sourceSessionId || '').trim();
@@ -2170,7 +3347,7 @@ async function _applyMobileHotRestartNotification(msg = {}) {
     }
   }
   if (msg.notificationId) {
-    try { wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId) }); } catch {}
+    try { wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId), surface: 'mobile', sessionId: sid }); } catch {}
   }
 }
 
@@ -2184,9 +3361,8 @@ async function _applyMobileScheduledNotification(msg = {}) {
   if (!sid || !/^auto_/i.test(sid)) return;
   const session = await loadMobileChatSession(sid).catch(() => null);
   const history = Array.isArray(session?.history) ? session.history : [];
-  const mapped = _mapServerHistoryToMobile(history);
   const localThread = __pmChat.threads?.[sid] || [];
-  __pmChat.threads[sid] = _mergeMobileThreadLocalArtifacts(mapped, localThread);
+  __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread);
   if (String(__pmChat.activeSessionId || '').trim() === sid) {
     _activeMobileThread();
     const threadEl = document.getElementById('pm-chat-thread');
@@ -2218,7 +3394,7 @@ if (!window.__pmMobileGoalBridgeInstalled) {
     if (!sid) return;
     _setMobileSessionGoal(sid, msg.goal || null);
     _refreshVisibleMobileGoalPills(sid);
-    try { window.__pmMobileGoalChanged?.(); } catch {}
+    try { window.__pmMobileGoalChanged?.(msg); } catch {}
   });
 }
 
@@ -2296,28 +3472,75 @@ function _renderMobileGeneratedImageBatch(mediaList) {
   </div>`;
 }
 
+function _mobileToolEventName(evtOrName) {
+  if (typeof evtOrName === 'string') return evtOrName.replace(/\s+/g, '_').toLowerCase();
+  const evt = evtOrName && typeof evtOrName === 'object' ? evtOrName : {};
+  const raw = String(
+    evt.action
+    || evt.name
+    || evt.toolName
+    || evt.tool_name
+    || evt.tool
+    || evt.label
+    || '',
+  ).trim();
+  return raw.replace(/\s+/g, '_').toLowerCase();
+}
+
+function _isMobileGenerateImageToolName(name) {
+  const value = _mobileToolEventName(name)
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  return value === 'generate_image'
+    || value === 'image_generation'
+    || value === 'voice_generate_image'
+    || value === 'creative_generate_image_shot';
+}
+
+function _isMobileGenerateVideoToolName(name) {
+  const value = _mobileToolEventName(name)
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  return value === 'generate_video'
+    || value === 'video_generation'
+    || value === 'voice_generate_video'
+    || value === 'creative_generate_video_shot';
+}
+
+function _isMobileExplicitMediaToolName(name) {
+  const value = _mobileToolEventName(name)
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  return _isMobileGenerateImageToolName(value)
+    || _isMobileGenerateVideoToolName(value)
+    || value === 'present_file'
+    || value === 'canvas_present'
+    || value === 'download_media'
+    || value.startsWith('creative_')
+    || value.startsWith('hyperframes_');
+}
+
 function _mobileHasPendingImageGeneration(message) {
   const entries = [
     ...(Array.isArray(message.processEntries) ? message.processEntries : []),
     ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
   ];
-  // Only entries that are NOT completed tool results / errors can signal "still generating"
-  const activeEntries = entries.filter((entry) => {
-    const t = String(entry?.type || '').toLowerCase();
-    return t !== 'result' && t !== 'error';
+  const hasActiveGenerateImageTool = entries.some((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    if (type === 'result' || type === 'error') return false;
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+    return _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
   });
-  const activeText = activeEntries
-    .map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase())
-    .join('\n');
-  // All entries (including results) — used for the "already done" guard
-  const allText = entries
-    .map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase())
-    .join('\n');
-  // Positive: generate_image tool call is in the active (non-result) entries
-  const hasPending = /\b(generate_image|generate image|generating image|image generation|i am generating the image|preparing generate image|prepared generate image)\b/.test(activeText);
-  // Negative: any entry (including results) signals completion
-  const isDone = /\b(generate_image complete|generate image complete|generated image|generated images|failed|error)\b/.test(allText);
-  return hasPending && !isDone;
+  const hasTerminalGenerateImageResult = entries.some((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    if (type !== 'result' && type !== 'error') return false;
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+    return _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
+  });
+  return hasActiveGenerateImageTool && !hasTerminalGenerateImageResult;
 }
 
 function _isMobileImageGenerationStreamEntry(entry) {
@@ -2362,40 +3585,124 @@ function _renderMobileMediaGallery(mediaList) {
 }
 
 function _browseFileIcon(kind) {
-  if (kind === 'image') return '🖼';
-  if (kind === 'video') return '🎬';
-  if (kind === 'audio') return '🎵';
-  return '📄';
+  if (kind === 'image') return ICONS.image;
+  if (kind === 'video') return ICONS.video;
+  if (kind === 'audio') return ICONS.volume;
+  return ICONS.doc;
+}
+
+function _browseFolderIcon() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4l2 2.2h7A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>';
+}
+
+function _browseViewIcon(view) {
+  if (view === 'grid') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
+}
+
+function _formatBrowseDate(value) {
+  const raw = value || 0;
+  const date = typeof raw === 'number' ? new Date(raw) : new Date(String(raw));
+  if (!Number.isFinite(date.getTime())) return '';
+  try {
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return '';
+  }
+}
+
+function _formatBrowseSize(bytes) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function _browseMeta(parts) {
+  return parts.filter(Boolean).join(' · ');
+}
+
+function _filterBrowseEntries(entries, query) {
+  const q = String(query || '').trim().toLowerCase();
+  const list = Array.isArray(entries) ? entries : [];
+  if (!q) return list;
+  return list.filter((entry) => String(entry?.name || entry?.path || '').toLowerCase().includes(q));
+}
+
+function _browseSectionHtml({ id, title, icon, entries, expanded, view, kind }) {
+  const list = Array.isArray(entries) ? entries : [];
+  const visible = expanded ? list : list.slice(0, 5);
+  const rows = visible.map((entry) => {
+    const name = String(entry.name || entry.path || (kind === 'dir' ? 'Folder' : 'File'));
+    const date = _formatBrowseDate(entry.modifiedAt || entry.mtime);
+    const meta = kind === 'dir'
+      ? _browseMeta([date, Number.isFinite(Number(entry.itemCount)) ? `${Number(entry.itemCount)} items` : ''])
+      : _browseMeta([date, _formatBrowseSize(entry.size)]);
+    const attrs = kind === 'dir'
+      ? `data-browse-nav="${escapeHtml(entry.path || '')}"`
+      : `data-browse-open="${escapeHtml(entry.path || '')}" data-browse-kind="${escapeHtml(entry.kind || 'file')}" data-browse-name="${escapeHtml(name)}"`;
+    const entryIcon = kind === 'dir' ? _browseFolderIcon() : _browseFileIcon(entry.kind);
+    return `
+      <button type="button" class="pm-browse-row ${kind}" ${attrs}>
+        <span class="pm-browse-row-icon">${entryIcon}</span>
+        <span class="pm-browse-row-main">
+          <span class="pm-browse-row-name">${escapeHtml(name)}</span>
+          ${meta ? `<span class="pm-browse-row-meta">${escapeHtml(meta)}</span>` : ''}
+        </span>
+        <span class="pm-browse-row-more" aria-hidden="true">${ICONS.dots}</span>
+      </button>`;
+  }).join('');
+  const empty = !list.length ? `<div class="pm-browse-empty">${kind === 'dir' ? 'No folders' : 'No files'}</div>` : '';
+  const toggle = list.length > 5
+    ? `<button type="button" class="pm-browse-show-all" data-browse-toggle="${escapeHtml(id)}">${expanded ? 'Show fewer' : `Show all ${title.toLowerCase()}`} <span>${expanded ? '&uarr;' : '&darr;'}</span></button>`
+    : '';
+  return `
+    <section class="pm-browse-section ${view}${expanded ? ' expanded' : ''}">
+      <header class="pm-browse-section-head">
+        <span class="pm-browse-section-title"><span class="pm-browse-section-icon">${icon}</span>${escapeHtml(title)}</span>
+        <span class="pm-browse-section-count">${list.length}</span>
+      </header>
+      <div class="pm-browse-list">${rows}${empty}</div>
+      ${toggle}
+    </section>`;
 }
 
 function _renderBrowseCard(bs) {
   if (bs.loading) {
-    return `<div class="pm-browse-card"><div class="pm-browse-empty">Loading workspace files…</div></div>`;
+    return `<div class="pm-browse-card"><div class="pm-browse-empty">Loading workspace files...</div></div>`;
   }
   if (bs.error) {
-    return `<div class="pm-browse-card"><div class="pm-browse-error">⚠ ${escapeHtml(bs.error)}</div></div>`;
+    return `<div class="pm-browse-card"><div class="pm-browse-error">${escapeHtml(bs.error)}</div></div>`;
   }
+  const view = bs.view === 'grid' ? 'grid' : 'list';
+  const query = String(bs.query || '');
   const parts = bs.cwd ? String(bs.cwd).split('/').filter(Boolean) : [];
-  const crumbs = [{ label: '🏠 Workspace', path: '' }, ...parts.map((p, i) => ({ label: p, path: parts.slice(0, i + 1).join('/') }))];
+  const crumbs = [{ label: 'Workspace', path: '' }, ...parts.map((p, i) => ({ label: p, path: parts.slice(0, i + 1).join('/') }))];
   const breadcrumbHtml = crumbs.map((c, i) => {
     const isLast = i === crumbs.length - 1;
     return `<button type="button" class="pm-browse-crumb${isLast ? ' active' : ''}" data-browse-nav="${escapeHtml(c.path)}">${escapeHtml(c.label)}</button>${isLast ? '' : '<span class="pm-browse-sep">›</span>'}`;
   }).join('');
-  const dirsHtml = bs.dirs.map(d => `
-    <button type="button" class="pm-browse-item dir" data-browse-nav="${escapeHtml(d.path)}">
-      <span class="pm-browse-item-icon">📁</span>
-      <span class="pm-browse-item-name">${escapeHtml(d.name)}</span>
-    </button>`).join('');
-  const filesHtml = bs.files.map(f => `
-    <button type="button" class="pm-browse-item file" data-browse-open="${escapeHtml(f.path)}" data-browse-kind="${escapeHtml(f.kind)}" data-browse-name="${escapeHtml(f.name)}">
-      <span class="pm-browse-item-icon">${_browseFileIcon(f.kind)}</span>
-      <span class="pm-browse-item-name">${escapeHtml(f.name)}</span>
-    </button>`).join('');
-  const emptyHtml = !bs.dirs.length && !bs.files.length ? '<div class="pm-browse-empty">Empty folder</div>' : '';
+  const dirs = _filterBrowseEntries(bs.dirs, query);
+  const files = _filterBrowseEntries(bs.files, query);
+  const emptyHtml = !dirs.length && !files.length ? '<div class="pm-browse-empty">No matching files or folders</div>' : '';
   return `
     <div class="pm-browse-card">
+      <div class="pm-browse-toolbar">
+        <label class="pm-browse-search">
+          <span class="pm-browse-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></span>
+          <input type="search" data-browse-search value="${escapeHtml(query)}" placeholder="Search files and folders..." autocomplete="off" autocorrect="off" spellcheck="false">
+        </label>
+        <div class="pm-browse-view-toggle" aria-label="View">
+          <button type="button" class="${view === 'grid' ? 'active' : ''}" data-browse-view="grid" aria-label="Grid view">${_browseViewIcon('grid')}</button>
+          <button type="button" class="${view === 'list' ? 'active' : ''}" data-browse-view="list" aria-label="List view">${_browseViewIcon('list')}</button>
+        </div>
+      </div>
       <nav class="pm-browse-breadcrumb" aria-label="Path">${breadcrumbHtml}</nav>
-      <div class="pm-browse-grid">${dirsHtml}${filesHtml}${emptyHtml}</div>
+      ${emptyHtml || _browseSectionHtml({ id: 'folders', title: 'Folders', icon: _browseFolderIcon(), entries: dirs, expanded: !!bs.showAllFolders, view, kind: 'dir' })}
+      ${emptyHtml ? '' : _browseSectionHtml({ id: 'files', title: 'Files', icon: ICONS.doc, entries: files, expanded: !!bs.showAllFiles, view, kind: 'file' })}
     </div>`;
 }
 
@@ -2788,9 +4095,9 @@ function _renderMobileMessageActions(m, index) {
   }
   const secondary = `<button type="button" class="pm-msg-action" data-msg-action="fork" data-msg-index="${index}" title="Fork" aria-label="Fork">${ICONS.fork || ICONS.chev}</button>`;
   return `<div class="pm-msg-actions">
-    <button type="button" class="pm-msg-action" data-msg-action="copy" data-msg-index="${index}" title="Copy" aria-label="Copy">${ICONS.clipboard}</button>
-    <button type="button" class="pm-msg-action" data-msg-action="speak" data-msg-index="${index}" title="Speak response" aria-label="Speak response">${ICONS.volume || ICONS.play}</button>
-    ${secondary}
+    <button type="button" class="pm-msg-action" data-msg-action="copy" data-msg-index="${index}" title="Copy" aria-label="Copy">${ICONS.clipboard}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+    <button type="button" class="pm-msg-action" data-msg-action="speak" data-msg-index="${index}" title="Speak response" aria-label="Speak response">${ICONS.volume || ICONS.play}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+    ${secondary.replace('</button>', '<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>')}
   </div>`;
 }
 
@@ -3763,6 +5070,18 @@ if (typeof window !== 'undefined' && !window.__pmMobileQuestionBridgeInstalled) 
   wsEventBus.on('question_expired', (msg = {}) => _updateMobileQuestionStatus(msg, 'expired'));
 }
 
+
+function _renderMobileRealtimeVoiceAssistantText(m) {
+  if (!m || m.role !== 'ai' || m.source !== 'voice_agent_realtime' || !m.voiceRealtimeActive) return '';
+  const clean = String(m.body?.text || m.content || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return '';
+  const progress = Math.max(0, Math.min(1, Number(m.voiceRealtimeProgress || 0) || 0));
+  const split = Math.max(0, Math.min(clean.length, Math.round(clean.length * progress)));
+  const spoken = clean.slice(0, split);
+  const pending = clean.slice(split);
+  return `<div class="pm-voice-chat-lyrics"><span class="pm-voice-chat-lyrics-spoken">${escapeHtml(spoken)}</span><span class="pm-voice-chat-lyrics-pending">${escapeHtml(pending)}</span></div>`;
+}
+
 function _renderChatMessageHtml(m, index = -1) {
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
@@ -3775,15 +5094,20 @@ function _renderChatMessageHtml(m, index = -1) {
     // inside .pm-bubble) so it reads as an editable message, not an inner panel.
     const contentHtml = isEditing
       ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
-      : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileMarkdown(m.body.text)}</div>${attachmentHtml}</div>`;
+      : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileSkillReferencedMarkdown(m.body.text, m.body.selectedSkillRefs || m.selectedSkillRefs)}</div>${attachmentHtml}</div>`;
     return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
       ${m.workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
       ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
   }
   const b = m.body || {};
   const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
+  const statusDividerHtml = '<div class="pm-msg-status-divider" aria-hidden="true"></div>';
   let inner = _renderMobileWorkTimer(m);
+  if (inner) inner += statusDividerHtml;
+  const renderedApprovalIds = new Set();
   if (m.approvalRequest) {
+    const approvalId = String(m.approvalRequest.id || '').trim();
+    if (approvalId) renderedApprovalIds.add(approvalId);
     inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
   }
   if (m.questionRequest) {
@@ -3796,15 +5120,18 @@ function _renderChatMessageHtml(m, index = -1) {
     if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
     if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
   }
-  const hasLiveTrace = m.streaming && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length;
+  const liveTraceHtml = m.streaming && !answerStarted && Array.isArray(m.liveTraceEntries)
+    ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true })
+    : '';
+  const hasLiveTrace = !!liveTraceHtml;
   const completedTraceEntries = !m.streaming ? _mobileWorkflowTraceEntriesForMessage(m) : [];
   const hasCompletedTrace = _mobileTraceHasToolGroup(completedTraceEntries);
   const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
   if (hasLiveTrace) {
-    inner += _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true });
+    inner += liveTraceHtml;
   } else if (hasCompletedTrace) {
     // Completed turn — trace hidden in collapsible drawer behind the work timer
-    inner += `<div class="pm-trace-drawer">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
+    inner += `<div class="pm-trace-drawer" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
   } else if (m.streaming && !answerStarted && !hasPendingImageGeneration) {
     inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
   }
@@ -3816,7 +5143,8 @@ function _renderChatMessageHtml(m, index = -1) {
     if (dockedQuestion) inner += `<div class="pm-streaming-question-dock">${_renderMobileQuestionCard(dockedQuestion)}</div>`;
   }
   if (b.text) {
-    inner += `<div class="markdown-body">${_renderMobileMarkdown(b.text)}</div>`;
+    const liveVoiceHtml = _renderMobileRealtimeVoiceAssistantText(m);
+    inner += liveVoiceHtml || `<div class="markdown-body">${_renderMobileMarkdown(_normalizeMobileTraceProseText(b.text))}</div>`;
     // rendered above with the shared desktop Markdown renderer
   }
   if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');
@@ -3852,7 +5180,12 @@ function _renderChatMessageHtml(m, index = -1) {
       </button>
     `).join('')}</div>`;
   }
-  const activeApprovals = m.streaming ? _getPendingApprovalsForSession(__pmChat.activeSessionId) : [];
+  const activeApprovals = m.streaming
+    ? _getPendingApprovalsForSession(__pmChat.activeSessionId).filter((approval) => {
+        const approvalId = String(approval?.id || '').trim();
+        return !approvalId || !renderedApprovalIds.has(approvalId);
+      })
+    : [];
   if (activeApprovals.length) {
     inner += `<div class="pm-chat-approvals-inline">${activeApprovals.map((approval) => _renderMobileApprovalCard(approval, { compact: true })).join('')}</div>`;
   }
@@ -3863,7 +5196,7 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
   inner += _renderMobileFileChanges(m.fileChanges);
-  inner += _renderMobileProcess(_mobileProcessEntriesWithLiveTrace(m, m.processEntries || b.processEntries), { collapsed: answerStarted });
+  if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
   return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
     ${m.workflowLabel ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
     <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
@@ -3895,7 +5228,12 @@ function _addMobileMedia(message, key, items, forcedKind = '') {
   }
 }
 
-function _collectMediaFromToolEvent(message, evt) {
+function _collectMediaFromToolEvent(message, evt, inheritedToolName = '') {
+  const toolName = _mobileToolEventName(evt) || _mobileToolEventName(inheritedToolName);
+  const isGenerateImageTool = _isMobileGenerateImageToolName(toolName);
+  const isGenerateVideoTool = _isMobileGenerateVideoToolName(toolName);
+  const isExplicitMediaTool = _isMobileExplicitMediaToolName(toolName);
+  const isTerminalEnvelope = /^(final|done)$/i.test(String(evt?.type || evt?.event || ''));
   const extra = evt?.extra && typeof evt.extra === 'object' ? evt.extra : {};
   let result = evt?.result && typeof evt.result === 'object' ? evt.result : {};
   if ((!result || !Object.keys(result).length) && typeof evt?.result === 'string') {
@@ -3906,33 +5244,37 @@ function _collectMediaFromToolEvent(message, evt) {
   }
   const sources = [extra, result, evt].filter(Boolean);
   for (const source of sources) {
-    if (Array.isArray(source.generated_images)) _addMobileMedia(message, 'generatedImages', source.generated_images, 'image');
-    if (Array.isArray(source.generatedImages)) _addMobileMedia(message, 'generatedImages', source.generatedImages, 'image');
-    if (source.generated_image) _addMobileMedia(message, 'generatedImages', source.generated_image, 'image');
-    if (source.generatedImage) _addMobileMedia(message, 'generatedImages', source.generatedImage, 'image');
-    if (Array.isArray(source.images)) _addMobileMedia(message, 'generatedImages', source.images, 'image');
-    if (source.image && typeof source.image === 'object' && (source.image.path || source.image.rel_path || source.image.base64)) _addMobileMedia(message, 'generatedImages', source.image, 'image');
-    if (Array.isArray(source.generated_videos)) _addMobileMedia(message, 'generatedVideos', source.generated_videos, 'video');
-    if (Array.isArray(source.generatedVideos)) _addMobileMedia(message, 'generatedVideos', source.generatedVideos, 'video');
-    if (source.generated_video) _addMobileMedia(message, 'generatedVideos', source.generated_video, 'video');
-    if (source.generatedVideo) _addMobileMedia(message, 'generatedVideos', source.generatedVideo, 'video');
-    if (Array.isArray(source.videos)) _addMobileMedia(message, 'generatedVideos', source.videos, 'video');
-    if (source.video && typeof source.video === 'object' && (source.video.path || source.video.rel_path || source.video.url)) _addMobileMedia(message, 'generatedVideos', source.video, 'video');
-    if (Array.isArray(source.canvasFiles)) _mergeMobileMediaIntoMessage(message, source.canvasFiles.map((path) => ({ path })));
-    if (Array.isArray(source.files)) {
-      // Guard: skip plain-string arrays (e.g. list_files / list_directory return `files: string[]`)
-      // Only merge items that are actual media objects (have path/kind/dataUrl/base64 as object fields)
-      const action = String(evt?.action || evt?.name || evt?.toolName || '').trim();
-      const isFileListingTool = action === 'list_files' || action === 'list_directory';
-      if (!isFileListingTool) {
-        const mediaFiles = source.files.filter((f) => f && typeof f === 'object');
-        if (mediaFiles.length) _mergeMobileMediaIntoMessage(message, mediaFiles);
-      }
+    const hasExplicitGeneratedImages = Array.isArray(source.generated_images)
+      || Array.isArray(source.generatedImages)
+      || !!source.generated_image
+      || !!source.generatedImage;
+    const hasExplicitGeneratedVideos = Array.isArray(source.generated_videos)
+      || Array.isArray(source.generatedVideos)
+      || !!source.generated_video
+      || !!source.generatedVideo;
+    const allowGeneratedImages = isGenerateImageTool || (isTerminalEnvelope && hasExplicitGeneratedImages);
+    const allowGeneratedVideos = isGenerateVideoTool || (isTerminalEnvelope && hasExplicitGeneratedVideos);
+    if (allowGeneratedImages && Array.isArray(source.generated_images)) _addMobileMedia(message, 'generatedImages', source.generated_images, 'image');
+    if (allowGeneratedImages && Array.isArray(source.generatedImages)) _addMobileMedia(message, 'generatedImages', source.generatedImages, 'image');
+    if (allowGeneratedImages && source.generated_image) _addMobileMedia(message, 'generatedImages', source.generated_image, 'image');
+    if (allowGeneratedImages && source.generatedImage) _addMobileMedia(message, 'generatedImages', source.generatedImage, 'image');
+    if (isGenerateImageTool && Array.isArray(source.images)) _addMobileMedia(message, 'generatedImages', source.images, 'image');
+    if (isGenerateImageTool && source.image && typeof source.image === 'object' && (source.image.path || source.image.rel_path || source.image.base64)) _addMobileMedia(message, 'generatedImages', source.image, 'image');
+    if (allowGeneratedVideos && Array.isArray(source.generated_videos)) _addMobileMedia(message, 'generatedVideos', source.generated_videos, 'video');
+    if (allowGeneratedVideos && Array.isArray(source.generatedVideos)) _addMobileMedia(message, 'generatedVideos', source.generatedVideos, 'video');
+    if (allowGeneratedVideos && source.generated_video) _addMobileMedia(message, 'generatedVideos', source.generated_video, 'video');
+    if (allowGeneratedVideos && source.generatedVideo) _addMobileMedia(message, 'generatedVideos', source.generatedVideo, 'video');
+    if (isGenerateVideoTool && Array.isArray(source.videos)) _addMobileMedia(message, 'generatedVideos', source.videos, 'video');
+    if (isGenerateVideoTool && source.video && typeof source.video === 'object' && (source.video.path || source.video.rel_path || source.video.url)) _addMobileMedia(message, 'generatedVideos', source.video, 'video');
+    if (isExplicitMediaTool && Array.isArray(source.canvasFiles)) _mergeMobileMediaIntoMessage(message, source.canvasFiles.map((path) => ({ path })));
+    if (isExplicitMediaTool && Array.isArray(source.files)) {
+      const mediaFiles = source.files.filter((f) => f && typeof f === 'object');
+      if (mediaFiles.length) _mergeMobileMediaIntoMessage(message, mediaFiles);
     }
-    if (Array.isArray(source.artifacts)) _mergeMobileMediaIntoMessage(message, source.artifacts);
+    if (isExplicitMediaTool && Array.isArray(source.artifacts)) _mergeMobileMediaIntoMessage(message, source.artifacts);
     if (source.productCarousel && typeof source.productCarousel === 'object') _mergeMobileProductCarouselIntoMessage(message, source.productCarousel);
     if (Array.isArray(source.results)) {
-      for (const nested of source.results) _collectMediaFromToolEvent(message, nested);
+      for (const nested of source.results) _collectMediaFromToolEvent(message, nested, toolName);
     }
   }
 }
@@ -3944,11 +5286,19 @@ function _renderChatAttachmentPreviews(files, removable = true) {
     const remove = removable ? `<button type="button" class="pm-attach-remove" data-remove-attachment="${i}" aria-label="Remove attachment">×</button>` : '';
     if (f.kind === 'image' && (f.dataUrl || f.workspacePath)) {
       const src = f.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(f.workspacePath || ''))}`;
-      return `<div class="pm-attach-chip image">${remove}<img src="${escapeHtml(src)}" alt=""><span><strong>${name}</strong><em>${meta}</em></span></div>`;
+      const mediaAttrs = !removable
+        ? ` data-pm-media data-kind="image" data-src="${escapeHtml(src)}" data-download="${escapeHtml(f.workspacePath ? `/api/canvas/download?path=${encodeURIComponent(String(f.workspacePath || ''))}` : src)}" data-name="${name}" data-path="${escapeHtml(String(f.workspacePath || ''))}"`
+        : '';
+      const tag = removable ? 'div' : 'button type="button"';
+      return `<${tag} class="pm-attach-chip image${removable ? '' : ' openable'}"${mediaAttrs}>${remove}<img src="${escapeHtml(src)}" alt=""><span><strong>${name}</strong><em>${meta}</em></span></${removable ? 'div' : 'button'}>`;
     }
     if (f.kind === 'video' && (f.dataUrl || f.workspacePath)) {
       const src = f.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(f.workspacePath || ''))}`;
-      return `<div class="pm-attach-chip video">${remove}<video src="${escapeHtml(src)}" muted playsinline preload="metadata"></video><span><strong>${name}</strong><em>${meta}</em></span></div>`;
+      const mediaAttrs = !removable
+        ? ` data-pm-media data-kind="video" data-src="${escapeHtml(src)}" data-download="${escapeHtml(f.workspacePath ? `/api/canvas/download?path=${encodeURIComponent(String(f.workspacePath || ''))}` : src)}" data-name="${name}" data-path="${escapeHtml(String(f.workspacePath || ''))}"`
+        : '';
+      const tag = removable ? 'div' : 'button type="button"';
+      return `<${tag} class="pm-attach-chip video${removable ? '' : ' openable'}"${mediaAttrs}>${remove}<video src="${escapeHtml(src)}" muted playsinline preload="metadata"></video><span><strong>${name}</strong><em>${meta}</em></span></${removable ? 'div' : 'button'}>`;
     }
     return `<div class="pm-attach-chip">${remove}<span class="pm-attach-file">${ICONS.clipboard}</span><span><strong>${name}</strong><em>${meta}</em></span></div>`;
   }).join('');
@@ -4086,6 +5436,77 @@ function _buildMobileFileContextNote(uploadResults = []) {
   return `\n\n[UPLOADED FILES]\n${lines.join('\n')}${hasImages ? '\nImages are attached directly for vision analysis.' : ''}\nUse the exact workspace paths above to read, edit, present, or process the attached files.`;
 }
 
+const MOBILE_EMPTY_CHAT_STARTER_PROMPTS = [
+  {
+    title: 'Start a new build',
+    body: 'Shape a page, app mockup, workflow, or feature plan inside the current project.',
+    prompt: 'Help me start a new build in this project. Ask only for the key missing details, then turn it into a concrete implementation plan.',
+  },
+  {
+    title: 'Review recent momentum',
+    body: 'Look across recent Prometheus work and suggest the next highest-leverage move.',
+    prompt: 'Review the recent Prometheus project momentum and suggest the single highest-leverage next step, with a short plan for how to execute it.',
+  },
+  {
+    title: 'Turn an idea into a plan',
+    body: 'Take a rough thought and convert it into a scoped build, research, or agent task.',
+    prompt: 'Help me turn a rough idea into a clear plan. Start by making the idea concrete, then propose the smallest useful first version.',
+  },
+];
+let mobileEmptyChatBrainCards = [];
+let mobileEmptyChatBrainCardsLoaded = false;
+let mobileEmptyChatBrainCardsLoading = false;
+
+function _normalizeMobileEmptyChatBrainCard(card) {
+  if (!card || typeof card !== 'object') return null;
+  const title = String(card.title || '').trim();
+  const body = String(card.body || '').trim();
+  const prompt = String(card.prompt || '').trim();
+  if (!title || !body || !prompt) return null;
+  return { title, body, prompt };
+}
+
+function _getMobileEmptyChatStarterCards() {
+  return mobileEmptyChatBrainCards.length ? mobileEmptyChatBrainCards : MOBILE_EMPTY_CHAT_STARTER_PROMPTS;
+}
+
+async function _loadMobileEmptyChatBrainCards(options = {}) {
+  const force = options?.force === true;
+  if (!force && (mobileEmptyChatBrainCardsLoaded || mobileEmptyChatBrainCardsLoading)) return;
+  if (mobileEmptyChatBrainCardsLoading) return;
+  mobileEmptyChatBrainCardsLoading = true;
+  try {
+    const data = await mobileGatewayFetch('/api/brain/pulse-cards');
+    mobileEmptyChatBrainCards = Array.isArray(data?.cards)
+      ? data.cards.map(_normalizeMobileEmptyChatBrainCard).filter(Boolean).slice(0, 3)
+      : [];
+    mobileEmptyChatBrainCardsLoaded = true;
+  } catch (err) {
+    console.warn('[mobile chat] failed to load Brain pulse cards:', err);
+    mobileEmptyChatBrainCards = [];
+    mobileEmptyChatBrainCardsLoaded = true;
+  } finally {
+    mobileEmptyChatBrainCardsLoading = false;
+  }
+  if (String(__pmChat.activeSessionId || '') === MOBILE_CHAT_SESSION_ID) {
+    _renderMobileChatSessionNow(MOBILE_CHAT_SESSION_ID);
+  }
+}
+
+function _renderMobileEmptyChatStarterCards() {
+  const cards = _getMobileEmptyChatStarterCards();
+  return `<div class="pm-mobile-empty-chat" aria-label="Starter prompts">
+    <div class="pm-mobile-empty-chat-cards">
+      ${cards.map((card, index) => `
+        <button class="pm-mobile-empty-chat-card" type="button" data-mobile-starter-prompt="${index}">
+          <span class="pm-mobile-empty-chat-card-title">${escapeHtml(card.title)}</span>
+          <span class="pm-mobile-empty-chat-card-body">${escapeHtml(card.body)}</span>
+        </button>
+      `).join('')}
+    </div>
+  </div>`;
+}
+
 function _renderThread(threadEl) {
   _dedupeMobileAssistantTurns(__pmChat.thread);
   _reindexMobileThread(__pmChat.thread);
@@ -4130,9 +5551,14 @@ function _renderThread(threadEl) {
       };
     });
   } catch {}
-  threadEl.innerHTML = __pmChat.thread
+  const renderedMessages = __pmChat.thread
     .map((msg, index) => _isMobileHiddenVoiceDraftMessage(msg, index) ? '' : _renderChatMessageHtml(msg, index))
     .join('');
+  threadEl.innerHTML = renderedMessages || (
+    String(__pmChat.activeSessionId || '') === MOBILE_CHAT_SESSION_ID
+      ? _renderMobileEmptyChatStarterCards()
+      : ''
+  );
   try {
     Object.keys(openProc).forEach((idx) => {
       if (closedProc.has(idx)) return;
@@ -4152,6 +5578,10 @@ function _renderThread(threadEl) {
       const idx = d.closest('[data-msg-index]')?.getAttribute('data-msg-index');
       if (idx == null) return;
       const key = `${idx}:${d.getAttribute('data-pm-trace-group') || detailIndex}`;
+      if (d.closest('.pm-trace-drawer[data-trace-completed="1"]')) {
+        d.removeAttribute('open');
+        return;
+      }
       if (closedTraceGroups.has(key)) d.removeAttribute('open');
       else if (openTraceGroups[key]) d.setAttribute('open', '');
     });
@@ -4170,8 +5600,7 @@ function _renderThread(threadEl) {
     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
   });
   _wireMobileProcessRunActions(threadEl);
-  _wireMobileMediaCards(threadEl);
-  _wireMobileFileChangeRows(threadEl);
+  _wireMobileChatEnhancements(threadEl);
 }
 
 function _patchMobileThreadMessage(threadEl, message, index) {
@@ -4184,12 +5613,24 @@ function _patchMobileThreadMessage(threadEl, message, index) {
   nextWrap.innerHTML = _renderChatMessageHtml(message, msgIndex);
   const nextEl = nextWrap.firstElementChild;
   if (!nextEl) return false;
-  if (currentEl.className !== nextEl.className) {
+  const currentClass = String(currentEl.className || '');
+  const nextClass = String(nextEl.className || '');
+  const currentStreaming = currentEl.getAttribute('data-streaming') === '1';
+  const nextStreaming = nextEl.getAttribute('data-streaming') === '1';
+  const sameMessageShell = currentEl.getAttribute('data-msg-index') === nextEl.getAttribute('data-msg-index')
+    && currentEl.tagName === nextEl.tagName
+    && currentClass === nextClass;
+  if (!sameMessageShell) {
     currentEl.replaceWith(nextEl);
   } else {
+    if (nextStreaming) currentEl.setAttribute('data-streaming', '1');
+    else currentEl.removeAttribute('data-streaming');
     const currentBubble = currentEl.querySelector('.pm-bubble');
     const nextBubble = nextEl.querySelector('.pm-bubble');
     if (!currentBubble || !nextBubble) return false;
+    const wasStreaming = currentStreaming;
+    const isStreaming = nextStreaming;
+    const finalizedThisPatch = wasStreaming && !isStreaming;
     const openProc = {};
     const closedProc = new Set();
     const openTraceGroups = {};
@@ -4198,7 +5639,13 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     const stableVisionPreviews = {};
     const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
     const questionDrafts = _captureMobileQuestionDraftState(currentEl);
+    const existingLiveEntryIds = new Set();
+    const previousAssistantTextLen = String(currentBubble.querySelector('.markdown-body')?.textContent || '').length;
     try {
+      currentEl.querySelectorAll('[data-pm-live-entry-id]').forEach((node) => {
+        const id = String(node.getAttribute('data-pm-live-entry-id') || '').trim();
+        if (id) existingLiveEntryIds.add(id);
+      });
       currentEl.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
         if (key) stableVisionPreviews[key] = node;
@@ -4213,6 +5660,10 @@ function _patchMobileThreadMessage(threadEl, message, index) {
       });
       currentEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
         const key = d.getAttribute('data-pm-trace-group') || String(detailIndex);
+        if (finalizedThisPatch) {
+          closedTraceGroups.add(key);
+          return;
+        }
         if (d.open) {
           if (d.getAttribute('data-pm-trace-live-current') !== '1') openTraceGroups[key] = true;
         } else {
@@ -4231,6 +5682,15 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     } catch {}
     currentBubble.innerHTML = nextBubble.innerHTML;
     try {
+      currentBubble.querySelectorAll('[data-pm-live-entry-id]').forEach((node) => {
+        const id = String(node.getAttribute('data-pm-live-entry-id') || '').trim();
+        if (id && !existingLiveEntryIds.has(id)) node.classList.add('pm-stream-enter');
+      });
+      const nextAssistantTextLen = String(message?.body?.text || message?.content || '').length;
+      if (nextAssistantTextLen > previousAssistantTextLen) {
+        const markdown = currentBubble.querySelector('.markdown-body');
+        if (markdown) markdown.classList.add('pm-stream-text-refresh');
+      }
       currentBubble.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
         const stable = key ? stableVisionPreviews[key] : null;
@@ -4254,6 +5714,10 @@ function _patchMobileThreadMessage(threadEl, message, index) {
       });
       currentEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
         const key = d.getAttribute('data-pm-trace-group') || String(detailIndex);
+        if (d.closest('.pm-trace-drawer[data-trace-completed="1"]')) {
+          d.removeAttribute('open');
+          return;
+        }
         if (closedTraceGroups.has(key)) d.removeAttribute('open');
         else if (openTraceGroups[key]) d.setAttribute('open', '');
       });
@@ -4274,8 +5738,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
   });
   _wireMobileProcessRunActions(patchedEl);
-  _wireMobileMediaCards(patchedEl);
-  _wireMobileFileChangeRows(patchedEl);
+  _wireMobileChatEnhancements(patchedEl);
   return true;
 }
 
@@ -4291,7 +5754,7 @@ function _patchLatestMobileStreamingMessage(threadEl, bodyEl, key = 'chat') {
   return true;
 }
 
-function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 50) {
+function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 90) {
   if (!threadEl) return false;
   const timerKey = String(key || 'chat');
   if (__pmChat.patchRenderTimers?.[timerKey]) return true;
@@ -4352,6 +5815,9 @@ function _installMobileTimestampReveal(threadEl, onMessageAction) {
     const isExpanded = timerEl.classList.contains('expanded');
     timerEl.classList.toggle('expanded', !isExpanded);
     drawer.classList.toggle('open', !isExpanded);
+    if (isExpanded) {
+      drawer.querySelectorAll('details.pm-trace-tool-group').forEach((detail) => detail.removeAttribute('open'));
+    }
     event.stopPropagation();
   });
 
@@ -4717,6 +6183,7 @@ function _scrollChat(bodyEl) {
 
 const PM_CHAT_SLASH_COMMANDS = [
   { command: '/side', label: 'Open a linked side chat', placeholder: 'Optional first side-chat message...' },
+  { command: '/skill', label: 'Insert a skill reference', placeholder: 'Search installed skills...' },
   { command: '/goal', label: 'Start goal mode in this chat', placeholder: 'Describe the goal Prometheus should keep working toward...' },
   { command: '/goal status', label: 'Show the active goal state', placeholder: 'Optional note for the status check...' },
   { command: '/goal pause', label: 'Pause the active goal runner', placeholder: 'Optional reason...' },
@@ -4739,6 +6206,9 @@ let pmSkillTriggerExpanded = false;
 let pmSkillTriggerSelectedId = '';
 let pmSkillTriggerLastKey = '';
 let pmSkillTriggerExcludedIds = new Set();
+let pmSelectedComposerSkillIds = [];
+let pmSelectedComposerSkills = [];
+let pmSkillCommandSelectionIndex = 0;
 
 const PM_SKILL_TRIGGER_STOPWORDS = new Set([
   'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
@@ -4795,6 +6265,137 @@ function _pmSkillTriggerExclusionKey(value) {
 
 function _pmSkillTriggerIdentity(skill) {
   return String(skill?.id || skill?.name || '').trim();
+}
+
+function _pmNormalizeSelectedSkillIds(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const ids = [];
+  raw.forEach((item) => {
+    const id = String(item || '').trim();
+    const key = id.toLowerCase();
+    if (!id || seen.has(key)) return;
+    seen.add(key);
+    ids.push(id);
+  });
+  return ids;
+}
+
+function _pmRememberSelectedComposerSkill(id, title = '') {
+  pmSelectedComposerSkillIds = _pmNormalizeSelectedSkillIds([...pmSelectedComposerSkillIds, id]).slice(0, 8);
+  const skillId = String(id || '').trim();
+  const skillTitle = String(title || id || '').trim();
+  if (!skillTitle) return;
+  const key = (skillId || skillTitle).toLowerCase();
+  const next = Array.isArray(pmSelectedComposerSkills) ? pmSelectedComposerSkills.filter((item) => {
+    const itemKey = String(item?.id || item?.title || '').trim().toLowerCase();
+    return itemKey && itemKey !== key;
+  }) : [];
+  next.push({ id: skillId || skillTitle, title: skillTitle });
+  pmSelectedComposerSkills = next.slice(-8);
+}
+
+function _pmClearSelectedComposerSkills() {
+  pmSelectedComposerSkillIds = [];
+  pmSelectedComposerSkills = [];
+}
+
+function _pmNormalizeSelectedComposerSkillRefs(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const refs = [];
+  raw.forEach((item) => {
+    const title = String(item?.title || item?.name || '').trim();
+    const id = String(item?.id || title).trim();
+    const key = (id || title).toLowerCase();
+    if (!title || !key || seen.has(key)) return;
+    seen.add(key);
+    refs.push({ id: id || title, title });
+  });
+  return refs;
+}
+
+function _pmSkillRefMatchesAt(text, index, refs) {
+  const lower = text.toLowerCase();
+  for (const ref of refs) {
+    const title = String(ref?.title || '').trim();
+    if (!title) continue;
+    const end = index + title.length;
+    if (lower.slice(index, end) !== title.toLowerCase()) continue;
+    return { ref, end };
+  }
+  return null;
+}
+
+function _pmSortedSlashCommandTokens() {
+  return PM_CHAT_SLASH_COMMANDS.slice().sort((a, b) => b.command.length - a.command.length);
+}
+
+function _pmSlashCommandTokenAt(text, index) {
+  const value = String(text || '');
+  const lower = value.toLowerCase();
+  const prev = index > 0 ? value.charAt(index - 1) : '';
+  if (prev && !/\s/.test(prev)) return null;
+  for (const item of _pmSortedSlashCommandTokens()) {
+    const command = String(item.command || '').trim();
+    if (!command) continue;
+    const end = index + command.length;
+    if (lower.slice(index, end) !== command.toLowerCase()) continue;
+    const next = value.charAt(end);
+    if (next && !/\s/.test(next)) continue;
+    return { item, end };
+  }
+  return null;
+}
+
+function _pmHasSlashCommandToken(text) {
+  const value = String(text || '');
+  for (let i = 0; i < value.length; i += 1) {
+    if (value.charAt(i) === '/' && _pmSlashCommandTokenAt(value, i)) return true;
+  }
+  return false;
+}
+
+function _pmComposerRichTextHtml(value, refs = pmSelectedComposerSkills) {
+  const text = String(value || '');
+  const normalizedRefs = _pmNormalizeSelectedComposerSkillRefs(refs)
+    .sort((a, b) => String(b.title || '').length - String(a.title || '').length);
+  let cursor = 0;
+  let html = '';
+  while (cursor < text.length) {
+    const match = _pmSkillRefMatchesAt(text, cursor, normalizedRefs);
+    if (match) {
+      const label = text.slice(cursor, match.end);
+      html += `<span class="pm-composer-skill-token">${escapeHtml(label)}</span>`;
+      cursor = match.end;
+      continue;
+    }
+    const commandMatch = text.charAt(cursor) === '/' ? _pmSlashCommandTokenAt(text, cursor) : null;
+    if (commandMatch) {
+      const label = text.slice(cursor, commandMatch.end);
+      html += `<span class="pm-composer-command-token">${escapeHtml(label)}</span>`;
+      cursor = commandMatch.end;
+      continue;
+    }
+    html += escapeHtml(text.charAt(cursor));
+    cursor += 1;
+  }
+  return html;
+}
+
+function _pmUpdateComposerRichPreview(page, input) {
+  const wrap = page?.querySelector?.('#pm-composer-input-wrap');
+  const preview = page?.querySelector?.('#pm-composer-rich-preview');
+  if (!wrap || !preview || !input) return;
+  const text = String(input.value || '');
+  const refs = _pmNormalizeSelectedComposerSkillRefs(pmSelectedComposerSkills);
+  const hasSkillToken = refs.some((ref) => ref.title && text.toLowerCase().includes(ref.title.toLowerCase()));
+  const hasCommandToken = _pmHasSlashCommandToken(text);
+  const hasRichPreview = hasSkillToken || hasCommandToken;
+  wrap.classList.toggle('has-rich-preview', hasRichPreview);
+  preview.hidden = !hasRichPreview;
+  preview.innerHTML = hasRichPreview ? _pmComposerRichTextHtml(text, refs) : '';
+  preview.scrollTop = input.scrollTop || 0;
 }
 
 function _pmGetExcludedSkillIds() {
@@ -4977,11 +6578,79 @@ function _pmMatchSlashCommandValue(value) {
   return null;
 }
 
-function _pmSlashCommandSuggestions(value) {
-  const text = String(value || '');
-  if (!text.startsWith('/') || /\s/.test(text.trim())) return [];
-  const query = text.toLowerCase();
+function _pmSlashCommandState(input) {
+  if (!input) return null;
+  const value = typeof input === 'string' ? input : String(input.value || '');
+  const cursor = typeof input === 'string'
+    ? value.length
+    : (Number.isFinite(Number(input.selectionStart)) ? Number(input.selectionStart) : value.length);
+  const beforeCursor = value.slice(0, cursor);
+  const slashIndex = beforeCursor.lastIndexOf('/');
+  if (slashIndex < 0) return null;
+  const prefixChar = slashIndex > 0 ? beforeCursor.charAt(slashIndex - 1) : '';
+  if (prefixChar && !/\s/.test(prefixChar)) return null;
+  const query = beforeCursor.slice(slashIndex);
+  if (!query.startsWith('/') || /[\s\r\n]/.test(query)) return null;
+  return { start: slashIndex, end: cursor, query, value };
+}
+
+function _pmSlashCommandSuggestions(input) {
+  const state = _pmSlashCommandState(input);
+  if (!state) return [];
+  const query = state.query.toLowerCase();
   return PM_CHAT_SLASH_COMMANDS.filter((item) => item.command.toLowerCase().startsWith(query)).slice(0, 7);
+}
+
+function _pmSkillCommandState(input) {
+  if (!input) return null;
+  const value = String(input.value || '');
+  const cursor = Number.isFinite(Number(input.selectionStart)) ? Number(input.selectionStart) : value.length;
+  const beforeCursor = value.slice(0, cursor);
+  const slashIndex = beforeCursor.toLowerCase().lastIndexOf('/skill');
+  if (slashIndex < 0) return null;
+  const prefixChar = slashIndex > 0 ? beforeCursor.charAt(slashIndex - 1) : '';
+  if (prefixChar && !/\s/.test(prefixChar)) return null;
+  const afterToken = beforeCursor.slice(slashIndex + '/skill'.length);
+  if (afterToken && !/^\s/.test(afterToken)) return null;
+  if (/[\r\n]/.test(afterToken)) return null;
+  return { start: slashIndex, end: cursor, query: afterToken.replace(/^\s+/, ''), value };
+}
+
+function _pmSkillCommandSearchText(skill) {
+  return _pmNormalizeSkillText([
+    skill?.name,
+    skill?.id,
+    skill?.description,
+    ...(Array.isArray(skill?.triggers) ? skill.triggers : []),
+    ...(Array.isArray(skill?.categories) ? skill.categories : []),
+  ].filter(Boolean).join(' '));
+}
+
+function _pmSkillCommandSuggestions(input) {
+  const state = _pmSkillCommandState(input);
+  if (!state) return [];
+  _pmEnsureSkillTriggerCacheLoaded();
+  const skills = Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [];
+  const query = _pmNormalizeSkillText(state.query);
+  const matches = query ? skills.filter((skill) => _pmSkillCommandSearchText(skill).includes(query)) : skills;
+  return matches.slice(0, 8);
+}
+
+function _pmReplaceSkillCommandWithSelection(page, input, skill) {
+  const state = _pmSkillCommandState(input);
+  if (!state || !input || !skill) return;
+  const name = String(skill.name || skill.id || 'Skill').trim();
+  const safeName = name.replace(/\*/g, '').trim() || 'Skill';
+  const suffix = String(state.value.slice(state.end) || '');
+  const replacement = `${safeName}${suffix && /^\s/.test(suffix) ? '' : ' '}`;
+  input.value = `${state.value.slice(0, state.start)}${replacement}${state.value.slice(state.end)}`;
+  const nextCursor = state.start + replacement.length;
+  input.setSelectionRange?.(nextCursor, nextCursor);
+  _pmRememberSelectedComposerSkill(skill.id || skill.name || safeName, safeName);
+  _pmHideSlashPopover(page);
+  _pmRenderSkillTriggerPill(page, input);
+  _pmUpdateComposerRichPreview(page, input);
+  input.focus?.();
 }
 
 function _pmHideSlashPopover(page) {
@@ -5005,10 +6674,14 @@ function _pmRefreshSlashChrome(page, input) {
 
 function _pmSetActiveSlashCommand(page, input, item, remainder = '') {
   if (!input || !item) return;
-  pmActiveSlashCommand = item;
-  input.value = String(remainder || '');
+  pmActiveSlashCommand = null;
+  const command = String(item.command || '').trim();
+  const detail = String(remainder || '').trim();
+  input.value = `${command}${detail ? ` ${detail}` : ' '}`;
+  try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
   _pmRefreshSlashChrome(page, input);
   _pmHideSlashPopover(page);
+  _pmUpdateComposerRichPreview(page, input);
   input.focus();
 }
 
@@ -5022,6 +6695,39 @@ function _pmClearActiveSlashCommand(page, input, options = {}) {
 function _pmSelectSlashCommand(page, input, command) {
   const item = PM_CHAT_SLASH_COMMANDS.find((candidate) => candidate.command === command);
   if (!item) return;
+  const slashState = _pmSlashCommandState(input);
+  if (item.command === '/skill') {
+    if (!input) return;
+    const current = String(input.value || '');
+    const typedMatch = slashState?.start === 0 ? _pmMatchSlashCommandValue(current) : null;
+    const remainder = typedMatch?.item.command === item.command ? typedMatch.remainder : '';
+    if (slashState) {
+      const replacement = `/skill${remainder ? ` ${remainder}` : ' '}`;
+      input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
+      const nextCursor = slashState.start + replacement.length;
+      input.setSelectionRange?.(nextCursor, nextCursor);
+    } else {
+      input.value = `/skill${remainder ? ` ${remainder}` : ' '}`;
+      input.setSelectionRange?.(input.value.length, input.value.length);
+    }
+    pmActiveSlashCommand = null;
+    _pmRefreshSlashChrome(page, input);
+    _pmRenderSlashPopover(page, input);
+    input.focus?.();
+    return;
+  }
+  if (slashState && slashState.start > 0 && input) {
+    const replacement = `${item.command} `;
+    input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
+    const nextCursor = slashState.start + replacement.length;
+    input.setSelectionRange?.(nextCursor, nextCursor);
+    pmActiveSlashCommand = null;
+    _pmRefreshSlashChrome(page, input);
+    _pmHideSlashPopover(page);
+    _pmUpdateComposerRichPreview(page, input);
+    input.focus?.();
+    return;
+  }
   const current = String(input?.value || '');
   const typedMatch = _pmMatchSlashCommandValue(current);
   const remainder = typedMatch?.item.command === item.command ? typedMatch.remainder : '';
@@ -5034,7 +6740,32 @@ function _pmRenderSlashPopover(page, input) {
     _pmHideSlashPopover(page);
     return [];
   }
-  const suggestions = _pmSlashCommandSuggestions(input?.value || '');
+  const skillSuggestions = _pmSkillCommandSuggestions(input);
+  if (skillSuggestions.length) {
+    pmSkillCommandSelectionIndex = Math.max(0, Math.min(pmSkillCommandSelectionIndex, skillSuggestions.length - 1));
+    popover.innerHTML = skillSuggestions.map((skill, idx) => {
+      const description = String(skill.description || '').trim();
+      const shortDescription = description.length > 84 ? `${description.slice(0, 81).trim()}...` : description;
+      return `
+    <button class="pm-chat-slash-item ${idx === pmSkillCommandSelectionIndex ? 'active' : ''}" type="button" data-skill-id="${escapeHtml(skill.id || '')}">
+      <span class="pm-chat-slash-token">${escapeHtml(skill.name || skill.id || 'Skill')}</span>
+      <span class="pm-chat-slash-label">${escapeHtml(shortDescription || skill.id || 'Skill')}</span>
+      <span class="pm-chat-slash-hint">${idx === 0 ? 'Enter' : 'Tap'}</span>
+    </button>
+  `;
+    }).join('');
+    popover.querySelectorAll('.pm-chat-slash-item').forEach((btn) => {
+      btn.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        const id = btn.getAttribute('data-skill-id') || '';
+        const skill = skillSuggestions.find((candidate) => String(candidate.id || '') === id) || skillSuggestions[0];
+        _pmReplaceSkillCommandWithSelection(page, input, skill);
+      });
+    });
+    popover.hidden = false;
+    return skillSuggestions;
+  }
+  const suggestions = _pmSlashCommandSuggestions(input);
   if (!suggestions.length) {
     _pmHideSlashPopover(page);
     return [];
@@ -5059,8 +6790,13 @@ function _pmRenderSlashPopover(page, input) {
 
 function _pmHandleSlashInput(page, input) {
   const value = String(input?.value || '');
+  if (_pmSkillCommandState(input)) {
+    pmSkillCommandSelectionIndex = 0;
+    _pmRenderSlashPopover(page, input);
+    return;
+  }
   if (pmActiveSlashCommand) {
-    if (value.startsWith('/')) {
+    if (_pmSlashCommandState(input)) {
       pmActiveSlashCommand = null;
       _pmRefreshSlashChrome(page, input);
       pmSlashCommandSelectionIndex = 0;
@@ -5070,7 +6806,10 @@ function _pmHandleSlashInput(page, input) {
   }
   const match = _pmMatchSlashCommandValue(value);
   if (match) {
-    _pmSetActiveSlashCommand(page, input, match.item, match.remainder);
+    pmActiveSlashCommand = null;
+    _pmRefreshSlashChrome(page, input);
+    _pmUpdateComposerRichPreview(page, input);
+    _pmHideSlashPopover(page);
     return;
   }
   pmSlashCommandSelectionIndex = 0;
@@ -5167,6 +6906,134 @@ function _wireMobileMediaCards(root = document) {
   });
 }
 
+async function _copyMobileSnippetText(text, button = null) {
+  const value = String(text || '');
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    pmToast('Snippet copied', 'success');
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); pmToast('Snippet copied', 'success'); }
+    catch { pmToast('Could not copy snippet', 'error'); }
+    finally { ta.remove(); }
+  }
+  if (button) {
+    button.classList.add('copied');
+    window.setTimeout(() => button.classList.remove('copied'), 700);
+  }
+}
+
+function _wireMobileSnippetCopyButtons(root = document) {
+  root?.querySelectorAll?.('.pm-bubble .markdown-body pre').forEach((pre) => {
+    if (pre.dataset.pmSnippetCopyWired === '1') return;
+    pre.dataset.pmSnippetCopyWired = '1';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pm-snippet-copy-btn';
+    button.title = 'Copy snippet';
+    button.setAttribute('aria-label', 'Copy snippet');
+    button.innerHTML = ICONS.clipboard;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const code = pre.querySelector('code');
+      _copyMobileSnippetText((code?.innerText || pre.innerText || '').trim(), button);
+    });
+    pre.appendChild(button);
+  });
+}
+
+function _mobileHtmlVisualFilename() {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  return `prometheus-visual-${ts}.html`;
+}
+
+function _mobileNormalizeVisualHtml(raw) {
+  const html = String(raw || '').trim();
+  if (!html) return '';
+  if (/<!doctype html|<html[\s>]/i.test(html)) return html;
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Prometheus Visual</title>
+</head>
+<body>
+${html}
+</body>
+</html>`;
+}
+
+async function _saveMobileHtmlVisual(block, button = null) {
+  const raw = block?.getAttribute?.('data-vis-code') || block?.querySelector?.('iframe')?.getAttribute?.('srcdoc') || '';
+  const html = _mobileNormalizeVisualHtml(raw);
+  if (!html) {
+    pmToast('This visual has no HTML source to save.', 'error');
+    return;
+  }
+  try {
+    if (button) {
+      button.disabled = true;
+      button.classList.add('saving');
+    }
+    const filename = _mobileHtmlVisualFilename();
+    const result = await uploadMobileTextFile({ filename, content: html });
+    const path = String(result?.relPath || `uploads/${filename}`);
+    pmToast('Saved visual to workspace', 'success');
+    window.__pmCanvasSheet?.open({
+      name: filename,
+      kind: 'html',
+      path,
+      src: _mobileMediaUrl({ path }, 'inline'),
+      download: _mobileMediaUrl({ path }, 'download'),
+      interactionMode: 'interact',
+    });
+  } catch (err) {
+    pmToast(err?.message || 'Could not save visual', 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove('saving');
+    }
+  }
+}
+
+function _wireMobileVisualSaveButtons(root = document) {
+  root?.querySelectorAll?.('.pm-bubble .visual-block[data-vis-lang="html"][data-vis-code]').forEach((block) => {
+    if (block.dataset.pmVisualSaveWired === '1') return;
+    block.dataset.pmVisualSaveWired = '1';
+    const row = document.createElement('div');
+    row.className = 'pm-visual-save-row';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pm-visual-save-btn';
+    button.title = 'Save HTML visual';
+    button.setAttribute('aria-label', 'Save HTML visual to workspace');
+    button.innerHTML = `${ICONS.upload}<span>Save HTML</span>`;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      _saveMobileHtmlVisual(block, button);
+    });
+    row.appendChild(button);
+    block.insertAdjacentElement('afterend', row);
+  });
+}
+
+function _wireMobileChatEnhancements(root = document) {
+  _wireMobileMediaCards(root);
+  _wireMobileFileChangeRows(root);
+  _wireMobileSnippetCopyButtons(root);
+  _wireMobileVisualSaveButtons(root);
+}
+
 function _wireMobileFileChangeRows(root = document) {
   root?.querySelectorAll?.('[data-pm-file-change-path]')?.forEach((row) => {
     if (row.dataset.pmFileChangeWired === '1') return;
@@ -5191,9 +7058,9 @@ function _wireMobileFileChangeRows(root = document) {
 
 export function renderChatPage(page, { navigate, sessionId = null }) {
   _installMobileApprovalBridge();
-  // When the Chat tab is opened without a session in the URL, return to the last
-  // chat the user explicitly opened. New Chat clears this key, so notifications
-  // cannot hijack an intentional blank draft.
+  // A bare mobile chat route reopens the last explicitly opened chat. The New
+  // Chat button clears that remembered id, so only that action lands on the
+  // unsaved mobile_default draft with starter cards.
   const rememberedSession = sessionId ? '' : _readMobileLastChatSession();
   let requestedSession = String(sessionId || rememberedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
@@ -5228,21 +7095,32 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     pop.className = 'pm-chat-settings-popover';
     pop.setAttribute('aria-label', 'Chat settings menu');
     pop.innerHTML = `
-      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-open" type="button" data-action="settings">Settings</button>
       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-notifications" type="button" data-action="notifications">Notifications</button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-files" type="button" data-action="files">Files</button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-permissions" type="button" data-action="permissions">Permissions</button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-open" type="button" data-action="settings">Settings</button>
     `;
 
-    const openSettings = () => {
+    const openSettings = (tab = '') => {
       closeMenu();
-      if (typeof page.openSettings === 'function') page.openSettings();
-      else if (typeof window.pmOpenSettings === 'function') window.pmOpenSettings();
-      else if (typeof window.openSettings === 'function') window.openSettings();
-      else navigate?.('#mobile/settings');
+      const target = tab ? `#mobile/settings/${encodeURIComponent(tab)}` : '#mobile/settings';
+      if (typeof page.openSettings === 'function' && !tab) page.openSettings();
+      else if (typeof window.pmOpenSettings === 'function') {
+        const opened = window.pmOpenSettings(tab || undefined);
+        if (!opened) navigate?.(target);
+      }
+      else if (typeof window.openSettings === 'function') window.openSettings(tab || undefined);
+      else navigate?.(target);
     };
+
+    pop.querySelector('#pm-chat-settings-permissions')?.addEventListener('click', () => {
+      closeMenu();
+      requestAnimationFrame(() => openSettings('security'));
+    }, { passive: true });
 
     pop.querySelector('#pm-chat-settings-open')?.addEventListener('click', () => {
       closeMenu();
-      requestAnimationFrame(openSettings);
+      requestAnimationFrame(() => openSettings());
     }, { passive: true });
 
     pop.querySelector('#pm-chat-settings-notifications')?.addEventListener('click', () => {
@@ -5252,9 +7130,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       });
     }, { passive: true });
 
+    pop.querySelector('#pm-chat-settings-files')?.addEventListener('click', () => {
+      closeMenu();
+      requestAnimationFrame(() => {
+        handleBrowseCommand('').catch((err) => pmToast(err?.message || String(err || 'Could not open files'), 'error'));
+      });
+    }, { passive: true });
+
     document.body.appendChild(overlay);
     document.body.appendChild(pop);
     _refreshMobileChatPushButton().catch(() => {});
+    _prefetchBrowseRoot().catch(() => {});
   };
 
   const header = renderMobileHeader({
@@ -5273,6 +7159,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
     <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
     <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
+    <div class="pm-chat-connection-status" id="pm-chat-connection-status" hidden aria-live="polite">
+      <span class="pm-chat-connection-spinner" aria-hidden="true"></span>
+      <span class="pm-chat-connection-text">Reconnecting to Prometheus</span>
+    </div>
     <form class="pm-composer" id="pm-composer">
       <span class="pm-glass-lens" aria-hidden="true"></span>
       <span class="pm-glass-border" aria-hidden="true"></span>
@@ -5286,12 +7176,15 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       </button>
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn" id="pm-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
-        <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+        <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
+          <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
+          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+        </div>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
       </div>
       <div class="pm-chat-voice-shell" id="pm-chat-voice-shell" hidden>
-        <button type="button" class="pm-chat-voice-camera" id="pm-chat-voice-camera" aria-label="Send camera snapshot">${ICONS.image}</button>
+        <button type="button" class="pm-chat-voice-camera" id="pm-chat-voice-camera" aria-label="Attach realtime camera or photos">${ICONS.paperclip}</button>
         <button type="button" class="pm-chat-voice-close" id="pm-chat-voice-close" aria-label="Exit voice mode">&times;</button>
         <div class="pm-chat-voice-inline" id="pm-chat-voice-inline" hidden></div>
       </div>
@@ -5356,10 +7249,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     onNewChat: () => _startMobileNewChat(navigate),
   });
   wireMobileContextWindow(page, { getSessionId: () => __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
+  setTimeout(() => { _prefetchBrowseRoot().catch(() => {}); }, 300);
 
   const body     = page.querySelector('#pm-chat-body');
   const threadEl = page.querySelector('#pm-chat-thread');
   const form     = page.querySelector('#pm-composer');
+  const connectionStatus = page.querySelector('#pm-chat-connection-status');
   const backgroundSpawnDock = page.querySelector('#pm-background-spawn-dock');
   const goalStrip = page.querySelector('#pm-mobile-goal-strip');
   const input    = page.querySelector('#pm-composer-input');
@@ -5405,6 +7300,23 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
 
   _pmRefreshSlashChrome(page, input);
   _installMobileTimestampReveal(threadEl, handleMobileMessageAction);
+  threadEl?.addEventListener('click', (event) => {
+    const btn = event.target?.closest?.('[data-mobile-starter-prompt]');
+    if (!btn) return;
+    const index = Number(btn.getAttribute('data-mobile-starter-prompt'));
+    const card = _getMobileEmptyChatStarterCards()[index];
+    if (!card || !input) return;
+    input.value = card.prompt;
+    resizeComposerInput();
+    _pmUpdateComposerRichPreview(page, input);
+    _pmClearActiveSlashCommand(page, input, { focus: false });
+    updateComposerSubmitState();
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+  });
+  if (requestedSession === MOBILE_CHAT_SESSION_ID) {
+    _loadMobileEmptyChatBrainCards().catch(() => {});
+  }
   const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
   const previousQueuedPromptsBridge = window.__pmMobileQueuedPromptsChanged;
   const previousGoalBridge = window.__pmMobileGoalChanged;
@@ -5415,9 +7327,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const currentQueuedPromptsBridge = () => {
     updateChatComposerSpace();
   };
-  const currentGoalBridge = () => {
+  const currentGoalBridge = (msg = {}) => {
     _renderMobileGoalPill(goalStrip, requestedSession);
     updateChatComposerSpace();
+    const sid = String(msg?.sessionId || requestedSession || '').trim();
+    if (sid && sid === requestedSession) {
+      const event = String(msg?.event || '').trim();
+      const status = String(msg?.goal?.status || '').trim();
+      if (status === 'active' || /^(runner_started|turn_started|runtime_failure|runner_stopped)$/.test(event)) {
+        scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
+      }
+    }
   };
   window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
   window.__pmMobileQueuedPromptsChanged = currentQueuedPromptsBridge;
@@ -5439,9 +7359,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     input.style.height = '';
     input.style.overflowY = 'hidden';
     _pmClearSkillExclusions();
+    _pmClearSelectedComposerSkills();
     _pmHideSkillTriggerPill(page);
+    _pmUpdateComposerRichPreview(page, input);
     requestAnimationFrame(resizeComposerInput);
   };
+  let connectionStatusHideTimer = null;
+  let connectionStatusSuccessTimer = null;
   requestAnimationFrame(resizeComposerInput);
   requestAnimationFrame(() => updateChatComposerSpace());
 
@@ -6102,7 +8026,6 @@ void main() {
         }
       });
       if (staged.length) {
-        _kickoffMobileXaiVisionSummary(staged, { name: reason === 'ptt_release' ? 'camera view after speaking' : 'live camera view' }).catch(() => {});
         _voiceDebug('voice-camera-auto-captured', { reason, frames: staged.length });
       }
       return staged.length > 0;
@@ -6181,9 +8104,59 @@ void main() {
         pill.classList.add('offline');
       });
   }
+
+  function setChatConnectionStatus(visible, text = 'Reconnecting to Prometheus', options = {}) {
+    if (!connectionStatus) return;
+    if (connectionStatusHideTimer) {
+      clearTimeout(connectionStatusHideTimer);
+      connectionStatusHideTimer = null;
+    }
+    if (connectionStatusSuccessTimer) {
+      clearTimeout(connectionStatusSuccessTimer);
+      connectionStatusSuccessTimer = null;
+    }
+    const mode = String(options.mode || '').trim();
+    const apply = () => {
+      connectionStatus.querySelector('.pm-chat-connection-text')?.replaceChildren(document.createTextNode(text));
+      connectionStatus.hidden = !visible;
+      connectionStatus.classList.toggle('visible', !!visible);
+      connectionStatus.classList.toggle('success', visible && mode === 'success');
+      updateChatComposerSpace();
+    };
+    const delayMs = Math.max(0, Number(options.delayMs || 0) || 0);
+    if (!visible && delayMs > 0) {
+      connectionStatusHideTimer = setTimeout(() => {
+        connectionStatusHideTimer = null;
+        apply();
+      }, delayMs);
+      return;
+    }
+    apply();
+  }
+
+  const showReconnectingStatus = (msg = {}) => {
+    const waitingForNetwork = String(msg?.type || '') === 'ws:waiting_for_network';
+    setChatConnectionStatus(true, waitingForNetwork ? 'Waiting for network' : 'Reconnecting to Prometheus');
+  };
+  const hideReconnectingStatus = () => {
+    if (connectionStatus && !connectionStatus.hidden && connectionStatus.classList.contains('visible')) {
+      setChatConnectionStatus(true, 'Prometheus Reconnected', { mode: 'success' });
+      connectionStatusSuccessTimer = setTimeout(() => {
+        connectionStatusSuccessTimer = null;
+        setChatConnectionStatus(false, 'Prometheus Reconnected', { mode: 'success', delayMs: 180 });
+      }, 950);
+      return;
+    }
+    setChatConnectionStatus(false, 'Reconnecting to Prometheus', { delayMs: 180 });
+  };
   if (__pmChat.statusTimer) clearInterval(__pmChat.statusTimer);
   updateOnlineStatus();
   __pmChat.statusTimer = setInterval(updateOnlineStatus, 7000);
+  wsEventBus?.on?.('ws:reconnecting', showReconnectingStatus);
+  wsEventBus?.on?.('ws:waiting_for_network', showReconnectingStatus);
+  wsEventBus?.on?.('ws:timeout', showReconnectingStatus);
+  wsEventBus?.on?.('ws:error', showReconnectingStatus);
+  wsEventBus?.on?.('ws:open', hideReconnectingStatus);
 
   if (!__pmChat.threads[requestedSession]?.length && requestedSession !== MOBILE_CHAT_SESSION_ID) {
     // Render localStorage skeleton immediately so the user sees content at once
@@ -6195,19 +8168,18 @@ void main() {
       _scrollChat(body);
     } else {
       threadEl.innerHTML = '<div class="pm-chat-loading">Loading chat...</div>';
+      setChatConnectionStatus(true, 'Loading chat');
     }
     loadMobileChatSession(requestedSession)
       .then((session) => {
         if (__pmChat.activeSessionId !== requestedSession) return;
+        hideReconnectingStatus();
         _rememberMobileSessionGoal(session, requestedSession);
         _renderMobileGoalPill(goalStrip, requestedSession);
         updateChatComposerSpace();
         const history = Array.isArray(session?.history) ? session.history : [];
         const localThread = __pmChat.threads[requestedSession] || [];
-        __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
-          _mapServerHistoryToMobile(history),
-          localThread,
-        );
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
         _activeMobileThread();
         _renderThread(threadEl);
         _scrollChat(body);
@@ -6222,8 +8194,10 @@ void main() {
         if (__pmChat.activeSessionId !== requestedSession) return;
         if (!__pmChat.threads[requestedSession]?.length) {
           threadEl.innerHTML = `<div class="pm-chat-loading error">Could not load chat: ${escapeHtml(err.message || 'Unknown error')}</div>`;
+          setChatConnectionStatus(true, 'Reconnecting to Prometheus');
         } else {
           pmToast('Showing cached chat while Prometheus reconnects.', 'info');
+          setChatConnectionStatus(true, 'Reconnecting to Prometheus');
         }
       });
   }
@@ -6254,11 +8228,13 @@ void main() {
       };
 
       let recoveredSessionProcessLog = [];
+      let recoveredSessionHistory = [];
       if (fullRefresh || force) {
         const session = prefetchedSession;
         _rememberMobileSessionGoal(session, requestedSession);
         _renderMobileGoalPill(goalStrip, requestedSession);
         const history = Array.isArray(session?.history) ? session.history : [];
+        recoveredSessionHistory = history;
         recoveredSessionProcessLog = Array.isArray(session?.processLog) ? session.processLog : [];
         // CRITICAL: do NOT replace the thread with server history while a run is
         // still active. Server history never includes the in-progress streaming turn,
@@ -6268,10 +8244,7 @@ void main() {
         // reconnect. Defer the history merge to after active-run recovery.
         if (history.length && !status?.active) {
           const localThread = __pmChat.threads[requestedSession] || [];
-          __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
-            _mapServerHistoryToMobile(history),
-            localThread,
-          );
+          __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
           _activeMobileThread();
         }
         // ── Parallel batch 2: approvals + questions (independent) ────────────────
@@ -6294,7 +8267,25 @@ void main() {
       }
 
       const activeThread = _activeMobileThread();
-      let aiTurn = _findLatestAssistantTurn(activeThread);
+      const latestAssistantTurn = _findLatestAssistantTurn(activeThread);
+      let aiTurn = latestAssistantTurn?.streaming === true ? latestAssistantTurn : null;
+      const runStartedAt = Number(status?.run?.startedAt || remembered?.startedAt || 0) || 0;
+      const activeRunKind = String(status?.run?.kind || '').trim();
+      if (status?.active && _mobileHistoryHasCompletedTurnSince(recoveredSessionHistory, runStartedAt, { activeRunKind })) {
+        const localThread = __pmChat.threads[requestedSession] || [];
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(
+          requestedSession,
+          recoveredSessionHistory,
+          localThread,
+        ).filter((turn) => !(turn?.role === 'ai' && turn.streaming));
+        _activeMobileThread();
+        _flushThreadRender(threadEl, body, requestedSession);
+        hideReconnectingStatus();
+        _clearMobileActiveRun(requestedSession);
+        _markMobileSessionRunning(requestedSession, false);
+        setBusy(false);
+        return;
+      }
       if (status?.active) {
         let hasLocalLiveHistory = !!(aiTurn?.streaming && (
           String(aiTurn.body?.text || aiTurn.content || '').trim()
@@ -6319,7 +8310,9 @@ void main() {
           hasLocalLiveHistory = false;
         }
         aiTurn.streaming = true;
-        _mergeMobileProcessEntries(aiTurn, recoveredSessionProcessLog);
+        const activeRunProcessLog = _filterMobileProcessEntriesForActiveRun(recoveredSessionProcessLog, aiTurn, status, remembered);
+        if (activeRunProcessLog.length) _mergeMobileProcessEntries(aiTurn, activeRunProcessLog);
+        _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
         const rememberedLastSeq = Math.max(
           Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
           Number(remembered?.lastSeq || 0) || 0,
@@ -6342,17 +8335,31 @@ void main() {
         const isColdReopen = remembered?.disconnected === true;
         let shouldResetForReplay = isColdReopen
           || (!hasLocalLiveHistory && (fullRefresh || force));
-        // On cold reopen also clear the in-memory lastSeq so replayAfter=0
-        if (isColdReopen && __pmChat.activeRuns?.[requestedSession]) {
+        // Full replay must also clear in-memory/local lastSeq; otherwise the
+        // seq=0 frames are fetched but noteChatStreamSeq rejects them as stale.
+        if (shouldResetForReplay && __pmChat.activeRuns?.[requestedSession]) {
           __pmChat.activeRuns[requestedSession] = {
             ...__pmChat.activeRuns[requestedSession],
             lastSeq: 0,
             streamId: '',
           };
+          _rememberMobileActiveRun(requestedSession, { lastSeq: 0, streamId: '' });
         }
         let replayAfter = shouldResetForReplay ? 0 : rememberedLastSeq;
         let replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => null);
         let events = Array.isArray(replay?.events) ? replay.events : [];
+        const replayStreamId = String(replay?.stream?.streamId || '').trim();
+        const rememberedStreamId = String(__pmChat.activeRuns?.[requestedSession]?.streamId || remembered?.streamId || '').trim();
+        if (!shouldResetForReplay && replayStreamId && rememberedStreamId && replayStreamId !== rememberedStreamId) {
+          shouldResetForReplay = true;
+          replayAfter = 0;
+          if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+          const run = __pmChat.activeRuns[requestedSession] || {};
+          __pmChat.activeRuns[requestedSession] = { ...run, lastSeq: 0, streamId: replayStreamId };
+          _rememberMobileActiveRun(requestedSession, { lastSeq: 0, streamId: replayStreamId });
+          replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => replay);
+          events = Array.isArray(replay?.events) ? replay.events : [];
+        }
         const firstSeq = Math.max(0, Math.floor(Number(replay?.stream?.firstSeq || 0)) || 0);
         const replayGap = !shouldResetForReplay
           && rememberedLastSeq > 0
@@ -6364,6 +8371,7 @@ void main() {
           if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
           const run = __pmChat.activeRuns[requestedSession] || {};
           __pmChat.activeRuns[requestedSession] = { ...run, lastSeq: 0, streamId: '' };
+          _rememberMobileActiveRun(requestedSession, { lastSeq: 0, streamId: '' });
           replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => replay);
           events = Array.isArray(replay?.events) ? replay.events : [];
         }
@@ -6372,16 +8380,23 @@ void main() {
             startedAt: Number(replay?.stream?.startedAt || status?.run?.startedAt || remembered?.startedAt || aiTurn.workStartedAt || aiTurn.timestamp || 0),
             clientRequestId: aiTurn._clientRequestId,
           });
-          _mergeMobileProcessEntries(aiTurn, recoveredSessionProcessLog);
+          if (activeRunProcessLog.length) _mergeMobileProcessEntries(aiTurn, activeRunProcessLog);
+          _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
         }
         let terminal = '';
-        for (const frame of events) {
-          const applied = applyMobileChatStreamEvent(aiTurn, replayFrameToEvent(frame));
-          if (applied === 'done' || applied === 'error') {
-            terminal = applied;
-            break;
+        aiTurn._pmRecoveryReplay = true;
+        try {
+          for (const frame of events) {
+            const applied = applyMobileChatStreamEvent(aiTurn, replayFrameToEvent(frame));
+            if (applied === 'done' || applied === 'error') {
+              terminal = applied;
+              break;
+            }
           }
+        } finally {
+          delete aiTurn._pmRecoveryReplay;
         }
+        _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
         if (terminal) {
           await recoverBackgroundDock(events);
           finalizeMobileLiveAiTurn(aiTurn);
@@ -6390,9 +8405,10 @@ void main() {
         if (!events.length && !String(aiTurn.body?.text || '').trim() && !(Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.length)) {
           _appendMobileProcess(aiTurn, 'info', 'Live run is connected. Waiting for the next update.');
         }
+        hideReconnectingStatus();
         _rememberMobileActiveRun(requestedSession, {
           startedAt: status.run?.startedAt || remembered?.startedAt,
-          disconnected: true,
+          disconnected: false,
           streamId: replay?.stream?.streamId || remembered?.streamId || '',
           lastSeq: Math.max(
             Number(replay?.stream?.lastSeq || 0) || 0,
@@ -6414,10 +8430,7 @@ void main() {
       const history = Array.isArray(session?.history) ? session.history : [];
       if (history.length) {
         const localThread = __pmChat.threads[requestedSession] || [];
-        __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
-          _mapServerHistoryToMobile(history),
-          localThread,
-        );
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
         if (!silent) pmToast('Recovered latest mobile chat result.', 'success');
@@ -6429,7 +8442,7 @@ void main() {
       if (queue.length) {
         const next = queue.shift();
         _renderMobileQueuedPromptsPanel(requestedSession);
-        setTimeout(() => sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [] }), 0);
+        setTimeout(() => sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [], selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [], selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [] }), 0);
       }
     } catch (err) {
       if (_readMobileActiveRun(requestedSession)?.disconnected) scheduleMobileRunRecovery(2500, { fullRefresh });
@@ -6534,10 +8547,16 @@ void main() {
   }
 
   function _setChatVoiceActive(active) {
-    form?.classList.toggle('is-voice-active', !!active);
-    body?.classList.toggle('pm-chat-voice-occluded', !!active);
-    if (chatVoiceShell) chatVoiceShell.hidden = !active;
-    if (chatVoiceHost) chatVoiceHost.hidden = !active;
+    const enabled = !!active;
+    const thread = Array.isArray(__pmChat.threads?.[requestedSession]) ? __pmChat.threads[requestedSession] : [];
+    const newChatVoice = requestedSession === MOBILE_CHAT_SESSION_ID && thread.length === 0;
+    form?.classList.toggle('is-voice-active', enabled);
+    body?.classList.toggle('pm-chat-voice-occluded', enabled);
+    document.body?.classList.toggle('pm-chat-voice-active', enabled);
+    document.body?.classList.toggle('pm-chat-voice-new-chat', enabled && newChatVoice);
+    document.body?.classList.toggle('pm-chat-voice-existing-chat', enabled && !newChatVoice);
+    if (chatVoiceShell) chatVoiceShell.hidden = !enabled;
+    if (chatVoiceHost) chatVoiceHost.hidden = !enabled;
     updateChatComposerSpace();
   }
 
@@ -6553,13 +8572,18 @@ void main() {
       const goalHeight = goalStrip && !goalStrip.hidden
         ? Math.ceil(goalStrip.getBoundingClientRect?.().height || 0)
         : 0;
+      const connectionHeight = connectionStatus && !connectionStatus.hidden
+        ? Math.ceil(connectionStatus.getBoundingClientRect?.().height || 0)
+        : 0;
       page?.style?.setProperty?.('--pm-composer-live-height', `${height}px`);
       page?.style?.setProperty?.('--pm-queued-live-height', `${queuedHeight}px`);
       page?.style?.setProperty?.('--pm-goal-live-height', `${goalHeight}px`);
+      page?.style?.setProperty?.('--pm-connection-live-height', `${connectionHeight}px`);
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
-      const space = Math.max(170, height + queuedHeight + goalHeight + dockHeight + (dockHeight ? 54 : 40));
+      page?.style?.setProperty?.('--pm-background-dock-live-height', `${dockHeight}px`);
+      const space = Math.max(170, height + queuedHeight + goalHeight + dockHeight + connectionHeight + (dockHeight || connectionHeight ? 54 : 40));
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
       if (form.classList.contains('is-voice-active') && chatVoiceShell && !chatVoiceShell.hidden) {
         const bodyRect = body.getBoundingClientRect?.();
@@ -6590,8 +8614,7 @@ void main() {
       ? visible.map((msg, index) => _renderChatMessageHtml(msg, index)).join('')
       : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>';
     _wireMobileProcessRunActions(sideThreadEl);
-    _wireMobileMediaCards(sideThreadEl);
-    _wireMobileFileChangeRows(sideThreadEl);
+    _wireMobileChatEnhancements(sideThreadEl);
     requestAnimationFrame(() => {
       if (sideThreadEl) sideThreadEl.scrollTop = sideThreadEl.scrollHeight;
     });
@@ -6724,9 +8747,7 @@ void main() {
           if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
             _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
           } else {
-            aiTurn.finalResponseStarted = true;
-            aiTurn.body.text += chunk;
-            aiTurn.content = String(aiTurn.body.text || '');
+            _appendMobileVisualStreamToken(aiTurn, chunk, scheduleSideRenderSoon);
           }
         }
         scheduleSideRenderSoon();
@@ -6740,7 +8761,6 @@ void main() {
       case 'thinking_delta': {
         const text = String(evt.thinking || evt.text || '');
         if (text) {
-          _appendMobileProcess(aiTurn, 'think', text.trim().slice(0, 220));
           _appendMobileLiveTrace(aiTurn, 'think', text, { append: true });
         }
         scheduleSideRenderSoon();
@@ -6789,7 +8809,9 @@ void main() {
         if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.text) {
           aiTurn.finalResponseStarted = true;
-          aiTurn.body.text = String(evt.text);
+          _finishMobileVisualStreamText(aiTurn, String(evt.text));
+        } else {
+          _finishMobileVisualStreamText(aiTurn);
         }
         aiTurn.content = String(aiTurn.body.text || '');
         flushSideRender();
@@ -6801,12 +8823,15 @@ void main() {
         if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.reply && !String(aiTurn.body.text || '').trim()) {
           aiTurn.finalResponseStarted = true;
-          aiTurn.body.text = String(evt.reply);
+          _finishMobileVisualStreamText(aiTurn, String(evt.reply));
+        } else {
+          _finishMobileVisualStreamText(aiTurn);
         }
         aiTurn.content = String(aiTurn.body.text || '');
         flushSideRender();
         return 'done';
       case 'error':
+        _finishMobileVisualStreamText(aiTurn);
         _appendMobileProcess(aiTurn, 'error', String(evt.message || 'Chat error'), evt);
         aiTurn.body.text = (aiTurn.body.text ? `${aiTurn.body.text}\n\n` : '') + `Warning: ${String(evt.message || 'Chat error')}`;
         aiTurn.content = aiTurn.body.text;
@@ -6857,6 +8882,7 @@ void main() {
       },
       onError: (err) => {
         if (err?.name === 'AbortError') return;
+        _finishMobileVisualStreamText(aiTurn);
         aiTurn.body.text = (aiTurn.body.text ? `${aiTurn.body.text}\n\n` : '') + `Warning: ${err?.message || 'Chat error'}`;
         aiTurn.content = aiTurn.body.text;
         finishMobileSideTurn();
@@ -6866,6 +8892,7 @@ void main() {
     });
     sideState.abort = { abort: () => {
       try { stream.abort(); } catch {}
+      _finishMobileVisualStreamText(aiTurn);
       aiTurn.streaming = false;
       aiTurn.body.text = String(aiTurn.body.text || '').trim()
         ? `[Stopped by user]\n\n${aiTurn.body.text}`
@@ -6881,6 +8908,7 @@ void main() {
         return;
       }
       sideTurnFinished = true;
+      _finishMobileVisualStreamText(aiTurn);
       aiTurn.streaming = false;
       aiTurn.workEndedAt = Number(aiTurn.workEndedAt || Date.now()) || Date.now();
       aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
@@ -7013,6 +9041,9 @@ void main() {
     if (chatVoiceShell) chatVoiceShell.hidden = true;
     form?.classList.remove('is-voice-active');
     body?.classList.remove('pm-chat-voice-occluded');
+    document.body?.classList.remove('pm-chat-voice-active');
+    document.body?.classList.remove('pm-chat-voice-new-chat');
+    document.body?.classList.remove('pm-chat-voice-existing-chat');
     updateChatComposerSpace();
     updateComposerSubmitState();
   }
@@ -7045,7 +9076,6 @@ void main() {
             mimeType: normalized?.mimeType || extra?.file?.type || 'image/jpeg',
             base64: normalized?.base64,
           }, sid);
-          _kickoffMobileXaiVisionSummary([dataUrl], { name: 'camera photo' }).catch(() => {});
         },
         onVideoCapture: async (payload) => {
           const frames = Array.isArray(payload?.frames) ? payload.frames : [];
@@ -7067,7 +9097,6 @@ void main() {
             __pmRealtimeAgent.pendingImages.push(frameImg);
             _injectRealtimeImageItemToConversation(frameImg, `Video frame ${i + 1} of ${frames.length} from the mobile camera clip - sequential visual context for what I say next.`).catch(() => {});
           }
-          _kickoffMobileXaiVisionSummary(frames.map((f) => f.dataUrl), { name: 'camera video clip', durationMs: Number(payload?.durationMs || 0) || 0 }).catch(() => {});
         },
       });
     } catch (err) {
@@ -7111,9 +9140,7 @@ void main() {
         }, sid);
         dataUrls.push(item.dataUrl);
       });
-      if (dataUrls.length) {
-        _kickoffMobileXaiVisionSummary(dataUrls, { name: dataUrls.length > 1 ? 'photo attachments' : 'photo attachment' }).catch(() => {});
-      }
+      if (dataUrls.length) _voiceDebug('realtime-agent-image-files-staged', { count: dataUrls.length });
     } catch (err) {
       pmToast(err?.message || 'Could not read the selected photo. Check photo or file permission.', 'error');
     }
@@ -7158,8 +9185,10 @@ void main() {
     const update = event?.detail || {};
     _onChatVoiceUpdate(update.sessionId, update);
   };
+  const _openChatVoiceAttachSheet = () => openAttachSheet({ target: 'voice' });
   window.addEventListener('pm-mobile-chat-voice-update', _chatVoiceUpdateEventHandler);
   chatVoiceClose?.addEventListener('click', _closeChatVoiceMode);
+  chatVoiceCamera?.addEventListener('click', _openChatVoiceAttachSheet);
 
   async function _toggleChatVoiceMode({ autoStart = false } = {}) {
     if (!chatVoiceHost) return;
@@ -7181,7 +9210,6 @@ void main() {
         autoStart,
         openCameraCapture,
         openAttachmentSheet: () => openAttachSheet({ target: 'voice' }),
-        cameraButton: chatVoiceCamera,
       }).catch((err) => {
         console.warn('[mobile chat] inline voice mount failed:', err);
         pmToast('Could not start voice mode.', 'error');
@@ -7266,6 +9294,7 @@ void main() {
         return;
       }
       if (target?.closest?.('[data-speak-confirm]')) {
+        try { _unlockVoiceAudio(); } catch {}
         close();
         try { await onConfirm?.(clean); }
         catch (err) { pmToast(err?.message || 'Could not speak response', 'error'); }
@@ -7397,6 +9426,13 @@ void main() {
     const action = String(button?.getAttribute?.('data-msg-action') || '').trim();
     const index = Number(button?.getAttribute?.('data-msg-index'));
     if (!action || !Number.isFinite(index)) return;
+    if (action === 'copy' || action === 'speak' || action === 'fork') {
+      try { pmHaptic(12); } catch {}
+      try {
+        button.classList.add('is-pressed');
+        window.setTimeout(() => button.classList.remove('is-pressed'), 220);
+      } catch {}
+    }
     if (action === 'copy') return copyMobileChatMessage(index);
     if (action === 'speak') return speakMobileChatMessage(index);
     if (action === 'fork') return forkMobileConversationFromMessage(index);
@@ -7428,10 +9464,24 @@ void main() {
     if (!seq) return true;
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
     const run = __pmChat.activeRuns[requestedSession] || {};
+    const previousStreamId = String(run.streamId || '').trim();
+    const streamChanged = !!streamId && !!previousStreamId && streamId !== previousStreamId;
     const prevSeq = Math.max(0, Math.floor(Number(run.lastSeq || 0)) || 0);
-    if (seq <= prevSeq) return false;
-    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, lastSeq: seq, streamId: streamId || run.streamId || '', runtimeId: runtimeId || run.runtimeId || '' };
-    _rememberMobileActiveRun(requestedSession, { lastSeq: seq, streamId: streamId || run.streamId || '', runtimeId: runtimeId || run.runtimeId || '' });
+    if (!streamChanged && seq <= prevSeq) return false;
+    __pmChat.activeRuns[requestedSession] = {
+      ...run,
+      busy: true,
+      lastSeq: seq,
+      streamId: streamId || run.streamId || '',
+      runtimeId: runtimeId || run.runtimeId || '',
+      clientRequestId: cid || run.clientRequestId || '',
+    };
+    _rememberMobileActiveRun(requestedSession, {
+      lastSeq: seq,
+      streamId: streamId || run.streamId || '',
+      runtimeId: runtimeId || run.runtimeId || '',
+      clientRequestId: cid || run.clientRequestId || '',
+    });
     return true;
   }
 
@@ -7506,8 +9556,9 @@ void main() {
     return entries;
   }
 
-  function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
-    if (!aiTurn) return;
+function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
+  if (!aiTurn) return;
+  _clearMobileVisualStreamTimer(aiTurn);
     const startedAtRaw = Number(options.startedAt || 0);
     const startedAt = Number.isFinite(startedAtRaw) && startedAtRaw > 0
       ? startedAtRaw
@@ -7529,6 +9580,8 @@ void main() {
     delete aiTurn.fileChanges;
     delete aiTurn.productCarousel;
     delete aiTurn.richArtifacts;
+    delete aiTurn._pmVisualStreamPending;
+    delete aiTurn._pmVisualStreamFull;
   }
 
 
@@ -7543,9 +9596,7 @@ void main() {
           if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
             _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
           } else {
-            aiTurn.finalResponseStarted = true;
-            aiTurn.body.text += chunk;
-            aiTurn.content = String(aiTurn.body.text || '');
+            _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
           }
         }
         renderThreadSoon();
@@ -7564,7 +9615,6 @@ void main() {
       case 'thinking_delta': {
         const text = String(evt.thinking || evt.text || '');
         if (text) {
-          _appendMobileProcess(aiTurn, 'think', text.slice(0, 220));
           _appendMobileLiveTrace(aiTurn, 'think', text, { append: true });
           renderThreadSoon();
         }
@@ -7673,7 +9723,9 @@ void main() {
         if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.text) {
           aiTurn.finalResponseStarted = true;
-          aiTurn.body.text = String(evt.text);
+          _finishMobileVisualStreamText(aiTurn, String(evt.text));
+        } else {
+          _finishMobileVisualStreamText(aiTurn);
         }
         renderThreadSoon();
         return 'final';
@@ -7684,10 +9736,13 @@ void main() {
         if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
         if (evt.reply && !String(aiTurn.body.text || '').trim()) {
           aiTurn.finalResponseStarted = true;
-          aiTurn.body.text = String(evt.reply);
+          _finishMobileVisualStreamText(aiTurn, String(evt.reply));
+        } else {
+          _finishMobileVisualStreamText(aiTurn);
         }
         return 'done';
       case 'error':
+        _finishMobileVisualStreamText(aiTurn);
         _appendMobileProcess(aiTurn, 'error', String(evt.message || 'Chat error'), evt);
         aiTurn.body.text = (aiTurn.body.text ? `${aiTurn.body.text}\n\n` : '') + `Warning: ${String(evt.message || 'Chat error')}`;
         renderThreadNow();
@@ -7699,6 +9754,7 @@ void main() {
 
   function finalizeMobileLiveAiTurn(aiTurn) {
     if (!aiTurn) return;
+    _finishMobileVisualStreamText(aiTurn);
     aiTurn.streaming = false;
     aiTurn.workEndedAt = Number(aiTurn.workEndedAt || Date.now()) || Date.now();
     aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
@@ -7706,6 +9762,7 @@ void main() {
     aiTurn.timestamp = Number(aiTurn.timestamp || Date.now()) || Date.now();
     aiTurn.content = String(aiTurn.body?.text || '');
     _mergeMobileLiveTraceIntoProcess(aiTurn);
+    _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
     if (__pmChat.activeRuns?.[requestedSession]) __pmChat.activeRuns[requestedSession].abort = null;
     __pmChat.abort = null;
     _clearMobileActiveRun(requestedSession);
@@ -7713,8 +9770,26 @@ void main() {
     if (_isMobileChatSessionVisibleToUser(requestedSession)) {
       markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
     }
-    renderThreadNow();
-    updateMobileChatSessionHistory(requestedSession, _mobileHistoryForServer(_activeMobileThread())).catch((err) => {
+    const timerKey = String(requestedSession || 'chat');
+    if (__pmChat.renderTimers?.[timerKey]) {
+      clearTimeout(__pmChat.renderTimers[timerKey]);
+      delete __pmChat.renderTimers[timerKey];
+    }
+    if (__pmChat.patchRenderTimers?.[timerKey]) {
+      clearTimeout(__pmChat.patchRenderTimers[timerKey]);
+      delete __pmChat.patchRenderTimers[timerKey];
+    }
+    const scrollSnapshot = _mobileChatScrollSnapshot(body);
+    const patchedFinal = _patchMobileThreadMessage(threadEl, aiTurn, _activeMobileThread().indexOf(aiTurn));
+    if (patchedFinal) {
+      _syncMobileWorkTimer(threadEl, body, requestedSession);
+      _restoreMobileChatScroll(body, scrollSnapshot);
+    } else {
+      renderThreadNow();
+    }
+    const finalThread = _activeMobileThread();
+    _saveMobileThreadCache(requestedSession, finalThread);
+    updateMobileChatSessionHistory(requestedSession, _mobileHistoryForServer(finalThread)).catch((err) => {
       console.warn('[mobile chat] failed to persist recovered turn:', err);
     });
     setBusy(false);
@@ -7923,22 +9998,88 @@ void main() {
     return false;
   }
 
+  function _normalizeBrowseState(cwdRel, entries, previous = {}) {
+    const dirs = entries
+      .filter(e => e.type === 'dir')
+      .map(e => ({
+        name: e.name,
+        path: e.path,
+        itemCount: Number.isFinite(Number(e.itemCount)) ? Number(e.itemCount) : undefined,
+        mtime: e.mtime || 0,
+        modifiedAt: e.modifiedAt || '',
+      }))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+    const files = entries
+      .filter(e => e.type === 'file')
+      .map(e => ({
+        name: e.name,
+        path: e.path,
+        kind: _mobileMediaKind({ path: e.path, name: e.name }),
+        size: e.size || 0,
+        mtime: e.mtime || 0,
+        modifiedAt: e.modifiedAt || '',
+      }))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+    return {
+      loading: false,
+      cwd: cwdRel,
+      dirs,
+      files,
+      error: null,
+      query: previous.query || '',
+      view: previous.view === 'grid' ? 'grid' : 'list',
+      showAllFolders: previous.showAllFolders === true,
+      showAllFiles: previous.showAllFiles === true,
+    };
+  }
+
+  async function _prefetchBrowseRoot() {
+    const key = '';
+    const cached = pmMobileBrowseCache.get(key);
+    if (cached && Date.now() - cached.loadedAt < PM_MOBILE_BROWSE_CACHE_TTL_MS) return;
+    try {
+      const data = await loadMobileWorkspaceFiles('');
+      const entries = Array.isArray(data?.files) ? data.files : [];
+      pmMobileBrowseCache.set(key, { loadedAt: Date.now(), entries });
+    } catch {}
+  }
+
   async function _browseTo(turn, cwdRel) {
-    turn.body.browseState = { loading: true, cwd: cwdRel, dirs: [], files: [], error: null };
+    const cwd = String(cwdRel || '').trim();
+    const previous = turn.body.browseState || {};
+    const cached = pmMobileBrowseCache.get(cwd);
+    if (cached && Date.now() - cached.loadedAt < PM_MOBILE_BROWSE_CACHE_TTL_MS) {
+      turn.body.browseState = _normalizeBrowseState(cwd, cached.entries, previous);
+    } else {
+      turn.body.browseState = {
+        loading: true,
+        cwd,
+        dirs: [],
+        files: [],
+        error: null,
+        query: previous.query || '',
+        view: previous.view === 'grid' ? 'grid' : 'list',
+        showAllFolders: previous.showAllFolders === true,
+        showAllFiles: previous.showAllFiles === true,
+      };
+    }
     turn.body.text = '';
     renderThreadNow();
     try {
-      const data = await loadMobileWorkspaceFiles(cwdRel);
+      const data = await loadMobileWorkspaceFiles(cwd);
       const entries = Array.isArray(data?.files) ? data.files : [];
+      pmMobileBrowseCache.set(cwd, { loadedAt: Date.now(), entries });
+      turn.body.browseState = _normalizeBrowseState(cwd, entries, turn.body.browseState || previous);
+    } catch (err) {
       turn.body.browseState = {
         loading: false,
-        cwd: cwdRel,
-        dirs: entries.filter(e => e.type === 'dir').map(e => ({ name: e.name, path: e.path })),
-        files: entries.filter(e => e.type === 'file').map(e => ({ name: e.name, path: e.path, kind: _mobileMediaKind({ path: e.path, name: e.name }) })),
-        error: null,
+        cwd,
+        dirs: [],
+        files: [],
+        error: err.message || String(err),
+        query: previous.query || '',
+        view: previous.view === 'grid' ? 'grid' : 'list',
       };
-    } catch (err) {
-      turn.body.browseState = { loading: false, cwd: cwdRel, dirs: [], files: [], error: err.message || String(err) };
     }
     renderThreadNow();
   }
@@ -8029,7 +10170,6 @@ void main() {
       !Array.isArray(options.attachments)
       && Array.isArray(__pmRealtimeAgent?.pendingImages)
       && __pmRealtimeAgent.pendingImages.length
-      && String(__pmRealtimeAgent.conn?.provider || 'openai_realtime') !== 'xai'
     )
       ? __pmRealtimeAgent.pendingImages.map((img, index) => ({
           kind: 'image',
@@ -8048,13 +10188,19 @@ void main() {
     const excludedSkillIds = fromQueue && Array.isArray(options.excludedSkillIds)
       ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
       : _pmGetExcludedSkillIds();
+    const selectedSkillIds = fromQueue
+      ? _pmNormalizeSelectedSkillIds(options.selectedSkillIds || options.forcedSkillIds || options.matchedSkillIds)
+      : _pmNormalizeSelectedSkillIds(options.selectedSkillIds || options.forcedSkillIds || options.matchedSkillIds || pmSelectedComposerSkillIds);
+    const selectedSkillRefs = fromQueue
+      ? _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills)
+      : _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills || pmSelectedComposerSkills);
     if (!fromQueue && (__pmChat.activeRuns?.[busySessionId]?.busy || __pmChat.activeRuns?.[requestedSession]?.busy)) {
       const queue = _getMobileQueuedPrompts(busySessionId);
       if (queue.length >= PM_MOBILE_MAX_QUEUED_PROMPTS) {
         pmToast(`Queue full (${PM_MOBILE_MAX_QUEUED_PROMPTS}). Wait for Prometheus to finish.`, 'warn');
         return;
       }
-      queue.push(_makeMobileQueuedPrompt(msg || 'Attached file(s)', files, { excludedSkillIds }));
+      queue.push(_makeMobileQueuedPrompt(msg || 'Attached file(s)', files, { excludedSkillIds, selectedSkillIds, selectedSkillRefs }));
       if (!Array.isArray(options.attachments)) {
         __pmChat.attachments[busySessionId] = [];
         renderPendingAttachments();
@@ -8088,11 +10234,24 @@ void main() {
     _clearMobileBackgroundSpawnDockForSession(actualSessionId);
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
+    let stagedVoiceImageSummary = '';
+    const realtimeProviderForSend = String(__pmRealtimeAgent?.conn?.provider || '').trim();
+    if (stagedVoiceImages.length && realtimeProviderForSend === 'xai') {
+      stagedVoiceImageSummary = await _summarizeMobileXaiVisionImages(
+        stagedVoiceImages.map((img) => img.dataUrl),
+        {
+          name: stagedVoiceImages.length > 1 ? 'camera images' : (stagedVoiceImages[0]?.name || 'camera photo'),
+          reason: 'typed_chat_send',
+          toast: true,
+        },
+      );
+    }
     if (stagedVoiceImages.length) {
-      _flushMobileRealtimeAgentPendingImages('typed_chat_send', {
+      await _flushMobileRealtimeAgentPendingImages('typed_chat_send', {
         promptText: msg,
         createResponse: __pmVoice?.settings?.voiceMode === 'openai_realtime',
-      }).catch(() => {});
+        precomputedSummary: stagedVoiceImageSummary,
+      });
     }
 
     if (!Array.isArray(options.attachments)) {
@@ -8101,8 +10260,17 @@ void main() {
       else attachTray.hidden = true;
     }
     setBusy(true, actualSessionId);
+    if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+    __pmChat.activeRuns[actualSessionId] = {
+      ...(__pmChat.activeRuns[actualSessionId] || {}),
+      busy: true,
+      lastSeq: 0,
+      streamId: '',
+      runtimeId: '',
+    };
     _markMobileSessionRunning(actualSessionId, true);
-    _rememberMobileActiveRun(actualSessionId);
+    _rememberMobileActiveRun(actualSessionId, { disconnected: false, lastSeq: 0, streamId: '', runtimeId: '' });
+    window.__pmMobileContextTurnStart?.({ sessionId: actualSessionId });
 
     const uploadResults = files.length ? await _uploadMobileChatAttachments(files) : [];
     const failedUploads = uploadResults.filter((r) => r.error);
@@ -8110,14 +10278,30 @@ void main() {
     const visionAttachments = files
       .filter(f => f.kind === 'image' && f.base64 && f.mimeType)
       .map(f => ({ type: 'image', base64: f.base64, mimeType: f.mimeType, name: f.name }));
-    const messageForApi = buildMessageWithAttachments(msg, files, uploadResults);
+    const apiMessageText = stagedVoiceImageSummary
+      ? [
+          msg || 'Please review the attached image.',
+          '',
+          '[REALTIME VOICE VISUAL CONTEXT]',
+          'The image attached to this turn was summarized for the xAI realtime voice lane before this worker request:',
+          stagedVoiceImageSummary,
+          'Use this visual context directly. Do not say the image has not arrived unless there are no image attachments or visual summary.',
+          '[/REALTIME VOICE VISUAL CONTEXT]',
+        ].join('\n')
+      : msg;
+    const messageForApi = buildMessageWithAttachments(apiMessageText, files, uploadResults);
     const clientRequestId = _newMobileClientRequestId(actualSessionId);
     if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
     __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
+    __pmChat.activeRuns[actualSessionId] = {
+      ...(__pmChat.activeRuns[actualSessionId] || {}),
+      clientRequestId,
+    };
+    _rememberMobileActiveRun(actualSessionId, { clientRequestId });
 
     // Push user bubble unless an edit/reprompt already replaced it in-place.
     if (options.skipUserBubble !== true) {
-      activeThread.push(_makeMobileUserMessage(msg || 'Attached file(s)', files));
+      activeThread.push(_makeMobileUserMessage(msg || 'Attached file(s)', files, { selectedSkillRefs }));
     }
     _reindexMobileThread(activeThread);
 
@@ -8147,6 +10331,7 @@ void main() {
       if (turnFinished) return;
       turnFinished = true;
       const targetAiTurn = _mobileStreamTargetTurn(aiTurn);
+      _finishMobileVisualStreamText(targetAiTurn);
       if (stoppedByUser) {
         _appendMobileProcess(targetAiTurn, 'warn', 'Generation stopped by user. Runtime abort sent; process log preserved.');
         const streamed = String(targetAiTurn.body.text || '').trim();
@@ -8178,10 +10363,30 @@ void main() {
         markMobileChatSessionRead(actualSessionId, Date.now()).catch(() => {});
       }
       if (__pmChat.sentClientRequestIds?.[actualSessionId] === clientRequestId) delete __pmChat.sentClientRequestIds[actualSessionId];
-      renderThreadNow();
-      updateMobileChatSessionHistory(actualSessionId, _mobileHistoryForServer(_activeMobileThread())).catch((err) => {
+      _rememberMobileCompletedAssistantTurn(actualSessionId, targetAiTurn);
+      const timerKey = String(actualSessionId || 'chat');
+      if (__pmChat.renderTimers?.[timerKey]) {
+        clearTimeout(__pmChat.renderTimers[timerKey]);
+        delete __pmChat.renderTimers[timerKey];
+      }
+      if (__pmChat.patchRenderTimers?.[timerKey]) {
+        clearTimeout(__pmChat.patchRenderTimers[timerKey]);
+        delete __pmChat.patchRenderTimers[timerKey];
+      }
+      const scrollSnapshot = _mobileChatScrollSnapshot(body);
+      const patchedFinal = _patchMobileThreadMessage(threadEl, targetAiTurn, _activeMobileThread().indexOf(targetAiTurn));
+      if (patchedFinal) {
+        _syncMobileWorkTimer(threadEl, body, actualSessionId);
+        _restoreMobileChatScroll(body, scrollSnapshot);
+      } else {
+        renderThreadNow();
+      }
+      const finalThread = _activeMobileThread();
+      _saveMobileThreadCache(actualSessionId, finalThread);
+      updateMobileChatSessionHistory(actualSessionId, _mobileHistoryForServer(finalThread)).catch((err) => {
         console.warn('[mobile chat] failed to persist completed turn:', err);
       });
+      window.__pmMobileContextTurnDone?.({ sessionId: actualSessionId });
       setBusy(false, actualSessionId);
     };
 
@@ -8192,7 +10397,7 @@ void main() {
       _renderMobileQueuedPromptsPanel(actualSessionId);
       pmToast(queue.length ? `Running queued prompt (${queue.length} remaining).` : 'Running queued prompt.', 'info');
       setTimeout(() => {
-        sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [] });
+        sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [], selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [], selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [] });
       }, 0);
     };
 
@@ -8203,8 +10408,11 @@ void main() {
       attachmentPreviews: files.map(_sanitizeMobileAttachmentPreviewForServer),
       clientRequestId,
       excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined,
+      selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined,
     }, {
       onEvent: (evt) => {
+        hideReconnectingStatus();
+        window.__pmMobileContextStreamEvent?.(evt, { sessionId: actualSessionId });
         const applied = applyMobileChatStreamEvent(aiTurn, evt);
         if (applied === 'done' || applied === 'error') finishAiTurn();
       },
@@ -8212,11 +10420,13 @@ void main() {
         if (stoppedByUser || err?.name === 'AbortError') return;
         const targetAiTurn = _mobileStreamTargetTurn(aiTurn);
         const message = err?.message || 'Chat error';
+        _finishMobileVisualStreamText(targetAiTurn);
         if (err?.mobileStreamDisconnected) {
           targetAiTurn.body.text = targetAiTurn.body.text || "Connection dropped, but Prometheus may still be working. I'll keep checking and recover the result here.";
           targetAiTurn.streaming = true;
           _appendMobileProcess(targetAiTurn, 'warn', message);
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
+          setChatConnectionStatus(true, 'Reconnecting to Prometheus');
           pmToast('Connection dropped - recovery mode is on.', 'warn');
           scheduleMobileRunRecovery(2500, { force: true });
         } else {
@@ -8253,6 +10463,7 @@ void main() {
         renderThreadNow();
       });
       stream.abort();
+      _finishMobileVisualStreamText(aiTurn);
       finishAiTurn();
     } };
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
@@ -8280,6 +10491,7 @@ void main() {
   const onMainChatStreamEvent = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return;
     if (__pmChat.activeSessionId !== requestedSession) return;
+    hideReconnectingStatus();
     const activeThread = _activeMobileThread();
     const incomingClientRequestId = String(msg.data?.clientRequestId || '').trim();
     const eventType = String(msg.event || '');
@@ -8365,6 +10577,11 @@ void main() {
       setBusy(false, requestedSession);
     } else if (applied && applied !== 'duplicate') setBusy(true);
   };
+  const onMainChatStreamUpdate = (msg = {}) => {
+    if (String(msg.sessionId || '') !== requestedSession) return;
+    if (__pmChat.activeSessionId !== requestedSession) return;
+    scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
+  };
   const onVoiceInterruptionEvent = (msg = {}) => {
     if (msg?.isInterruption === false) return;
     const sid = String(msg.sessionId || '').trim();
@@ -8420,32 +10637,26 @@ void main() {
     if (__pmChat.activeSessionId !== requestedSession) return;
     const evt = { type: String(msg.event || ''), ...(msg.data || {}) };
     const label = _mobileToolLabel(evt);
+    let entry = null;
     if (evt.type === 'tool_call') {
       const args = _safeJsonPreview(evt.args || evt.params || evt.input);
-      _rememberVoiceAgentProcessEntry(sid, {
+      entry = {
         type: label.toLowerCase().includes('skill') ? 'skill' : 'tool',
         text: `${label}${args ? `: ${args}` : ''}`,
         extra: evt,
-      });
+      };
     } else if (evt.type === 'tool_result') {
       const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
-      _rememberVoiceAgentProcessEntry(sid, {
+      entry = {
         type: evt.error ? 'error' : 'result',
         text: `${label}${result ? ` -> ${result}` : ' complete'}`,
         extra: evt,
-      });
+      };
     } else {
       return;
     }
-    const activeThread = _activeMobileThread();
-    const latestAi = _findLatestAssistantTurn(activeThread);
-    if (latestAi && latestAi.streaming) {
-      const entries = _takePendingVoiceAgentProcessEntries(sid);
-      if (entries.length) {
-        latestAi.processEntries = Array.isArray(latestAi.processEntries) ? latestAi.processEntries : [];
-        latestAi.processEntries.push(...entries);
-        renderThreadSoon();
-      }
+    if (_attachVoiceAgentProcessEntriesToMobileTurn(sid, [entry])) {
+      renderThreadSoon();
     }
   };
   const onBackgroundSpawnEvent = (msg = {}) => {
@@ -8488,22 +10699,43 @@ void main() {
   wsEventBus?.on?.('ws:open', runRecoveryOnWsOpen);
 
   wsEventBus?.on?.('main_chat_stream_event', onMainChatStreamEvent);
+  wsEventBus?.on?.('main_chat_stream_update', onMainChatStreamUpdate);
   wsEventBus?.on?.('voice_interruption', onVoiceInterruptionEvent);
   wsEventBus?.on?.('voice_agent_tool_event', onVoiceAgentToolEvent);
   wsEventBus?.on?.('bg_agent_event', onBackgroundSpawnEvent);
   wsEventBus?.on?.('bg_agent_done', onBackgroundSpawnDone);
   const refreshSkillTriggerPill = () => _pmRenderSkillTriggerPill(page, input);
+  const onSkillsCacheUpdated = () => {
+    refreshSkillTriggerPill();
+    if (_pmSkillCommandState(input)) _pmRenderSlashPopover(page, input);
+  };
+  const onMarkdownReady = () => renderThreadNow();
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
     window.removeEventListener('pagehide', onAppHide, { capture: true });
     document.removeEventListener('visibilitychange', onAppHideVisibility, { capture: true });
     window.removeEventListener('focus', runRecoveryOnReturn);
-    window.removeEventListener('prometheus:skills-cache-updated', refreshSkillTriggerPill);
+    window.removeEventListener('prometheus:skills-cache-updated', onSkillsCacheUpdated);
+    window.removeEventListener('prometheus:markdown-ready', onMarkdownReady);
     wsEventBus?.off?.('ws:open', runRecoveryOnWsOpen);
+    wsEventBus?.off?.('ws:reconnecting', showReconnectingStatus);
+    wsEventBus?.off?.('ws:waiting_for_network', showReconnectingStatus);
+    wsEventBus?.off?.('ws:timeout', showReconnectingStatus);
+    wsEventBus?.off?.('ws:error', showReconnectingStatus);
+    wsEventBus?.off?.('ws:open', hideReconnectingStatus);
+    if (connectionStatusHideTimer) {
+      clearTimeout(connectionStatusHideTimer);
+      connectionStatusHideTimer = null;
+    }
+    if (connectionStatusSuccessTimer) {
+      clearTimeout(connectionStatusSuccessTimer);
+      connectionStatusSuccessTimer = null;
+    }
 
     document.removeEventListener('visibilitychange', runRecoveryOnVisibility);
     wsEventBus?.off?.('main_chat_stream_event', onMainChatStreamEvent);
+    wsEventBus?.off?.('main_chat_stream_update', onMainChatStreamUpdate);
     wsEventBus?.off?.('voice_interruption', onVoiceInterruptionEvent);
     wsEventBus?.off?.('voice_agent_tool_event', onVoiceAgentToolEvent);
     wsEventBus?.off?.('bg_agent_event', onBackgroundSpawnEvent);
@@ -8530,6 +10762,10 @@ void main() {
     }
     window.removeEventListener('pm-mobile-chat-voice-update', _chatVoiceUpdateEventHandler);
     chatVoiceClose?.removeEventListener('click', _closeChatVoiceMode);
+    chatVoiceCamera?.removeEventListener('click', _openChatVoiceAttachSheet);
+    document.body?.classList.remove('pm-chat-voice-active');
+    document.body?.classList.remove('pm-chat-voice-new-chat');
+    document.body?.classList.remove('pm-chat-voice-existing-chat');
     chatVoiceHost?._pmCleanup?.();
     body?.classList.remove('pm-chat-voice-occluded');
     stopCameraCapture();
@@ -8581,10 +10817,12 @@ void main() {
       });
       return;
     }
+    const selectedSkillIds = _pmNormalizeSelectedSkillIds(pmSelectedComposerSkillIds);
+    const selectedSkillRefs = _pmNormalizeSelectedComposerSkillRefs(pmSelectedComposerSkills);
     resetComposerInput();
     _pmClearActiveSlashCommand(page, input, { focus: false });
     updateComposerSubmitState();
-    sendMessage(text);
+    sendMessage(text, { selectedSkillIds, selectedSkillRefs });
   });
 
   // Haptic feedback on the orange send / voice-mode / abort button and the mic
@@ -8596,6 +10834,20 @@ void main() {
   } catch (err) { console.warn('[mobile chat] haptic wiring failed:', err); }
 
   threadEl?.addEventListener('click', (event) => {
+    const skillRefBtn = event.target.closest?.('[data-pm-skill-ref]');
+    if (skillRefBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      _pmShowSkillReferencePopover(
+        skillRefBtn.getAttribute('data-pm-skill-ref') || '',
+        skillRefBtn.getAttribute('data-pm-skill-title') || skillRefBtn.textContent || '',
+      ).catch((err) => {
+        console.warn('[mobile skills] failed to open skill reference popover:', err);
+        pmToast('Could not load skill details.', 'error');
+      });
+      return;
+    }
+
     const emailComposerBtn = event.target.closest?.('[data-email-composer-action]');
     if (emailComposerBtn) {
       event.preventDefault();
@@ -8609,6 +10861,32 @@ void main() {
       event.preventDefault();
       event.stopPropagation();
       handleMobileMessageAction(msgActionBtn);
+      return;
+    }
+
+    const browseViewBtn = event.target.closest?.('[data-browse-view]');
+    if (browseViewBtn) {
+      event.preventDefault();
+      const activeThread = _activeMobileThread();
+      const browseTurn = [...activeThread].reverse().find(m => m.body?.browseState);
+      if (browseTurn) {
+        browseTurn.body.browseState.view = browseViewBtn.getAttribute('data-browse-view') === 'grid' ? 'grid' : 'list';
+        renderThreadNow();
+      }
+      return;
+    }
+
+    const browseToggleBtn = event.target.closest?.('[data-browse-toggle]');
+    if (browseToggleBtn) {
+      event.preventDefault();
+      const activeThread = _activeMobileThread();
+      const browseTurn = [...activeThread].reverse().find(m => m.body?.browseState);
+      const section = browseToggleBtn.getAttribute('data-browse-toggle') || '';
+      if (browseTurn) {
+        if (section === 'folders') browseTurn.body.browseState.showAllFolders = !browseTurn.body.browseState.showAllFolders;
+        if (section === 'files') browseTurn.body.browseState.showAllFiles = !browseTurn.body.browseState.showAllFiles;
+        renderThreadNow();
+      }
       return;
     }
 
@@ -8646,14 +10924,39 @@ void main() {
     runCommandAction(action, id, button);
   });
 
+  threadEl?.addEventListener('input', (event) => {
+    const search = event.target.closest?.('[data-browse-search]');
+    if (!search) return;
+    const activeThread = _activeMobileThread();
+    const browseTurn = [...activeThread].reverse().find(m => m.body?.browseState);
+    if (!browseTurn) return;
+    browseTurn.body.browseState.query = search.value || '';
+    browseTurn.body.browseState.showAllFolders = false;
+    browseTurn.body.browseState.showAllFiles = false;
+    renderThreadNow();
+    requestAnimationFrame(() => {
+      const next = threadEl.querySelector('[data-browse-search]');
+      try {
+        if (next) {
+          next.focus({ preventScroll: true });
+          const len = next.value.length;
+          next.setSelectionRange(len, len);
+        }
+      } catch {}
+    });
+  });
+
   input?.addEventListener('input', () => {
     resizeComposerInput();
     _pmHandleSlashInput(page, input);
     _pmRenderSkillTriggerPill(page, input);
+    _pmUpdateComposerRichPreview(page, input);
     updateComposerSubmitState();
   });
+  input?.addEventListener('scroll', () => _pmUpdateComposerRichPreview(page, input));
   input?.addEventListener('keydown', (e) => {
-    const suggestions = _pmSlashCommandSuggestions(input.value);
+    const skillSuggestions = _pmSkillCommandSuggestions(input);
+    const suggestions = skillSuggestions.length ? skillSuggestions : _pmSlashCommandSuggestions(input);
     const popoverOpen = !page.querySelector('#pm-chat-slash-popover')?.hidden && suggestions.length > 0;
     if (!popoverOpen) {
       // Plain Enter inserts a newline (default behavior) so multi-paragraph
@@ -8666,15 +10969,25 @@ void main() {
     }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      pmSlashCommandSelectionIndex = e.key === 'ArrowDown'
-        ? (pmSlashCommandSelectionIndex + 1) % suggestions.length
-        : (pmSlashCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+      if (skillSuggestions.length) {
+        pmSkillCommandSelectionIndex = e.key === 'ArrowDown'
+          ? (pmSkillCommandSelectionIndex + 1) % suggestions.length
+          : (pmSkillCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+      } else {
+        pmSlashCommandSelectionIndex = e.key === 'ArrowDown'
+          ? (pmSlashCommandSelectionIndex + 1) % suggestions.length
+          : (pmSlashCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+      }
       _pmRenderSlashPopover(page, input);
       return;
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault();
-      _pmSelectSlashCommand(page, input, suggestions[pmSlashCommandSelectionIndex]?.command || suggestions[0]?.command || '');
+      if (skillSuggestions.length) {
+        _pmReplaceSkillCommandWithSelection(page, input, suggestions[pmSkillCommandSelectionIndex] || suggestions[0]);
+      } else {
+        _pmSelectSlashCommand(page, input, suggestions[pmSlashCommandSelectionIndex]?.command || suggestions[0]?.command || '');
+      }
       return;
     }
     if (e.key === 'Escape') {
@@ -8684,7 +10997,8 @@ void main() {
   });
   input?.addEventListener('blur', () => setTimeout(() => _pmHideSlashPopover(page), 120));
   commandChip?.addEventListener('click', () => _pmClearActiveSlashCommand(page, input));
-  window.addEventListener('prometheus:skills-cache-updated', refreshSkillTriggerPill);
+  window.addEventListener('prometheus:skills-cache-updated', onSkillsCacheUpdated);
+  window.addEventListener('prometheus:markdown-ready', onMarkdownReady);
 
   sideComposer?.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -9041,7 +11355,7 @@ function _sendMobileRealtimeAgentSessionUpdateFromSettings(reason = 'settings_li
           audio: {
             input: {
               turn_detection: turnDetection,
-              transcription: { model: 'gpt-4o-transcribe' },
+              transcription: { model: 'gpt-realtime-whisper' },
             },
             output: {
               voice: settings.realtimeVoice || 'marin',
@@ -9788,7 +12102,7 @@ async function _refreshMobileRealtimeAgentRoomTarget(participant = {}, options =
           audio: {
             input: {
               turn_detection: turnDetection,
-              transcription: { model: 'gpt-4o-transcribe' },
+              transcription: { model: 'gpt-realtime-whisper' },
             },
             output: {
               voice: settings.realtimeVoice || 'marin',
@@ -10040,13 +12354,44 @@ function _voiceSetStatusTone(tone = '') {
   });
 }
 
-function _voiceShowRealtimeUserTranscript(text, hint = 'Realtime transcript') {
-  _voiceSetStatus(_voiceStatusPreviewText(text, 'Listening...'), hint);
-  _voiceSetStatusTone('pm-voice-live-text');
+function _voiceScrollLiveTranscriptToEnd() {
+  const statusEl = __pmVoice.statusEl || document.getElementById('pm-voice-status');
+  if (!statusEl || !document.body?.classList.contains('pm-chat-voice-active')) return;
+  requestAnimationFrame(() => {
+    statusEl.scrollTop = statusEl.scrollHeight;
+  });
 }
 
-function _voiceShowRealtimeAgentMessage(text, hint = 'Realtime agent is responding') {
-  _voiceSetStatus(_voiceStatusPreviewText(text, 'Thinking...'), hint);
+function _voiceShowRealtimeUserTranscript(text, hint = 'Realtime transcript') {
+  const isChatVoice = document.body?.classList.contains('pm-chat-voice-active');
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  _voiceSetStatus(isChatVoice ? (clean || 'Listening...') : _voiceStatusPreviewText(text, 'Listening...'), hint);
+  _voiceSetStatusTone('pm-voice-live-text');
+  _voiceScrollLiveTranscriptToEnd();
+}
+
+function _voiceRenderHighlightedStatus(text, highlight = '') {
+  const statusEl = __pmVoice.statusEl || document.getElementById('pm-voice-status');
+  if (!statusEl) return false;
+  const clean = _voiceStatusPreviewText(text, 'Thinking...');
+  const tail = String(highlight || '').replace(/\s+/g, ' ').trim();
+  if (!tail || !clean || !clean.endsWith(tail)) {
+    statusEl.textContent = clean;
+    return true;
+  }
+  const head = clean.slice(0, Math.max(0, clean.length - tail.length));
+  statusEl.innerHTML = `${escapeHtml(head)}<span class="pm-voice-speaking-highlight">${escapeHtml(tail)}</span>`;
+  return true;
+}
+
+function _voiceShowRealtimeAgentMessage(text, hint = 'Realtime agent is responding', options = {}) {
+  if (document.body?.classList.contains('pm-chat-voice-active')) {
+    _voiceSetStatus('', '');
+    _voiceSetStatusTone('pm-voice-agent-text');
+    return;
+  }
+  _voiceSetStatus('', hint);
+  _voiceRenderHighlightedStatus(text, options.highlight || '');
   _voiceSetStatusTone('pm-voice-agent-text');
 }
 
@@ -11155,6 +13500,9 @@ const __pmRealtimeAgent = {
     dispatchedWorkerThisResponse: false,
     lastUserTranscript: '',
     lastAssistantTranscript: '',
+    currentUserTranscriptItemId: '',
+    currentUserSpeechStartedAt: 0,
+    voiceLyricTimer: null,
     nudged: false,
     pendingWorkerDispatch: null,
     suppressAssistantTranscript: false,
@@ -11225,7 +13573,7 @@ function _sendMobileRealtimeAgentCreateResponseFlag(enabled) {
           audio: {
             input: {
               turn_detection: turnDetection,
-              transcription: { model: 'gpt-4o-transcribe' },
+              transcription: { model: 'gpt-realtime-whisper' },
             },
           },
         },
@@ -12156,7 +14504,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
           audio: {
             input: {
               turn_detection: _mobileRealtimeTurnDetectionForListenMode(listenMode),
-              transcription: { model: 'gpt-4o-transcribe' },
+              transcription: { model: 'gpt-realtime-whisper' },
             },
             output: {
               voice: __pmVoice?.settings?.realtimeVoice || 'marin',
@@ -12225,6 +14573,10 @@ function _stopMobileRealtimeAgentSession() {
   __pmRealtimeAgent.pendingImages = [];
   __pmRealtimeAgent.stagedImageTurn = null;
   __pmRealtimeAgent.functionCallBuffers.clear();
+  if (__pmRealtimeAgent.turn?.voiceLyricTimer) {
+    clearInterval(__pmRealtimeAgent.turn.voiceLyricTimer);
+    __pmRealtimeAgent.turn.voiceLyricTimer = null;
+  }
   _clearMobileRealtimeAgentPendingCreateResponse();
   _stopMobileRealtimeAgentContextRefreshLoop();
   try { conn?.cleanup?.(); } catch {}
@@ -12253,6 +14605,8 @@ function _setMobileRealtimeAgentMicEnabled(enabled) {
       __pmRealtimeAgent.turn.mobileUserTurn = null;
       __pmRealtimeAgent.turn.lastUserTranscript = '';
       __pmRealtimeAgent.turn.liveUserTranscript = '';
+      __pmRealtimeAgent.turn.currentUserTranscriptItemId = '';
+      __pmRealtimeAgent.turn.currentUserSpeechStartedAt = Date.now();
     }
     conn.xaiCapture.sending = !!enabled;
     if (conn.micTrack) conn.micTrack.enabled = true;
@@ -12726,7 +15080,13 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
       }
       __pmVoice.realtimeSpeechActiveResponse = true;
       const b64 = event.delta || event.audio;
-      if (b64) { try { playback.enqueue(_mobileBase64ToInt16(b64)); } catch {} }
+      if (b64) {
+        try {
+          const pcm = _mobileBase64ToInt16(b64);
+          _noteMobileRealtimeAssistantAudioChunk(sid, pcm);
+          playback.enqueue(pcm);
+        } catch {}
+      }
       return;
     }
     if (type === 'input_audio_buffer.speech_started') {
@@ -12755,7 +15115,7 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
           input: {
             format: { type: 'audio/pcm', rate: openAiCapture.sampleRate || MOBILE_XAI_REALTIME_SAMPLE_RATE },
             noise_reduction: { type: 'near_field' },
-            transcription: { model: 'gpt-4o-transcribe' },
+            transcription: { model: 'gpt-realtime-whisper' },
             turn_detection: turnDetection,
           },
           output: {
@@ -12930,7 +15290,13 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
         }
         __pmVoice.realtimeSpeechActiveResponse = true;
         const b64 = event.delta || event.audio;
-        if (b64) { try { playback.enqueue(_mobileBase64ToInt16(b64)); } catch {} }
+        if (b64) {
+          try {
+            const pcm = _mobileBase64ToInt16(b64);
+            _noteMobileRealtimeAssistantAudioChunk(sid, pcm);
+            playback.enqueue(pcm);
+          } catch {}
+        }
         return;
       }
       if (type === 'input_audio_buffer.speech_started') {
@@ -13031,6 +15397,13 @@ function _ensureMobileRealtimeAgentChatTurn(sessionId, role) {
         content: '',
         source: 'voice_agent_realtime',
       };
+  if (role !== 'user') {
+    const pendingEntries = _takePendingVoiceAgentProcessEntries(sid);
+    if (pendingEntries.length) {
+      turn.processEntries = pendingEntries;
+      turn.workStartedAt = Number(turn.timestamp || Date.now()) || Date.now();
+    }
+  }
   __pmChat.threads[sid].push(turn);
   __pmRealtimeAgent.turn[key] = turn;
   return turn;
@@ -13040,6 +15413,10 @@ function _finalizeMobileRealtimeAgentChatTurn(sessionId, role, text) {
   const sid = String(sessionId || '').trim();
   const turn = _ensureMobileRealtimeAgentChatTurn(sid, role);
   if (!turn) return null;
+  if (role !== 'user') {
+    const pendingEntries = _takePendingVoiceAgentProcessEntries(sid);
+    if (pendingEntries.length) _appendVoiceAgentProcessEntriesToTurn(turn, pendingEntries);
+  }
   const value = _cleanVoiceSpeechText(text || turn.content || turn.body?.text || '');
   if (!value) {
     const thread = __pmChat.threads?.[sid];
@@ -13055,28 +15432,177 @@ function _finalizeMobileRealtimeAgentChatTurn(sessionId, role, text) {
     turn.content = value;
   }
   turn.streaming = false;
+  if (role === 'ai') {
+    turn.voiceRealtimeActive = true;
+    turn.voiceRealtimeHighlight = '';
+    turn.voiceRealtimeProgress = Math.max(Number(turn.voiceRealtimeProgress || 0) || 0, 0.01);
+    turn.voiceRealtimeFinalizedAt = Date.now();
+  }
   turn.time = _nowTime();
   turn.timestamp = Number(turn.timestamp || Date.now()) || Date.now();
   return turn;
 }
 
+
+
+function _mobileRealtimeActiveAssistantTurn(sessionId = '') {
+  const turn = __pmRealtimeAgent?.turn?.mobileAssistantTurn || null;
+  const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
+  if (!turn || !sid) return null;
+  const thread = __pmChat?.threads?.[sid];
+  return Array.isArray(thread) && thread.includes(turn) ? turn : null;
+}
+
+function _estimateMobileRealtimeSpeechMs(text = '') {
+  const words = String(text || '').replace(/[^\p{L}\p{N}' ]/gu, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean).length;
+  return Math.max(1500, Math.min(45000, Math.round((words / 2.65) * 1000) + 450));
+}
+
+function _startMobileRealtimeAssistantLyricProgress(sessionId = '') {
+  const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
+  if (!sid) return;
+  const turn = _mobileRealtimeActiveAssistantTurn(sid);
+  if (!turn) return;
+  const pendingAudioMs = Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioMs || 0) || 0;
+  if (pendingAudioMs > 0) {
+    turn.voiceRealtimeAudioMs = (Number(turn.voiceRealtimeAudioMs || 0) || 0) + pendingAudioMs;
+    if (!Number(turn.voiceRealtimeAudioStartedAt || 0) && Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt || 0)) {
+      turn.voiceRealtimeAudioStartedAt = Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt || 0);
+    }
+    __pmRealtimeAgent.turn.voiceRealtimePendingAudioMs = 0;
+    __pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt = 0;
+  }
+  if (!Number(turn.voiceRealtimeAudioStartedAt || 0)) turn.voiceRealtimeAudioStartedAt = Date.now();
+  turn.voiceRealtimeActive = true;
+  if (!Number.isFinite(Number(turn.voiceRealtimeProgress))) turn.voiceRealtimeProgress = 0;
+  if (__pmRealtimeAgent.turn.voiceLyricTimer) return;
+  __pmRealtimeAgent.turn.voiceLyricTimer = setInterval(() => {
+    const activeTurn = _mobileRealtimeActiveAssistantTurn(sid);
+    if (!activeTurn || !activeTurn.voiceRealtimeActive) {
+      clearInterval(__pmRealtimeAgent.turn.voiceLyricTimer);
+      __pmRealtimeAgent.turn.voiceLyricTimer = null;
+      return;
+    }
+    const text = String(activeTurn.body?.text || activeTurn.content || '').trim();
+    const started = Number(activeTurn.voiceRealtimeAudioStartedAt || activeTurn.voiceRealtimeUpdatedAt || Date.now());
+    const estimatedMs = Math.max(
+      Number(activeTurn.voiceRealtimeAudioMs || 0) || 0,
+      _estimateMobileRealtimeSpeechMs(text),
+    );
+    const elapsed = Math.max(0, Date.now() - started);
+    const progress = Math.max(Number(activeTurn.voiceRealtimeProgress || 0) || 0, Math.min(0.98, elapsed / Math.max(1, estimatedMs)));
+    activeTurn.voiceRealtimeProgress = progress;
+    _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress', force: true });
+  }, 180);
+}
+
+function _finishMobileRealtimeAssistantLyricProgress(sessionId = '', options = {}) {
+  const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
+  const turn = _mobileRealtimeActiveAssistantTurn(sid);
+  if (!turn) return;
+  const delayMs = Math.max(350, Math.min(2400, Number(options.delayMs || 900) || 900));
+  turn.voiceRealtimeProgress = 1;
+  _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress_done', force: true });
+  setTimeout(() => {
+    if (turn !== _mobileRealtimeActiveAssistantTurn(sid)) return;
+    turn.voiceRealtimeActive = false;
+    turn.voiceRealtimeHighlight = '';
+    turn.voiceRealtimeProgress = 1;
+    if (__pmRealtimeAgent.turn?.mobileAssistantTurn === turn) __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+    _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress_final', force: true });
+  }, delayMs);
+}
+
+function _noteMobileRealtimeAssistantAudioChunk(sessionId = '', int16 = null) {
+  const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
+  const turn = _mobileRealtimeActiveAssistantTurn(sid);
+  const samples = int16 && typeof int16.length === 'number' ? Number(int16.length || 0) : 0;
+  const chunkMs = samples > 0 ? (samples / MOBILE_XAI_REALTIME_SAMPLE_RATE) * 1000 : 0;
+  if (!turn) {
+    if (chunkMs > 0) {
+      __pmRealtimeAgent.turn.voiceRealtimePendingAudioMs = (Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioMs || 0) || 0) + chunkMs;
+      if (!Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt || 0)) __pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt = Date.now();
+    }
+    return;
+  }
+  turn.voiceRealtimeAudioMs = Math.max(Number(turn.voiceRealtimeAudioMs || 0) || 0, 0) + Math.max(0, chunkMs);
+  turn.voiceRealtimeAudioLastAt = Date.now();
+  if (!Number(turn.voiceRealtimeAudioStartedAt || 0)) turn.voiceRealtimeAudioStartedAt = Date.now();
+  _startMobileRealtimeAssistantLyricProgress(sid);
+}
+
+function _mobileRealtimeTranscriptItemId(event = {}) {
+  return String(event?.item_id || event?.item?.id || event?.previous_item_id || '').trim();
+}
+
+function _mobileRealtimeTranscriptWordCount(text = '') {
+  return String(text || '').replace(/[^\p{L}\p{N}' ]/gu, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean).length;
+}
+
+function _chooseMobileRealtimeFinalUserTranscript(eventTranscript = '', liveTranscript = '') {
+  const eventText = String(eventTranscript || '').replace(/\s+/g, ' ').trim();
+  const liveText = String(liveTranscript || '').replace(/\s+/g, ' ').trim();
+  if (!eventText) return liveText;
+  if (!liveText) return eventText;
+  const eventWords = _mobileRealtimeTranscriptWordCount(eventText);
+  const liveWords = _mobileRealtimeTranscriptWordCount(liveText);
+  const eventKey = _normalizeVoiceEchoText(eventText);
+  const liveKey = _normalizeVoiceEchoText(liveText);
+  if (eventKey && liveKey && eventKey === liveKey) return eventText;
+  if (liveWords >= 2 && eventWords <= 1 && liveText.length >= eventText.length + 3) return liveText;
+  if (liveWords > eventWords && liveText.length >= eventText.length + 8) return liveText;
+  if (eventWords > liveWords && eventText.length >= liveText.length + 8) return eventText;
+  return eventText.length >= liveText.length ? eventText : liveText;
+}
+
+function _shouldIgnoreMobileRealtimeTranscriptForCurrentTurn(event = {}, type = '') {
+  const itemId = _mobileRealtimeTranscriptItemId(event);
+  if (!itemId) return false;
+  const turn = __pmRealtimeAgent.turn || (__pmRealtimeAgent.turn = {});
+  const current = String(turn.currentUserTranscriptItemId || '').trim();
+  if (!current) {
+    turn.currentUserTranscriptItemId = itemId;
+    return false;
+  }
+  const startedAt = Number(turn.currentUserSpeechStartedAt || 0);
+  const withinCurrentSpeechWindow = startedAt > 0 && Date.now() - startedAt < 18000;
+  if (current !== itemId && withinCurrentSpeechWindow) {
+    _voiceDebug('realtime-agent-stale-transcript-ignored', { type, itemId, currentItemId: current });
+    return true;
+  }
+  return false;
+}
+
 async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   sessionId = _mobileRealtimeAgentEffectiveSessionId(sessionId);
   const type = String(event?.type || '');
-  const _eventText = (value = event) => {
+  const _eventTextCandidates = (value = event) => {
     const parts = [];
+    const seen = new Set();
     const push = (v) => {
       if (v == null || (typeof v === 'object' && !Array.isArray(v))) return;
       if (Array.isArray(v)) return;
       const t = String(v || '').replace(/\s+/g, ' ').trim();
-      if (t) parts.push(t);
+      if (!t) return;
+      const key = t.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      parts.push(t);
     };
-    push(value?.transcript || value?.text || value?.delta || value?.content || value?.output_text);
+    ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(value?.[key]));
     const item = value?.item || value?.response || value?.message || null;
-    push(item?.transcript || item?.text || item?.delta || item?.content || item?.output_text);
+    ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(item?.[key]));
     const content = Array.isArray(item?.content) ? item.content : (Array.isArray(value?.content) ? value.content : []);
-    content.forEach((part) => push(part?.transcript || part?.text || part?.delta || part?.content || part?.audio_transcript));
-    return parts.join(' ').replace(/\s+/g, ' ').trim();
+    content.forEach((part) => ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(part?.[key])));
+    return parts;
+  };
+  const _eventText = (value = event, options = {}) => {
+    const parts = _eventTextCandidates(value);
+    if (!parts.length) return '';
+    if (options.preferLongest) {
+      return [...parts].sort((a, b) => b.length - a.length)[0] || '';
+    }
+    return parts[0] || '';
   };
   _voiceDebug('realtime-agent-event', {
     type,
@@ -13086,8 +15612,20 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 12) : [],
   });
   if (type === 'response.created') {
+    if (
+      String(__pmRealtimeAgent.conn?.provider || '') === 'xai'
+      && __pmRealtimeAgent.turn?.xaiVisionInjecting
+    ) {
+      try { __pmRealtimeAgent.conn?.dc?.send?.(JSON.stringify({ type: 'response.cancel' })); } catch {}
+      try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
+      _voiceDebug('realtime-agent-xai-premature-response-cancelled-for-vision', {
+        reason: __pmRealtimeAgent.turn?.xaiVisionInjectReason || '',
+      });
+      return;
+    }
     __pmRealtimeAgent.activeResponse = true;
     _suspendMobileRealtimeInputForOutput('response_created');
+    _startMobileRealtimeAssistantLyricProgress(sessionId);
     if (__pmRealtimeAgent.quiet.active) {
       __pmRealtimeAgent.quiet.suppressResponse = true;
       try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
@@ -13099,6 +15637,12 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     __pmRealtimeAgent.turn.lastAssistantTranscript = '';
     __pmRealtimeAgent.turn.liveAssistantTranscript = '';
     __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+    if (__pmRealtimeAgent.turn.voiceLyricTimer) {
+      clearInterval(__pmRealtimeAgent.turn.voiceLyricTimer);
+      __pmRealtimeAgent.turn.voiceLyricTimer = null;
+    }
+    __pmRealtimeAgent.turn.voiceRealtimePendingAudioMs = 0;
+    __pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt = 0;
     _voiceShowRealtimeAgentMessage('', 'Realtime agent is responding');
     __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
     return;
@@ -13128,16 +15672,23 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     return;
   }
   if (type === 'conversation.item.input_audio_transcription.delta' || type === 'conversation.item.input_audio_transcription.updated') {
-    const delta = _eventText(event);
+    if (_shouldIgnoreMobileRealtimeTranscriptForCurrentTurn(event, type)) return;
+    const delta = _eventText(event, { preferLongest: type.endsWith('.updated') });
     if (delta) {
       __pmRealtimeAgent.turn.liveUserTranscript = type.endsWith('.updated') ? delta : `${__pmRealtimeAgent.turn.liveUserTranscript || ''}${delta}`;
       _voiceShowRealtimeUserTranscript(__pmRealtimeAgent.turn.liveUserTranscript, 'Realtime transcript');
-      _voiceDebug('realtime-agent-user-transcript-delta', { textLen: String(__pmRealtimeAgent.turn.liveUserTranscript || '').length, type });
+      _voiceDebug('realtime-agent-user-transcript-delta', { textLen: String(__pmRealtimeAgent.turn.liveUserTranscript || '').length, type, itemId: _mobileRealtimeTranscriptItemId(event) });
     }
     return;
   }
   if (type === 'conversation.item.input_audio_transcription.completed') {
-    const transcript = String(_eventText(event) || __pmRealtimeAgent.turn.liveUserTranscript || '').trim();
+    if (_shouldIgnoreMobileRealtimeTranscriptForCurrentTurn(event, type)) return;
+    const eventTranscript = String(_eventText(event, { preferLongest: true }) || '').trim();
+    const liveTranscript = String(__pmRealtimeAgent.turn.liveUserTranscript || '').trim();
+    const transcript = _chooseMobileRealtimeFinalUserTranscript(eventTranscript, liveTranscript);
+    if (eventTranscript && liveTranscript && transcript !== eventTranscript) {
+      _voiceDebug('realtime-agent-user-transcript-live-preferred', { eventLen: eventTranscript.length, liveLen: liveTranscript.length, itemId: _mobileRealtimeTranscriptItemId(event) });
+    }
     if (transcript) {
       if (_shouldIgnoreMobileRealtimeAgentTranscriptEvent(sessionId, event, transcript)) {
         __pmRealtimeAgent.turn.liveUserTranscript = '';
@@ -13213,11 +15764,10 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     return;
   }
   if ((type === 'conversation.item.created' || type === 'conversation.item.done' || type === 'conversation.item.completed') && String(event?.item?.role || '').toLowerCase() === 'user') {
-    const transcript = _eventText(event);
-    if (transcript) {
-      __pmRealtimeAgent.turn.lastUserTranscript = transcript;
-      __pmRealtimeAgent.turn.liveUserTranscript = '';
-      _voiceShowRealtimeUserTranscript(transcript, 'Realtime transcript');
+    const transcript = _eventText(event, { preferLongest: true });
+    if (transcript && !String(__pmRealtimeAgent.turn.lastUserTranscript || '').trim()) {
+      __pmRealtimeAgent.turn.liveUserTranscript = _chooseMobileRealtimeFinalUserTranscript(transcript, __pmRealtimeAgent.turn.liveUserTranscript || '');
+      _voiceShowRealtimeUserTranscript(__pmRealtimeAgent.turn.liveUserTranscript, 'Realtime transcript');
     }
     return;
   }
@@ -13232,13 +15782,18 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     const delta = _eventText(event);
     if (delta) {
       __pmRealtimeAgent.turn.liveAssistantTranscript = `${__pmRealtimeAgent.turn.liveAssistantTranscript || ''}${delta}`;
-      _voiceShowRealtimeAgentMessage(__pmRealtimeAgent.turn.liveAssistantTranscript, 'Realtime agent is responding');
+      _voiceShowRealtimeAgentMessage(__pmRealtimeAgent.turn.liveAssistantTranscript, 'Realtime agent is responding', { highlight: delta });
       if (_currentMobileSubagentVoiceTarget()) return;
       const turn = _ensureMobileRealtimeAgentChatTurn(sessionId, 'ai');
       if (turn) {
         turn.body.text = `${turn.body?.text || ''}${delta}`;
         turn.content = String(turn.body.text || '');
-        _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_assistant_transcript_delta' });
+        turn.voiceRealtimeActive = true;
+        turn.voiceRealtimeHighlight = '';
+        turn.voiceRealtimeUpdatedAt = Date.now();
+        if (!Number.isFinite(Number(turn.voiceRealtimeProgress))) turn.voiceRealtimeProgress = 0;
+        _startMobileRealtimeAssistantLyricProgress(sessionId);
+        _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_assistant_transcript_delta', force: true });
       }
     }
     return;
@@ -13252,7 +15807,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     || (type === 'response.output_item.done' && String(event?.item?.role || event?.item?.type || '').toLowerCase() !== 'function_call')
   ) {
     if (__pmRealtimeAgent.quiet.active || __pmRealtimeAgent.quiet.suppressResponse || __pmRealtimeAgent.turn.suppressAssistantTranscript) return;
-    const transcript = _cleanVoiceSpeechText(_eventText(event) || __pmRealtimeAgent.turn.liveAssistantTranscript || '');
+    const transcript = _cleanVoiceSpeechText(_eventText(event, { preferLongest: true }) || __pmRealtimeAgent.turn.liveAssistantTranscript || '');
     if (transcript) {
       __pmRealtimeAgent.turn.lastAssistantTranscript = transcript;
       __pmRealtimeAgent.turn.liveAssistantTranscript = '';
@@ -13271,8 +15826,16 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       // Append to chat thread for visibility
       try {
         const sid = sessionId;
-        _finalizeMobileRealtimeAgentChatTurn(sid, 'ai', transcript);
-        __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+        const finalized = _finalizeMobileRealtimeAgentChatTurn(sid, 'ai', transcript);
+        if (finalized) {
+          finalized.voiceRealtimeActive = true;
+          finalized.voiceRealtimeHighlight = '';
+          finalized.voiceRealtimeProgress = Math.max(Number(finalized.voiceRealtimeProgress || 0) || 0, 0.01);
+          finalized.voiceRealtimeFinalizedAt = Date.now();
+          _startMobileRealtimeAssistantLyricProgress(sid);
+        } else {
+          __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+        }
         _persistMobileThreadSnapshot(sid);
         _renderRecent();
         _renderMobileChatSessionNow(sid);
@@ -13317,6 +15880,13 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     __pmRealtimeAgent.lastResponseEndedAt = Date.now();
     const lastRealtimeReply = String(__pmRealtimeAgent.turn.lastAssistantTranscript || __pmRealtimeAgent.turn.liveAssistantTranscript || '').trim();
     if (lastRealtimeReply) _voiceShowRealtimeAgentMessage(lastRealtimeReply, 'Realtime agent response');
+    const activeLyricTurn = _mobileRealtimeActiveAssistantTurn(sessionId);
+    if (activeLyricTurn) {
+      const started = Number(activeLyricTurn.voiceRealtimeAudioStartedAt || activeLyricTurn.voiceRealtimeUpdatedAt || Date.now());
+      const estimatedMs = Math.max(Number(activeLyricTurn.voiceRealtimeAudioMs || 0) || 0, _estimateMobileRealtimeSpeechMs(activeLyricTurn.body?.text || activeLyricTurn.content || lastRealtimeReply));
+      const remainingMs = Math.max(550, Math.min(9000, estimatedMs - Math.max(0, Date.now() - started)));
+      setTimeout(() => _finishMobileRealtimeAssistantLyricProgress(sessionId, { delayMs: 900 }), remainingMs);
+    }
     setTimeout(() => {
       if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) _voiceShowReadyStatus();
     }, lastRealtimeReply ? 8500 : 1200);
@@ -13337,6 +15907,8 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       if (_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput(__pmRealtimeAgent.conn?.provider || 'openai_webrtc')) return;
       _clearMobileRealtimeAgentQueuedFinalSummary('speech_started');
       __pmRealtimeAgent.turn.liveUserTranscript = '';
+      __pmRealtimeAgent.turn.currentUserTranscriptItemId = '';
+      __pmRealtimeAgent.turn.currentUserSpeechStartedAt = Date.now();
       _voiceShowRealtimeUserTranscript('', 'Listening for realtime speech');
       __pmRealtimeAgent.turn.subagentVoiceUserLogKey = '';
       __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
@@ -13349,7 +15921,9 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       if (autoCapture?.finally) autoCapture.finally(flushImages);
       else flushImages();
     }
-    _voiceDebug('realtime-agent-audio-buffer-event', { type, itemId: event?.item_id || '', previousItemId: event?.previous_item_id || '' });
+    const audioItemId = String(event?.item_id || '').trim();
+    if (type === 'input_audio_buffer.committed' && audioItemId) __pmRealtimeAgent.turn.currentUserTranscriptItemId = audioItemId;
+    _voiceDebug('realtime-agent-audio-buffer-event', { type, itemId: event?.item_id || '', previousItemId: event?.previous_item_id || '', currentItemId: __pmRealtimeAgent.turn.currentUserTranscriptItemId || '' });
     return;
   }
   if (type === 'error') {
@@ -13677,6 +16251,12 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
         return;
       }
     }
+    const realtimeToolEntries = Array.isArray(result?.processEntries)
+      ? result.processEntries.map(_normalizeVoiceAgentProcessEntry).filter(Boolean)
+      : [];
+    if (realtimeToolEntries.length) {
+      _attachVoiceAgentProcessEntriesToMobileTurn(sessionId, realtimeToolEntries);
+    }
     // Overlay any captured screenshot on the voice orb, like other preview cards.
     if (result.preview?.dataUrl && typeof __pmRealtimeAgent.enqueuePreviews === 'function') {
       try {
@@ -13694,6 +16274,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
         const sid = String(sessionId || __pmChat.activeSessionId || '').trim();
         if (sid) {
           if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
+          const artifactProcessEntries = _takePendingVoiceAgentProcessEntries(sid);
           __pmChat.threads[sid].push({
             role: 'ai',
             streaming: false,
@@ -13704,6 +16285,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
             richArtifacts: voiceArtifacts,
             source: 'voice_agent_realtime',
             channel: 'voice',
+            processEntries: artifactProcessEntries.length ? artifactProcessEntries : undefined,
           });
           _renderMobileChatSessionNow(sid);
         }
@@ -13844,27 +16426,45 @@ async function _injectRealtimeImageItemToConversation(img, label) {
   }
 }
 
-// xAI voice/realtime models can't take image input. When the user captures media
-// on xAI voice, summarize it through the vision sidecar the moment it's captured
-// and inject the text summary into the live xAI voice session, so it's ready
-// before the user finishes speaking (no wait). One photo = one summary; a video's
-// sampled frames are summarized together as one clip.
-async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
-  if (String(__pmRealtimeAgent.conn?.provider || 'openai_realtime') !== 'xai') return;
+async function _summarizeMobileXaiVisionImages(dataUrls, opts = {}) {
   const urls = (Array.isArray(dataUrls) ? dataUrls : [dataUrls])
     .map((u) => String(u || '').trim())
     .filter((u) => u.startsWith('data:image'));
-  if (!urls.length) return;
+  if (!urls.length) return '';
   const isVideo = urls.length > 1;
   try {
     const reqBody = isVideo
       ? { frames: urls.map((u) => ({ dataUrl: u })), durationMs: Number(opts.durationMs || 0) || 0, name: String(opts.name || 'camera video') }
       : { dataUrl: urls[0], name: String(opts.name || 'camera photo') };
+    _voiceDebug('realtime-agent-xai-summary-start', { isVideo, count: urls.length, reason: opts.reason || '' });
     const res = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', { method: 'POST', body: JSON.stringify(reqBody) });
     const summary = String(res?.summary || '').trim();
-    if (!summary) { _voiceDebug('realtime-agent-xai-summary-empty', { error: res?.error || '' }); return; }
+    if (!summary) { _voiceDebug('realtime-agent-xai-summary-empty', { error: res?.error || '' }); return ''; }
+    _voiceDebug('realtime-agent-xai-summary-ready', { isVideo, summaryLen: summary.length });
+    return summary;
+  } catch (err) {
+    const message = String(err?.message || err || '').trim();
+    _voiceDebug('realtime-agent-xai-summary-failed', { message });
+    if (opts.toast !== false) {
+      try { pmToast(`Could not summarize the image for xAI voice${message ? `: ${message.slice(0, 180)}` : '.'}`, 'error'); } catch {}
+    }
+    return '';
+  }
+}
+
+async function _sendMobileXaiVisionSummaryToRealtime(dataUrls, opts = {}) {
+  if (String(__pmRealtimeAgent.conn?.provider || 'openai_realtime') !== 'xai') return false;
+  const urls = (Array.isArray(dataUrls) ? dataUrls : [dataUrls])
+    .map((u) => String(u || '').trim())
+    .filter((u) => u.startsWith('data:image'));
+  if (!urls.length) return false;
+  const isVideo = urls.length > 1;
+  const promptText = String(opts.promptText || '').trim();
+  const summary = String(opts.precomputedSummary || await _summarizeMobileXaiVisionImages(urls, opts)).trim();
+  if (!summary) return false;
+  try {
     const dc = __pmRealtimeAgent.conn?.dc;
-    if (!dc || dc.readyState !== 'open' || String(__pmRealtimeAgent.conn?.provider) !== 'xai') return;
+    if (!dc || dc.readyState !== 'open' || String(__pmRealtimeAgent.conn?.provider) !== 'xai') return false;
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -13872,16 +16472,30 @@ async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
         role: 'user',
         content: [{
           type: 'input_text',
-          text: `[Visual context from my camera ${isVideo ? 'video clip' : 'photo'}, described by the vision sidecar since you can't see images directly]: ${summary}\nTreat this as what I'm showing you and keep it in mind for what I say next.`,
+          text: [
+            `[Visual context from my camera ${isVideo ? 'video clip' : 'photo'}, described by the vision sidecar since you can't see images directly]: ${summary}`,
+            promptText ? `User message for this visual context: ${promptText}` : '',
+            'Treat this as the image I am referring to now. Do not say you are waiting for the image unless this visual context is absent.',
+          ].filter(Boolean).join('\n'),
         }],
       },
     }));
     _voiceDebug('realtime-agent-xai-summary-injected', { isVideo, summaryLen: summary.length });
+    return true;
   } catch (err) {
     const message = String(err?.message || err || '').trim();
     _voiceDebug('realtime-agent-xai-summary-failed', { message });
-    try { pmToast(`Could not summarize the image for xAI voice${message ? `: ${message.slice(0, 180)}` : '.'}`, 'error'); } catch {}
+    if (opts.toast !== false) {
+      try { pmToast(`Could not summarize the image for xAI voice${message ? `: ${message.slice(0, 180)}` : '.'}`, 'error'); } catch {}
+    }
+    return false;
   }
+}
+
+// Kept for direct callers, but the response-critical path now awaits summary
+// injection from _flushMobileRealtimeAgentPendingImages before responding.
+async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
+  return _sendMobileXaiVisionSummaryToRealtime(dataUrls, opts);
 }
 
 // Stage a captured photo: show it in the chat bubble AND inject it into the
@@ -13898,6 +16512,13 @@ function _stageMobileRealtimeAgentImage(attachment, sessionId, options = {}) {
     base64: String(attachment?.base64 || dataUrl.replace(/^data:[^;]+;base64,/, '')),
     realtimeInjected: false,
   };
+  if (String(__pmRealtimeAgent.conn?.provider || '') === 'xai') {
+    img.xaiSummaryPromise = _summarizeMobileXaiVisionImages([dataUrl], {
+      name: img.name,
+      reason: 'image_staged',
+      toast: false,
+    });
+  }
   __pmRealtimeAgent.pendingImages.push(img);
   // Inject into the realtime session immediately (audio idle → reliable).
   _injectRealtimeImageItemToConversation(img).catch(() => {});
@@ -13942,10 +16563,40 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
   const all = images.slice();
   __pmRealtimeAgent.pendingImages = [];
   if (provider === 'xai') {
-    // xAI voice models can't take images directly — handled by a separate summary
-    // workflow (grok). Nothing to inject into the realtime session here.
-    _voiceDebug('realtime-agent-image-flush-skip-xai', { count: all.length, reason });
-    return false;
+    const promptText = String(options.promptText || '').trim();
+    __pmRealtimeAgent.turn.xaiVisionInjecting = true;
+    __pmRealtimeAgent.turn.xaiVisionInjectReason = reason;
+    let injected = false;
+    try {
+      let summary = String(options.precomputedSummary || '').trim();
+      if (!summary) {
+        const stagedSummaries = await Promise.all(
+          all.map((im) => im?.xaiSummaryPromise).filter((promise) => promise && typeof promise.then === 'function'),
+        ).catch(() => []);
+        summary = stagedSummaries.map((value) => String(value || '').trim()).filter(Boolean).join('\n\n');
+      }
+      injected = await _sendMobileXaiVisionSummaryToRealtime(
+        all.map((im) => im.dataUrl),
+        { name: all.length > 1 ? 'camera images' : (all[0]?.name || 'camera photo'), reason, promptText, precomputedSummary: summary },
+      );
+    } finally {
+      __pmRealtimeAgent.turn.xaiVisionInjecting = false;
+      __pmRealtimeAgent.turn.xaiVisionInjectReason = '';
+    }
+    _voiceDebug('realtime-agent-image-flushed-xai-summary', { count: all.length, reason, injected });
+    const shouldCreateVisionResponse = options.createResponse === true || reason === 'speech_started';
+    if (injected && shouldCreateVisionResponse && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
+      __pmRealtimeAgent.conn.dc.send(JSON.stringify({
+        type: 'response.create',
+        response: {
+          output_modalities: ['audio'],
+          instructions: promptText
+            ? 'Answer using the injected visual context and the user message. Do not say the image has not arrived.'
+            : 'Answer using the injected visual context. Do not say the image has not arrived.',
+        },
+      }));
+    }
+    return !!injected;
   }
   // Most images are already injected at STAGE time (when audio was idle). Only
   // send the ones that weren't (e.g. captured before the data channel was open).
@@ -14380,8 +17031,9 @@ async function _ttsSpeak(text) {
   const mode = String(__pmVoice.settings?.voiceMode || 'default');
   const outputProvider = String(__pmVoice.settings?.ttsProvider || __pmVoice.provider?.ttsProvider || _outputProviderForMode(mode));
   _voiceDebug('tts-start', { textLen: String(text || '').length, mode, provider: outputProvider });
-  const explicitVoiceMode = outputProvider === 'openai_realtime' || outputProvider === 'xai' || outputProvider === 'openai';
   const wantsRealtime = outputProvider === 'openai_realtime';
+  const wantsXai = outputProvider === 'xai';
+  const wantsOpenaiTts = outputProvider === 'openai';
   let realtimeReady = !!(__pmVoice.provider?.canRealtime || _isRealtimeConnected());
   if (wantsRealtime && !realtimeReady) {
     try {
@@ -14391,6 +17043,15 @@ async function _ttsSpeak(text) {
       const detected = _detectProvider(status);
       __pmVoice.provider = { ...detected, sttProvider: __pmVoice.provider?.sttProvider || detected.sttProvider || 'browser' };
       realtimeReady = !!(__pmVoice.provider?.canRealtime || _isRealtimeConnected(status));
+    } catch {}
+  }
+  if ((wantsXai || wantsOpenaiTts) && !Array.isArray(__pmVoice.voiceStatus?.ttsProviders)) {
+    try {
+      const status = await loadVoiceStatus();
+      __pmVoice.lastVoiceStatus = status;
+      __pmVoice.voiceStatus = status?.voice || null;
+      const detected = _detectProvider(status);
+      __pmVoice.provider = { ...__pmVoice.provider, ...detected };
     } catch {}
   }
   if (wantsRealtime && realtimeReady) {
@@ -14403,7 +17064,6 @@ async function _ttsSpeak(text) {
       if (_isBenignRealtimeParseError(err)) return;
       pmToast(err.message || 'OpenAI Realtime audio failed', 'error');
       _voiceSetStatus('Audio failed', 'OpenAI Realtime could not play this response');
-      if (explicitVoiceMode) return;
     }
   }
   const xaiTtsConfigured = Array.isArray(__pmVoice.voiceStatus?.ttsProviders)
@@ -14411,8 +17071,6 @@ async function _ttsSpeak(text) {
   const openaiTtsConfigured = Array.isArray(__pmVoice.voiceStatus?.ttsProviders)
     && __pmVoice.voiceStatus.ttsProviders.some(p => p?.id === 'openai' && p?.configured);
   const xaiDisabled = !!(typeof window !== 'undefined' && window.__pmDisableXaiTts);
-  const wantsXai = outputProvider === 'xai';
-  const wantsOpenaiTts = outputProvider === 'openai';
   const providersToTry = wantsXai && xaiTtsConfigured && !xaiDisabled
     ? ['xai']
     : (wantsOpenaiTts && openaiTtsConfigured ? ['openai'] : []);
@@ -14468,7 +17126,6 @@ async function _ttsSpeak(text) {
       pmToast(err.message || `${ttsProvider} voice failed`, 'error');
       _voiceSetStatus('Audio failed', `${ttsProvider === 'xai' ? 'xAI / Grok' : ttsProvider} could not play this response`);
       _markVoiceSpeakingEnd();
-      if (explicitVoiceMode) return;
     }
   }
   _voiceDebug('tts-browser-fallback', { mode, provider: outputProvider });
@@ -15398,6 +18055,16 @@ export async function renderVoicePage(page, ctx) {
   const banner     = page.querySelector('#pm-voice-provider-banner');
   const settingsToggle = page.querySelector('#pm-voice-settings-toggle');
   const settingsPanel = page.querySelector('#pm-voice-settings-panel');
+  const _closeVoiceSettingsPanel = () => {
+    if (settingsPanel) settingsPanel.style.display = 'none';
+    document.removeEventListener('pointerdown', _voiceSettingsOutsideHandler, true);
+  };
+  const _voiceSettingsOutsideHandler = (event) => {
+    const target = event?.target;
+    if (!settingsPanel || settingsPanel.style.display === 'none') return;
+    if (target && (settingsPanel.contains(target) || settingsToggle?.contains(target))) return;
+    _closeVoiceSettingsPanel();
+  };
   const voiceModeSelect = page.querySelector('#pm-voice-mode-provider');
   const listenModeSelect = page.querySelector('#pm-voice-listen-mode');
   const serverVoiceLabel = page.querySelector('#pm-voice-server-voice-label');
@@ -16028,10 +18695,21 @@ void main() {
   }
 
   function _showVoiceApproval(approval) {
+    const normalizedApproval = _normalizeMobileApproval(approval);
+    if (!normalizedApproval?.id) return;
+    _activeApprovalId = normalizedApproval.id;
+    _activeApprovalRecord = normalizedApproval;
+    _activeVoiceCommandApprovalId = _pmIsCommandApproval(normalizedApproval) ? normalizedApproval.id : null;
+    if (document.body?.classList?.contains('pm-chat-voice-active')) {
+      if (approvalCard) {
+        approvalCard.hidden = true;
+        approvalCard.classList.remove('pm-va-visible', 'pm-va-success', 'pm-va-failed', 'pm-va-running');
+      }
+      _speakVoiceApprovalPrompt(_activeApprovalRecord);
+      return;
+    }
     if (!approvalCard) return;
-    _activeApprovalId = approval.id;
-    _activeApprovalRecord = _normalizeMobileApproval(approval);
-    _activeVoiceCommandApprovalId = _pmIsCommandApproval(approval) ? approval.id : null;
+    approval = normalizedApproval;
     const risk = Number(approval.riskScore || 0);
     const riskLabel = risk >= 7 ? 'High' : risk >= 4 ? 'Medium' : 'Low';
     const riskColor = risk >= 7 ? 'var(--pm-orange)' : risk >= 4 ? '#d6a247' : '#2fae66';
@@ -16290,6 +18968,7 @@ void main() {
       voiceWaveRaf = 0;
     }
     window.removeEventListener('resize', _resizeVoiceWaveCanvas);
+    document.removeEventListener('pointerdown', _voiceSettingsOutsideHandler, true);
     try { voiceWaveSource?.disconnect?.(); } catch {}
     try { voiceWaveAnalyser?.disconnect?.(); } catch {}
     try { voiceWaveAudioCtx?.close?.(); } catch {}
@@ -16753,8 +19432,12 @@ void main() {
     banner.innerHTML = detail;
   }
 
-  settingsToggle.addEventListener('click', () => {
-    settingsPanel.style.display = settingsPanel.style.display === 'none' ? 'block' : 'none';
+  settingsToggle.addEventListener('click', (event) => {
+    event?.stopPropagation?.();
+    const willOpen = settingsPanel.style.display === 'none';
+    settingsPanel.style.display = willOpen ? 'block' : 'none';
+    document.removeEventListener('pointerdown', _voiceSettingsOutsideHandler, true);
+    if (willOpen) setTimeout(() => document.addEventListener('pointerdown', _voiceSettingsOutsideHandler, true), 0);
   });
   voiceModeSelect.addEventListener('change', () => {
     const mode = voiceModeSelect.value || 'default';
@@ -18277,6 +20960,7 @@ void main() {
     processEntries: [],
     liveTraceEntries: [],
     source: 'voice',
+    _voiceWorkerLocalTurn: true,
     ...(interruptionResult?.classification ? {
       workflowGroupId: [...chatThread].reverse().find((turn) => turn?.workflowPart === 'interruption')?.workflowGroupId || '',
       workflowPart: ['cancel', 'pause', 'unknown'].includes(String(interruptionResult?.classification?.intent || '')) ? 'abort_response' : 'interruption_response',
@@ -18310,6 +20994,67 @@ void main() {
     let aiBuf = '';
     let lastSpokenMilestone = '';
     let finalSpoken = false;
+    let voiceWorkerFinalTurn = null;
+    const hasTurnsAfterVoiceWorkerTrace = () => {
+      const idx = chatThread.indexOf(chatAiTurn);
+      return idx >= 0 && idx < chatThread.length - 1;
+    };
+    const ensureVoiceWorkerFinalTurn = () => {
+      if (voiceWorkerFinalTurn && chatThread.includes(voiceWorkerFinalTurn)) return voiceWorkerFinalTurn;
+      voiceWorkerFinalTurn = {
+        role: 'ai',
+        streaming: true,
+        time: '',
+        timestamp: Date.now(),
+        workStartedAt: voiceWorkerHandoffStartedAt,
+        body: { sender: 'Prometheus', text: '' },
+        content: '',
+        processEntries: [],
+        liveTraceEntries: [],
+        source: 'voice_worker_final',
+        _clientRequestId: cmd.id,
+        _voiceWorkerLocalFinal: true,
+        ...(chatAiTurn.workflowGroupId ? {
+          workflowGroupId: chatAiTurn.workflowGroupId,
+          workflowPart: chatAiTurn.workflowPart || 'interruption_response',
+          workflowLabel: chatAiTurn.workflowLabel || 'Worker response',
+        } : {}),
+      };
+      chatThread.push(voiceWorkerFinalTurn);
+      return voiceWorkerFinalTurn;
+    };
+    const setVoiceWorkerFinalText = (text, { streaming = true } = {}) => {
+      const value = String(text || '');
+      const useSeparateFinal = !!voiceWorkerFinalTurn || hasTurnsAfterVoiceWorkerTrace();
+      const target = useSeparateFinal ? ensureVoiceWorkerFinalTurn() : chatAiTurn;
+      if (target !== chatAiTurn) {
+        if (chatAiTurn.body) chatAiTurn.body.text = '';
+        chatAiTurn.content = '';
+        chatAiTurn.streaming = false;
+        chatAiTurn.workEndedAt = Number(chatAiTurn.workEndedAt || Date.now()) || Date.now();
+        chatAiTurn.workDurationMs = Math.max(0, chatAiTurn.workEndedAt - _mobileAssistantWorkStartedAt(chatAiTurn));
+        chatAiTurn.time = chatAiTurn.time || _nowTime();
+      }
+      target.body = target.body || { sender: 'Prometheus', text: '' };
+      target.body.text = value;
+      target.content = value;
+      target.streaming = !!streaming;
+      target.timestamp = Number(target.timestamp || Date.now()) || Date.now();
+      if (!streaming) {
+        target.time = _nowTime();
+        target.workEndedAt = Number(target.workEndedAt || Date.now()) || Date.now();
+        target.workDurationMs = Math.max(0, target.workEndedAt - _mobileAssistantWorkStartedAt(target));
+      }
+      return target;
+    };
+    const moveVoiceWorkerDraftFinalIntoTrace = () => {
+      if (!voiceWorkerFinalTurn || chatAiTurn.toolActivityStarted) return;
+      const draft = String(voiceWorkerFinalTurn.body?.text || voiceWorkerFinalTurn.content || '').trim();
+      if (draft) _appendMobileLiveTrace(chatAiTurn, 'preamble', draft);
+      const idx = chatThread.indexOf(voiceWorkerFinalTurn);
+      if (idx >= 0) chatThread.splice(idx, 1);
+      voiceWorkerFinalTurn = null;
+    };
     const settleVoiceAfterFinalSpeech = () => {
       const startedAt = Date.now();
       const checkSpeak = setInterval(() => {
@@ -18371,6 +21116,7 @@ void main() {
     let voiceWorkerFirstPreflightLogged = false;
     let voiceWorkerFirstTokenLogged = false;
     _voiceDebug('worker-handoff-starting', { sessionId: targetSessionId, requestId: cmd.id });
+    window.__pmMobileContextTurnStart?.({ sessionId: targetSessionId });
     const interruptionIntent = String(interruptionResult?.classification?.intent || '').trim();
     if (interruptionCallerContext && (interruptionIntent === 'cancel' || interruptionIntent === 'pause' || interruptionIntent === 'unknown')) {
       const reply = String(interruptionResult?.voiceReply || '').trim();
@@ -18393,6 +21139,7 @@ void main() {
       _persistMobileThreadSnapshot(targetSessionId);
       _setOrbState(null);
       _setStatus(interruptionIntent === 'cancel' ? 'Cancelled' : interruptionIntent === 'pause' ? 'Paused' : 'Ready', reply);
+      window.__pmMobileContextTurnDone?.({ sessionId: targetSessionId });
       return;
     }
     __pmVoice.spokenTextSoFar = '';
@@ -18476,8 +21223,7 @@ void main() {
         if (__pmVoice.activeVoiceRuntime?.activeRequestId === cmd.id) {
           __pmVoice.activeVoiceRuntime.assistantTextSoFar = aiBuf;
         }
-        chatAiTurn.body.text = aiBuf;
-        chatAiTurn.content = aiBuf;
+        setVoiceWorkerFinalText(aiBuf, { streaming: true });
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_token' });
         cmd.status = 'streaming';
         _updateToolFlip(cmd, 'responding...');
@@ -18498,11 +21244,12 @@ void main() {
         }
       },
       onThinking: (m) => {
-        _appendMobileProcess(chatAiTurn, 'think', String(m).slice(0, 220));
         _appendMobileLiveTrace(chatAiTurn, 'think', m, { append: true });
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_thinking' });
       },
       onToolCall: (evt) => {
+        window.__pmMobileContextStreamEvent?.({ ...evt, type: 'tool_call' }, { sessionId: targetSessionId });
+        moveVoiceWorkerDraftFinalIntoTrace();
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
@@ -18519,6 +21266,8 @@ void main() {
         if (cmd.expanded) _renderRecent();
       },
       onToolResult: (evt) => {
+        window.__pmMobileContextStreamEvent?.({ ...evt, type: 'tool_result' }, { sessionId: targetSessionId });
+        moveVoiceWorkerDraftFinalIntoTrace();
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
@@ -18536,6 +21285,8 @@ void main() {
         if (cmd.expanded) _renderRecent();
       },
       onToolProgress: (evt) => {
+        window.__pmMobileContextStreamEvent?.({ ...evt, type: 'tool_progress' }, { sessionId: targetSessionId });
+        moveVoiceWorkerDraftFinalIntoTrace();
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
         const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
@@ -18596,10 +21347,7 @@ void main() {
           __pmVoice.activeVoiceRuntime.assistantTextSoFar = aiBuf;
           __pmVoice.activeVoiceRuntime.isStreamActive = false;
         }
-        chatAiTurn.streaming = false;
-        chatAiTurn.time = _nowTime();
-        chatAiTurn.body.text = aiBuf;
-        chatAiTurn.content = aiBuf;
+        setVoiceWorkerFinalText(aiBuf, { streaming: false });
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_final' });
         _persistMobileThreadSnapshot(targetSessionId);
         __pmVoice.pendingInterruptContext = null;
@@ -18630,6 +21378,7 @@ void main() {
         _renderRecent();
         _setOrbState(null);
         _setStatus('Error', 'Try again or tap repeat last response');
+        window.__pmMobileContextTurnDone?.({ sessionId: targetSessionId });
       },
       onDone: () => {
         stopVoiceAgentNarration();
@@ -18644,10 +21393,7 @@ void main() {
         cmd.status = 'done';
         cmd.currentTool = 'complete';
         cmd.finalText = aiBuf;
-        chatAiTurn.streaming = false;
-        chatAiTurn.time = _nowTime();
-        if (aiBuf) chatAiTurn.body.text = aiBuf;
-        chatAiTurn.content = String(chatAiTurn.body?.text || '');
+        setVoiceWorkerFinalText(aiBuf || String(chatAiTurn.body?.text || ''), { streaming: false });
         _persistMobileThreadSnapshot(targetSessionId);
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_done', force: true });
         __pmVoice.lastAi = aiBuf;
@@ -18664,6 +21410,7 @@ void main() {
           _setVoiceResponseStatus(aiBuf, realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Speaking response');
           settleVoiceAfterFinalSpeech();
         }
+        window.__pmMobileContextTurnDone?.({ sessionId: targetSessionId });
       },
     });
     let voiceStopSent = false;
@@ -18679,6 +21426,7 @@ void main() {
         _appendMobileProcess(chatAiTurn, 'error', `Backend abort request failed: ${err?.message || err}`);
       });
       stream.abort();
+      window.__pmMobileContextTurnDone?.({ sessionId: targetSessionId });
     } };
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
     __pmChat.activeRuns[targetSessionId] = {
@@ -18686,10 +21434,12 @@ void main() {
       busy: true,
       abort: voiceAbortHandle,
       source: 'voice',
-      runtimeId: __pmChat.activeRuns[targetSessionId]?.runtimeId || '',
+      runtimeId: '',
+      lastSeq: 0,
+      streamId: '',
     };
     __pmChat.busy = true;
-    _rememberMobileActiveRun(targetSessionId);
+    _rememberMobileActiveRun(targetSessionId, { disconnected: false, lastSeq: 0, streamId: '', runtimeId: '' });
     _markMobileSessionRunning(targetSessionId, true);
     _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_run_active' });
     cmd._stream = stream;
@@ -19989,12 +22739,16 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     const sender = String(options.sender || message?.fromLabel || message?.body?.sender || message?.fromName || 'Agent');
     inner += _renderMobileWorkTimer(traceMessage);
     inner += `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
-    const hasLiveTrace = streaming && Array.isArray(traceMessage.liveTraceEntries) && traceMessage.liveTraceEntries.length;
+    const answerStarted = !!String(text || '').trim();
+    const liveTraceHtml = streaming && !answerStarted && Array.isArray(traceMessage.liveTraceEntries)
+      ? _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true })
+      : '';
+    const hasLiveTrace = !!liveTraceHtml;
     const completedTraceEntries = !streaming ? _mobileWorkflowTraceEntriesForMessage(traceMessage) : [];
     if (hasLiveTrace) {
-      inner += _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true });
+      inner += liveTraceHtml;
     } else if (_mobileTraceHasToolGroup(completedTraceEntries)) {
-      inner += `<div class="pm-trace-drawer">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
+      inner += `<div class="pm-trace-drawer" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
     } else {
       inner += progress;
     }
@@ -20018,7 +22772,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     }
   }
   return `
-    <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'}" style="max-width:92%;margin-bottom:10px;"${streaming && !fromUser ? ' data-streaming="1"' : ''}>
+    <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'} pm-agent-chat-msg"${streaming && !fromUser ? ' data-streaming="1"' : ''}>
       <div class="pm-bubble">
         ${inner}
         ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
@@ -21154,16 +23908,45 @@ async function _renderTeamChatTab(slot, teamId) {
     if (!queueEl) return;
     queueEl.hidden = sendQueue.length === 0;
     queueEl.innerHTML = sendQueue.length
-      ? `<div class="pm-mobile-queued-head"><b aria-label="${sendQueue.length} queued message${sendQueue.length === 1 ? '' : 's'}">${sendQueue.length}</b></div>
-         <div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
+      ? `<div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
            <div class="pm-mobile-queued-item">
              <button type="button" class="pm-mobile-queued-text" data-team-queue-edit="${idx}">${escapeHtml(String(item.text || 'Attached file(s)').slice(0, 120))}${item.files?.length ? ` <em>+${item.files.length}</em>` : ''}</button>
-             <div class="pm-mobile-queued-actions"><button type="button" class="pm-mobile-queued-icon pm-mobile-queued-remove" data-team-queue-remove="${idx}" aria-label="Remove queued message">${ICONS.trash}</button></div>
+             <div class="pm-mobile-queued-actions">
+               <div class="pm-mobile-queued-menu-wrap">
+                 <button type="button" class="pm-mobile-queued-icon pm-mobile-queued-menu-trigger" data-team-queue-menu="${idx}" aria-label="Queued message actions" title="Actions">${ICONS.dots}</button>
+                 <div class="pm-mobile-queued-popover" data-team-queue-menu-popover="${idx}" hidden>
+                   <button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-steer" data-team-queue-steer="${idx}">${ICONS.target}<span>Steer</span></button>
+                   <button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-remove" data-team-queue-remove="${idx}">${ICONS.trash}<span>Delete</span></button>
+                 </div>
+               </div>
+             </div>
            </div>`).join('')}</div>`
       : '';
-    queueEl.querySelectorAll('[data-team-queue-remove]').forEach((btn) => btn.addEventListener('click', () => {
+    _ensureMobileQueuedPromptMenuDismiss();
+    queueEl.querySelectorAll('[data-team-queue-edit]').forEach((btn) => attachMobileButtonHaptic(btn, () => {}));
+    queueEl.querySelectorAll('[data-team-queue-menu]').forEach((btn) => attachMobileButtonHaptic(btn, () => {
+      const idx = Number(btn.getAttribute('data-team-queue-menu'));
+      if (!Number.isInteger(idx)) return;
+      const menu = queueEl.querySelector(`[data-team-queue-menu-popover="${idx}"]`);
+      if (!menu) return;
+      const nextOpen = !!menu.hidden;
+      _closeMobileQueuedPromptMenus(queueEl);
+      menu.hidden = !nextOpen;
+    }));
+    queueEl.querySelectorAll('[data-team-queue-steer]').forEach((btn) => attachMobileButtonHaptic(btn, () => {
+      const idx = Number(btn.getAttribute('data-team-queue-steer'));
+      if (Number.isFinite(idx) && idx >= 0 && idx < sendQueue.length) {
+        const [item] = sendQueue.splice(idx, 1);
+        if (item) sendQueue.unshift(item);
+      }
+      _closeMobileQueuedPromptMenus(queueEl);
+      renderQueue();
+      drainQueueSoon();
+    }));
+    queueEl.querySelectorAll('[data-team-queue-remove]').forEach((btn) => attachMobileButtonHaptic(btn, () => {
       const idx = Number(btn.getAttribute('data-team-queue-remove'));
       if (Number.isFinite(idx)) sendQueue.splice(idx, 1);
+      _closeMobileQueuedPromptMenus(queueEl);
       renderQueue();
     }));
   }
@@ -24499,6 +27282,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   const tabs = ['Overview', 'Chat', 'System Prompt', 'Runs', 'Heartbeat'];
   const modelPickerScope = `pm-sa-model-${agent.id}`;
   const voicePickerScope = `pm-sa-voice-${agent.id}`;
+  const displayModel = String(agent.effectiveModel || agent.model || '').trim();
 
   body.innerHTML = `
     <div class="pm-detail-head">
@@ -24506,7 +27290,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
       <h1>${escapeHtml(agent.name)}</h1>
       <span class="pm-pill ${pill.cls}" style="align-self:center;">${pill.label}</span>
     </div>
-    <div class="pm-detail-sub">${escapeHtml(agent.model || 'Default model')}${agent.isTeamMember ? ' · team member' : ''}${agent.cronSchedule ? ' · scheduled' : ''}</div>
+    <div class="pm-detail-sub">${escapeHtml(displayModel ? displayModel.split('/').pop() : 'Default model')}${agent.isTeamMember ? ' · team member' : ''}${agent.cronSchedule ? ' · scheduled' : ''}</div>
 
     <div class="pm-action-row">
       <button class="pm-action-btn primary" data-act="dispatch">${ICONS.send} Dispatch Task</button>
@@ -24529,7 +27313,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
       <div class="pm-card-grid">
         <div class="pm-card">
           <div class="pm-card-head">${ICONS.brain} Model</div>
-          <div class="pm-card-body strong">${escapeHtml(agent.model || 'default')}</div>
+          <div class="pm-card-body strong">${escapeHtml(displayModel ? displayModel.split('/').pop() : 'default')}</div>
         </div>
         <div class="pm-card">
           <div class="pm-card-head">${ICONS.clock} Last Run</div>
@@ -24715,36 +27499,149 @@ async function _renderSubagentSystemPromptTab(slot, agentId) {
 }
 
 async function _renderSubagentRunsTab(slot, agentId) {
-  const runs = await loadSubagentRuns(agentId, 30);
+  let runs = await loadSubagentRuns(agentId, 50);
+  let expandedId = '';
+  const details = {};
+
+  const render = () => {
   if (!runs.length) {
     slot.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clock}</div><h2>No runs yet</h2><p>Tap Dispatch Task above to give this agent something to do.</p></div>`;
     return;
   }
-  slot.innerHTML = runs.map(r => {
-    const ok = r.success === true || r.status === 'complete';
-    const pill = r.inProgress
-      ? '<span class="pm-pill running">running</span>'
-      : ok
-        ? '<span class="pm-pill active">success</span>'
-        : `<span class="pm-pill orange">${escapeHtml(String(r.taskStatus || r.status || 'failed'))}</span>`;
-    const summary = String(r.taskSummary || r.summary || r.prompt || '').slice(0, 220);
-    const started = r.startedAt || r.createdAt;
-    const finished = r.finishedAt || r.completedAt;
-    const duration = (finished && started) ? _formatDuration(finished - started) : '';
-    return `
-      <article class="pm-card" style="padding:14px 16px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-          <strong style="flex:1;font-size:14px;">${escapeHtml(r.taskName || r.title || 'Task')}</strong>
-          ${pill}
+    const groups = [
+      { key: 'attention', label: 'Needs Attention', statuses: ['needs_assistance', 'awaiting_user_input', 'stalled'] },
+      { key: 'paused', label: 'Paused', statuses: ['paused'] },
+      { key: 'running', label: 'Running', statuses: ['queued', 'running', 'waiting_subagent'] },
+      { key: 'failed', label: 'Failed', statuses: ['failed'] },
+      { key: 'complete', label: 'Completed', statuses: ['complete'] },
+    ];
+    const matched = new Set();
+    const sections = groups.map((group) => {
+      const items = runs.filter((run) => {
+        const hit = group.statuses.includes(String(run.status || run.taskStatus || '').toLowerCase());
+        if (hit) matched.add(String(run.id || run.taskId || ''));
+        return hit;
+      });
+      if (!items.length) return '';
+      return `<section style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;letter-spacing:.06em;">${escapeHtml(group.label)} (${items.length})</div>
+        ${items.map(renderRunCard).join('')}
+      </section>`;
+    });
+    const other = runs.filter((run) => !matched.has(String(run.id || run.taskId || '')));
+    if (other.length) sections.push(`<section style="display:flex;flex-direction:column;gap:8px;">
+      <div style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;letter-spacing:.06em;">Other (${other.length})</div>
+      ${other.map(renderRunCard).join('')}
+    </section>`);
+    slot.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div>
+          <div style="font-size:13px;font-weight:800;">Runs</div>
+          <div style="font-size:12px;color:var(--pm-muted);">Task work and recovery stay here.</div>
         </div>
-        ${summary ? `<div class="pm-card-body" style="margin-bottom:6px;">${escapeHtml(summary)}${summary.length >= 220 ? '…' : ''}</div>` : ''}
-        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--pm-muted);">
-          <span>${escapeHtml(r.trigger || 'manual')} · ${r.stepCount || r.steps || 0} steps</span>
-          <span>${_formatTimeAgo(started)}${duration ? ' · ' + duration : ''}</span>
-        </div>
-      </article>
+        <button class="pm-btn ghost" id="pm-sa-runs-refresh" style="padding:6px 10px;font-size:12px;">${ICONS.refresh}</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;">${sections.join('')}</div>
     `;
-  }).join('');
+    wire();
+  };
+
+  const renderRunCard = (r) => {
+    const id = String(r.id || r.taskId || '');
+    const status = String(r.status || r.taskStatus || '').toLowerCase();
+    const pillMeta = _pmTaskPill(status);
+    const summary = String(r.resultPreview || r.finalSummary || r.pauseAnalysis?.message || r.prompt || '').slice(0, 260);
+    const started = r.startedAt || r.createdAt;
+    const finished = r.completedAt || r.finishedAt;
+    const duration = (finished && started) ? _formatDuration(finished - started) : '';
+    const isOpen = expandedId === id;
+    const detail = details[id]?.task;
+    const loading = details[id]?.loading;
+    const canRecover = !!(detail?.canRecover || r.canRecover || ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'].includes(status));
+    return `
+      <article class="pm-card pm-sa-run-card" data-sa-run-id="${escapeHtml(id)}" style="padding:14px 16px;cursor:pointer;border-color:${isOpen ? 'var(--pm-orange)' : 'var(--pm-border)'};">
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;">
+          <strong style="flex:1;font-size:14px;line-height:1.3;">${escapeHtml(r.taskName || r.title || 'Task')}</strong>
+          <span class="pm-pill ${pillMeta.cls}">${escapeHtml(pillMeta.label)}</span>
+        </div>
+        ${summary ? `<div class="pm-card-body" style="margin-bottom:6px;white-space:pre-wrap;">${escapeHtml(summary)}${summary.length >= 260 ? '...' : ''}</div>` : ''}
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--pm-muted);gap:10px;">
+          <span>${escapeHtml(r.trigger || r.source || 'manual')} - ${r.completedSteps || 0}/${r.totalSteps || r.stepCount || 0} steps</span>
+          <span>${_formatTimeAgo(r.lastProgressAt || started)}${duration ? ' - ' + duration : ''}</span>
+        </div>
+        ${canRecover && !isOpen ? `<div style="margin-top:8px;font-size:12px;font-weight:800;color:var(--pm-orange);">Open recovery chat</div>` : ''}
+        ${isOpen ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--pm-border);display:flex;flex-direction:column;gap:12px;cursor:default;">
+          ${loading || !detail ? `<div class="pm-card-body">Loading run details...</div>` : `
+            ${detail.finalSummary ? `<section><div class="pm-card-head">Output</div><div class="pm-card-body" style="white-space:pre-wrap;">${escapeHtml(detail.finalSummary)}</div></section>` : ''}
+            ${canRecover ? `<section style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;">
+              <div class="pm-card-head" style="color:#9a3412;">Recovery Chat</div>
+              ${_pmRenderTaskRecovery(detail)}
+              <div style="display:flex;gap:8px;margin-top:10px;">
+                <textarea class="pm-textarea" data-sa-run-reply="${escapeHtml(id)}" rows="2" placeholder="Reply to this run..." style="min-height:58px;"></textarea>
+                <button class="pm-btn primary" data-sa-run-send="${escapeHtml(id)}" style="align-self:flex-end;">Send</button>
+              </div>
+            </section>` : detail.recoveryConversation?.length ? `<section><div class="pm-card-head">Recovery History</div>${_pmRenderTaskRecovery(detail)}</section>` : ''}
+            <section><div class="pm-card-head">Progress</div>${_pmRenderTaskProgress(_pmTaskProgressItems(detail))}</section>
+            <section><div class="pm-card-head">Task Prompt</div><div class="pm-card-body" style="white-space:pre-wrap;">${escapeHtml(detail.prompt || detail.title || '')}</div></section>
+            <section><div class="pm-card-head">Process Log</div>${_pmRenderTaskJournal(detail.journal)}</section>
+          `}
+        </div>` : ''}
+      </article>`;
+  };
+
+  async function openDetail(id) {
+    expandedId = expandedId === id ? '' : id;
+    if (expandedId && !details[id]?.task) {
+      details[id] = { loading: true };
+      render();
+      try {
+        const data = await loadSubagentRunDetail(agentId, id);
+        details[id] = { task: data.task || null, run: data.run || null, evidenceBus: data.evidenceBus || null };
+      } catch (err) {
+        details[id] = { task: null, error: err?.message || 'Failed to load run' };
+        pmToast(err?.message || 'Failed to load run', 'error');
+      }
+    }
+    render();
+  }
+
+  function wire() {
+    slot.querySelector('#pm-sa-runs-refresh')?.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      runs = await loadSubagentRuns(agentId, 50);
+      render();
+    });
+    slot.querySelectorAll('[data-sa-run-id]').forEach((card) => {
+      card.addEventListener('click', async (event) => {
+        if (event.target.closest('button, textarea, input, a')) return;
+        await openDetail(card.getAttribute('data-sa-run-id'));
+      });
+    });
+    slot.querySelectorAll('[data-sa-run-send]').forEach((btn) => {
+      btn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const id = btn.getAttribute('data-sa-run-send');
+        const input = slot.querySelector(`[data-sa-run-reply="${CSS.escape(id)}"]`);
+        const message = String(input?.value || '').trim();
+        if (!message) return;
+        btn.disabled = true;
+        try {
+          const data = await sendSubagentRunRecovery(agentId, id, message);
+          if (input) input.value = '';
+          if (data?.task) details[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
+          runs = await loadSubagentRuns(agentId, 50);
+          pmToast(data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
+          render();
+        } catch (err) {
+          pmToast(err?.message || 'Send failed', 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  render();
 }
 
 async function _renderSubagentHeartbeatTab(slot, agentId) {
@@ -24856,16 +27753,45 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     if (!queueEl) return;
     queueEl.hidden = sendQueue.length === 0;
     queueEl.innerHTML = sendQueue.length
-      ? `<div class="pm-mobile-queued-head"><b aria-label="${sendQueue.length} queued message${sendQueue.length === 1 ? '' : 's'}">${sendQueue.length}</b></div>
-         <div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
+      ? `<div class="pm-mobile-queued-list">${sendQueue.map((item, idx) => `
            <div class="pm-mobile-queued-item">
              <button type="button" class="pm-mobile-queued-text" data-sa-queue-edit="${idx}">${escapeHtml(String(item.text || 'Attached file(s)').slice(0, 120))}${item.files?.length ? ` <em>+${item.files.length}</em>` : ''}</button>
-             <div class="pm-mobile-queued-actions"><button type="button" class="pm-mobile-queued-icon pm-mobile-queued-remove" data-sa-queue-remove="${idx}" aria-label="Remove queued message">${ICONS.trash}</button></div>
+             <div class="pm-mobile-queued-actions">
+               <div class="pm-mobile-queued-menu-wrap">
+                 <button type="button" class="pm-mobile-queued-icon pm-mobile-queued-menu-trigger" data-sa-queue-menu="${idx}" aria-label="Queued message actions" title="Actions">${ICONS.dots}</button>
+                 <div class="pm-mobile-queued-popover" data-sa-queue-menu-popover="${idx}" hidden>
+                   <button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-steer" data-sa-queue-steer="${idx}">${ICONS.target}<span>Steer</span></button>
+                   <button type="button" class="pm-mobile-queued-menu-item pm-mobile-queued-remove" data-sa-queue-remove="${idx}">${ICONS.trash}<span>Delete</span></button>
+                 </div>
+               </div>
+             </div>
            </div>`).join('')}</div>`
       : '';
-    queueEl.querySelectorAll('[data-sa-queue-remove]').forEach((btn) => btn.addEventListener('click', () => {
+    _ensureMobileQueuedPromptMenuDismiss();
+    queueEl.querySelectorAll('[data-sa-queue-edit]').forEach((btn) => attachMobileButtonHaptic(btn, () => {}));
+    queueEl.querySelectorAll('[data-sa-queue-menu]').forEach((btn) => attachMobileButtonHaptic(btn, () => {
+      const idx = Number(btn.getAttribute('data-sa-queue-menu'));
+      if (!Number.isInteger(idx)) return;
+      const menu = queueEl.querySelector(`[data-sa-queue-menu-popover="${idx}"]`);
+      if (!menu) return;
+      const nextOpen = !!menu.hidden;
+      _closeMobileQueuedPromptMenus(queueEl);
+      menu.hidden = !nextOpen;
+    }));
+    queueEl.querySelectorAll('[data-sa-queue-steer]').forEach((btn) => attachMobileButtonHaptic(btn, () => {
+      const idx = Number(btn.getAttribute('data-sa-queue-steer'));
+      if (Number.isFinite(idx) && idx >= 0 && idx < sendQueue.length) {
+        const [item] = sendQueue.splice(idx, 1);
+        if (item) sendQueue.unshift(item);
+      }
+      _closeMobileQueuedPromptMenus(queueEl);
+      renderQueue();
+      drainQueueSoon();
+    }));
+    queueEl.querySelectorAll('[data-sa-queue-remove]').forEach((btn) => attachMobileButtonHaptic(btn, () => {
       const idx = Number(btn.getAttribute('data-sa-queue-remove'));
       if (Number.isFinite(idx)) sendQueue.splice(idx, 1);
+      _closeMobileQueuedPromptMenus(queueEl);
       renderQueue();
     }));
   }

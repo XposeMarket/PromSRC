@@ -17,13 +17,14 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v100-2026-06-26-voice-room-fast-target';
+const VERSION = 'pm-v114-2026-06-28-slash-command-style-align';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 
 // Files needed for the mobile shell to render offline.
 const PRECACHE = [
   '/',
+  '/index.html',
   '/mobile/chat',
   '/mobile/voice',
   '/mobile/tasks',
@@ -35,6 +36,13 @@ const PRECACHE = [
   '/src/mobile/mobile-pages.js',
   '/src/mobile/mobile-data.js',
   '/src/mobile/mobile-api.js',
+  '/static/styles/mobile.css',
+  '/static/styles/base.css',
+  '/static/mobile/mobile-router.js',
+  '/static/mobile/mobile-shell.js',
+  '/static/mobile/mobile-pages.js',
+  '/static/mobile/mobile-data.js',
+  '/static/mobile/mobile-api.js',
   '/src/api.js',
   '/src/state.js',
   '/src/utils.js',
@@ -95,8 +103,25 @@ async function staleWhileRevalidate(request, cacheName) {
 }
 
 function offlineShellResponse() {
-  return caches.match('/?source=pwa#mobile/chat')
-    .then((cached) => cached || caches.match('/') || caches.match('/index.html'))
+  const candidates = [
+    '/?source=pwa#mobile/chat',
+    '/?source=pwa',
+    '/mobile/chat',
+    '/',
+    '/index.html',
+  ];
+  return caches.open(STATIC_CACHE)
+    .then(async (cache) => {
+      for (const url of candidates) {
+        const cached = await cache.match(url, { ignoreSearch: true });
+        if (cached) return cached;
+      }
+      for (const url of candidates) {
+        const cached = await caches.match(url, { ignoreSearch: true });
+        if (cached) return cached;
+      }
+      return null;
+    })
     .then((cached) => cached || new Response(
       '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Prometheus offline</title><body style="margin:0;background:#101112;color:#f5efe7;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;display:grid;min-height:100vh;place-items:center"><main style="max-width:28rem;padding:2rem"><h1 style="font-size:1.4rem">Prometheus is offline</h1><p style="line-height:1.5;color:#c9b8a7">The mobile shell is available, but the gateway could not be reached. Reopen when the connection returns to see live state.</p></main></body>',
       { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
@@ -111,6 +136,11 @@ self.addEventListener('fetch', (event) => {
   try { url = new URL(request.url); } catch { return; }
   if (url.origin !== self.location.origin) return;
   if (isBypass(url)) return;
+
+  if (request.mode === 'navigate') {
+    event.respondWith(networkFirst(request, STATIC_CACHE).catch(() => offlineShellResponse()));
+    return;
+  }
 
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE));

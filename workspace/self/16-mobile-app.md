@@ -16,6 +16,8 @@ Canonical mobile source files:
 - `web-ui/src/mobile/mobile-data.js` - static first-pass/mock mobile nav/schedule/team data still used by parts of the shell.
 - `web-ui/src/styles/mobile.css` - isolated mobile styling. It only takes over when `body.pm-mobile-active` is present; mobile themes use `--pm-*` surface tokens and semantic `--pm-accent*` tokens, while legacy `--pm-orange*` variables are compatibility aliases.
 
+Mobile background visual rule: `body.pm-mobile-active` and `.pm-app` must use flat theme background colors only. Do not add page-level radial/conic/linear background-image glow layers or pseudo-element glow overlays for any theme/skin; component-local shadows are okay, but the app backdrop itself should have no glow. [2026-06-29]
+
 Root PWA/static entry files:
 
 - `web-ui/index.html` - includes mobile CSS, PWA metadata, `#mobile-root`, boot screen, and `src/mobile/mobile-router.js`.
@@ -415,6 +417,12 @@ Live dev-edit workflow for mobile:
 - Reload mobile clients. A `dev_reload_requested` WebSocket event can target `mobile`; `web-ui/src/ws.js` clears Prometheus service-worker caches before reloading mobile routes.
 
 Prometheus' internal dev helper rule is recorded in `src/gateway/prompt-context.ts`: mobile app source is under `web-ui/src/mobile/*`; do not hand-edit generated public copies; after live mobile edits, apply/sync through the mobile/web-ui change path.
+
+Mobile context-window chip/popover spacing note [2026-06-28]: `renderMobileContextChip()` is inserted between the header and `.pm-body.pm-chat-body`. Keep chat-body top padding large enough that the first message starts below the floating context ring, and keep `.pm-ctx-popover` top offset lower than the header action row so the panel does not visually touch header buttons.
+
+Mobile header Permissions shortcut note [2026-06-28]: the top-right chat-header ⋮ button is `renderMobileHeader()` from `web-ui/src/mobile/mobile-shell.js`, and the chat popover/menu itself is built inside `renderChatPage()` in `web-ui/src/mobile/mobile-pages.js` (`#pm-chat-settings-popover`). The `Permissions` menu item opens `#mobile/settings/security`, which `web-ui/src/mobile/mobile-router.js` maps to `openMobileSettings('security')`; that reuses the desktop Settings Security tab. The Default Permissions / Light Permissions terminal-command toggle is owned by `web-ui/src/pages/SettingsPage.js` (`loadSecuritySettings()`, `saveSecuritySettings()`, `getTerminalPermissionModeFromUI()`) and persists through `src/gateway/routes/settings.router.ts` as `tools.permissions.shell.approval_mode` in the settings config store.
+
+
 
 ## Gotchas
 

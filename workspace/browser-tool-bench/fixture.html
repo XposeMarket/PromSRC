@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prometheus Browser Tool Benchmark Fixture</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; line-height: 1.35; }
+  header { position: sticky; top: 0; background: white; padding: 8px 0; border-bottom: 1px solid #ddd; z-index: 5; }
+  button, input, a { margin: 6px; padding: 8px 10px; }
+  #dropzone, #drag-source { display: inline-flex; align-items:center; justify-content:center; width: 180px; height: 90px; border: 2px dashed #777; margin: 12px; user-select: none; }
+  #drag-source { border-style: solid; background: #f1f5f9; cursor: grab; }
+  .card { border: 1px solid #ddd; padding: 10px; margin: 8px 0; border-radius: 8px; }
+  .spacer { height: 1200px; background: linear-gradient(#fff, #f8fafc); }
+  #late { padding: 12px; background: #dcfce7; margin: 8px 0; }
+  #typebox { min-height: 42px; border:1px solid #aaa; padding: 8px; width: 360px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Prometheus Browser Tool Benchmark Fixture</h1>
+  <button id="add-late">Add delayed element</button>
+  <button id="fetch-json">Fetch JSON</button>
+  <a id="download-link" download="browser-benchmark-download.txt" href="data:text/plain;charset=utf-8,Prometheus%20browser%20download%20benchmark">Download text fixture</a>
+</header>
+
+<section>
+  <label>Search/input field <input id="search" name="search" placeholder="type here" /></label>
+  <button id="echo">Echo input</button>
+  <p id="echo-out">Echo: empty</p>
+  <div id="typebox" contenteditable="true" role="textbox" aria-label="Rich text input">Click then browser_type here</div>
+  <input id="file" type="file" />
+  <p id="upload-out">Upload: none</p>
+</section>
+
+<section>
+  <div id="drag-source" draggable="true">Drag me</div>
+  <div id="dropzone">Drop here</div>
+  <p id="drag-out">Drag: idle</p>
+</section>
+
+<section id="cards">
+  <article class="card" data-id="alpha"><h2>Alpha Card</h2><a href="#alpha">Alpha link</a><p>Fast local DOM extraction target.</p></article>
+  <article class="card" data-id="bravo"><h2>Bravo Card</h2><a href="#bravo">Bravo link</a><p>Second structured extraction item.</p></article>
+  <article class="card" data-id="charlie"><h2>Charlie Card</h2><a href="#charlie">Charlie link</a><p>Third structured extraction item.</p></article>
+</section>
+
+<div id="late-host"></div>
+<div class="spacer">Scroll test area: lots of blank vertical space.</div>
+<section id="bottom"><h2>Bottom Sentinel</h2><p>No more results</p></section>
+
+<script>
+const log = (id, text) => document.getElementById(id).textContent = text;
+document.getElementById('echo').addEventListener('click', () => log('echo-out', 'Echo: ' + document.getElementById('search').value));
+document.getElementById('file').addEventListener('change', e => log('upload-out', 'Upload: ' + (e.target.files[0]?.name || 'none')));
+document.getElementById('add-late').addEventListener('click', () => setTimeout(() => {
+  const div = document.createElement('div'); div.id = 'late'; div.textContent = 'Delayed element appeared'; document.getElementById('late-host').appendChild(div);
+}, 600));
+document.getElementById('fetch-json').addEventListener('click', async () => {
+  const blob = new Blob([JSON.stringify({ok:true, source:'fixture', at: Date.now()})], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const data = await fetch(url).then(r => r.json());
+  log('echo-out', 'Fetched: ' + data.source);
+});
+const src = document.getElementById('drag-source');
+src.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'drag-source'));
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => e.preventDefault());
+dz.addEventListener('drop', e => { e.preventDefault(); log('drag-out', 'Drag: dropped ' + e.dataTransfer.getData('text/plain')); });
+</script>
+</body>
+</html>

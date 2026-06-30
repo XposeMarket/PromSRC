@@ -38,15 +38,21 @@ Key rules:
 - `connector_list` is always available
 - `ask_team_coordinator` is always available
 - `deploy_analysis_team` lives under `agents_and_teams`
-- `terminal` is the canonical model-facing command/process tool under `workspace_write`; hidden compatibility tools `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit` remain executable internals
+- `browser_automation` is wrapper-first: the model-facing surface is `browser_session`, `browser_observe`, `browser_act`, and `browser_extract`
+- `desktop_automation` is wrapper-first: the model-facing surface is `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background`
+- `external_apps` is wrapper-first for the large bundled connectors: X/xAI uses `x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, and `x_admin`; Vercel uses `vercel_ops`
+- `agents_and_teams` is wrapper-first for non-core agent/team operations: `agent_ops`, `agent_chat_ops`, `team_ops_wrapper`, and `team_collab_ops`
+- `workspace_write` is wrapper-first: the model-facing surface is `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`
+- `workspace_run` is the canonical model-facing command/process/check wrapper under `workspace_write`; hidden compatibility tools `terminal`, `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit` remain executable internals
+- `prometheus_source_read` is wrapper-first: `dev_source_read` covers src/, web-ui/, and allowlisted prom-root list/stats/read/batch/grep actions; old granular read helpers remain executable internals
+- `prometheus_source_write` is wrapper-first after approval: `dev_source_edit` covers approved src/web-ui patchsets, surgical edits, full writes, deletes, verification, and apply-live; old granular write helpers remain executable internals
 - `schedule_job` is core; deeper schedule operator tools such as history/detail/output/patch/stuck-control live under `automations`
-- workspace file/read/write tools such as `read_file`, `list_files`, `list_directory`, `grep_file`, `grep_files`, `file_stats`, `mkdir`, `present_file`, `apply_workspace_patchset`, and `clone_repo` live under `workspace_write`
+- granular workspace file/read/write/git/run/safety/code-nav tools such as `read_file`, `list_directory`, `grep_file`, `file_stats`, `find_replace`, `apply_workspace_patchset`, `git_status`, `run_typecheck`, `snapshot_workspace`, and `code_outline` remain executable compatibility internals but are hidden from the normal exposed schema surface
+- granular browser/desktop tools such as `browser_open`, `browser_snapshot`, `browser_click`, `browser_run_js`, `desktop_screenshot`, `desktop_click`, `desktop_window_click`, and `desktop_background_command` remain executable compatibility internals but are hidden from the normal exposed schema surface
+- granular X/Vercel, agent/team, and Creative tools remain executable compatibility internals but are hidden from the normal exposed schema surface when their wrapper surface exists
+- `search_files`, `read_files_batch`, and `file_tree` remain visible helper tools because they are shared by `workspace_write` and `prometheus_source_read`; `clone_repo` also remains visible because repo intake has special first-use guidance
 - legacy `creative_mode` normalizes to `creative_basic`; `image_mode`, `video_mode`, `hyperframes`, `creative_qa`, and `media_quality` normalize to the narrower creative buckets
-- `get_creative_mode`, `switch_creative_mode`, core canvas/project/element/style/export basics live under `creative_basic`
-- image/asset/layer/cutout/icon/generation helpers live under `creative_image`
-- video/shot/storyboard/audio/caption/sequence/composition helpers live under `creative_video`
-- HyperFrames and HTML Motion clip/template helpers live under `creative_hyperframes`
-- frame render, layout, text-fit, contrast, overlap, timing, lint, and validation helpers live under `creative_quality`
+- `creative_basic` exposes `creative_project` and `creative_scene`; `creative_image` exposes `creative_image_ops`; `creative_video` exposes `creative_video_ops`; `creative_hyperframes` exposes `creative_hyperframes_ops`; `creative_quality` exposes `creative_quality_ops`
 - `generate_image` and `generate_video` remain core; `analyze_video` lives under `media_assets`
 - only `skill_list` and `skill_read` are core skill tools; `skill_resource_list`, `skill_resource_read`, metadata repair/update, authoring, import/export, and resource mutation live under `skills`
 - the model-facing web surface is unified: use `web_search` for preferred-provider, forced-provider, or multi-provider search; use `web_fetch` with either `url` or `urls` for single or batch fetch
@@ -54,6 +60,11 @@ Key rules:
 - the model-facing delivery surface is unified around `delivery_send` and `delivery_send_screenshot`; legacy `send_telegram` and `browser_send_to_telegram` remain executable compatibility aliases but are hidden from the exposed schema surface
 - the 2026-06-19 core schema compaction pass reduced the always-on core surface from 47 tools / ~15.9k estimated schema tokens to 45 tools / ~13.3k by shortening verbose descriptions and hiding legacy delivery aliases
 - the 2026-06-19 workspace command unification pass made `terminal` cover bounded commands (`action:"run"`), supervised starts (`action:"start"`), and process management (`status`, `log`, `wait`, `kill`, `submit`). The hidden legacy names still route to the same executor for compatibility, while `terminal` command runs reuse the existing run-command deny policy, cwd/boundary analysis, Lite terminal permission mode, command permission grants, approval queue/cards, task pause/resume flow, Telegram approvals, and audit logging.
+- the 2026-06-29 workspace wrapper compaction pass added six unified model-facing workspace tools: `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`. The direct executor normalizes those wrapper actions to the existing granular handlers before execution, so path scope, mutation guards, command policy, approval cards, snapshots, git shell-outs, and code-nav behavior remain centralized in the old handlers while the active `workspace_write` schema becomes much smaller.
+- the 2026-06-29 dev source wrapper compaction pass added `dev_source_read` under `prometheus_source_read` and `dev_source_edit` under `prometheus_source_write`. `dev_source_edit` is still gated by the existing dev source approval flow: the write category cannot be activated until `request_dev_source_edit` or an approved `code_change` proposal grants access, and each delegated granular handler still runs the old session/scope/syntax checks.
+- the 2026-06-29 browser/desktop wrapper compaction pass added `browser_session`, `browser_observe`, `browser_act`, and `browser_extract` under `browser_automation`, plus `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background` under `desktop_automation`. The executor normalizes wrapper actions to the existing granular handlers, preserving browser final-action approvals, observe/capture behavior, desktop screenshot freshness, coordinate validation, scoped window helpers, macro/background lanes, policy checks, and audit logging.
+- the 2026-06-29 external/agents/creative wrapper compaction pass added X/xAI and Vercel wrappers under `external_apps`, agent/team wrappers under `agents_and_teams`, and wrapper tools for each Creative bucket. The executor normalizes wrapper actions to existing extension/direct/capability handlers so connector auth, team state, Creative project state, policy checks, and audit logging stay centralized.
+- the 2026-06-29 voice wrapper compaction pass made the Realtime voice tool surface wrapper-first: `voice_ops`, `voice_browser`, and `voice_desktop` are exposed alongside canonical `skill_*` and rich `show_*` card tools. Granular `voice_web_*`, `voice_browser_*`, `voice_desktop_*`, screenshot/status, and simple generation tools remain executable compatibility handlers behind `executeVoiceAgentToolWithTrace(...)` normalization.
 - the 2026-06-19 creative split replaced the old single `creative_mode` bucket (~28.9k schema tokens) with narrower buckets: `creative_basic` ~6.2k, `creative_image` ~3.6k, `creative_video` ~9.0k, `creative_hyperframes` ~7.1k, and `creative_quality` ~3.9k
 - the 2026-06-19 scoped category activation pass removed accidental sticky activation from main chat: `request_tool_category` defaults to `scope:"turn"`, while direct internal `activateToolCategory(...)` calls still default to session scope for dev approvals/background runners that intentionally need persistence
 - the 2026-06-19 file/dev read-output pass made active file results capped by default: `read_file` returns 240 lines unless windowed or `full:true`, `read_source`/`read_webui_source`/`read_prom_file` return 300 lines by default, `read_files_batch` defaults to 8 files x 200 lines, and `read_dev_sources` defaults to 8 files x 220 lines. Use `start_line`/`num_lines` for chunks; use `full:true` only when the whole file is genuinely needed.
@@ -61,6 +72,11 @@ Key rules:
 - `skill_list` is compact by default: it returns ids/names/count metadata, supports `query` and `limit`, and only includes descriptions when `include_descriptions:true` is explicitly needed.
 - large tool outputs are summarized before reinjection into the active model loop; full/raw output remains available through tool observation raw storage for audit/recovery.
 - the context-window endpoint includes last-turn usage telemetry: provider delta plus grouped tool-result output by tool, so oversized outputs such as repeated `grep_source` calls are visible in desktop/mobile context-window UI.
+- the context-window ring/bar is based on the compaction trigger/current context limit, not the model's full context window. The detailed rows still expose the full model window as an out-of-band reference.
+- desktop and mobile context-window UI apply a live current-turn overlay from streamed `tool_result` telemetry, so long-running tool loops can visibly grow before the backend finalizes/persists the assistant turn.
+- the 2026-06-28 tool stopwatch pass makes `ToolResult.extra.telemetry.durationMs` first-class: streamed `tool_result` events expose `durationMs`/`elapsedMs`/`elapsed_ms`, model-facing tool observations include a compact `[TOOL_STOPWATCH] elapsed_ms=...` line, and context-window last-turn/live tool rows show elapsed timing suffixes such as `browser_open x1 · 2.4s`. Use this for browser/desktop/tool performance benchmarking instead of guessing from wall-clock feel.
+
+- active skill reminder accounting mirrors the `[ACTIVE_SKILLS]` prompt block and persists `activatedSkillResources`; full `skill_read` content is accounted as tool-result/observation context, not as the lightweight active-skill reminder row.
 
 Tool definition sources:
 
@@ -126,7 +142,7 @@ Important boundary:
 
 Run-command/system-control policy facts to preserve:
 
-- `terminal` is the only model-facing command/process schema in `workspace_write`; hidden compatibility aliases still execute through the same command handling. Command handling separates default approval routing from Lite terminal permissions.
+- `workspace_run` is the model-facing command/process/check schema in `workspace_write`; hidden compatibility aliases, including `terminal`, still execute through the same command handling. Command handling separates default approval routing from Lite terminal permissions.
 - token allowlists are assembled in `src/gateway/chat/chat-helpers.ts` from defaults plus config-backed arrays under `tools.permissions.shell.*`; in default mode, an unknown or non-allowlisted token should reach the normal command approval queue instead of hard-blocking before approval
 - config/schema/type support exists for `allowed_commands`, `allowed_windows_read_commands`, `allowed_windows_system_commands`, and `allowed_custom_commands`; those lists are enforced as hard/auto-block boundaries only when `tools.permissions.shell.approval_mode === "lite"`
 - local-control additions such as `powercfg` and `taskkill` are still commit-tier shell actions; allowing the token only permits them to reach normal policy/approval/audit, not to run silently
@@ -242,11 +258,14 @@ Implementation facts for the 2026-06-17 workspace batch-file-tools update:
 - direct chat/subagent fallback handlers for these tools remain in `src/gateway/agents-runtime/subagent-executor.ts`
 - chat tool schemas for these tools live in `src/gateway/tools/defs/file-web-memory.ts`
 - `src/gateway/tool-builder.ts` exposes `search_files`, `read_files_batch`, and `file_tree` in both `workspace_write` and `prometheus_source_read` contexts so source/self-edit sessions can use the token-saving helpers without activating the full workspace write category
+- `src/gateway/tool-builder.ts` exposes `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav` under `workspace_write`, while hiding most granular workspace schemas through `SCHEMA_HIDDEN_COMPAT_TOOL_NAMES`
+- `src/gateway/tool-builder.ts` exposes `dev_source_read` under `prometheus_source_read` and `dev_source_edit` under `prometheus_source_write`, while hiding the granular source/web-ui/prom-root read/write schemas through `SCHEMA_HIDDEN_COMPAT_TOOL_NAMES`
+- `src/gateway/tool-builder.ts` exposes wrapper-only browser/desktop schemas under `browser_automation` and `desktop_automation`, while hiding granular browser/desktop schemas through `SCHEMA_HIDDEN_COMPAT_TOOL_NAMES`
 - `search_files(directory:"src/..."|"web-ui/...")` delegates to `grep_source`/`grep_webui_source` in the direct executor; `file_tree(path:"src/..."|"web-ui/...")` renders compact trees from the Prometheus project source roots
 - `read_files_batch` accepts `src/...` and `web-ui/...` entries and delegates those reads through the source-read handlers, keeping Prometheus self-edit inspection batched and read-only
 
-- `read_files_batch` should be preferred over serial `read_file` calls when inspecting two or more workspace files before an edit
-- `apply_workspace_patchset` supports grouped workspace file mutations (`find_replace`, `replace_lines`, `insert_after`, `delete_lines`, `write_file`, `create_file`) and returns per-edit results
+- `workspace_read(action:"batch_read")` should be preferred over serial reads when inspecting two or more workspace files before an edit
+- `workspace_edit(action:"patchset")` delegates to `apply_workspace_patchset`, which supports grouped workspace file mutations (`find_replace`, `replace_lines`, `insert_after`, `delete_lines`, `write_file`, `create_file`) and returns per-edit results
 - `file_tree` returns a compact indented directory tree for fast project orientation, with depth, glob, and exclude controls
 
 Implementation facts for the 2026-06-05 batch research update:

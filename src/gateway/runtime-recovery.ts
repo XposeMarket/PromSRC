@@ -60,14 +60,62 @@ function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefine
 }
 
 type RestartCheckpointPhase = 'initiated' | 'recovered';
+type RestartCheckpointTextOptions = {
+  includeProcessPacket?: boolean;
+};
 
-function buildCheckpointText(runtime: LiveRuntimeSnapshot, reason: string, phase: RestartCheckpointPhase = 'initiated'): string {
+function compactCheckpointValue(value: unknown, max = 700): string {
+  const text = typeof value === 'string'
+    ? value
+    : value && typeof value === 'object'
+      ? JSON.stringify(value)
+      : String(value ?? '');
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, Math.max(0, max - 3))}...` : clean;
+}
+
+function formatCheckpointProcessPacket(runtime: LiveRuntimeSnapshot): string[] {
+  const checkpoint = runtime.checkpoint || {};
+  const rawProcessEntries = Array.isArray(checkpoint.processEntries) ? checkpoint.processEntries : [];
+  const entries = rawProcessEntries
+    .filter((entry) => entry && typeof entry === 'object')
+    .slice(-18);
+  const lines: string[] = [];
+  if (checkpoint.args) lines.push(`Last tool args: ${compactCheckpointValue(checkpoint.args, 900)}`);
+  if (checkpoint.result) lines.push(`Last tool result: ${compactCheckpointValue(checkpoint.result, 1100)}`);
+  if (checkpoint.thinkingTail) {
+    lines.push('Recent reasoning/thinking tail:');
+    lines.push(compactCheckpointValue(checkpoint.thinkingTail, 1400));
+  }
+  if (entries.length) {
+    lines.push('Recent runtime process/tool log:');
+    for (const entry of entries) {
+      const type = String(entry.type || entry.event || 'info').toUpperCase();
+      const toolName = compactCheckpointValue(entry.extra?.toolName || entry.toolName || '', 80);
+      const content = compactCheckpointValue(entry.content || entry.message || entry.result || '', 500);
+      if (!content && !toolName) continue;
+      lines.push(`- [${type}]${toolName ? ` ${toolName}:` : ''} ${content}`.trim());
+    }
+  }
+  return lines.slice(0, 28);
+}
+
+function buildCheckpointText(
+  runtime: LiveRuntimeSnapshot,
+  reason: string,
+  phase: RestartCheckpointPhase = 'initiated',
+  opts: RestartCheckpointTextOptions = {},
+): string {
   const plannedTool = plannedRestartToolName(runtime);
+  const includeProcessPacket = opts.includeProcessPacket !== false;
+  const processPacket = includeProcessPacket ? formatCheckpointProcessPacket(runtime) : [];
   if (plannedTool) {
     if (phase === 'recovered') {
       return [
         '[Hot restart checkpoint: planned by this chat]',
-        'Gateway Restart Successful - Prometheus Back Online ✅',
+        'Gateway restart successful. Prometheus is back online.',
+        '',
+        ...processPacket,
       ].join('\n');
     }
     return [
@@ -76,6 +124,9 @@ function buildCheckpointText(runtime: LiveRuntimeSnapshot, reason: string, phase
       '',
       `Restart trigger: ${plannedTool}`,
       'Prometheus called this restart tool from this chat.',
+      includeProcessPacket ? '' : 'Detailed recovery context was saved internally.',
+      '',
+      ...processPacket,
     ].join('\n');
   }
 
@@ -87,15 +138,19 @@ function buildCheckpointText(runtime: LiveRuntimeSnapshot, reason: string, phase
     runtime.checkpoint?.event ? `Last event: ${runtime.checkpoint.event}` : '',
     runtime.checkpoint?.message ? `Last progress: ${String(runtime.checkpoint.message).slice(0, 1000)}` : '',
     runtime.checkpoint?.toolName ? `Last tool: ${runtime.checkpoint.toolName}` : '',
+    ...processPacket,
     '',
-    'Prometheus saved this checkpoint before shutdown. Continue from the latest known progress instead of restarting completed work.',
+    includeProcessPacket
+      ? 'Prometheus saved this checkpoint before shutdown. Continue from the latest known progress instead of restarting completed work.'
+      : 'Prometheus saved a checkpoint before shutdown. Continue from the latest known progress if the user asks.',
   ].filter(Boolean);
   return lines.join('\n');
 }
 
 function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: string, phase: RestartCheckpointPhase = 'initiated'): void {
   if (!runtime.sessionId) return;
-  const content = buildCheckpointText(runtime, reason, phase);
+  const content = buildCheckpointText(runtime, reason, phase, { includeProcessPacket: false });
+  const recoveryPacket = buildCheckpointText(runtime, reason, phase, { includeProcessPacket: true });
   const recent = getHistory(runtime.sessionId, 8);
   const alreadyPresent = recent.some((msg) =>
     msg.role === 'assistant' && String(msg.content || '').trim() === content.trim()
@@ -107,7 +162,7 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
   const processEntries = rawProcessEntries
     .filter((entry) => entry && typeof entry === 'object')
     .slice(-250);
-  const toolLog = processEntries.length
+  const processToolLog = processEntries.length
     ? processEntries.map((entry: any) => {
       const type = String(entry.type || 'info').toUpperCase();
       const text = String(entry.content || '').trim();
@@ -115,6 +170,7 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
       return `[${type}]${toolName ? ` ${toolName}:` : ''} ${text}`.trim();
     }).join('\n')
     : undefined;
+  const toolLog = [recoveryPacket, processToolLog].filter(Boolean).join('\n\n');
   const workspacePath = getWorkspace(runtime.sessionId) || process.cwd();
   const fileChanges = collectTurnFileChangesFromProcessEntries(processEntries, workspacePath);
   const workStartedAt = Number(runtime.startedAt || 0) || Date.now();
@@ -129,7 +185,7 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
     channel: runtime.source as any,
     channelLabel: runtime.source || 'system',
     processEntries: processEntries.length ? processEntries : undefined,
-    toolLog,
+    toolLog: toolLog || undefined,
     fileChanges: fileChanges || undefined,
   }, {
     disableCompactionCheck: true,
@@ -139,8 +195,9 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
 }
 
 function pauseMainChatGoalRuntimeForRestart(runtime: LiveRuntimeSnapshot, reason: string): void {
-  if (runtime.kind !== 'main_chat' || !runtime.sessionId) return;
-  if (String(runtime.source || '') !== 'goal' && !/main chat goal/i.test(String(runtime.label || ''))) return;
+  if (runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') return;
+  if (!runtime.sessionId) return;
+  if (runtime.kind !== 'main_chat_goal' && String(runtime.source || '') !== 'goal' && !/main chat goal/i.test(String(runtime.label || ''))) return;
   recordMainChatGoalInterruptedForRestart(runtime.sessionId, reason, Number(runtime.startedAt || 0));
 }
 
@@ -178,9 +235,9 @@ export function prepareActiveRuntimesForGatewayShutdown(reason = 'gateway_shutdo
         continue;
       }
 
-      if (runtime.kind === 'main_chat' && runtime.sessionId) {
+      if ((runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && runtime.sessionId) {
         pauseMainChatGoalRuntimeForRestart(runtime, reason);
-        addCheckpointMessageToSession(runtime, reason);
+        if (runtime.kind === 'main_chat') addCheckpointMessageToSession(runtime, reason);
       }
     } catch (err: any) {
       console.warn('[runtime-recovery] Failed to prepare runtime for shutdown:', runtime.id, err?.message || err);
@@ -225,7 +282,7 @@ function resolveActiveRestartEpoch(): number {
 }
 
 function isMainChatHotRestartRecoveryCandidate(runtime: LiveRuntimeSnapshot, sinceEpoch = 0): boolean {
-  if (runtime.kind !== 'main_chat' || !runtime.sessionId) return false;
+  if ((runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') || !runtime.sessionId) return false;
   // Only main-chat runtimes this restart actually interrupted.
   if (isInterruptedByRestart(runtime, sinceEpoch)) return true;
   // The explicit shutdown-marked checkpoint path also counts, but only when it
@@ -338,7 +395,7 @@ export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs =
         ? 'auto-resumed'
         : `paused by this restart; ask before resuming. Resume command: task_control(action:"resume", task_id:"${runtime.taskId}")`;
       taskLines.push(`- ${kind}: ${label} (${runtime.taskId})${team}; status=${status}; ${resumeHint}${last ? `; ${last}` : ''}`);
-    } else if (runtime.kind === 'main_chat' && runtime.sessionId) {
+    } else if ((runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && runtime.sessionId) {
       const sessionId = String(runtime.sessionId).trim();
       // The chat we're currently restarting INTO is handled by the live restart
       // confirmation, not listed as an "other thread to go back to".
@@ -418,9 +475,9 @@ export function recoverInterruptedRuntimes(opts: {
         continue;
       }
 
-      if (runtime.kind === 'main_chat' && runtime.sessionId) {
+      if ((runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && runtime.sessionId) {
         pauseMainChatGoalRuntimeForRestart(runtime, runtime.interruptReason || 'gateway_restart');
-        addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart', 'recovered');
+        if (runtime.kind === 'main_chat') addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart', 'recovered');
         interruptedChats.push(runtime.sessionId);
         markDurableRuntimeRecovered(runtime.id, 'interrupted', { recovery: 'chat_checkpointed', sessionId: runtime.sessionId });
         continue;

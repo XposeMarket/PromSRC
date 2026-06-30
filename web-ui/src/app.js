@@ -327,6 +327,55 @@ const PAGE_TITLES = {
   hub: ['Hub', 'Skill usage, achievements, and tool activity'],
 };
 
+const PAGE_MODULES = {
+  bgtasks: './pages/TasksPage.js',
+  schedule: './pages/SchedulePage.js',
+  teams: './pages/TeamsPage.js',
+  subagents: './pages/SubagentsPage.js',
+  proposals: './pages/ProposalsPage.js',
+  audit: './pages/AuditPage.js',
+  memory: './pages/MemoryPage.js',
+  hub: './pages/HubPage.js',
+};
+const _pageModulePromises = new Map();
+
+function ensurePageModule(mode) {
+  const src = PAGE_MODULES[mode];
+  if (!src) return Promise.resolve();
+  if (!_pageModulePromises.has(mode)) {
+    _pageModulePromises.set(mode, import(src).catch((err) => {
+      _pageModulePromises.delete(mode);
+      console.error(`[app] Failed to load page module for ${mode}:`, err);
+      throw err;
+    }));
+  }
+  return _pageModulePromises.get(mode);
+}
+
+function activateLoadedPageMode(mode) {
+  if (mode !== window.currentMode) return;
+  if (mode === 'bgtasks' && typeof window.refreshBgTasks === 'function') window.refreshBgTasks();
+  if (mode === 'schedule' && typeof window.refreshSchedules === 'function') window.refreshSchedules();
+  if (mode === 'teams') {
+    const badge = document.getElementById('teams-badge');
+    if (badge) badge.style.display = 'none';
+    if (typeof window.teamsPageActivate === 'function') window.teamsPageActivate();
+    else if (typeof window.refreshTeams === 'function') window.refreshTeams();
+  }
+  if (mode === 'proposals') {
+    if (typeof window.loadProposals === 'function') window.loadProposals();
+    const badge = document.getElementById('proposals-badge');
+    if (badge) badge.style.display = 'none';
+  }
+  if (mode === 'subagents') {
+    if (typeof window.subagentsPageActivate === 'function') window.subagentsPageActivate();
+    else if (typeof window.refreshSubagents === 'function') window.refreshSubagents();
+  }
+  if (mode === 'audit' && typeof window.loadAuditLog === 'function') window.loadAuditLog();
+  if (mode === 'memory' && typeof window.memoryPageActivate === 'function') window.memoryPageActivate();
+  if (mode === 'hub' && typeof window.hubPageActivate === 'function') window.hubPageActivate();
+}
+
 export function setMode(mode) {
   if (!VALID_MODES.includes(mode)) mode = 'chat';
   state.currentMode = mode;
@@ -394,27 +443,7 @@ export function setMode(mode) {
     _syncPageViewPositions();
   }
 
-  if (mode === 'bgtasks' && typeof window.refreshBgTasks === 'function') window.refreshBgTasks();
-  if (mode === 'schedule' && typeof window.refreshSchedules === 'function') window.refreshSchedules();
-  if (mode === 'teams') {
-    const badge = document.getElementById('teams-badge');
-    if (badge) badge.style.display = 'none';
-    if (typeof window.teamsPageActivate === 'function') window.teamsPageActivate();
-    else if (typeof window.refreshTeams === 'function') window.refreshTeams();
-  }
-  if (mode === 'proposals') {
-    if (typeof window.loadProposals === 'function') window.loadProposals();
-    const badge = document.getElementById('proposals-badge');
-    if (badge) badge.style.display = 'none';
-  }
-  if (mode === 'subagents') {
-    console.log('[app] setMode subagents, subagentsPageActivate defined:', typeof window.subagentsPageActivate);
-    if (typeof window.subagentsPageActivate === 'function') window.subagentsPageActivate();
-    else if (typeof window.refreshSubagents === 'function') window.refreshSubagents();
-  }
-  if (mode === 'audit' && typeof window.loadAuditLog === 'function') window.loadAuditLog();
-  if (mode === 'memory' && typeof window.memoryPageActivate === 'function') window.memoryPageActivate();
-  if (mode === 'hub' && typeof window.hubPageActivate === 'function') window.hubPageActivate();
+  ensurePageModule(mode).then(() => activateLoadedPageMode(mode)).catch(() => {});
 }
 
 // Legacy compatibility: old header buttons still broadcast to setMode via onclick

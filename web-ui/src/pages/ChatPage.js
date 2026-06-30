@@ -592,6 +592,7 @@ const chatContextWindowState = {
   open: false,
   expanded: false,
   expandedRows: new Set(),
+  liveTurn: null,
   lastSessionId: '',
   lastFetchAt: 0,
   refreshTimer: 0,
@@ -600,8 +601,101 @@ const chatContextWindowState = {
   planData: null,
 };
 
+function resetChatContextWindowLiveTurn(sessionId) {
+  const sid = String(sessionId || '').trim();
+  chatContextWindowState.liveTurn = sid ? {
+    sessionId: sid,
+    active: true,
+    startedAt: Date.now(),
+    settledAt: 0,
+    toolResultTokens: 0,
+    toolResultBytes: 0,
+    toolDurationMsTotal: 0,
+    toolDurationMsMax: 0,
+    tools: new Map(),
+  } : null;
+  scheduleChatContextWindowRefresh(0);
+}
+
+function settleChatContextWindowLiveTurn(sessionId) {
+  const live = chatContextWindowState.liveTurn;
+  if (!live || String(live.sessionId || '') !== String(sessionId || '')) return;
+  live.active = false;
+  live.settledAt = Date.now();
+  setTimeout(() => {
+    const current = chatContextWindowState.liveTurn;
+    if (!current || current !== live) return;
+    if (Date.now() - Number(current.settledAt || 0) < 7000) return;
+    chatContextWindowState.liveTurn = null;
+    renderChatContextWindow(chatContextWindowState.data);
+  }, 7500);
+  scheduleChatContextWindowRefresh(500);
+}
+
+function estimateContextTokensFromText(text) {
+  const raw = String(text || '');
+  if (!raw) return 0;
+  return Math.max(1, Math.ceil(raw.length / 4));
+}
+
+function recordChatContextWindowToolResult(event, sessionId) {
+  const sid = String(sessionId || getChatContextWindowSessionId() || '').trim();
+  if (!sid) return;
+  let live = chatContextWindowState.liveTurn;
+  if (!live || String(live.sessionId || '') !== sid) {
+    resetChatContextWindowLiveTurn(sid);
+    live = chatContextWindowState.liveTurn;
+  }
+  if (!live) return;
+  const telemetry = event?.extra?.telemetry || event?.telemetry || {};
+  const fallbackText = String(event?.result || event?.output || event?.error || '');
+  const resultTokens = Math.max(0, Number(telemetry.resultTokens || telemetry.result_tokens || 0))
+    || estimateContextTokensFromText(fallbackText);
+  if (resultTokens <= 0) return;
+  const resultBytes = Math.max(0, Number(telemetry.resultBytes || telemetry.result_bytes || fallbackText.length || 0));
+  const durationMsRaw = Number(telemetry.durationMs || telemetry.duration_ms || event?.durationMs || event?.elapsedMs || event?.elapsed_ms || 0);
+  const durationMs = Number.isFinite(durationMsRaw) ? Math.max(0, Math.round(durationMsRaw)) : 0;
+  const action = String(event?.action || event?.tool || event?.name || 'tool').trim() || 'tool';
+  live.active = true;
+  live.toolResultTokens += resultTokens;
+  live.toolResultBytes += resultBytes;
+  if (durationMs > 0) {
+    live.toolDurationMsTotal = Math.max(0, Number(live.toolDurationMsTotal || 0)) + durationMs;
+    live.toolDurationMsMax = Math.max(Math.max(0, Number(live.toolDurationMsMax || 0)), durationMs);
+  }
+  const tool = live.tools.get(action) || { tool: action, calls: 0, resultTokens: 0, resultBytes: 0, durationMsTotal: 0, durationMsMax: 0 };
+  tool.calls += 1;
+  tool.resultTokens += resultTokens;
+  tool.resultBytes += resultBytes;
+  if (durationMs > 0) {
+    tool.durationMsTotal += durationMs;
+    tool.durationMsMax = Math.max(tool.durationMsMax, durationMs);
+  }
+  live.tools.set(action, tool);
+  renderChatContextWindow(chatContextWindowState.data);
+  scheduleChatContextWindowRefresh(1200);
+}
+
 function getChatContextWindowSessionId() {
   return String(window.activeChatSessionId || window.agentSessionId || '').trim();
+}
+
+function formatContextDurationLabel(value) {
+  const durationMs = Number(value);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(2)}s`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(durationMs / 60_000);
+  const seconds = Math.round((durationMs % 60_000) / 1000);
+  return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
+}
+
+function formatContextToolDurationSuffix(tool) {
+  const value = Math.max(0, Number(tool?.durationMsMax || tool?.durationMsAvg || tool?.durationMsTotal || 0));
+  const label = formatContextDurationLabel(value);
+  if (!label) return '';
+  return ` · ${label}${Number(tool?.durationMsMax || 0) > 0 && Number(tool?.calls || 0) > 1 ? ' max' : ''}`;
 }
 
 function formatContextTokenCount(value) {
@@ -621,6 +715,12 @@ function formatContextTokenCount(value) {
 function setChatContextWindowLoading(label = 'Loading...') {
   const total = document.getElementById('chat-context-window-total');
   if (total) total.textContent = label;
+}
+
+function setChatContextWindowHeadLabel(label = 'Context window') {
+  const headLabel = document.querySelector('#chat-context-window-popover .chat-context-window-head span:first-child');
+  if (!headLabel) return;
+  headLabel.innerHTML = `${escHtml(label)}<svg class="ccw-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
 }
 
 function formatContextPercent(tokens, total) {
@@ -667,6 +767,69 @@ function renderChatContextRows(rows, windowTokens) {
   });
 }
 
+function getChatContextWindowDisplayLimit(data, currentState = {}) {
+  return Math.max(0, Number(
+    data?.currentContextLimitTokens
+    || data?.contextLimitTokens
+    || currentState?.contextLimitTokens
+    || data?.compactionTriggerTokens
+    || data?.inputBudgetTokens
+    || data?.contextWindowTokens
+    || 0
+  ));
+}
+
+function applyChatContextWindowLiveOverlay(data) {
+  if (!data || data.success === false) return data;
+  const live = chatContextWindowState.liveTurn;
+  const sid = getChatContextWindowSessionId();
+  if (!live || String(live.sessionId || '') !== sid) return data;
+  const stillVisible = live.active || (live.settledAt && Date.now() - live.settledAt < 7000);
+  const liveTokens = Math.max(0, Number(live.toolResultTokens || 0));
+  if (!stillVisible || liveTokens <= 0) return data;
+  const currentState = data.currentState || {};
+  const rows = Array.isArray(currentState.rows)
+    ? currentState.rows.map((row) => ({ ...row, children: Array.isArray(row.children) ? row.children.map((child) => ({ ...child })) : row.children }))
+    : [];
+  const toolChildren = Array.from(live.tools?.values?.() || [])
+    .sort((a, b) => Number(b.resultTokens || 0) - Number(a.resultTokens || 0))
+    .slice(0, 12)
+    .map((tool, index) => ({
+      id: `live_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
+      label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${formatContextToolDurationSuffix(tool)}`,
+      tokens: Math.max(0, Number(tool.resultTokens || 0)),
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: false,
+    }));
+  const liveRow = {
+    id: 'live_tool_results',
+    label: `Live tool results${live.toolDurationMsTotal ? ` · ${formatContextDurationLabel(live.toolDurationMsTotal)} total` : ''}`,
+    tokens: liveTokens,
+    active: true,
+    includedInContext: true,
+    percentBasis: 'window',
+    estimated: false,
+    children: toolChildren,
+  };
+  const freeIndex = rows.findIndex((row) => row?.id === 'free_space');
+  if (freeIndex >= 0) rows[freeIndex] = { ...rows[freeIndex], tokens: Math.max(0, Number(rows[freeIndex].tokens || 0) - liveTokens) };
+  const insertAt = rows.findIndex((row) => row?.id === 'mcp_tools');
+  if (insertAt >= 0) rows.splice(insertAt, 0, liveRow);
+  else rows.push(liveRow);
+  const overlaidState = {
+    ...currentState,
+    currentStateTokens: Math.max(0, Number(currentState.currentStateTokens || data.currentStateTokens || 0)) + liveTokens,
+    rows,
+  };
+  return {
+    ...data,
+    currentState: overlaidState,
+    currentStateTokens: overlaidState.currentStateTokens,
+  };
+}
+
 function toggleChatContextWindowRow(event) {
   if (event) event.stopPropagation();
   const id = event?.currentTarget?.dataset?.ccwRowId;
@@ -677,29 +840,30 @@ function toggleChatContextWindowRow(event) {
 }
 
 function renderChatContextWindow(data = chatContextWindowState.data) {
+  data = applyChatContextWindowLiveOverlay(data);
   const btn = document.getElementById('chat-context-window-btn');
   const fill = document.getElementById('chat-context-window-fill');
   const total = document.getElementById('chat-context-window-total');
-  const headLabel = document.querySelector('#chat-context-window-popover .chat-context-window-head span:first-child');
   if (!btn) return;
 
   if (!data || data.success === false) {
     btn.style.setProperty('--chat-context-window-deg', '0deg');
     if (fill) fill.style.width = '0%';
     if (total) total.textContent = 'Unavailable';
-    if (headLabel) headLabel.textContent = 'Context window';
+    setChatContextWindowHeadLabel('Context window');
     renderChatContextRows([], 0);
     return;
   }
 
   const currentState = data.currentState || {};
   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
-  const windowTokens = Math.max(0, Number(data.contextWindowTokens || 0));
+  const windowTokens = getChatContextWindowDisplayLimit(data, currentState);
+  const modelWindowTokens = Math.max(0, Number(data.contextWindowTokens || currentState.contextWindowTokens || 0));
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
-  btn.title = `Context window: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens`;
+  btn.title = `Context before compaction: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens${modelWindowTokens && modelWindowTokens !== windowTokens ? ` (model window ${formatContextTokenCount(modelWindowTokens)})` : ''}`;
   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
-  if (headLabel) headLabel.textContent = 'Context window';
+  setChatContextWindowHeadLabel('Context window');
   if (total) total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)`;
   renderChatContextRows(currentState.rows, windowTokens);
 }
@@ -1025,9 +1189,10 @@ function normalizeQueuedChatTurn(value) {
     const message = String(value.message || value.text || '').trim();
     const files = Array.isArray(value.files) ? value.files : [];
     const excludedSkillIds = Array.isArray(value.excludedSkillIds) ? value.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
-    return { message, files, excludedSkillIds };
+    const selectedSkillIds = normalizeSelectedSkillIds(value.selectedSkillIds || value.forcedSkillIds || value.matchedSkillIds);
+    return { message, files, excludedSkillIds, selectedSkillIds };
   }
-  return { message: String(value || '').trim(), files: [], excludedSkillIds: [] };
+  return { message: String(value || '').trim(), files: [], excludedSkillIds: [], selectedSkillIds: [] };
 }
 
 function makeQueuedChatTurn(message, files = [], options = {}) {
@@ -1035,6 +1200,7 @@ function makeQueuedChatTurn(message, files = [], options = {}) {
     message: String(message || '').trim(),
     files: Array.isArray(files) ? files.slice() : [],
     excludedSkillIds: Array.isArray(options.excludedSkillIds) ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
+    selectedSkillIds: normalizeSelectedSkillIds(options.selectedSkillIds || options.forcedSkillIds || options.matchedSkillIds),
   };
 }
 
@@ -6346,6 +6512,15 @@ function mainGoalStartedAtMs(goal) {
   return mainGoalTimestampMs(goal?.createdAt || goal?.created_at || goal?.startedAt);
 }
 
+function mainGoalPauseStartedAtMs(goal) {
+  return mainGoalTimestampMs(goal?.pauseStartedAt || goal?.pause_started_at);
+}
+
+function mainGoalPausedMs(goal) {
+  const value = Number(goal?.pausedMs || goal?.paused_ms);
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 function mainGoalFinishedAtMs(goal) {
   return mainGoalTimestampMs(goal?.completedAt || goal?.failedAt || goal?.blockedAt || goal?.updatedAt);
 }
@@ -6354,8 +6529,18 @@ function mainGoalElapsedMs(goal) {
   const startedAt = mainGoalStartedAtMs(goal);
   if (!startedAt) return 0;
   const status = String(goal?.status || 'active');
-  const endAt = ['completed', 'done', 'failed', 'blocked'].includes(status) ? (mainGoalFinishedAtMs(goal) || Date.now()) : Date.now();
-  return Math.max(0, endAt - startedAt);
+  if (status === 'paused') {
+    const pausedMs = mainGoalPausedMs(goal);
+    const pauseStartedAt = mainGoalPauseStartedAtMs(goal);
+    const totalPausedMs = pauseStartedAt ? pausedMs + Math.max(0, Date.now() - pauseStartedAt) : pausedMs;
+    const endAt = (mainGoalFinishedAtMs(goal) || Date.now()) - totalPausedMs;
+    return Math.max(0, endAt - startedAt);
+  }
+  if (['completed', 'done', 'failed', 'blocked', 'cleared'].includes(status)) {
+    const endedAt = mainGoalFinishedAtMs(goal) || Date.now();
+    return Math.max(0, endedAt - startedAt - mainGoalPausedMs(goal));
+  }
+  return Math.max(0, Date.now() - startedAt - mainGoalPausedMs(goal));
 }
 
 function formatGoalElapsed(ms) {
@@ -6368,6 +6553,59 @@ function formatGoalElapsed(ms) {
   return `${seconds}s`;
 }
 
+function mainGoalStatusLabel(status) {
+  const value = String(status || 'active').toLowerCase();
+  if (value === 'done' || value === 'completed') return 'Completed goal';
+  if (value === 'paused') return 'Paused goal';
+  if (value === 'blocked') return 'Blocked goal';
+  if (value === 'failed') return 'Failed goal';
+  return 'Pursuing goal';
+}
+
+function mainGoalTurnPlans(goal) {
+  return Array.isArray(goal?.turnPlans) ? goal.turnPlans : [];
+}
+
+function renderMainGoalDiagnostics(goal) {
+  const rows = [
+    ['Quality', goal?.lastQualityGrade || ''],
+    ['Open issues', Array.isArray(goal?.lastUnresolvedIssues) ? goal.lastUnresolvedIssues.join(' | ') : ''],
+    ['Missing criteria', Array.isArray(goal?.lastMissingAcceptanceCriteria) ? goal.lastMissingAcceptanceCriteria.join(' | ') : ''],
+    ['Verification gaps', Array.isArray(goal?.lastVerificationGaps) ? goal.lastVerificationGaps.join(' | ') : ''],
+  ].filter(([, value]) => String(value || '').trim());
+  if (!rows.length) return '';
+  return `<div class="main-goal-diagnostics">
+    ${rows.map(([label, value]) => `<div><strong>${escHtml(label)}</strong><span>${escHtml(String(value).slice(0, 700))}</span></div>`).join('')}
+  </div>`;
+}
+
+function renderMainGoalTurnPlans(goal) {
+  const plans = mainGoalTurnPlans(goal);
+  if (!plans.length) {
+    return '<div class="main-goal-plan-empty">No turn plan has been declared yet.</div>';
+  }
+  const total = plans.length;
+  return `<div class="main-goal-turn-plans">
+    ${plans.map((plan, index) => {
+      const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+      const complete = steps.filter((step) => ['done', 'skipped'].includes(normalizeProgressStatus(step?.status))).length;
+      const title = `Turn ${index + 1}/${total}`;
+      const status = String(plan?.status || 'planned');
+      const judge = String(plan?.judgeReason || '').trim();
+      return `<section class="main-goal-turn-plan" data-plan-status="${escHtml(status)}">
+        <div class="main-goal-turn-head">
+          <strong>${escHtml(title)}</strong>
+          <span>${escHtml(status)} · ${escHtml(String(complete))}/${escHtml(String(steps.length))}</span>
+        </div>
+        <div class="main-goal-turn-steps">
+          ${steps.length ? renderChecklistItemsHTML(steps, { maxText: 170 }) : '<div class="main-goal-plan-empty">This turn has no tracked steps.</div>'}
+        </div>
+        ${judge ? `<div class="main-goal-turn-judge">${escHtml(judge.slice(0, 700))}</div>` : ''}
+      </section>`;
+    }).join('')}
+  </div>`;
+}
+
 function updateMainGoalElapsedLabel() {
   const goal = getActiveMainChatGoal();
   const label = document.querySelector('[data-main-goal-elapsed]');
@@ -6377,7 +6615,7 @@ function updateMainGoalElapsedLabel() {
 
 function syncMainGoalElapsedTimer() {
   const goal = getActiveMainChatGoal();
-  const shouldTick = !!goal && goal.status !== 'cleared' && mainGoalStartedAtMs(goal) > 0;
+  const shouldTick = !!goal && String(goal.status || '') === 'active' && mainGoalStartedAtMs(goal) > 0;
   if (!shouldTick) {
     if (mainGoalElapsedTimer) clearInterval(mainGoalElapsedTimer);
     mainGoalElapsedTimer = null;
@@ -6410,8 +6648,12 @@ function renderMainGoalStrip() {
   const reason = goal.blockedReason || goal.pausedReason || goal.failureReason || goal.lastReason || '';
   const deniedActions = Array.isArray(goal.deniedActions) ? goal.deniedActions : [];
   const latestDenial = deniedActions[deniedActions.length - 1] || null;
+  const plans = mainGoalTurnPlans(goal);
+  const latestPlan = plans[plans.length - 1] || null;
   const policyMeta = [
+    mainGoalStatusLabel(status),
     `${Number(goal.turnsUsed || 0)} turns`,
+    latestPlan ? `turn plans ${plans.length}` : '',
     'Autonomous',
     'Hard policy active',
     deniedActions.length ? `${deniedActions.length} denied` : '',
@@ -6424,7 +6666,7 @@ function renderMainGoalStrip() {
   chatView?.classList.add('has-main-goal');
   strip.innerHTML = `
     <button type="button" class="main-goal-main" onclick="toggleMainGoalDetails()" aria-expanded="${expanded ? 'true' : 'false'}" title="Show goal details">
-      <div class="main-goal-kicker"><span>Pursuing goal</span><span class="main-goal-elapsed" data-main-goal-elapsed>${escHtml(formatGoalElapsed(mainGoalElapsedMs(goal)))}</span></div>
+      <div class="main-goal-kicker"><span>${escHtml(mainGoalStatusLabel(status))}</span><span class="main-goal-elapsed" data-main-goal-elapsed>${escHtml(formatGoalElapsed(mainGoalElapsedMs(goal)))}</span></div>
       <div class="main-goal-title" title="${escHtml(goal.goal || '')}">${escHtml(goal.goal || 'Untitled goal')}</div>
       <div class="main-goal-meta">${escHtml(policyMeta)}</div>
       ${latestDenial ? `<div class="main-goal-denial">${escHtml(`Latest denied: ${latestDenial.category || 'policy'} - ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
@@ -6433,6 +6675,8 @@ function renderMainGoalStrip() {
           <div><strong>Turns</strong><span>${escHtml(String(Number(goal.turnsUsed || 0)))}</span></div>
           <div><strong>Original goal</strong><span>${escHtml(goal.goal || 'Untitled goal')}</span></div>
           <div><strong>Last judge reprompt</strong><span>${escHtml(judgeReprompt || 'No judge reprompt yet.')}</span></div>
+          ${renderMainGoalDiagnostics(goal)}
+          ${renderMainGoalTurnPlans(goal)}
         </div>
       ` : ''}
     </button>
@@ -6440,6 +6684,8 @@ function renderMainGoalStrip() {
       ${isActive ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('pause')" title="Pause goal">Pause</button>` : ''}
       ${canResume ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('resume')" title="Resume goal">Resume</button>` : ''}
       <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('status')" title="Refresh goal">Status</button>
+      <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('revise')" title="Revise goal">Revise</button>
+      ${status !== 'done' ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('done')" title="Mark goal done">Done</button>` : ''}
       <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('clear')" title="Clear goal">Clear</button>
     </div>
   `;
@@ -6450,7 +6696,25 @@ async function mainGoalAction(action) {
   const sid = String(window.activeChatSessionId || '').trim();
   if (!sid) return;
   try {
-    const result = await api(`/api/sessions/${encodeURIComponent(sid)}/main-goal/${encodeURIComponent(action)}`, { method: 'POST', body: {} });
+    const body = {};
+    if (action === 'pause') {
+      const reason = window.prompt?.('Pause reason (optional)', '') || '';
+      if (reason.trim()) body.text = reason.trim();
+    } else if (action === 'done') {
+      const note = window.prompt?.('Completion note (optional)', '') || '';
+      if (note.trim()) body.text = note.trim();
+    } else if (action === 'clear') {
+      const ok = window.confirm?.('Clear and archive this goal?') ?? true;
+      if (!ok) return;
+      const note = window.prompt?.('Archive note (optional)', '') || '';
+      if (note.trim()) body.text = note.trim();
+    } else if (action === 'revise') {
+      const current = getActiveMainChatGoal();
+      const goal = window.prompt?.('Revise goal', current?.goal || '') || '';
+      if (!goal.trim()) return;
+      body.goal = goal.trim();
+    }
+    const result = await api(`/api/sessions/${encodeURIComponent(sid)}/main-goal/${encodeURIComponent(action)}`, { method: 'POST', body });
     const sess = window.chatSessions.find(s => s.id === sid);
     if (sess) sess.mainChatGoal = result?.goal || null;
     renderMainGoalStrip();
@@ -10304,6 +10568,19 @@ function renderFileChanges(fileChanges) {
   return renderFileChangesGroup(normalizeFileChangesPayload(fileChanges));
 }
 
+function renderDesktopSlashCommandTokens(html) {
+  let out = String(html || '');
+  const commands = (Array.isArray(CHAT_SLASH_COMMANDS) ? CHAT_SLASH_COMMANDS : [])
+    .map((item) => String(item.command || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  for (const command of commands) {
+    const escaped = escHtml(command);
+    out = out.split(escaped).join(`<span class="inline-command-token"><span class="inline-command-token-icon" aria-hidden="true"></span>${escaped}</span>`);
+  }
+  return out;
+}
+
 async function openInFileLocation(targetPath) {
   const p = String(targetPath || '').trim();
   if (!p) return;
@@ -10358,7 +10635,10 @@ function renderUserMessageContent(msg) {
         </div>`;
       }).join('')}</div>`
     : '';
-  return `${imgHtml}${fileHtml}${text ? `<div class="msg-content">${escHtml(text)}</div>` : ''}`;
+  const textHtml = text
+    ? renderDesktopSlashCommandTokens(escHtml(text).replace(/\*\*([^*\n][^*\n]{0,120})\*\*/g, '<strong>$1</strong>'))
+    : '';
+  return `${imgHtml}${fileHtml}${textHtml ? `<div class="msg-content">${textHtml}</div>` : ''}`;
 }
 
 function renderLiveTracePreview(entry) {
@@ -10396,10 +10676,27 @@ function isDesktopStartupStatusText(text) {
     .test(String(text || '').replace(/\s+/g, ' ').trim());
 }
 
+function isBareThinkingLiveTraceText(text) {
+  return /^thinking(?:\.\.\.)?$/i.test(String(text || '').replace(/\s+/g, ' ').trim());
+}
+
+function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
+  const trace = String(text || '').replace(/\s+/g, ' ').trim();
+  const final = String(finalText || '').replace(/\s+/g, ' ').trim();
+  if (!trace || !final) return false;
+  if (trace === final) return true;
+  const traceLower = trace.toLowerCase();
+  const finalLower = final.toLowerCase();
+  if (trace.length >= 32 && finalLower.startsWith(traceLower)) return true;
+  if (final.length >= 32 && traceLower.startsWith(finalLower)) return true;
+  return false;
+}
+
 function visibleLiveTraceEntries(entries) {
   return (Array.isArray(entries) ? entries : []).filter((entry) =>
     entry
     && !isDesktopPreparedTraceEntry(entry)
+    && !isBareThinkingLiveTraceText(entry?.text)
     && (String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim())
   );
 }
@@ -10407,16 +10704,18 @@ function visibleLiveTraceEntries(entries) {
 function renderLiveTraceEntry(entry) {
   const type = String(entry.type || 'info').toLowerCase();
   const text = String(entry.text || '').trim();
+  const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.ts || entry.time || '')}`).trim();
+  const attr = entryId ? ` data-live-entry-id="${escHtml(entryId)}"` : '';
   const previewHtml = renderLiveTracePreview(entry);
   if (type === 'preamble' || type === 'think' || type === 'assistant') {
-    return `<div class="live-turn-prose live-turn-${escHtml(type)}">
+    return `<div class="live-turn-prose live-turn-${escHtml(type)}"${attr}>
       <div class="live-turn-md">${renderMd(normalizeLiveTraceProseText(text))}</div>
       ${previewHtml}
     </div>`;
   }
   const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
   const body = text ? `<div class="live-turn-text">${escHtml(text)}</div>` : '';
-  return `<div class="live-turn-segment live-turn-${escHtml(type)}">
+  return `<div class="live-turn-segment live-turn-${escHtml(type)}"${attr}>
     <span>${escHtml(label)}</span>
     ${body}
     ${previewHtml}
@@ -10474,27 +10773,102 @@ function liveTraceToolLabel(text) {
     .trim();
 }
 
+function liveTraceToolAction(label, entryType = '') {
+  const raw = String(label || '').replace(/\s+/g, ' ').trim();
+  const text = raw.toLowerCase();
+  const type = String(entryType || '').toLowerCase();
+  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(text)) {
+    return { key: 'screenshot', one: 'viewed screenshot', many: 'viewed screenshots', style: 'noun' };
+  }
+  if (/\b(skill read|read skill|skill list|list skills|skill search|skill match)\b/.test(text)) {
+    return { key: 'skill', one: 'read skill', many: 'read skills', style: 'noun' };
+  }
+  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(text)) {
+    return { key: 'fileSearch', one: 'searched files', many: 'searched files', style: 'times' };
+  }
+  if (/\b(read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(text)) {
+    return { key: 'fileRead', one: 'read file', many: 'read files', style: 'noun' };
+  }
+  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(text)) {
+    return { key: 'webSearch', one: 'searched web', many: 'searched web', style: 'times' };
+  }
+  if (/\b(browser click|clicked?|tap|tapped)\b/.test(text)) {
+    return { key: 'click', one: 'clicked', many: 'clicked', style: 'times' };
+  }
+  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(text)) {
+    return { key: 'scroll', one: 'scrolled', many: 'scrolled', style: 'times' };
+  }
+  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(text)) {
+    return { key: 'page', one: 'opened page', many: 'opened pages', style: 'noun' };
+  }
+  if (/\b(shell|powershell|command|terminal|run command|exec|cmd\.exe)\b/.test(text)) {
+    return { key: 'command', one: 'ran command', many: 'ran commands', style: 'noun' };
+  }
+  if (/\b(apply patch|edited?|update file|create file|delete file|write file)\b/.test(text)) {
+    return { key: 'edit', one: 'edited file', many: 'edited files', style: 'noun' };
+  }
+  if (/\b(approval|approve|permission)\b/.test(text)) {
+    return { key: 'approval', one: 'requested approval', many: 'requested approvals', style: 'noun' };
+  }
+  return { key: `tool:${raw || 'tool'}`, one: raw || 'used tool', many: raw || 'used tools', style: 'tool' };
+}
+
+function liveTraceCountPhrase(count) {
+  if (count === 1) return 'once';
+  if (count === 2) return 'twice';
+  return `${count} times`;
+}
+
+function liveTraceToolActionText(action, count) {
+  const total = Math.max(1, Number(count || 0) || 1);
+  if (action.style === 'times') return `${total === 1 ? action.one : action.many} ${liveTraceCountPhrase(total)}`;
+  if (action.style === 'tool') return total === 1 ? action.one : `${action.many} x${total}`;
+  return `${total === 1 ? action.one : action.many.replace(/^(\w+)\s+/, `$1 ${total} `)}`;
+}
+
+function liveTraceJoinSummaryParts(parts) {
+  if (!parts.length) return '';
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
 function liveTraceToolSummary(entries) {
-  const list = Array.isArray(entries) ? entries : [];
+  const list = visibleLiveTraceEntries(entries);
   const toolish = list.filter((entry) => ['tool', 'result', 'error', 'vision'].includes(String(entry?.type || '').toLowerCase()));
-  const labels = [...new Set(toolish.map((entry) => liveTraceToolLabel(entry.text)).filter(Boolean))];
+  const calls = toolish.filter((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    return type === 'tool' || type === 'vision';
+  });
+  const source = calls.length ? calls : toolish;
+  const actionCounts = new Map();
+  source.forEach((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    const label = liveTraceToolLabel(entry.text);
+    if (!label && type !== 'vision') return;
+    const action = liveTraceToolAction(label, type);
+    const existing = actionCounts.get(action.key);
+    if (existing) existing.count += 1;
+    else actionCounts.set(action.key, { ...action, count: 1 });
+  });
   const errors = [...new Set(list
     .filter((entry) => String(entry?.type || '').toLowerCase() === 'error')
     .map((entry) => liveTraceToolLabel(entry.text))
     .filter(Boolean))].length;
-  const logicalCount = Math.max(labels.length, errors || 0, toolish.length ? 1 : 0);
   if (errors) return `${errors} tool${errors === 1 ? '' : 's'} failed`;
-  if (labels.length === 1) {
-    const count = logicalCount;
-    return `${labels[0]}${count > 1 ? ` x${count}` : ''}`;
+  const actions = [...actionCounts.values()].sort((a, b) => b.count - a.count);
+  if (actions.length) {
+    const summary = liveTraceJoinSummaryParts(actions.slice(0, 3).map((action) => liveTraceToolActionText(action, action.count)));
+    return summary.charAt(0).toUpperCase() + summary.slice(1);
   }
-  const count = logicalCount || list.length;
-  return `Ran ${count} tool${count === 1 ? '' : 's'}`;
+  const count = toolish.length || list.length;
+  return `Used ${count} tool${count === 1 ? '' : 's'}`;
 }
 
 function renderLiveTurnTrace(entries, { streaming = false } = {}) {
   const groups = liveTraceGroups(entries);
   if (!groups.length) return '';
+  if (!streaming && !groups.some((group) => group.kind === 'tools' && group.entries.length > 0)) return '';
   const lastToolIndex = groups.map((group, index) => group.kind === 'tools' ? index : -1).filter((index) => index >= 0).pop();
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
@@ -10529,10 +10903,10 @@ function desktopWorkflowTraceEntriesForMessage(message) {
     if (text && isDesktopStartupStatusText(text)) return;
     if (type === 'user' || type === 'final' || /^user\s*:/i.test(text)) return;
     const normalizedText = text.replace(/\s+/g, ' ').trim();
-    if (finalText && normalizedText === finalText && !previewData) return;
+    if (isBareThinkingLiveTraceText(normalizedText) && !previewData) return;
+    if (liveTraceTextLooksLikeFinalAnswer(normalizedText, finalText) && !previewData) return;
     if (type === 'process' || type === 'info') {
-      if (/^thinking(?:\.\.\.)?$/i.test(normalizedText)) type = 'think';
-      else if (!previewData) return;
+      if (!previewData) return;
     }
     if (type === 'skill') type = 'tool';
     const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
@@ -10593,6 +10967,85 @@ function mergeLiveTraceProcessEntries(traceEntries, processEntries) {
   const base = Array.isArray(processEntries) ? processEntries.slice() : [];
   const liveProcessEntries = liveTraceEntriesToProcessEntries(traceEntries, base);
   return liveProcessEntries.length ? [...liveProcessEntries, ...base] : base;
+}
+
+function processEntryDedupeKey(entry) {
+  return `${String(entry?.type || '').toLowerCase()}|${String(entry?.content || entry?.text || entry?.message || '').replace(/\s+/g, ' ').trim()}`;
+}
+
+function mergeVoiceAgentProcessEntryLists(...groups) {
+  const out = [];
+  const seen = new Set();
+  groups.flatMap((group) => Array.isArray(group) ? group : []).forEach((entry) => {
+    const normalized = normalizeProcessEntryForRender(entry);
+    if (!normalized) return;
+    const key = processEntryDedupeKey(normalized);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(normalized);
+  });
+  return out;
+}
+
+function rememberVoiceAgentProcessEntries(sessionId, entries) {
+  const sid = String(sessionId || '').trim();
+  const normalized = mergeVoiceAgentProcessEntryLists(entries);
+  if (!sid || !normalized.length) return;
+  const bucket = window._voiceAgentPendingProcessEntriesBySession || (window._voiceAgentPendingProcessEntriesBySession = {});
+  bucket[sid] = mergeVoiceAgentProcessEntryLists(bucket[sid], normalized).slice(-80);
+}
+
+function takePendingVoiceAgentProcessEntries(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return [];
+  const bucket = window._voiceAgentPendingProcessEntriesBySession || {};
+  const entries = Array.isArray(bucket[sid]) ? bucket[sid] : [];
+  delete bucket[sid];
+  return entries;
+}
+
+function isVoiceAgentAssistantMessage(msg) {
+  if (!msg || !isAssistantLikeMessage(msg)) return false;
+  const source = String(msg.source || '').toLowerCase();
+  const channel = String(msg.channel || msg.channelLabel || '').toLowerCase();
+  return source.includes('voice_agent') || channel.includes('voice') || msg.voiceInterruptionEventId;
+}
+
+function attachVoiceAgentProcessEntriesToRecentAssistantTurn(sessionId, entries, { render = true } = {}) {
+  const sid = String(sessionId || '').trim();
+  const normalized = mergeVoiceAgentProcessEntryLists(entries);
+  if (!sid || !normalized.length) return false;
+  const sess = getChatSessionById(sid);
+  const history = Array.isArray(sess?.history) ? sess.history : null;
+  if (!history) {
+    rememberVoiceAgentProcessEntries(sid, normalized);
+    return false;
+  }
+  let target = null;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const msg = history[i];
+    if (String(msg?.role || '') === 'user') break;
+    if (isVoiceAgentAssistantMessage(msg)) {
+      target = msg;
+      break;
+    }
+  }
+  if (!target) {
+    rememberVoiceAgentProcessEntries(sid, normalized);
+    return false;
+  }
+  target.processEntries = mergeVoiceAgentProcessEntryLists(target.processEntries, normalized);
+  const now = Date.now();
+  target.workStartedAt = Number(target.workStartedAt || target.timestamp || now) || now;
+  if (!target.workEndedAt) target.workEndedAt = now;
+  target.workDurationMs = Math.max(0, Number(target.workEndedAt || now) - Number(target.workStartedAt || now));
+  sess.updatedAt = now;
+  try { persistSession(sid); } catch {}
+  if (render && window.activeChatSessionId === sid) {
+    window.chatHistory = sess.history;
+    try { renderChatMessages(); } catch {}
+  }
+  return true;
 }
 
 function isGenerateImagePendingFromEntries(...entryGroups) {
@@ -10909,7 +11362,7 @@ function renderSideChatPaneHtml() {
 // so a background/non-viewed session can never repaint the foreground — the
 // render fns themselves also guard on visibility. Every finalization path must
 // flush so the complete final answer always lands.
-const STREAM_RENDER_THROTTLE_MS = 90;
+const STREAM_RENDER_THROTTLE_MS = 180;
 const _streamRenderTimers = new Map(); // sessionId -> timeout handle
 
 function scheduleStreamingRenderFor(sessionId, renderFn) {
@@ -10929,6 +11382,25 @@ function flushStreamingRenderFor(sessionId, renderFn) {
   const handle = _streamRenderTimers.get(key);
   if (handle) { clearTimeout(handle); _streamRenderTimers.delete(key); }
   if (typeof renderFn === 'function') { try { renderFn(); } catch {} }
+}
+
+function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
+  const key = String(sessionId || window.activeChatSessionId || 'chat');
+  const seenBySession = window.__pmLiveStreamEntryIdsBySession || (window.__pmLiveStreamEntryIdsBySession = {});
+  const seen = seenBySession[key] || (seenBySession[key] = new Set());
+  document.querySelectorAll('[data-live-entry-id]').forEach((node) => {
+    const id = String(node.getAttribute('data-live-entry-id') || '').trim();
+    if (!id) return;
+    if (!seen.has(id)) {
+      seen.add(id);
+      node.classList.add('live-stream-enter');
+    }
+  });
+  const streaming = document.getElementById('streaming-text-content');
+  const afterTextLen = String(streaming?.textContent || '').length;
+  if (streaming && afterTextLen > Number(beforeTextLen || 0)) {
+    streaming.classList.add('live-stream-text-refresh');
+  }
 }
 
 // Capture/restore scroll state of any open process panels across a full
@@ -11189,7 +11661,7 @@ function syncAssistantWorkTimer() {
     if (!window._assistantWorkTimer) {
       window._assistantWorkTimer = setInterval(() => {
         if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
-      }, 1000);
+      }, 2500);
     }
   } else if (window._assistantWorkTimer) {
     clearInterval(window._assistantWorkTimer);
@@ -11717,9 +12189,19 @@ function parsePersistedToolLogEntries(toolLog, msg) {
   return entries;
 }
 
+function isInternalRestartProcessEntry(entry) {
+  const packetType = String(entry?.extra?.packetType || '').trim();
+  return packetType === 'hot_restart_context'
+    || packetType === 'restart_context_packet'
+    || packetType === 'runtime_recovery_context';
+}
+
 function processEntriesForMessage(msg) {
   if (Array.isArray(msg?.processEntries) && msg.processEntries.length) {
-    return msg.processEntries.map(normalizeProcessEntryForRender).filter(Boolean);
+    return msg.processEntries
+      .filter((entry) => !isInternalRestartProcessEntry(entry))
+      .map(normalizeProcessEntryForRender)
+      .filter(Boolean);
   }
   const toolLog = String(msg?.toolLog || '').trim();
   if (!toolLog) return [];
@@ -12595,6 +13077,7 @@ function isFailedTurnReply(text) {
 
 const CHAT_SLASH_COMMANDS = [
   { command: '/side', label: 'Open a linked side chat', placeholder: 'Optional first side-chat message...' },
+  { command: '/skill', label: 'Insert a skill reference', placeholder: 'Search installed skills...' },
   { command: '/goal', label: 'Start goal mode in this chat', placeholder: 'Describe the goal Prometheus should keep working toward...' },
   { command: '/goal status', label: 'Show the active goal state', placeholder: 'Optional note for the status check...' },
   { command: '/goal pause', label: 'Pause the active goal runner', placeholder: 'Optional reason...' },
@@ -12611,6 +13094,8 @@ let skillTriggerSelectedId = '';
 let skillTriggerLastKey = '';
 let skillTriggerCacheLoadPromise = null;
 let skillTriggerExcludedIds = new Set();
+let selectedComposerSkillIds = [];
+let skillCommandSelectionIndex = 0;
 
 const SKILL_TRIGGER_STOPWORDS = new Set([
   'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
@@ -12688,6 +13173,28 @@ function getSkillTriggerCandidates(skill) {
 
 function getInstalledSkillCache() {
   return Array.isArray(window.prometheusSkillsCache) ? window.prometheusSkillsCache : [];
+}
+
+function normalizeSelectedSkillIds(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const ids = [];
+  raw.forEach((item) => {
+    const id = String(item || '').trim();
+    const key = id.toLowerCase();
+    if (!id || seen.has(key)) return;
+    seen.add(key);
+    ids.push(id);
+  });
+  return ids;
+}
+
+function rememberSelectedComposerSkill(id) {
+  selectedComposerSkillIds = normalizeSelectedSkillIds([...selectedComposerSkillIds, id]).slice(0, 8);
+}
+
+function clearSelectedComposerSkills() {
+  selectedComposerSkillIds = [];
 }
 
 function normalizeSkillTriggerExclusionId(value) {
@@ -12883,11 +13390,77 @@ function matchSlashCommandValue(value) {
   return null;
 }
 
-function getSlashCommandSuggestions(value) {
-  const text = String(value || '');
-  if (!text.startsWith('/') || /\s/.test(text.trim())) return [];
-  const query = text.toLowerCase();
+function getSlashCommandState(input = document.getElementById('chat-input')) {
+  if (!input) return null;
+  const value = typeof input === 'string' ? input : String(input.value || '');
+  const cursor = typeof input === 'string'
+    ? value.length
+    : (Number.isFinite(Number(input.selectionStart)) ? Number(input.selectionStart) : value.length);
+  const beforeCursor = value.slice(0, cursor);
+  const slashIndex = beforeCursor.lastIndexOf('/');
+  if (slashIndex < 0) return null;
+  const prefixChar = slashIndex > 0 ? beforeCursor.charAt(slashIndex - 1) : '';
+  if (prefixChar && !/\s/.test(prefixChar)) return null;
+  const query = beforeCursor.slice(slashIndex);
+  if (!query.startsWith('/') || /[\s\r\n]/.test(query)) return null;
+  return { start: slashIndex, end: cursor, query, value };
+}
+
+function getSlashCommandSuggestions(input = document.getElementById('chat-input')) {
+  const state = getSlashCommandState(input);
+  if (!state) return [];
+  const query = state.query.toLowerCase();
   return CHAT_SLASH_COMMANDS.filter((item) => item.command.toLowerCase().startsWith(query)).slice(0, 7);
+}
+
+function getSkillCommandState(input = document.getElementById('chat-input')) {
+  if (!input) return null;
+  const value = String(input.value || '');
+  const cursor = Number.isFinite(Number(input.selectionStart)) ? Number(input.selectionStart) : value.length;
+  const beforeCursor = value.slice(0, cursor);
+  const slashIndex = beforeCursor.toLowerCase().lastIndexOf('/skill');
+  if (slashIndex < 0) return null;
+  const prefixChar = slashIndex > 0 ? beforeCursor.charAt(slashIndex - 1) : '';
+  if (prefixChar && !/\s/.test(prefixChar)) return null;
+  const afterToken = beforeCursor.slice(slashIndex + '/skill'.length);
+  if (afterToken && !/^\s/.test(afterToken)) return null;
+  if (/[\r\n]/.test(afterToken)) return null;
+  return { start: slashIndex, end: cursor, query: afterToken.replace(/^\s+/, ''), value };
+}
+
+function skillCommandSearchText(skill) {
+  return normalizeSkillMatchText([
+    skill?.name,
+    skill?.id,
+    skill?.description,
+    ...(Array.isArray(skill?.triggers) ? skill.triggers : []),
+    ...(Array.isArray(skill?.categories) ? skill.categories : []),
+  ].filter(Boolean).join(' '));
+}
+
+function getSkillCommandSuggestions(input = document.getElementById('chat-input')) {
+  const state = getSkillCommandState(input);
+  if (!state) return [];
+  ensureSkillTriggerCacheLoaded();
+  const query = normalizeSkillMatchText(state.query);
+  const skills = getInstalledSkillCache();
+  const matches = query ? skills.filter((skill) => skillCommandSearchText(skill).includes(query)) : skills;
+  return matches.slice(0, 8);
+}
+
+function replaceSkillCommandWithSelection(skill, input = document.getElementById('chat-input')) {
+  const state = getSkillCommandState(input);
+  if (!state || !skill || !input) return;
+  const name = String(skill.name || skill.id || 'Skill').trim();
+  const replacement = `**${name.replace(/\*/g, '')}**`;
+  input.value = `${state.value.slice(0, state.start)}${replacement}${state.value.slice(state.end)}`;
+  const nextCursor = state.start + replacement.length;
+  input.setSelectionRange(nextCursor, nextCursor);
+  rememberSelectedComposerSkill(skill.id || skill.name || name);
+  resizeChatInput(input);
+  hideSlashCommandPopover();
+  handleSkillTriggerInput(input);
+  input.focus();
 }
 
 function hideSlashCommandPopover() {
@@ -12901,7 +13474,33 @@ function renderSlashCommandPopover(inputValue = '') {
     hideSlashCommandPopover();
     return;
   }
-  const suggestions = getSlashCommandSuggestions(inputValue);
+  const input = document.getElementById('chat-input');
+  const skillSuggestions = getSkillCommandSuggestions(input);
+  if (skillSuggestions.length) {
+    skillCommandSelectionIndex = Math.max(0, Math.min(skillCommandSelectionIndex, skillSuggestions.length - 1));
+    popover.innerHTML = skillSuggestions.map((skill, idx) => {
+      const description = String(skill.description || '').trim();
+      const shortDescription = description.length > 96 ? `${description.slice(0, 93).trim()}...` : description;
+      return `
+    <button class="chat-slash-command-item ${idx === skillCommandSelectionIndex ? 'active' : ''}" type="button" data-skill-id="${escHtml(skill.id || '')}">
+      <span class="chat-slash-token">${escHtml(skill.name || skill.id || 'Skill')}</span>
+      <span class="chat-slash-label">${escHtml(shortDescription || skill.id || 'Skill')}</span>
+      <span class="chat-slash-hint">${idx === 0 ? 'Enter' : 'Click'}</span>
+    </button>
+  `;
+    }).join('');
+    popover.querySelectorAll('.chat-slash-command-item').forEach((btn) => {
+      btn.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        const id = btn.getAttribute('data-skill-id') || '';
+        const skill = skillSuggestions.find((candidate) => String(candidate.id || '') === id) || skillSuggestions[0];
+        replaceSkillCommandWithSelection(skill, input);
+      });
+    });
+    popover.style.display = 'block';
+    return;
+  }
+  const suggestions = getSlashCommandSuggestions(input);
   if (!suggestions.length) {
     hideSlashCommandPopover();
     return;
@@ -12953,6 +13552,40 @@ function selectSlashCommand(command) {
   const item = CHAT_SLASH_COMMANDS.find((candidate) => candidate.command === command);
   if (!item) return;
   const input = document.getElementById('chat-input');
+  const slashState = getSlashCommandState(input);
+  if (item.command === '/skill') {
+    if (!input) return;
+    const current = String(input.value || '');
+    const typedMatch = slashState?.start === 0 ? matchSlashCommandValue(current) : null;
+    const remainder = typedMatch?.item.command === item.command ? typedMatch.remainder : '';
+    if (slashState) {
+      const replacement = `/skill${remainder ? ` ${remainder}` : ' '}`;
+      input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
+      const nextCursor = slashState.start + replacement.length;
+      input.setSelectionRange(nextCursor, nextCursor);
+    } else {
+      input.value = `/skill${remainder ? ` ${remainder}` : ' '}`;
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+    activeSlashCommand = null;
+    refreshActiveSlashCommandChrome();
+    resizeChatInput(input);
+    renderSlashCommandPopover(input.value);
+    input.focus();
+    return;
+  }
+  if (slashState && slashState.start > 0 && input) {
+    const replacement = `${item.command} `;
+    input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
+    const nextCursor = slashState.start + replacement.length;
+    input.setSelectionRange(nextCursor, nextCursor);
+    activeSlashCommand = null;
+    refreshActiveSlashCommandChrome();
+    resizeChatInput(input);
+    hideSlashCommandPopover();
+    input.focus();
+    return;
+  }
   const current = String(input?.value || '');
   const typedMatch = matchSlashCommandValue(current);
   const remainder = typedMatch?.item.command === item.command ? typedMatch.remainder : '';
@@ -12996,8 +13629,13 @@ function handleImmediateChatSlashCommand(message) {
 function handleSlashCommandInput(input) {
   if (!input) return;
   const value = String(input.value || '');
+  if (getSkillCommandState(input)) {
+    skillCommandSelectionIndex = 0;
+    renderSlashCommandPopover(value);
+    return;
+  }
   if (activeSlashCommand) {
-    if (value.startsWith('/')) {
+    if (getSlashCommandState(input)) {
       activeSlashCommand = null;
       refreshActiveSlashCommandChrome();
       slashCommandSelectionIndex = 0;
@@ -13021,6 +13659,7 @@ function clearChatComposerAfterSend(input) {
   }
   clearActiveSlashCommand({ focus: false });
   clearSkillTriggerExclusions();
+  clearSelectedComposerSkills();
   hideSkillTriggerPill();
 }
 
@@ -13076,6 +13715,9 @@ async function sendChat(queuedMessage = null, options = {}) {
   const excludedSkillIds = queuedTurn
     ? (Array.isArray(queuedTurn.excludedSkillIds) ? queuedTurn.excludedSkillIds.slice() : [])
     : getSkillTriggerExcludedIds();
+  const selectedSkillIds = queuedTurn
+    ? normalizeSelectedSkillIds(queuedTurn.selectedSkillIds || queuedTurn.forcedSkillIds || queuedTurn.matchedSkillIds)
+    : normalizeSelectedSkillIds(selectedComposerSkillIds);
   const forcedSessionId = String(options.sessionIdOverride || '').trim();
   if (!forcedSessionId) ensureActiveChatSessionExists();
   const thisSessionId = forcedSessionId || window.activeChatSessionId; // capture at send time — stable through async closure
@@ -13094,8 +13736,10 @@ async function sendChat(queuedMessage = null, options = {}) {
   const addProcessEntry = (type, content, extra) => addSessionProcessEntry(thisSessionId, type, content, extra);
   const renderIfViewingThisSession = () => {
     if (!isSessionVisibleInChatSurface(thisSessionId)) return;
+    const beforeTextLen = String(document.getElementById('streaming-text-content')?.textContent || '').length;
     if (window.activeChatSessionId === thisSessionId) applyStreamStateToWindow(thisSessionId);
     renderChatMessages();
+    markLiveStreamMotionAfterRender(thisSessionId, beforeTextLen);
   };
   const pushProgressLine = (line) => {
     const txt = String(line || '').trim();
@@ -13132,6 +13776,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   const appendLiveTrace = (type, text, { append = false } = {}) => {
     const content = String(text || '');
     if (!content) return;
+    if (isBareThinkingLiveTraceText(content)) return;
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
     const normalizedType = String(type || 'info').toLowerCase();
     const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
@@ -13204,7 +13849,7 @@ async function sendChat(queuedMessage = null, options = {}) {
       return;
     }
     const queuedFiles = pendingChatFiles.length ? pendingChatFiles.slice() : [];
-    sessionQueue.push(makeQueuedChatTurn(message, queuedFiles, { excludedSkillIds }));
+    sessionQueue.push(makeQueuedChatTurn(message, queuedFiles, { excludedSkillIds, selectedSkillIds }));
     if (queuedFiles.length) {
       pendingChatFiles = [];
       renderChatFilePills();
@@ -13219,6 +13864,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   }
   streamState = resetSessionStreamState(thisSessionId);
   streamState.turnStartedAt = Date.now();
+  resetChatContextWindowLiveTurn(thisSessionId);
   clearBackgroundSpawnDockForSession(thisSessionId);
 
   // Show the user's message immediately, then do attachment work before the API call.
@@ -13376,12 +14022,13 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (!voiceHandoff?.shouldContinueToWorker) {
       const reply = String(voiceHandoff?.result?.voiceReply || '').trim();
       if (reply) {
+        const sessionProcessEntries = Array.isArray(thisSession?.processLog)
+          ? thisSession.processLog.slice(Math.max(0, Number(streamState.currentTurnStartIndex || 0)))
+          : [];
         appendAssistantTurnForUser({
           role: 'ai',
           content: reply,
-          processEntries: Array.isArray(thisSession?.processLog)
-            ? thisSession.processLog.slice(Math.max(0, Number(streamState.currentTurnStartIndex || 0)))
-            : [],
+          processEntries: mergeVoiceAgentProcessEntryLists(sessionProcessEntries, voiceHandoff?.result?.processEntries),
           mode: window.useAgentMode ? 'agentic' : 'chat',
         });
       }
@@ -13590,7 +14237,7 @@ async function sendChat(queuedMessage = null, options = {}) {
         'Accept': 'text/event-stream'
       },
 	      signal: turnAbortController.signal,
-	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, clientRequestId, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined, reasoning: buildReasoningPayload(), callerContext: turnCallerContext, excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined, origin: { channel: 'web', surface: 'desktop_app', device: 'computer', label: 'Desktop app', source: 'chat_page' } })
+	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, clientRequestId, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined, reasoning: buildReasoningPayload(), callerContext: turnCallerContext, excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined, selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined, origin: { channel: 'web', surface: 'desktop_app', device: 'computer', label: 'Desktop app', source: 'chat_page' } })
     });
 
     if (!res.ok) {
@@ -13817,6 +14464,7 @@ async function sendChat(queuedMessage = null, options = {}) {
                   `${stepPrefix}${displayAction}${syntheticTag}`,
                   (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
                 );
+                scheduleChatContextWindowRefresh(650);
               }
             }
             break;
@@ -13882,6 +14530,7 @@ async function sendChat(queuedMessage = null, options = {}) {
               `${stepPrefix}${resultDisplay}${syntheticTag}`,
               extraPayload,
             );
+            recordChatContextWindowToolResult(event, thisSessionId);
             break;
           }
 
@@ -14340,6 +14989,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   sendBtn.disabled = false;
   releaseChatSendLock(sendLock);
   forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+  settleChatContextWindowLiveTurn(thisSessionId);
   scheduleChatContextWindowRefresh(500);
   updateQueuedPromptUI();
   if (Number.isInteger(options.reuseExistingUserIndex) && options.reuseExistingUserIndex >= 0) {
@@ -14796,19 +15446,30 @@ function clearChat() {
 // Enter to send, Shift+Enter for newline
 document.getElementById('chat-input').addEventListener('keydown', e => {
   const input = e.currentTarget;
-  const suggestions = getSlashCommandSuggestions(String(input.value || ''));
+  const skillSuggestions = getSkillCommandSuggestions(input);
+  const suggestions = skillSuggestions.length ? skillSuggestions : getSlashCommandSuggestions(input);
   const popoverVisible = !activeSlashCommand && suggestions.length > 0;
   if (popoverVisible && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
     e.preventDefault();
-    slashCommandSelectionIndex = e.key === 'ArrowDown'
-      ? (slashCommandSelectionIndex + 1) % suggestions.length
-      : (slashCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+    if (skillSuggestions.length) {
+      skillCommandSelectionIndex = e.key === 'ArrowDown'
+        ? (skillCommandSelectionIndex + 1) % suggestions.length
+        : (skillCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+    } else {
+      slashCommandSelectionIndex = e.key === 'ArrowDown'
+        ? (slashCommandSelectionIndex + 1) % suggestions.length
+        : (slashCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+    }
     renderSlashCommandPopover(input.value);
     return;
   }
   if (popoverVisible && (e.key === 'Enter' || e.key === 'Tab')) {
     e.preventDefault();
-    selectSlashCommand(suggestions[slashCommandSelectionIndex]?.command || suggestions[0]?.command || '');
+    if (skillSuggestions.length) {
+      replaceSkillCommandWithSelection(suggestions[skillCommandSelectionIndex] || suggestions[0], input);
+    } else {
+      selectSlashCommand(suggestions[slashCommandSelectionIndex]?.command || suggestions[0]?.command || '');
+    }
     return;
   }
   if (e.key === 'Escape' && popoverVisible) {
@@ -14837,7 +15498,10 @@ document.getElementById('chat-input').addEventListener('blur', () => {
 });
 window.addEventListener('prometheus:skills-cache-updated', () => {
   const input = document.getElementById('chat-input');
-  if (input) handleSkillTriggerInput(input);
+  if (input) {
+    handleSkillTriggerInput(input);
+    if (getSkillCommandState(input)) renderSlashCommandPopover(input.value);
+  }
 });
 
 document.addEventListener('keydown', handleRealtimeSpaceKeydown, true);
@@ -19008,14 +19672,22 @@ function appendRealtimeAgentChatMessage(sessionId, role, text) {
   const sess = getChatSessionById(sid);
   if (!sess) return;
   if (!Array.isArray(sess.history)) sess.history = [];
-  sess.history.push({
+  const pendingEntries = role === 'user' ? [] : takePendingVoiceAgentProcessEntries(sid);
+  const message = {
     role: role === 'user' ? 'user' : 'ai',
     content,
     timestamp: Date.now(),
     source: 'voice_agent_realtime',
     channel: 'voice',
     channelLabel: 'Realtime voice',
-  });
+    processEntries: pendingEntries.length ? pendingEntries : undefined,
+  };
+  if (pendingEntries.length) {
+    message.workStartedAt = message.timestamp;
+    message.workEndedAt = message.timestamp;
+    message.workDurationMs = 0;
+  }
+  sess.history.push(message);
   try { persistSession(sid); } catch {}
   if (window.activeChatSessionId === sid) {
     window.chatHistory = sess.history;
@@ -19315,6 +19987,9 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
         return;
       }
     }
+    if (Array.isArray(data?.processEntries) && data.processEntries.length) {
+      attachVoiceAgentProcessEntriesToRecentAssistantTurn(sessionId, data.processEntries);
+    }
     // A voice show_* tool produced a rich-artifact card — render it into the chat
     // thread now, and send the model only a lean confirmation (not the full card JSON).
     const voiceArtifacts = data?.result && Array.isArray(data.result.richArtifacts) ? data.result.richArtifacts : null;
@@ -19332,6 +20007,7 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
             source: 'voice_agent_realtime',
             channel: 'voice',
             channelLabel: 'Realtime voice',
+            processEntries: mergeVoiceAgentProcessEntryLists(takePendingVoiceAgentProcessEntries(sid)),
           });
           try { persistSession(sid); } catch {}
           if (window.activeChatSessionId === sid) {
@@ -38019,10 +38695,12 @@ wsEventBus.on('session_notification', async (msg) => {
   };
   const ack = () => {
     if (msg.notificationId) {
-      wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId) });
+      wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId), surface: 'web', sessionId: String(msg.previousSessionId || msg.sessionId || '') });
     }
   };
   if (String(msg.source || '') === 'hot_restart') {
+    const targetSessionId = String(msg.previousSessionId || msg.sessionId || '').trim();
+    if (targetSessionId.startsWith('mobile_') || targetSessionId === 'mobile_default') return;
     const restored = await appendToPreviousSession();
     if (restored?.id) {
       window.activeChatSessionId = restored.id;
@@ -38288,6 +38966,7 @@ function inferCurrentTurnProcessStartIndex(sess, userContent = '') {
 function appendLiveTraceToStreamState(streamState, type, text, { append = false } = {}) {
   const content = String(text || '');
   if (!content) return;
+  if (isBareThinkingLiveTraceText(content)) return;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
@@ -38331,6 +39010,23 @@ function shouldProcessMainChatStreamEvent(msg = {}) {
   return true;
 }
 
+function getMainChatStreamLastSeq(sessionId, streamId = 'default') {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return 0;
+  const key = String(streamId || 'default');
+  const map = window._mainChatStreamLastSeqBySession || {};
+  const prev = map[sid] && typeof map[sid] === 'object' ? map[sid] : {};
+  if (key === 'default') {
+    const max = Object.values(prev).reduce((best, item) => {
+      const n = Number(item || 0);
+      return Number.isFinite(n) && n > best ? n : best;
+    }, 0);
+    return max;
+  }
+  const value = Number(prev[key] || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 function applyMainChatStreamFrame(sessionId, frame) {
   if (!frame || typeof frame !== 'object') return;
   handleMainChatStreamEvent({
@@ -38347,7 +39043,12 @@ async function catchUpMainChatStream(sessionId, options = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
   try {
-    const data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=0`, 2500);
+    const streamId = String(options.streamId || '').trim();
+    const explicitAfter = Number(options.after);
+    const after = Number.isFinite(explicitAfter)
+      ? Math.max(0, Math.floor(explicitAfter))
+      : getMainChatStreamLastSeq(sid, streamId || 'default');
+    const data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=${encodeURIComponent(String(after))}`, 2500);
     const events = Array.isArray(data?.events) ? data.events : [];
     events.forEach((frame) => applyMainChatStreamFrame(sid, frame));
     if (data?.active) scheduleMainChatStreamCatchup(sid);
@@ -38385,6 +39086,10 @@ async function _wsReconnectCatchUp() {
   } catch {}
   // Catch up on stream events for the active session that arrived while disconnected
   if (window.activeChatSessionId) {
+    try {
+      await _loadSessionFromServer(window.activeChatSessionId, { force: true });
+      syncActiveChat();
+    } catch {}
     catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
   }
 }
@@ -38709,6 +39414,12 @@ function handleMainChatStreamEvent(msg = {}) {
 
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
 
+wsEventBus.on('main_chat_stream_update', (msg = {}) => {
+  const sid = String(msg.sessionId || '').trim();
+  if (!sid) return;
+  scheduleMainChatStreamCatchup(sid);
+});
+
 function appendVoiceAgentToolProcessEvent(msg = {}) {
   const sid = String(msg.sessionId || '').trim();
   if (!sid) return;
@@ -38717,18 +39428,29 @@ function appendVoiceAgentToolProcessEvent(msg = {}) {
   if (!action) return;
   if (evt.type === 'tool_call') {
     const args = evt.args && typeof evt.args === 'object' ? evt.args : {};
-    addSessionProcessEntry(sid, (action.startsWith('skill_') || action.startsWith('voice_skill')) ? 'skill' : 'tool', formatToolCallForLog(action, args, null), {
+    const entry = {
+      type: (action.startsWith('skill_') || action.startsWith('voice_skill')) ? 'skill' : 'tool',
+      content: formatToolCallForLog(action, args, null),
       actor: 'Voice Agent',
-      ...args,
-    });
+      extra: { actor: 'Voice Agent', ...args },
+      ts: new Date().toLocaleTimeString(),
+    };
+    addSessionProcessEntry(sid, entry.type, entry.content, entry.extra);
+    attachVoiceAgentProcessEntriesToRecentAssistantTurn(sid, [entry]);
     return;
   }
   if (evt.type === 'tool_result') {
     const resultText = String(evt.result || evt.output || '').trim();
     const ok = evt.error === true ? false : !/^ERROR:/i.test(resultText);
-    addSessionProcessEntry(sid, ok ? 'result' : 'error', formatToolResultForLog(action, resultText, ok, null), {
+    const entry = {
+      type: ok ? 'result' : 'error',
+      content: formatToolResultForLog(action, resultText, ok, null),
       actor: 'Voice Agent',
-    });
+      extra: { actor: 'Voice Agent' },
+      ts: new Date().toLocaleTimeString(),
+    };
+    addSessionProcessEntry(sid, entry.type, entry.content, entry.extra);
+    attachVoiceAgentProcessEntriesToRecentAssistantTurn(sid, [entry]);
   }
 }
 

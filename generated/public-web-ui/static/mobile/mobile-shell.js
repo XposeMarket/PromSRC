@@ -492,7 +492,13 @@ function _positionTabIndicator(tabbar, tabId, { animate = true } = {}) {
     indicator.style.setProperty('--pm-ind-x', `${left}px`);
     indicator.style.setProperty('--pm-ind-w', `${width}px`);
     // Glue the magnify lens center to the resting pill center.
-    tabbar.style.setProperty('--pm-lens-x', `${left + width / 2}px`);
+    const center = left + width / 2;
+    tabbar.style.setProperty('--pm-lens-x', `${center}px`);
+    const barW = tabbar.offsetWidth;
+    tabbar.style.setProperty('--pm-pill-left', `${left}px`);
+    tabbar.style.setProperty('--pm-pill-right', `${Math.max(0, barW - (left + width))}px`);
+    tabbar.style.setProperty('--pm-pill-span', `${width}px`);
+    tabbar.style.setProperty('--pm-lens-r', `${width / 2}px`);
   };
   if (animate) {
     indicator.classList.add('is-moving');
@@ -736,7 +742,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   const app = el(`<div class="pm-app" id="pm-app"></div>`);
   root.appendChild(app);
 
-  // Drawer + scrim live inside .pm-app (absolute positioned)
+  // Drawer lives behind the app panel; opening the menu slides the app right.
   _scrimEl = el(`<div class="pm-drawer-scrim" aria-hidden="true"></div>`);
   _drawerEl = el(`
     <aside class="pm-drawer" role="dialog" aria-label="Menu" aria-modal="true">
@@ -775,8 +781,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       <div id="pm-install-slot" style="margin-top:auto;"></div>
     </aside>
   `);
-  app.appendChild(_scrimEl);
-  app.appendChild(_drawerEl);
+  root.insertBefore(_drawerEl, app);
+  root.insertBefore(_scrimEl, app);
 
   // Shell-level delegated fallback for the hamburger. Per-page code also wires
   // this via wireHeaderActions(), but if a page's render throws before that
@@ -784,8 +790,16 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   // works. openDrawer() is idempotent, so the double-wiring is harmless.
   app.addEventListener('click', (ev) => {
     const menuBtn = ev.target?.closest?.('[data-action="menu"]');
-    if (menuBtn && app.contains(menuBtn)) openDrawer();
-  });
+    if (menuBtn && app.contains(menuBtn)) {
+      openDrawer();
+      return;
+    }
+    if (document.body.classList.contains('pm-mobile-drawer-open')) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeDrawer();
+    }
+  }, true);
 
   _scrimEl.addEventListener('click', closeDrawer);
   _drawerEl.querySelectorAll('.pm-drawer-item').forEach(btn => {
@@ -1715,6 +1729,7 @@ function _escHandler(e) {
 
 export function openDrawer() {
   if (!_drawerEl || !_scrimEl) return;
+  document.body.classList.add('pm-mobile-drawer-open');
   _drawerEl.classList.add('open');
   _scrimEl.classList.add('open');
   if (_drawerCallbacks) {
@@ -1725,6 +1740,7 @@ export function openDrawer() {
 
 export function closeDrawer() {
   if (!_drawerEl || !_scrimEl) return;
+  document.body.classList.remove('pm-mobile-drawer-open');
   _drawerEl.classList.remove('open');
   _scrimEl.classList.remove('open');
   setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), 0);
@@ -1741,7 +1757,7 @@ export function renderMobileHeader({ title, online = true, leftIcon = 'menu', on
           <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
         </button>` : ''}
         ${rightActions}
-        <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+        <button class="pm-icon-btn" data-action="settings" aria-label="More">${ICONS.dots}</button>
       </div>
     </header>
     ${(!hideTitle || (extras && String(extras).trim()))

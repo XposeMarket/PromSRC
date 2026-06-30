@@ -3751,6 +3751,12 @@ function prettify(name: string): string {
     background_wait:    'Waiting for agents',
     dispatch_team_agent:'Dispatching agent',
     talk_to_subagent:   'Talking to agent',
+    message_subagent:   'Messaging agent',
+    chat_with_subagent: 'Chatting with agent',
+    agent_message_send: 'Sending agent message',
+    agent_turn_request: 'Requesting agent turn',
+    agent_reply_wait:   'Waiting for agent reply',
+    agent_thread_watch: 'Watching agent thread',
     // Creative / media
     generate_image:     'Generating image',
     analyze_image:      'Analyzing image',

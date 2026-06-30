@@ -76,15 +76,24 @@ Important runtime facts:
 
 Current browser tool surface also includes:
 
-- `browser_type`
-- `browser_scroll_collect_v2`
-- `browser_intercept_network`
-- `browser_element_watch`
-- `browser_snapshot_delta`
-- `browser_extract_structured`
-- `browser_teach_verify`
+- model-facing wrappers: `browser_session`, `browser_observe`, `browser_act`, and `browser_extract`
+- hidden compatibility handlers: `browser_type`, `browser_scroll_collect_v2`, `browser_intercept_network`, `browser_element_watch`, `browser_snapshot_delta`, `browser_extract_structured`, `browser_teach_verify`, and the other granular browser tools
 
 Browser site knowledge now includes named elements, item roots, and extraction schemas via `src/gateway/browser-site-knowledge.ts`. `browser_extract_structured` can use an inline schema or a saved schema name.
+
+Browser performance telemetry:
+
+- every browser tool result inherits universal tool stopwatch telemetry from `src/gateway/routes/chat.router.ts`
+- streamed `tool_result` events expose `durationMs`, `elapsedMs`, and `elapsed_ms`; the model-facing tool message also gets `[TOOL_STOPWATCH] elapsed_ms=...`
+- desktop and mobile context-window rows show live/last-turn elapsed timing per browser tool, which is the preferred way to find slow/heavy browser operations
+- observation mode is the main speed lever: `none` and `compact` are cheapest, `delta` is middle, `snapshot` is heavier, and `screenshot`/vision/scroll collection are the heaviest but highest-confidence
+- cheap browser actions now default to the fast `observe:"none"` ack path (`browser_click`, `browser_fill`, `browser_type`, `browser_drag`, `browser_click_and_download`, `browser_scroll_collect`, and `browser_vision_type`); request `capture_after:true`, `observe:"snapshot"`, or `observe:"screenshot"` only when the next step needs fresh refs or visual proof
+- browser status broadcasts only attach frames for visual/status-critical tools. `browser_snapshot` and `browser_vision_screenshot` attach frames by default; `browser_open` only attaches a frame when `observe:"screenshot"` is explicitly requested, so `observe:"compact"`/`observe:"none"` opens do not pay screenshot cost just to update live UI state
+- `browser_open` uses observation-aware settling: `snapshot`/`screenshot` waits remain safer for SPA hydration, while `compact`/`none` skip long network-idle/hydration waits for fast navigation acks
+- desktop click/scroll/drag verification is opt-in by default for speed; use `verify:"auto"`, `verify:"strict"`, or `verify:true` when before/after probe confirmation is worth the extra screenshot/OCR cost
+- Windows desktop click/scroll verify-off paths combine pointer move plus click/scroll into one PowerShell invocation, avoiding the old two-process move-then-action cost for routine mouse control
+- benchmark real sites by recording each browser tool's elapsed timing plus result size/tokens, then optimize by lowering observation mode, batching scroll/extraction, avoiding duplicate snapshots, and using web_fetch for non-interactive reading
+
 
 Browser-vs-web routing after the 2026-06-05 batch research update:
 

@@ -135,6 +135,21 @@ function buildSubagentToolFilter(subagentProfile: string | undefined): string[] 
   return undefined;
 }
 
+function splitExecutorProviderRef(ref?: string): { modelOverride?: string; providerOverride?: string } {
+  const raw = String(ref || '').trim();
+  if (!raw) return {};
+  const slashIdx = raw.indexOf('/');
+  if (slashIdx > 0) {
+    const providerOverride = raw.slice(0, slashIdx).trim();
+    const modelOverride = raw.slice(slashIdx + 1).trim();
+    return {
+      providerOverride: providerOverride || undefined,
+      modelOverride: modelOverride || undefined,
+    };
+  }
+  return { modelOverride: raw };
+}
+
 function looksLikeClarificationQuestion(text: string): boolean {
   if (!text || text.length < 20) return false;
   const t = text.trim();
@@ -765,6 +780,7 @@ export class BackgroundTaskRunner {
           'Keep it concrete and grounded in the provided logs.',
         ].join('\n');
     try {
+      const executorRouting = splitExecutorProviderRef(task.executorProvider);
       const result = await this.handleChat(
         prompt,
         recoverySessionId,
@@ -772,12 +788,12 @@ export class BackgroundTaskRunner {
         undefined,
         undefined,
         this._buildPauseAnalysisContext(task, snapshot, mode),
-        undefined,
+        executorRouting.modelOverride,
         'interactive',
         getTaskRecoveryNoToolsFilter(),
         undefined,
         undefined,
-        task.executorProvider,
+        executorRouting.providerOverride,
       );
       const text = String(result?.text || '').trim();
       if (text) return text;
@@ -2539,7 +2555,7 @@ export class BackgroundTaskRunner {
         clipped.slice(0, 8000),
         `[/SUBAGENT_RESPONSE]`,
         ``,
-        `Main chat note: This response came from standalone subagent "${title}". You can continue the conversation with message_subagent(agent_id: "${agentId}", message: "...") if a follow-up is needed.`,
+        `Main chat note: This response came from standalone subagent "${title}". You can continue normal chat with chat_with_subagent(agent_id: "${agentId}", message: "...") or send another background handoff with message_subagent(agent_id: "${agentId}", message: "...").`,
       ].join('\n');
       const userNotice = [
         `Also, your subagent ${title} finished.`,

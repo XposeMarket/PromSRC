@@ -16,6 +16,8 @@ let subagentsData = [];          // All standalone agents (not team members)
 let activeSubagentId = null;     // Currently open detail panel
 let subagentDetailTab = 'overview'; // overview | systemprompt | memory | heartbeat | runs | chat
 let subagentRuns = [];
+let activeSubagentRunId = '';
+let subagentRunDetails = {};
 let subagentChatHistory = [];    // [{ id, role:'user'|'agent'|'system', content, ts, metadata }]
 let subagentChatDraft = '';
 let _subagentChatSending = false;
@@ -765,6 +767,8 @@ async function openSubagentDetail(agentId) {
   activeSubagentId = agentId;
   subagentDetailTab = getSubagentStreamingState(agentId) ? 'chat' : 'overview';
   subagentRuns = [];
+  activeSubagentRunId = '';
+  subagentRunDetails = {};
   subagentChatHistory = [];
   syncActiveSubagentStreamingState();
   subagentSystemPrompt = '';
@@ -825,13 +829,13 @@ function closeSubagentDetail() {
 
 async function loadSubagentBoardData(agentId) {
   try {
-    const [histData, chatData, ctxData, skillsData] = await Promise.all([
-      api(`/api/agents/history?agentId=${encodeURIComponent(agentId)}&limit=30`),
+    const [runsData, chatData, ctxData, skillsData] = await Promise.all([
+      api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => ({ runs: [] })),
       api(`/api/agents/${encodeURIComponent(agentId)}/chat?limit=100`),
       api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ refs: [] })),
       api('/api/skills').catch(() => ({ skills: [] })),
     ]);
-    subagentRuns = histData.history || [];
+    subagentRuns = runsData.runs || [];
     subagentChatHistory = preserveSubagentProcessMetadata(normalizeSubagentChatMessages(chatData.messages || []));
     subagentContextRefs = ctxData.refs || [];
     subagentSkillsCache = Array.isArray(skillsData.skills) ? skillsData.skills : [];
@@ -1494,8 +1498,8 @@ async function switchSubagentTab(tab, agentId) {
   }
   if (tab === 'runs' && subagentRuns.length === 0) {
     try {
-      const d = await api(`/api/agents/history?agentId=${encodeURIComponent(agentId)}&limit=30`);
-      subagentRuns = d.history || [];
+      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+      subagentRuns = d.runs || [];
     } catch {}
   }
   if (tab === 'chat') {
@@ -1754,33 +1758,148 @@ function renderSubagentHeartbeatTab(agent) {
     </div>`;
 }
 
+function subagentRunStatusMeta(status) {
+  const s = String(status || '').toLowerCase();
+  if (['running', 'queued', 'waiting_subagent'].includes(s)) return { group: 'Running', label: s.replace(/_/g, ' '), color: '#0d4faf', bg: '#eaf2ff' };
+  if (['needs_assistance', 'awaiting_user_input', 'stalled'].includes(s)) return { group: 'Needs Attention', label: s.replace(/_/g, ' '), color: '#9a3412', bg: '#fff7ed' };
+  if (s === 'paused') return { group: 'Paused', label: 'paused', color: '#7c4d00', bg: '#fff8e1' };
+  if (s === 'complete') return { group: 'Completed', label: 'complete', color: '#166534', bg: '#dcfce7' };
+  if (s === 'failed') return { group: 'Failed', label: 'failed', color: '#991b1b', bg: '#fee2e2' };
+  return { group: 'Other', label: s || 'unknown', color: 'var(--muted)', bg: 'var(--panel)' };
+}
+
+function renderSubagentRunProgress(taskOrRun) {
+  const task = taskOrRun || {};
+  const plan = Array.isArray(task.plan) ? task.plan : [];
+  const runtimeItems = Array.isArray(task.runtimeProgress?.items) ? task.runtimeProgress.items : [];
+  const items = plan.length
+    ? plan.map((step, idx) => ({
+        text: step.description || step.text || step.title || `Step ${idx + 1}`,
+        status: step.status || 'pending',
+      }))
+    : runtimeItems.map((item, idx) => ({ text: item.text || `Step ${idx + 1}`, status: item.status || 'pending' }));
+  if (!items.length) return `<div style="font-size:12px;color:var(--muted)">No plan steps recorded yet.</div>`;
+  return `<div style="display:flex;flex-direction:column;gap:7px">${items.slice(0, 20).map((item, idx) => {
+    const raw = String(item.status || '').toLowerCase();
+    const done = raw === 'done' || raw === 'skipped';
+    const failed = raw === 'failed';
+    const active = raw === 'running' || raw === 'in_progress';
+    const color = failed ? '#b42323' : done ? '#166534' : active ? '#0d4faf' : 'var(--muted)';
+    return `<div style="display:grid;grid-template-columns:24px 1fr;gap:8px;align-items:start">
+      <span style="width:21px;height:21px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);background:${active ? '#eaf2ff' : done ? '#dcfce7' : failed ? '#fee2e2' : 'var(--panel)'};color:${color};font-size:10px;font-weight:900">${done ? 'OK' : failed ? '!' : idx + 1}</span>
+      <span style="font-size:12px;line-height:1.45;color:var(--text);overflow-wrap:anywhere">${escHtml(item.text)}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderSubagentRunRecovery(task, agentId) {
+  const canRecover = !!task?.canRecover || ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'].includes(String(task?.status || '').toLowerCase());
+  const turns = Array.isArray(task?.recoveryConversation) ? task.recoveryConversation.slice(-16) : [];
+  const pauseMessage = String(task?.pauseAnalysis?.message || '').trim();
+  const pending = String(task?.pendingClarificationQuestion || '').trim();
+  const taskId = String(task?.id || task?.taskId || '');
+  const recoveryTurnsHtml = turns.length
+    ? turns.map((turn) => {
+        const isUser = turn?.role === 'user';
+        return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:92%;background:${isUser ? 'rgba(251,146,60,.14)' : 'var(--panel)'};border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+          <div style="font-size:10px;font-weight:900;text-transform:uppercase;color:var(--muted);margin-bottom:4px">${isUser ? 'You' : 'Recovery'}</div>
+          <div style="font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(turn?.content || '')}</div>
+        </div>`;
+      }).join('')
+    : `<div style="font-size:12px;color:var(--muted)">No recovery messages yet.</div>`;
+  return `
+    <section style="border:1px solid ${canRecover ? '#fed7aa' : 'var(--line)'};background:${canRecover ? 'rgba(255,247,237,.7)' : 'var(--panel-2)'};border-radius:10px;padding:11px;display:flex;flex-direction:column;gap:9px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:12px;font-weight:900;color:${canRecover ? '#9a3412' : 'var(--text)'}">Recovery Chat</div>
+        <span style="font-size:10px;color:var(--muted)">${canRecover ? 'task mode' : 'read only'}</span>
+      </div>
+      ${pending ? `<div style="font-size:12px;line-height:1.45"><strong>Pending question:</strong> ${escHtml(pending)}</div>` : ''}
+      ${pauseMessage ? `<div style="font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere"><strong>Pause analysis:</strong><br>${escHtml(pauseMessage.slice(0, 1400))}</div>` : ''}
+      <div style="display:flex;flex-direction:column;gap:8px">${recoveryTurnsHtml}</div>
+      ${canRecover ? `<div style="display:flex;gap:8px;align-items:flex-end">
+        <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="2" placeholder="Reply to this run..." style="flex:1;min-height:54px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel);color:var(--text)"></textarea>
+        <button onclick="sendSubagentRunRecovery('${escHtml(agentId)}','${escHtml(taskId)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">Send</button>
+      </div>` : ''}
+    </section>`;
+}
+
+function renderSubagentRunDetail(agent, run) {
+  const taskId = String(run?.id || run?.taskId || '');
+  const detail = subagentRunDetails[taskId]?.task;
+  const loading = subagentRunDetails[taskId]?.loading;
+  if (loading || !detail) {
+    return `<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px;font-size:12px;color:var(--muted)">Loading run details...</div>`;
+  }
+  const journal = Array.isArray(detail.journal) ? detail.journal.slice(-30).reverse() : [];
+  return `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:12px">
+    ${detail.finalSummary ? `<section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Output</div><div style="font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(detail.finalSummary)}</div></section>` : ''}
+    ${renderSubagentRunRecovery({ ...run, ...detail }, agent.id)}
+    <section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Progress</div>${renderSubagentRunProgress(detail)}</section>
+    <section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Task Prompt</div><div style="font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(detail.prompt || detail.title || '')}</div></section>
+    <section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Process Log</div>
+      ${journal.length ? `<div style="font-family:'IBM Plex Mono',monospace;font-size:11px;border:1px solid var(--line);border-radius:8px;overflow:hidden">${journal.map((entry) => `<div style="display:grid;grid-template-columns:58px 82px 1fr;gap:6px;padding:7px 8px;border-bottom:1px solid var(--line)">
+        <span style="color:var(--muted)">${entry?.t ? new Date(entry.t).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : ''}</span>
+        <span style="font-weight:900;color:${entry?.type === 'error' ? '#b42323' : 'var(--muted)'}">${escHtml(entry?.type || 'event')}</span>
+        <span style="white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(entry?.content || entry?.detail || '')}</span>
+      </div>`).join('')}</div>` : `<div style="font-size:12px;color:var(--muted)">No process log entries yet.</div>`}
+    </section>
+  </div>`;
+}
+
 function renderSubagentRunsTab(agent) {
   if (subagentRuns.length === 0) {
     return `<div style="text-align:center;color:var(--muted);padding:48px 16px">
       <div style="font-size:36px;margin-bottom:10px">📭</div>
       <div style="font-size:13px;font-weight:700;margin-bottom:6px">No runs yet</div>
-      <div style="font-size:12px">This agent hasn't been run yet. Use the Overview tab to start a task.</div>
+      <div style="font-size:12px">Background task runs for this agent will appear here.</div>
     </div>`;
   }
 
+  const groups = ['Needs Attention', 'Paused', 'Running', 'Failed', 'Completed', 'Other'];
+  const byGroup = new Map(groups.map((group) => [group, []]));
+  subagentRuns.forEach((run) => {
+    const meta = subagentRunStatusMeta(run.status || run.taskStatus);
+    if (!byGroup.has(meta.group)) byGroup.set(meta.group, []);
+    byGroup.get(meta.group).push(run);
+  });
+
   return `
-    <div style="display:flex;flex-direction:column;gap:8px">
-      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:2px">Run History (${subagentRuns.length})</div>
-      ${subagentRuns.map(r => `
-        <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:11px 13px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
-            <div style="display:flex;align-items:center;gap:7px">
-              <span style="font-size:13px">${r.success ? '✅' : '❌'}</span>
-              <span style="font-size:11px;font-weight:700;color:var(--text)">${new Date(r.startedAt).toLocaleString()}</span>
-            </div>
-            <div style="display:flex;gap:5px;align-items:center">
-              <span style="font-size:10px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:1px 6px">${escHtml(r.trigger||'manual')}</span>
-              <span style="font-size:10px;color:var(--muted)">${Math.round((r.durationMs||0)/1000)}s · ${r.stepCount||0} steps</span>
-            </div>
-          </div>
-          ${r.resultPreview ? `<div style="font-size:11px;color:var(--text);line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;opacity:0.85">${escHtml(r.resultPreview.slice(0,300))}${r.resultPreview.length>300?'…':''}</div>` : ''}
-          ${r.error ? `<div style="font-size:11px;color:#e05c5c;margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(r.error)}</div>` : ''}
-        </div>`).join('')}
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div>
+          <div style="font-size:13px;font-weight:900;color:var(--text)">Runs</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Task work, status, output, and recovery stay here.</div>
+        </div>
+        <button onclick="reloadSubagentRuns('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer">Refresh</button>
+      </div>
+      ${groups.map((group) => {
+        const runs = byGroup.get(group) || [];
+        if (!runs.length) return '';
+        return `<section style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">${group} (${runs.length})</div>
+          ${runs.map((run) => {
+            const meta = subagentRunStatusMeta(run.status || run.taskStatus);
+            const taskId = String(run.id || run.taskId || '');
+            const open = activeSubagentRunId === taskId;
+            const title = String(run.title || run.taskName || run.prompt || 'Task');
+            const preview = String(run.resultPreview || run.finalSummary || run.pauseAnalysis?.message || run.prompt || '').trim();
+            const started = Number(run.startedAt || 0);
+            const updated = Number(run.lastProgressAt || run.completedAt || started || 0);
+            return `<article style="background:var(--panel-2);border:1px solid ${open ? 'var(--brand)' : 'var(--line)'};border-radius:10px;padding:11px 13px;cursor:pointer" onclick="openSubagentRunDetail('${escHtml(agent.id)}','${escHtml(taskId)}')">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+                <div style="min-width:0;flex:1">
+                  <div style="font-size:12px;font-weight:900;color:var(--text);line-height:1.35;overflow-wrap:anywhere">${escHtml(title.slice(0, 160))}${title.length > 160 ? '...' : ''}</div>
+                  <div style="font-size:10px;color:var(--muted);margin-top:3px">${escHtml(run.trigger || run.source || 'manual')} · ${run.completedSteps || 0}/${run.totalSteps || run.stepCount || 0} steps · ${updated ? timeAgo(updated) : ''}</div>
+                </div>
+                <span style="font-size:10px;font-weight:900;color:${meta.color};background:${meta.bg};border:1px solid ${meta.color};border-radius:999px;padding:3px 7px;white-space:nowrap">${escHtml(meta.label)}</span>
+              </div>
+              ${preview ? `<div style="font-size:11px;color:var(--text);line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;opacity:.84">${escHtml(preview.slice(0, 320))}${preview.length > 320 ? '...' : ''}</div>` : ''}
+              ${run.canRecover ? `<div style="margin-top:8px;font-size:11px;font-weight:900;color:#9a3412">Needs recovery input</div>` : ''}
+              ${open ? renderSubagentRunDetail(agent, run) : ''}
+            </article>`;
+          }).join('')}
+        </section>`;
+      }).join('')}
     </div>`;
 }
 
@@ -1861,6 +1980,56 @@ function renderSubagentChatTab(agent) {
         </div>
       </div>
     </div>`;
+}
+
+async function reloadSubagentRuns(agentId) {
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+    subagentRuns = Array.isArray(data?.runs) ? data.runs : [];
+    renderSubagentBoard(agentId);
+  } catch (err) {
+    showToast('Runs error', err.message || 'Failed to load runs', 'error');
+  }
+}
+
+async function openSubagentRunDetail(agentId, taskId) {
+  const id = String(taskId || '').trim();
+  if (!id) return;
+  activeSubagentRunId = activeSubagentRunId === id ? '' : id;
+  if (activeSubagentRunId && !subagentRunDetails[id]?.task) {
+    subagentRunDetails[id] = { loading: true };
+    renderSubagentBoard(agentId);
+    try {
+      const data = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}`);
+      subagentRunDetails[id] = { task: data.task || null, run: data.run || null, evidenceBus: data.evidenceBus || null };
+    } catch (err) {
+      subagentRunDetails[id] = { task: null, error: err.message || 'Failed to load run' };
+      showToast('Run error', err.message || 'Failed to load run', 'error');
+    }
+  }
+  renderSubagentBoard(agentId);
+}
+
+async function sendSubagentRunRecovery(agentId, taskId) {
+  const id = String(taskId || '').trim();
+  const textarea = document.getElementById(`sa-run-recovery-${id}`);
+  const message = String(textarea?.value || '').trim();
+  if (!id || !message) return;
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}/recovery`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+      timeoutMs: 300000,
+    });
+    if (textarea) textarea.value = '';
+    if (data?.task) subagentRunDetails[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
+    const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => null);
+    if (Array.isArray(runsData?.runs)) subagentRuns = runsData.runs;
+    showToast('Recovery updated', data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
+    renderSubagentBoard(agentId);
+  } catch (err) {
+    showToast('Recovery error', err.message || 'Failed to send recovery reply', 'error');
+  }
 }
 
 function startSubagentDesktopVoice(agentId) {
@@ -2185,8 +2354,8 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
     }
 
     try {
-      const d = await api(`/api/agents/history?agentId=${encodeURIComponent(agentId)}&limit=30`);
-      subagentRuns = d.history || [];
+      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+      subagentRuns = d.runs || [];
     } catch {}
 
     if (getSubagentStreamingState(agentId) === streamState) {
@@ -2510,8 +2679,8 @@ async function spawnSubagentTask(agentId) {
     if (result.success) {
       const preview = result.result?.result?.slice(0, 200) || '';
       bgtToast('✅ Done', preview || 'Task completed');
-      const d = await api(`/api/agents/history?agentId=${encodeURIComponent(agentId)}&limit=30`);
-      subagentRuns = d.history || [];
+      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => null);
+      subagentRuns = d?.runs || [];
       renderSubagentBoard(agentId);
     } else {
       bgtToast('❌ Failed', result.error || 'Unknown error');
@@ -2564,8 +2733,8 @@ function startSubagentPolling(agentId) {
   _subagentDetailPolling = setInterval(async () => {
     if (!activeSubagentId) return stopSubagentPolling();
     try {
-      const d = await api(`/api/agents/history?agentId=${encodeURIComponent(agentId)}&limit=30`);
-      const fresh = d.history || [];
+      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+      const fresh = d.runs || [];
 	      if (fresh.length !== subagentRuns.length) {
 	        subagentRuns = fresh;
 	        if (subagentDetailTab === 'runs') renderSubagentBoard(agentId);
@@ -2954,6 +3123,21 @@ wsEventBus.on('subagent_chat_stream_event', (data) => {
   });
 });
 
+wsEventBus.on('subagent_run_updated', async (data = {}) => {
+  const agentId = String(data.agentId || '').trim();
+  if (!agentId || agentId !== activeSubagentId) return;
+  try {
+    const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+    subagentRuns = runsData.runs || [];
+    const taskId = String(data.taskId || '').trim();
+    if (taskId && subagentRunDetails[taskId]?.task) {
+      const detail = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}`).catch(() => null);
+      if (detail?.task) subagentRunDetails[taskId] = { task: detail.task, run: detail.run || null, evidenceBus: detail.evidenceBus || null };
+    }
+    if (subagentDetailTab === 'runs') renderSubagentBoard(agentId);
+  } catch {}
+});
+
 wsEventBus.on('approval_created', (msg = {}) => {
   if (activeSubagentId) upsertSubagentChatApproval(activeSubagentId, msg.approval || msg);
 });
@@ -2991,6 +3175,9 @@ window.saveSubagentSystemPrompt = saveSubagentSystemPrompt;
 window.spawnSubagentTask = spawnSubagentTask;
 window.refreshSubagentDetail = refreshSubagentDetail;
 window.openSubagentSettings = openSubagentSettings;
+window.reloadSubagentRuns = reloadSubagentRuns;
+window.openSubagentRunDetail = openSubagentRunDetail;
+window.sendSubagentRunRecovery = sendSubagentRunRecovery;
 // Context refs
 window.saveSubagentCtxRef = saveSubagentCtxRef;
 window.addSubagentSkill = addSubagentSkill;

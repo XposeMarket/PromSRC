@@ -66,6 +66,14 @@ buildPersonalityContext() ──────────────── promp
     │    always-on tool menu
     │    TOOL_BLOCKS.skills (always)
     │    TOOL_BLOCKS.{category} (persistent session categories plus unexpired scoped categories)
+    │    browser_automation policy is wrapper-first: browser_session/observe/act/extract
+    │    desktop_automation policy is wrapper-first: desktop_screen/apps/window/input/macro/background
+    │    external_apps policy is wrapper-first for X/xAI and Vercel wrappers
+    │    agents_and_teams policy is wrapper-first: agent_ops/chat_ops/team wrappers
+    │    Creative bucket policies are wrapper-first: creative_project/scene/image/video/hyperframes/quality
+    │    workspace_write policy is wrapper-first: workspace_read/edit/run/git/safety/code_nav
+    │    prometheus_source_read/write policy is wrapper-first: dev_source_read/dev_source_edit
+    │    realtime voice policy is wrapper-first in chat.router: voice_ops/browser/desktop
     │
     ├─ Skills hint ────────────────────────── skills-manager.ts:858–872
     │    [SKILLS] N playbooks / [MATCHING_SKILLS] if pre-matched

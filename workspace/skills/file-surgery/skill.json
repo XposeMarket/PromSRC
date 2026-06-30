@@ -85,6 +85,11 @@
       "path": "references/recovery/recovery-note-apply-workspace-patchset-failed-applied-0-failed-1-results-2026-06-24.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
+    },
+    {
+      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-06-28.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
     }
   ]
 }

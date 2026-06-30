@@ -5,6 +5,7 @@ import { getConfig } from '../config/config';
 
 export type LiveRuntimeKind =
   | 'main_chat'
+  | 'main_chat_goal'
   | 'team_manager'
   | 'team_member'
   | 'team_subagent'
@@ -315,6 +316,7 @@ export function registerLiveRuntime(registration: LiveRuntimeRegistration): stri
 
 export function finishLiveRuntime(id: string): void {
   const key = String(id || '');
+  cancelCheckpointFlush(key);
   const record = activeRuntimes.get(key);
   if (record) {
     record.status = record.abortSignal?.aborted ? 'aborted' : 'completed';
@@ -327,12 +329,24 @@ export function finishLiveRuntime(id: string): void {
   activeRuntimes.delete(key);
 }
 
+function pruneTerminalActiveRuntimes(): void {
+  for (const [id, record] of activeRuntimes.entries()) {
+    if (!hasTerminalRuntimeCheckpoint(record)) continue;
+    cancelCheckpointFlush(id);
+    const snapshot = toSnapshot(record);
+    deleteDurableRuntime(id, 'pruned_terminal_active_runtime', snapshot);
+    activeRuntimes.delete(id);
+  }
+}
+
 export function getLiveRuntime(id: string): LiveRuntimeSnapshot | null {
+  pruneTerminalActiveRuntimes();
   const record = activeRuntimes.get(String(id || ''));
   return record ? toSnapshot(record) : null;
 }
 
 export function listLiveRuntimes(): LiveRuntimeSnapshot[] {
+  pruneTerminalActiveRuntimes();
   return Array.from(activeRuntimes.values())
     .sort((a, b) => b.startedAt - a.startedAt)
     .map(toSnapshot);
@@ -348,7 +362,9 @@ export function findLiveRuntime(
 }
 
 export function abortLiveRuntime(id: string): { ok: boolean; runtime?: LiveRuntimeSnapshot; error?: string } {
-  const record = activeRuntimes.get(String(id || ''));
+  const key = String(id || '');
+  cancelCheckpointFlush(key);
+  const record = activeRuntimes.get(key);
   if (!record) return { ok: false, error: 'Runtime not found.' };
   if (!record.abortable) return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not abortable.' };
 
@@ -486,6 +502,14 @@ function inferDefaultRecoveryPolicy(kind: LiveRuntimeKind): LiveRuntimeSnapshot[
 // Debounced ledger flush: coalesce rapid checkpoint updates into a single write
 // so tool_call/tool_result bursts don't saturate the disk with sync I/O.
 const _pendingLedgerFlush = new Map<string, ReturnType<typeof setTimeout>>();
+function cancelCheckpointFlush(id: string): void {
+  const key = String(id || '');
+  const existing = _pendingLedgerFlush.get(key);
+  if (!existing) return;
+  clearTimeout(existing);
+  _pendingLedgerFlush.delete(key);
+}
+
 function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): void {
   const existing = _pendingLedgerFlush.get(id);
   if (existing) clearTimeout(existing);

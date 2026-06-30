@@ -148,6 +148,10 @@ function desktopKey(args?: Record<string, any>): string {
   return normalizeText(args?.key);
 }
 
+function desktopVerifyMode(args?: Record<string, any>): string {
+  return normalizeText(args?.verify);
+}
+
 function browserTargetLabel(args?: Record<string, any>, resultText?: string): string {
   const raw = [
     args?.element,
@@ -403,6 +407,12 @@ function decideDesktopObservation(
   }
   if ((toolName === 'desktop_scroll' || toolName === 'desktop_window_scroll') && toDesktopScrollAmount(input.args) <= 3) {
     return { mode: 'none', reason: 'small desktop scroll', shouldRunAdvisor: false };
+  }
+  if (
+    (toolName === 'desktop_click' || toolName === 'desktop_window_click')
+    && desktopVerifyMode(input.args) === 'off'
+  ) {
+    return { mode: 'none', reason: 'explicit verify=off for low-latency desktop click', shouldRunAdvisor: false };
   }
   if (
     toolName === 'desktop_click'

@@ -433,6 +433,14 @@ function isTurnFileMutationTool(toolName: string): boolean {
   return false;
 }
 
+function isPlannedRestartToolName(toolName: string): boolean {
+  const name = String(toolName || '').trim();
+  return name === 'gateway_restart'
+    || name === 'prom_apply_dev_changes'
+    || /^(prom_)?dev_.*apply/i.test(name)
+    || /^(apply_)?dev_source_(changes|edit|patch)$/i.test(name);
+}
+
 function normalizeDisplayPath(filePath: string, workspacePath: string): string {
   const value = String(filePath || '').trim();
   if (!value) return '';
@@ -684,8 +692,28 @@ type MainChatStreamState = {
 };
 
 const mainChatStreams = new Map<string, MainChatStreamState>();
-const MAIN_CHAT_STREAM_MAX_EVENTS = 1600;
+const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
+const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
+const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
+  'user_message',
+  'session_title',
+  'agent_mode',
+  'ui_preflight',
+  'info',
+  'tool_call',
+  'tool_result',
+  'tool_progress',
+  'progress_state',
+  'thinking',
+  'agent_thought',
+  'final',
+  'done',
+  'error',
+  'warn',
+  'runtime_registered',
+]);
+const mainChatStreamUpdateTimers = new Map<string, NodeJS.Timeout>();
 
 function getMainChatStream(sessionId: string): MainChatStreamState | null {
   const sid = String(sessionId || '').trim();
@@ -718,12 +746,46 @@ function beginMainChatStream(sessionId: string): MainChatStreamState {
   return stream;
 }
 
+function broadcastMainChatStreamUpdate(stream: MainChatStreamState, frame: MainChatStreamFrame): void {
+  try {
+    broadcastWS({
+      type: 'main_chat_stream_update',
+      sessionId: stream.sessionId,
+      streamId: stream.streamId,
+      lastSeq: frame.seq,
+      event: frame.type,
+      at: frame.at,
+      active: stream.active,
+    });
+  } catch {}
+}
+
+function scheduleMainChatStreamUpdate(stream: MainChatStreamState, frame: MainChatStreamFrame): void {
+  const key = `${stream.sessionId}:${stream.streamId}`;
+  if (mainChatStreamUpdateTimers.has(key)) return;
+  const timer = setTimeout(() => {
+    mainChatStreamUpdateTimers.delete(key);
+    const latest = stream.events[stream.events.length - 1] || frame;
+    broadcastMainChatStreamUpdate(stream, latest);
+  }, MAIN_CHAT_WS_UPDATE_THROTTLE_MS);
+  if (typeof (timer as any).unref === 'function') (timer as any).unref();
+  mainChatStreamUpdateTimers.set(key, timer);
+}
+
 function finishMainChatStream(sessionId: string, streamId: string): void {
   const stream = getMainChatStream(sessionId);
   if (!stream || stream.streamId !== streamId) return;
   stream.active = false;
   stream.completedAt = Date.now();
   stream.updatedAt = stream.completedAt;
+  const key = `${stream.sessionId}:${stream.streamId}`;
+  const timer = mainChatStreamUpdateTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    mainChatStreamUpdateTimers.delete(key);
+  }
+  const latest = stream.events[stream.events.length - 1];
+  if (latest) broadcastMainChatStreamUpdate(stream, latest);
 }
 
 function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
@@ -741,17 +803,21 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
   }
   stream.updatedAt = frame.at;
-  try {
-    broadcastWS({
-      type: 'main_chat_stream_event',
-      sessionId: stream.sessionId,
-      streamId: stream.streamId,
-      seq: frame.seq,
-      event: frame.type,
-      at: frame.at,
-      data: frame.data,
-    });
-  } catch {}
+  if (MAIN_CHAT_WS_DIRECT_EVENTS.has(frame.type)) {
+    try {
+      broadcastWS({
+        type: 'main_chat_stream_event',
+        sessionId: stream.sessionId,
+        streamId: stream.streamId,
+        seq: frame.seq,
+        event: frame.type,
+        at: frame.at,
+        data: frame.data,
+      });
+    } catch {}
+  } else {
+    scheduleMainChatStreamUpdate(stream, frame);
+  }
   return frame;
 }
 
@@ -885,10 +951,12 @@ import { goalDecomposeTool, executeGoalDecompose, approveGoal, loadGoal, listGoa
 import {
   applyMainChatGoalJudgeResult,
   buildMainChatGoalContinuationPrompt,
+  getAllMainChatGoalRecords,
   handleMainChatGoalCommand,
   isMainChatGoalContinuation,
   judgeMainChatGoal,
   maybeSummarizeMainChatGoal,
+  recordMainChatGoalTurnPlanProgress,
   recordMainChatGoalDeniedAction,
   recordMainChatGoalRuntimeFailure,
   resolveMainChatGoalPolicy,
@@ -1841,13 +1909,16 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; excludedSkillIds?: string[] },
+  runtimeOptions?: { directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
 ): Promise<HandleChatResult> {
   try {
   const ollama = getOllamaClient();
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const excludedSkillIds = Array.isArray(runtimeOptions?.excludedSkillIds)
     ? runtimeOptions.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  const forcedSkillIds = Array.isArray(runtimeOptions?.forcedSkillIds)
+    ? runtimeOptions.forcedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
   const isBootStartupTurn = /\bBOOT\.md\b/i.test(String(callerContext || ''));
   const isHotRestartTurn = /\[HOT RESTART CONTEXT\]/i.test(String(callerContext || ''));
@@ -2297,7 +2368,7 @@ async function handleChat(
   };
 
   const emitProgressState = (reason: string) => {
-    sendSSE('progress_state', {
+    const payload = {
       source: progressState.source,
       reason,
       activeIndex: progressState.activeIndex,
@@ -2308,7 +2379,11 @@ async function handleChat(
         text: item.text,
         status: item.status,
       })),
-    });
+    };
+    sendSSE('progress_state', payload);
+    if (isHandleChatGoalContinuation && progressState.source === 'declared' && progressState.items.length >= 2) {
+      recordMainChatGoalTurnPlanProgress(sessionId, payload);
+    }
   };
 
   const resolveProviderModelOverride = (): {
@@ -2543,6 +2618,58 @@ async function handleChat(
   // consecutiveFailures: how many times the current step has failed in a row.
   // Resets on any success. Used to stay on the step during retries.
   let consecutiveStepFailures = 0;
+
+  const seedProgressFromStoredGoalPlan = (): boolean => {
+    if (!isHandleChatGoalContinuation) return false;
+    const goal = snapshotMainChatGoal(sessionId);
+    const plans = Array.isArray(goal?.turnPlans) ? [...goal.turnPlans] : [];
+    if (!goal || !plans.length) return false;
+    const reasonText = [
+      goal.lastReason,
+      goal.pausedReason,
+      goal.failureReason,
+    ].map((part: any) => String(part || '').toLowerCase()).join(' ');
+    const shouldResumePlan = goal.lastVerdict === 'failed'
+      || /\b(interrupted|gateway_restart|gateway_crash|restart|request canceled|request cancelled|canceled|cancelled|abort|aborted|stopped|runtime failure|runtime error)\b/.test(reasonText);
+    if (!shouldResumePlan) return false;
+    const isOpenPlan = (plan: any) => plan && !['complete', 'blocked'].includes(String(plan.status || '').toLowerCase());
+    const nextTurn = Number(goal.turnsUsed || 0) + 1;
+    const plan = [...plans].reverse().find((item: any) => Number(item?.turnNumber) === nextTurn && isOpenPlan(item))
+      || [...plans].reverse().find((item: any) => Number(item?.turnNumber) === Number(goal.turnsUsed || 0) && isOpenPlan(item))
+      || [...plans].reverse().find((item: any) => isOpenPlan(item));
+    const rawSteps = Array.isArray(plan?.steps) ? plan.steps : [];
+    if (!plan || rawSteps.length < 2) return false;
+    const items = rawSteps
+      .map((step: any, index: number) => {
+        const text = String(step?.text || '').trim();
+        if (!text) return null;
+        const rawStatus = String(step?.status || '').trim().toLowerCase();
+        const status = rawStatus === 'done' || rawStatus === 'failed' || rawStatus === 'skipped' || rawStatus === 'in_progress'
+          ? rawStatus
+          : 'pending';
+        return {
+          id: String(step?.id || `g${Number(plan.turnNumber) || nextTurn}_s${index + 1}`),
+          text,
+          status,
+        } as RuntimeProgressItem;
+      })
+      .filter(Boolean) as RuntimeProgressItem[];
+    if (items.length < 2) return false;
+    let firstOpenIndex = items.findIndex((item) => item.status === 'in_progress' || item.status === 'pending' || item.status === 'failed');
+    if (firstOpenIndex < 0) firstOpenIndex = items.length - 1;
+    if (items[firstOpenIndex]?.status === 'pending' || items[firstOpenIndex]?.status === 'failed') {
+      items[firstOpenIndex].status = 'in_progress';
+    }
+    progressState.source = 'declared';
+    progressState.items = items;
+    progressState.activeIndex = firstOpenIndex;
+    progressState.manualStepAdvance = true;
+    stepCursor = firstOpenIndex;
+    consecutiveStepFailures = 0;
+    emitProgressState('goal_plan_resumed');
+    return true;
+  };
+  seedProgressFromStoredGoalPlan();
 
   // Tools that gather information — do NOT advance the step cursor.
   const READ_ONLY_PROGRESS_TOOLS = new Set([
@@ -2977,6 +3104,35 @@ async function handleChat(
   const makeInstrumentedToolResult = (toolName: string, toolArgs: any, result: string, error: boolean, startedAt = Date.now(), extra?: any): ToolResult =>
     attachUniversalToolTelemetry({ name: toolName, args: toolArgs, result, error, extra }, toolName, toolArgs, startedAt, Date.now());
 
+  const getToolResultTelemetry = (toolResult: ToolResult | any): any =>
+    (toolResult?.extra?.telemetry && typeof toolResult.extra.telemetry === 'object')
+      ? toolResult.extra.telemetry
+      : (toolResult?.data?.telemetry && typeof toolResult.data.telemetry === 'object')
+        ? toolResult.data.telemetry
+        : {};
+
+  const getToolElapsedMs = (toolResult: ToolResult | any): number | undefined => {
+    const telemetry = getToolResultTelemetry(toolResult);
+    const durationMs = Number(telemetry.durationMs ?? telemetry.elapsedMs ?? telemetry.elapsed_ms ?? toolResult?.durationMs ?? toolResult?.elapsedMs ?? toolResult?.elapsed_ms);
+    return Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : undefined;
+  };
+
+  const formatToolElapsedForHumans = (durationMs: number): string => {
+    if (!Number.isFinite(durationMs)) return '';
+    if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+    if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(2)}s`;
+    if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
+    const minutes = Math.floor(durationMs / 60_000);
+    const seconds = Math.round((durationMs % 60_000) / 1000);
+    return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
+  };
+
+  const formatToolStopwatchLineForModel = (toolResult: ToolResult | any): string => {
+    const elapsedMs = getToolElapsedMs(toolResult);
+    if (!Number.isFinite(Number(elapsedMs))) return '';
+    return `[TOOL_STOPWATCH] elapsed_ms=${elapsedMs} elapsed=${formatToolElapsedForHumans(Number(elapsedMs))}`;
+  };
+
   const executeToolWithTelemetry = async (toolName: string, toolArgs: any): Promise<ToolResult> => {
     const startedAt = Date.now();
     try {
@@ -3180,12 +3336,12 @@ async function handleChat(
 
   const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
   const personalityProfile = isDirectSubagentChatTurn
-    ? { profile: 'direct_subagent' as const, excludedSkillIds }
+    ? { profile: 'direct_subagent' as const, excludedSkillIds, forcedSkillIds }
     : teachModeActive
-      ? { profile: 'teach_mode' as const, excludedSkillIds }
+      ? { profile: 'teach_mode' as const, excludedSkillIds, forcedSkillIds }
       : (isLocalPrimary
-        ? { profile: 'local_llm' as const, excludedSkillIds }
-        : (excludedSkillIds.length ? { excludedSkillIds } : undefined));
+        ? { profile: 'local_llm' as const, excludedSkillIds, forcedSkillIds }
+        : (excludedSkillIds.length || forcedSkillIds.length ? { excludedSkillIds, forcedSkillIds } : undefined));
   htime('reached Building model context');
   sendSSE('ui_preflight', { message: 'Building model context...' });
   const personalityCtx = await buildPersonalityContext(
@@ -3575,6 +3731,16 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     ).length;
   };
 
+  const isExplicitLowOverheadBrowserObserve = (
+    toolName: string,
+    toolArgs: Record<string, any> = {},
+  ): boolean => {
+    if (!isBrowserToolName(toolName)) return false;
+    if (!Object.prototype.hasOwnProperty.call(toolArgs || {}, 'observe')) return false;
+    const mode = resolveBrowserObserveMode(toolName, toolArgs?.observe);
+    return mode === 'none' || mode === 'compact';
+  };
+
   const captureObservationPreContext = async (
     toolName: string,
     toolArgs: Record<string, any> = {},
@@ -3582,7 +3748,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     let browserBefore: BrowserObservationPageState | null = null;
     let desktopBefore: DesktopObservationPacketState | null = null;
 
-    if (isBrowserToolName(toolName)) {
+    if (isBrowserToolName(toolName) && !isExplicitLowOverheadBrowserObserve(toolName, toolArgs)) {
       const sessionInfo = getBrowserSessionInfo(sessionId);
       const packet = sessionInfo.active
         ? await getBrowserAdvisorPacket(sessionId, { maxItems: 0, snapshotElements: 48 }).catch(() => null)
@@ -3617,7 +3783,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     const hasObserveOverride = Object.prototype.hasOwnProperty.call(toolArgs || {}, 'observe')
       && toolArgs?.observe !== undefined;
 
-    if (isBrowserTool) {
+    if (isBrowserTool && !isExplicitLowOverheadBrowserObserve(toolName, toolArgs)) {
       const sessionInfo = getBrowserSessionInfo(sessionId);
       browserAfterPacket = sessionInfo.active
         ? await getBrowserAdvisorPacket(sessionId, { maxItems: 0, snapshotElements: 48 }).catch(() => null)
@@ -5239,7 +5405,7 @@ RULES:
             history.length,
             _skillsManager,
             browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-            teachModeActive ? { profile: 'teach_mode', excludedSkillIds } : { profile: 'switch_model', excludedSkillIds },
+            teachModeActive ? { profile: 'teach_mode', excludedSkillIds, forcedSkillIds } : { profile: 'switch_model', excludedSkillIds, forcedSkillIds },
           );
         }
         if (messages[0]?.role === 'system') messages[0].content = isLocalPrimary
@@ -6438,7 +6604,10 @@ RULES:
         continue;
 	      }
 
-	      if (isHotRestartTurn) {
+	      const isDevEditHotRestartFollowup = isHotRestartTurn
+	        && /\[DEV EDIT CONTINUATION\]|\bHOT RESTART DEV-EDIT FOLLOW-UP\b/i.test(String(callerContext || ''));
+	      const isAllowedDevEditRestartWriteNote = isDevEditHotRestartFollowup && toolName === 'write_note';
+	      if (isHotRestartTurn && !isAllowedDevEditRestartWriteNote) {
 	        const blockMsg = `HOT RESTART mode: "${toolName}" is disabled. Provide the restart follow-up only.`;
 	        console.log(`[v2] HOT RESTART TOOL BLOCKED: ${toolName}`);
 	        const blockedResult: ToolResult = {
@@ -6529,7 +6698,7 @@ RULES:
             tool_name: toolName,
             tool_call_id: toolCallId || undefined,
             content: toolName === 'declare_plan'
-              ? 'Plan already declared and active. Do NOT call declare_plan again. Proceed immediately with step 1 now.'
+              ? 'Plan already declared for this turn. Do not call declare_plan again. Continue the current incomplete step, then call complete_plan_step with concrete evidence when that step is actually done.'
               : `Already ran this exact call ${callCount} times. Use the previous result and move on.`,
           });
           continue;
@@ -6733,6 +6902,33 @@ RULES:
       if (toolName === 'complete_plan_step' || toolName === 'step_complete') {
         const note = String(toolArgs?.note || '').trim();
         const isTaskSession = sessionId.startsWith('task_');
+        if (!isTaskSession && !progressState.manualStepAdvance) {
+          const infoText = 'No declared plan is active for this turn. Continue the work directly, or call declare_plan first if this turn needs tracked plan steps.';
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, infoText, false));
+          sendSSE('tool_result', { action: toolName, result: infoText, error: false, stepNum: allToolResults.length });
+          messages.push({
+            role: 'tool',
+            tool_name: toolName,
+            tool_call_id: toolCallId || undefined,
+            content: infoText,
+          });
+          resetProgressRoundStats();
+          continue;
+        }
+        if (!isTaskSession && progressState.manualStepAdvance && !note) {
+          const failText = 'Plan step completion needs concrete evidence in note. Call complete_plan_step again with what you finished, what files/tools/results prove it, and then continue to the next step.';
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
+          sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
+          messages.push({
+            role: 'tool',
+            tool_name: toolName,
+            tool_call_id: toolCallId || undefined,
+            content: failText,
+          });
+          markProgressStepResult(false, toolName);
+          resetProgressRoundStats();
+          continue;
+        }
         let completionSummary = note
           ? `Plan step completed: ${note}`
           : 'Plan step completed.';
@@ -7069,12 +7265,18 @@ RULES:
       );
 
       console.log(toolResult.error ? `[v2] TOOL FAIL: ${toolResult.result.slice(0, 100)}` : `[v2] TOOL OK: ${toolResult.result.slice(0, 100)}`);
+      const toolTelemetryForSse = getToolResultTelemetry(toolResult);
+      const toolElapsedMsForSse = getToolElapsedMs(toolResult);
 		      sendSSE('tool_result', {
 		        action: toolName,
 		        args: toolArgs,
 		        result: toolResult.result.slice(0, 4000),
 		        error: toolResult.error,
 		        stepNum: allToolResults.length,
+            durationMs: toolElapsedMsForSse,
+            elapsedMs: toolElapsedMsForSse,
+            elapsed_ms: toolElapsedMsForSse,
+            telemetry: toolTelemetryForSse,
 		        extra: toolResult.extra,
 		      });
       if (toolName === 'switch_model' && !toolResult.error) {
@@ -7156,6 +7358,8 @@ RULES:
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
+      const stopwatchLine = formatToolStopwatchLineForModel(toolResult);
+      if (stopwatchLine) toolMessageContent = `${stopwatchLine}\n${toolMessageContent}`;
       toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
 	      messages.push({
 	        role: 'tool',
@@ -7515,7 +7719,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         const abortController = new AbortController();
         const abortSignal = { aborted: false, signal: abortController.signal };
         const runtimeId = registerLiveRuntime({
-          kind: 'main_chat',
+          kind: 'main_chat_goal',
           label: 'Main chat goal',
           sessionId: sid,
           source: 'goal',
@@ -7525,6 +7729,8 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         });
         setModelBusy(true);
         broadcastMainChatGoalState(sid, 'turn_started', { turnsUsed: current.turnsUsed });
+        const runtimeProcessEntries: Record<string, any>[] = [];
+        let runtimeThinkingTail = '';
 
         let result: HandleChatResult | null = null;
         try {
@@ -7532,6 +7738,31 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
             prompt,
             sid,
             (event, data) => {
+              const checkpoint: Record<string, any> = { event, at: Date.now() };
+              if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
+              if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
+              if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
+              if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+              if (event === 'thinking_delta') {
+                const delta = String(data?.thinking || data?.text || '').trim();
+                if (delta) runtimeThinkingTail = `${runtimeThinkingTail}${delta}`.slice(-4000);
+                checkpoint.thinkingTail = runtimeThinkingTail;
+              } else {
+                const processEntry = runtimeProcessEntryFromSseEvent(event, data);
+                if (processEntry) {
+                  runtimeProcessEntries.push(processEntry);
+                  if (runtimeProcessEntries.length > 250) {
+                    runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+                  }
+                  checkpoint.processEntries = [...runtimeProcessEntries];
+                }
+                if (event === 'thinking') {
+                  const thinking = String(data?.thinking || data?.text || '').trim();
+                  if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
+                }
+                if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
+              }
+              updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
               try {
                 broadcastWS({ type: 'main_chat_goal_sse', sessionId: sid, event, ...data });
               } catch {}
@@ -7545,6 +7776,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
             undefined,
             { syntheticGoalContinuation: true } as any,
           );
+          attachRuntimeProcessEntriesToLatestAssistant(sid, runtimeProcessEntries);
         } catch (err: any) {
           const failed = recordMainChatGoalRuntimeFailure(sid, current.id, err?.message || String(err));
           broadcastMainChatGoalState(sid, 'runtime_failure', { error: err?.message || String(err), goal: failed });
@@ -7576,6 +7808,28 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
       broadcastMainChatGoalState(sid, 'runner_idle');
     }
   })();
+}
+
+export function resumeMainChatGoalsInterruptedForRestart(): string[] {
+  const policy = resolveMainChatGoalPolicy();
+  if (!policy.enabled || !policy.autoResumeOnRestart) return [];
+  const resumed: string[] = [];
+  const records = getAllMainChatGoalRecords();
+  for (const record of records) {
+    const goal = (record as any)?.goal || record;
+    if ((record as any)?.current === false) continue;
+    const sessionId = String((record as any)?.sessionId || goal?.sessionId || '').trim();
+    if (!sessionId || String(goal?.status || '') !== 'paused') continue;
+    const pausedReason = String(goal?.pausedReason || goal?.paused_reason || '').toLowerCase();
+    if (!/gateway_restart|gateway_crash|restart/.test(pausedReason)) continue;
+    const result = handleMainChatGoalCommand(sessionId, '/goal resume');
+    if (result.goal?.status === 'active') {
+      startMainChatGoalRunner(sessionId, 'startup_auto_resume');
+      broadcastMainChatGoalState(sessionId, 'startup_auto_resume', { goal: result.goal });
+      resumed.push(sessionId);
+    }
+  }
+  return Array.from(new Set(resumed));
 }
 
 function cleanGeneratedSessionTitle(raw: unknown): string {
@@ -7671,7 +7925,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[] },
+    flags?: { syntheticGoalContinuation?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -7682,12 +7936,17 @@ async function runInteractiveTurn(
   const turnExcludedSkillIds = Array.isArray(flags?.excludedSkillIds)
     ? flags.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
+  const turnForcedSkillIds = Array.isArray(flags?.forcedSkillIds)
+    ? flags.forcedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
   const isTimerTurn = /^\s*\[Timer fired\]/i.test(String(message || ''));
   const turnOrigin = normalizeTurnOrigin(turnOriginInput, sessionId, isTimerTurn || isGoalContinuationTurn ? { channel: 'system', surface: 'automation', device: 'server' } : undefined);
   persistTurnOriginChannelHint(sessionId, turnOrigin);
   const existingMainChatStream = getMainChatStream(sessionId);
-  const localMainChatStream = existingMainChatStream?.active ? null : beginMainChatStream(sessionId);
+  const localMainChatStream = existingMainChatStream?.active
+      ? null
+      : beginMainChatStream(sessionId);
   let localMainChatStreamCompleted = false;
   const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[] } | null | undefined): void => {
     if (!localMainChatStream || localMainChatStreamCompleted) return;
@@ -7725,10 +7984,12 @@ async function runInteractiveTurn(
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
     ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
-  appendMainChatStreamEvent(sessionId, localMainChatStream?.streamId || existingMainChatStream?.streamId || '', 'user_message', {
-    message: userMsg,
-    clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId),
-  });
+  if (!isGoalContinuationTurn) {
+    appendMainChatStreamEvent(sessionId, localMainChatStream?.streamId || existingMainChatStream?.streamId || '', 'user_message', {
+      message: userMsg,
+      clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId),
+    });
+  }
   try {
     const rollingCompactionApplied = false;
 
@@ -7870,7 +8131,7 @@ async function runInteractiveTurn(
 	    reasoningOptions,
 	    undefined, // providerOverride
 	    callerOnToken,
-      { directSubagentChat: isDirectSubagentChatTurn, excludedSkillIds: turnExcludedSkillIds },
+      { directSubagentChat: isDirectSubagentChatTurn, excludedSkillIds: turnExcludedSkillIds, forcedSkillIds: turnForcedSkillIds },
 	  );
 
   const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
@@ -7889,6 +8150,13 @@ async function runInteractiveTurn(
   }
   if (abortSignal?.aborted) {
     if (editRerunAbortResetSessions.has(String(sessionId || ''))) {
+      return result;
+    }
+    const plannedRestartAbort = [
+      ...((Array.isArray(result.toolResults) ? result.toolResults : []).map((entry: any) => entry?.name || entry?.action || entry?.toolName)),
+    ].some((name) => isPlannedRestartToolName(String(name || '')));
+    const plannedRestartLog = /\b(gateway_restart|prom_apply_dev_changes)\b/.test(toolLogText);
+    if (plannedRestartAbort || plannedRestartLog) {
       return result;
     }
     const interruptedText = String(result.text || '').trim();
@@ -8185,15 +8453,14 @@ async function callVoiceNarratorModel(packet: any, abortSignal?: AbortSignal): P
     'Do not start every line with "I am". Prefer contractions and direct language: "I\'ll", "I\'m", "Sure", "Let me".',
     'Explain why the current action helps the user request, not just what tool is running.',
     'Because speech may arrive after the event, prefer bridge phrasing for mid-turn updates: "I found...", "I checked...", "I read...", "That part is done; now I\'m...".',
-    'Use future/present intent only for task-start acknowledgements. Use recap-plus-next-step phrasing for tool results.',
+    'Prefer staying quiet on routine task starts; use recap-plus-next-step phrasing for tool results.',
     'Never say generic filler like "checking available skills", "reading the relevant skill", "working in the browser", or "checking the page state".',
     'If you cannot mention the concrete request/topic/file/site/action in a natural way, return {"action":"no_reply"}.',
     'Good style: "I’ll check whether there’s already a voice workflow for this." Bad style: "I am checking the available skills."',
     'Good mid-turn style: "I found the voice skill; I’m using it to guide this change." Bad style: "I am checking the available skills."',
     'Do not expose raw tool names, JSON, stack traces, hidden system details, or private reasoning.',
     'Do not narrate every event. Reply only when the user benefits from hearing it.',
-    'If currentState.isTaskStart is true, acknowledge the user request directly with a natural line like "Sure, I’ll go ahead and..." using the actual task.',
-    'For task-start, do not return no_reply unless the request is empty or unsafe to summarize.',
+    'If currentState.isTaskStart is true, return no_reply unless a spoken acknowledgement is clearly useful to the user.',
     'Keep reply text under 24 words.',
     'Return JSON only: {"action":"reply","text":"..."} or {"action":"no_reply"}.',
   ].join('\n');
@@ -8282,7 +8549,7 @@ function createVoiceNarrator(
     const fallback = voiceNarrationNaturalize(meta.stage === 'task_start'
       ? voiceNarrationTaskStartFallback(userMessage, data)
       : fallbackText);
-    const canFallback = fallback && (meta.priority === 'warn' || meta.stage === 'task_start');
+    const canFallback = fallback && meta.priority === 'warn';
     if (meta.stage === 'task_start') {
       if (canFallback) speak(fallback, { ...meta, source: 'gateway_narrator_task_start_ack' });
       return;
@@ -8301,7 +8568,7 @@ function createVoiceNarrator(
         recentNarration: [...recentNarration],
       },
       instruction: meta.stage === 'task_start'
-        ? 'This is the first real action for the turn. If useful, acknowledge the user request naturally and specifically, then say what you are starting. Use reply/no_reply JSON only.'
+        ? 'This is the first real action for the turn. Usually return no_reply because the worker stream already shows that work started. Only acknowledge if speech would clearly help the user. Use reply/no_reply JSON only.'
         : 'Decide reply/no_reply for a live voice milestone. Interruptions are handled elsewhere; do not mention interruption unless it is in the packet.',
     };
     const run = async () => {
@@ -8345,8 +8612,7 @@ function createVoiceNarrator(
           stepNum: data?.stepNum,
           synthetic: data?.synthetic === true,
           actor: data?.actor,
-          force: isTaskStart,
-          minGapMs: isTaskStart ? 0 : (data?.synthetic ? 4500 : 3200),
+          minGapMs: data?.synthetic ? 4500 : 3200,
         });
         return;
       }
@@ -8530,6 +8796,10 @@ function summarizeMobileRuntime(runtime: any): Record<string, any> {
     abortable: runtime?.abortable === true,
     abortRequestedAt: Number(runtime?.abortRequestedAt || 0) || null,
   };
+}
+
+function isLiveRunningRuntime(runtime: any): boolean {
+  return String(runtime?.status || 'running') === 'running' && !runtime?.abortRequestedAt;
 }
 
 type VoiceAgentAction =
@@ -9465,8 +9735,11 @@ function broadcastVoiceScreenshotPreview(
 }
 
 async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, args: Record<string, any>, trace?: VoiceAgentProcessEntry[]): Promise<string> {
-  const action = String(name || '').trim();
-  const cleanArgs = args && typeof args === 'object' ? args : {};
+  const requestedAction = String(name || '').trim();
+  const requestedArgs = args && typeof args === 'object' ? args : {};
+  const normalized = normalizeVoiceAgentWrapperTool(requestedAction, requestedArgs);
+  const action = normalized.name;
+  const cleanArgs = normalized.args && typeof normalized.args === 'object' ? normalized.args : {};
   broadcastVoiceAgentToolEvent(sessionId, 'tool_call', { action, args: cleanArgs });
   pushVoiceAgentProcessEntry(trace, action.startsWith('voice_skill_') || action.startsWith('skill_') ? 'skill' : 'tool', `Using ${friendlyVoiceToolName(action)}...`, { action, args: cleanArgs });
   const raw = await executeVoiceAgentTool(sessionId, action, cleanArgs);
@@ -9587,33 +9860,33 @@ const VOICE_SKILL_INSTRUCTIONS_MAX_CHARS = 7000;
 const VOICE_SKILL_RESOURCE_MAX_CHARS = 5000;
 
 const VOICE_TOOL_EQUIVALENTS: Record<string, string> = {
-  web_search: 'voice_web_search',
-  web_fetch: 'voice_web_fetch',
-  automation_dashboard: 'voice_automation_dashboard',
-  browser_open: 'voice_browser_open',
-  browser_snapshot: 'voice_browser_snapshot',
-  browser_screenshot: 'voice_browser_screenshot',
-  browser_click: 'voice_browser_click',
-  browser_vision_click: 'voice_browser_vision_click',
-  browser_fill: 'voice_browser_fill',
-  browser_type: 'voice_browser_type',
-  browser_vision_type: 'voice_browser_vision_type',
-  browser_press_key: 'voice_browser_press_key',
-  browser_scroll: 'voice_browser_scroll',
-  browser_wait: 'voice_browser_wait',
-  desktop_screenshot: 'voice_desktop_screenshot',
-  desktop_click: 'voice_desktop_click',
-  desktop_window_control: 'voice_desktop_window_control',
-  desktop_list_windows: 'voice_desktop_list_windows',
-  desktop_focus_window: 'voice_desktop_focus_window',
-  desktop_find_app: 'voice_desktop_find_app',
-  desktop_launch_app: 'voice_desktop_launch_app',
-  desktop_window_click: 'voice_desktop_window_click',
-  desktop_window_type: 'voice_desktop_window_type',
-  desktop_window_press_key: 'voice_desktop_window_press_key',
-  desktop_window_scroll: 'voice_desktop_window_scroll',
-  memory_search: 'voice_memory_search',
-  write_note: 'voice_write_note',
+  web_search: 'voice_ops action web_search',
+  web_fetch: 'voice_ops action web_fetch',
+  automation_dashboard: 'voice_ops action automation_dashboard',
+  browser_open: 'voice_browser action open',
+  browser_snapshot: 'voice_browser action snapshot',
+  browser_screenshot: 'voice_browser action screenshot',
+  browser_click: 'voice_browser action click',
+  browser_vision_click: 'voice_browser action vision_click',
+  browser_fill: 'voice_browser action fill',
+  browser_type: 'voice_browser action type',
+  browser_vision_type: 'voice_browser action vision_type',
+  browser_press_key: 'voice_browser action press_key',
+  browser_scroll: 'voice_browser action scroll',
+  browser_wait: 'voice_browser action wait',
+  desktop_screenshot: 'voice_desktop action screenshot',
+  desktop_click: 'voice_desktop action click',
+  desktop_window_control: 'voice_desktop action window_control',
+  desktop_list_windows: 'voice_desktop action list_windows',
+  desktop_focus_window: 'voice_desktop action focus_window',
+  desktop_find_app: 'voice_desktop action find_app',
+  desktop_launch_app: 'voice_desktop action launch_app',
+  desktop_window_click: 'voice_desktop action window_click',
+  desktop_window_type: 'voice_desktop action window_type',
+  desktop_window_press_key: 'voice_desktop action window_press_key',
+  desktop_window_scroll: 'voice_desktop action window_scroll',
+  memory_search: 'voice_ops action memory_search',
+  write_note: 'voice_ops action write_note',
 };
 
 function voiceToolEquivalentForSkillTool(toolName: unknown): string {
@@ -9621,8 +9894,8 @@ function voiceToolEquivalentForSkillTool(toolName: unknown): string {
   if (!tool) return '';
   if (VOICE_TOOL_EQUIVALENTS[tool]) return VOICE_TOOL_EQUIVALENTS[tool];
   if (tool.startsWith('voice_')) return tool;
-  if (tool.startsWith('browser_')) return 'voice browser tool where available';
-  if (tool.startsWith('desktop_')) return 'voice desktop tool where available';
+  if (tool.startsWith('browser_')) return 'voice_browser wrapper where available';
+  if (tool.startsWith('desktop_')) return 'voice_desktop wrapper where available';
   return '';
 }
 
@@ -9972,8 +10245,271 @@ function cleanVoiceWakePhrase(value: unknown): string {
     .slice(0, 80);
 }
 
+const VOICE_WRAPPER_TOOL_NAMES = new Set([
+  'voice_browser',
+  'voice_desktop',
+  'voice_ops',
+]);
+
+const VOICE_HIDDEN_COMPAT_TOOL_NAMES = new Set([
+  'voice_web_search',
+  'voice_web_fetch',
+  'voice_write_note',
+  'voice_agent_memory',
+  'voice_set_wake_phrase',
+  'voice_enter_quiet_mode',
+  'voice_set_quiet_until',
+  'voice_memory_search',
+  'voice_timer',
+  'voice_browser_screenshot',
+  'voice_browser_open',
+  'voice_browser_scroll',
+  'voice_browser_snapshot',
+  'voice_browser_click',
+  'voice_browser_vision_click',
+  'voice_browser_fill',
+  'voice_browser_type',
+  'voice_browser_vision_type',
+  'voice_browser_press_key',
+  'voice_browser_wait',
+  'voice_desktop_screenshot',
+  'voice_desktop_click',
+  'voice_desktop_window_control',
+  'voice_desktop_focus_window',
+  'voice_desktop_launch_app',
+  'voice_desktop_find_app',
+  'voice_desktop_list_windows',
+  'voice_desktop_window_click',
+  'voice_desktop_window_type',
+  'voice_desktop_window_press_key',
+  'voice_desktop_window_scroll',
+  'voice_automation_dashboard',
+  'voice_worker_status',
+  'voice_send_screenshot',
+  'voice_generate_image',
+  'voice_generate_video',
+]);
+
+function stripVoiceWrapperArgs(args: Record<string, any>): Record<string, any> {
+  const { action: _action, operation: _operation, op: _op, ...rest } = args || {};
+  return rest;
+}
+
+function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>): { name: string; args: Record<string, any> } {
+  const action = String(args?.action || args?.operation || args?.op || '').trim().toLowerCase();
+  const innerArgs = stripVoiceWrapperArgs(args || {});
+  if (name === 'voice_browser') {
+    const target = ({
+      screenshot: 'voice_browser_screenshot',
+      open: 'voice_browser_open',
+      scroll: 'voice_browser_scroll',
+      snapshot: 'voice_browser_snapshot',
+      click: 'voice_browser_click',
+      vision_click: 'voice_browser_vision_click',
+      fill: 'voice_browser_fill',
+      type: 'voice_browser_type',
+      vision_type: 'voice_browser_vision_type',
+      press_key: 'voice_browser_press_key',
+      wait: 'voice_browser_wait',
+    } as Record<string, string>)[action];
+    return target ? { name: target, args: innerArgs } : { name, args };
+  }
+  if (name === 'voice_desktop') {
+    const target = ({
+      screenshot: 'voice_desktop_screenshot',
+      click: 'voice_desktop_click',
+      window_control: 'voice_desktop_window_control',
+      focus_window: 'voice_desktop_focus_window',
+      launch_app: 'voice_desktop_launch_app',
+      find_app: 'voice_desktop_find_app',
+      list_windows: 'voice_desktop_list_windows',
+      window_click: 'voice_desktop_window_click',
+      window_type: 'voice_desktop_window_type',
+      window_press_key: 'voice_desktop_window_press_key',
+      window_scroll: 'voice_desktop_window_scroll',
+    } as Record<string, string>)[action];
+    if (target === 'voice_desktop_window_control' && innerArgs.action == null) {
+      const innerAction = args?.window_action ?? args?.windowAction ?? args?.control ?? args?.command;
+      if (innerAction != null) innerArgs.action = innerAction;
+    }
+    return target ? { name: target, args: innerArgs } : { name, args };
+  }
+  if (name === 'voice_ops') {
+    const target = ({
+      web_search: 'voice_web_search',
+      web_fetch: 'voice_web_fetch',
+      write_note: 'voice_write_note',
+      agent_memory: 'voice_agent_memory',
+      set_wake_phrase: 'voice_set_wake_phrase',
+      enter_quiet_mode: 'voice_enter_quiet_mode',
+      set_quiet_until: 'voice_set_quiet_until',
+      memory_search: 'voice_memory_search',
+      timer: 'voice_timer',
+      automation_dashboard: 'voice_automation_dashboard',
+      worker_status: 'voice_worker_status',
+      send_screenshot: 'voice_send_screenshot',
+      generate_image: 'voice_generate_image',
+      generate_video: 'voice_generate_video',
+    } as Record<string, string>)[action];
+    if (target === 'voice_agent_memory' && innerArgs.action == null) {
+      const innerAction = args?.memory_action ?? args?.memoryAction ?? args?.tool_action ?? args?.toolAction ?? args?.command;
+      if (innerAction != null) innerArgs.action = innerAction;
+    }
+    if (target === 'voice_timer' && innerArgs.action == null) {
+      const innerAction = args?.timer_action ?? args?.timerAction ?? args?.tool_action ?? args?.toolAction ?? args?.command;
+      if (innerAction != null) innerArgs.action = innerAction;
+    }
+    return target ? { name: target, args: innerArgs } : { name, args };
+  }
+  return { name, args };
+}
+
 function buildVoiceToolDefinitions(): any[] {
-  return [
+  const tools = [
+    {
+      type: 'function',
+      function: {
+        name: 'voice_ops',
+        description: 'Unified voice operations wrapper for quick search/fetch, notes, voice-agent memory, wake/quiet runtime controls, recall, timers, operator status, screenshot delivery, and simple image/video generation. Use action to choose the wrapper operation; pass underlying arguments at top level. For agent_memory use memory_action read/append/replace; for timer use timer_action create/list/update/reschedule/cancel.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['web_search', 'web_fetch', 'write_note', 'agent_memory', 'set_wake_phrase', 'enter_quiet_mode', 'set_quiet_until', 'memory_search', 'timer', 'automation_dashboard', 'worker_status', 'send_screenshot', 'generate_image', 'generate_video'],
+            },
+            query: { type: 'string' },
+            url: { type: 'string' },
+            content: { type: 'string' },
+            phrase: { type: 'string' },
+            reason: { type: 'string' },
+            mode: { type: 'string' },
+            tool_action: { type: 'string', description: 'Inner operation for wrapped tools that also need an action, such as agent_memory or timer.' },
+            memory_action: { type: 'string', enum: ['read', 'append', 'replace'], description: 'Inner action when action is agent_memory.' },
+            timer_action: { type: 'string', enum: ['create', 'list', 'update', 'reschedule', 'cancel'], description: 'Inner action when action is timer.' },
+            timer_id: { type: 'string' },
+            instruction: { type: 'string' },
+            label: { type: 'string' },
+            delay_seconds: { type: 'number' },
+            due_at: { type: 'string' },
+            delivery: { type: 'object', additionalProperties: true },
+            source: { type: 'string', enum: ['desktop_new', 'desktop_last', 'browser_new', 'browser_last'] },
+            target: { type: 'string', enum: ['origin', 'mobile', 'telegram', 'web', 'all'] },
+            caption: { type: 'string' },
+            prompt: { type: 'string' },
+            reference_images: { type: 'array', items: { type: 'string' } },
+            image: { type: 'string' },
+            video: { type: 'string' },
+            aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'] },
+            count: { type: 'integer', minimum: 1, maximum: 4 },
+            duration: { type: 'number' },
+            resolution: { type: 'string', enum: ['480p', '720p'] },
+            capture: { type: 'string', enum: ['all', 'primary'] },
+            monitor_index: { type: 'number' },
+            name: { type: 'string' },
+            handle: { type: 'number' },
+            active: { type: 'boolean' },
+            focus_first: { type: 'boolean' },
+            padding: { type: 'number' },
+            provider: { type: 'string' },
+            model: { type: 'string' },
+            output_dir: { type: 'string' },
+            save_to_workspace: { type: 'boolean' },
+            max_results: { type: 'number' },
+            max_chars: { type: 'number' },
+            limit: { type: 'number' },
+            include_recent_events: { type: 'boolean' },
+            include_done: { type: 'boolean' },
+            include: { type: 'array', items: { type: 'string' } },
+            agent_id: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser',
+        description: 'Unified live browser wrapper for the Prometheus-controlled browser. Use action open/snapshot/screenshot/click/vision_click/fill/type/vision_type/press_key/scroll/wait, then pass the matching target/input arguments at top level. Use Worker for uploads/downloads, files, credentials, purchases/payments, destructive actions, account settings, or durable changes.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['open', 'snapshot', 'screenshot', 'click', 'vision_click', 'fill', 'type', 'vision_type', 'press_key', 'scroll', 'wait'] },
+            url: { type: 'string' },
+            query: { type: 'string' },
+            ref: { type: 'number' },
+            element: { type: 'string' },
+            selector: { type: 'string' },
+            text: { type: 'string' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            button: { type: 'string', enum: ['left', 'right'] },
+            key: { type: 'string' },
+            direction: { type: 'string', enum: ['up', 'down'] },
+            amount: { type: 'number' },
+            ms: { type: 'number' },
+            include_screenshot: { type: 'boolean' },
+            include_summary: { type: 'boolean' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop',
+        description: 'Unified live desktop wrapper for screenshot, app/window discovery, focus/launch/window control, and pointer/keyboard/scroll actions. Use action to select the wrapper operation and pass target/input arguments at top level. For window_control use window_action minimize/maximize/restore/close. Use Worker for file edits, shell/install work, credentials, purchases/payments, account settings/security changes, destructive confirmations, or durable system changes.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['screenshot', 'click', 'window_control', 'focus_window', 'launch_app', 'find_app', 'list_windows', 'window_click', 'window_type', 'window_press_key', 'window_scroll'] },
+            window_action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'], description: 'Inner action when action is window_control.' },
+            capture: { type: 'string', enum: ['all', 'primary'] },
+            monitor_index: { type: 'number' },
+            mode: { type: 'string', enum: ['normal', 'som'] },
+            som: { type: 'boolean' },
+            name: { type: 'string' },
+            title: { type: 'string' },
+            handle: { type: 'number' },
+            active: { type: 'boolean' },
+            focus_first: { type: 'boolean' },
+            padding: { type: 'number' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            element: { type: 'number' },
+            coordinate_space: { type: 'string', enum: ['capture', 'monitor', 'virtual', 'window'] },
+            screenshot_id: { type: 'string' },
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            window_name: { type: 'string' },
+            app_id: { type: 'string' },
+            app: { type: 'string' },
+            process_name: { type: 'string' },
+            query: { type: 'string' },
+            text: { type: 'string' },
+            raw: { type: 'boolean' },
+            key: { type: 'string' },
+            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+            amount: { type: 'number' },
+            button: { type: 'string', enum: ['left', 'right'] },
+            double_click: { type: 'boolean' },
+            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            verify: { type: 'string' },
+            include_screenshot: { type: 'boolean' },
+            include_summary: { type: 'boolean' },
+            wait_ms: { type: 'number' },
+            limit: { type: 'number' },
+            refresh: { type: 'boolean' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
     {
       type: 'function',
       function: {
@@ -10805,6 +11341,7 @@ function buildVoiceToolDefinitions(): any[] {
       },
     },
   ];
+  return tools.filter((tool: any) => !VOICE_HIDDEN_COMPAT_TOOL_NAMES.has(String(tool?.function?.name || tool?.name || '')));
 }
 
 async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
@@ -11681,6 +12218,8 @@ function isVoiceBrowserDesktopAutomationTool(toolName: string): boolean {
 
 function isDirectVoiceUiControlTool(toolName: string): boolean {
   return [
+    'voice_browser',
+    'voice_desktop',
     'voice_browser_open',
     'voice_browser_snapshot',
     'voice_browser_screenshot',
@@ -11995,12 +12534,12 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     'You are the live voice layer and you MAY call the provided voice_* tools plus canonical read-only skill_* tools directly.',
     'The voice_* tools are safe wrappers around existing Prometheus tools, and skill_* tools are the normal Prometheus skill list/read/resource tools. Those provided tools are the only tools you may use from this layer.',
     'Do not say web search, fetch, notes, memory search, skill list/read, timers, or screenshot capture/delivery are only available to the Worker when a matching voice_* or skill_* tool is provided.',
-    'Use voice tools for fast conversational support and live browser/desktop UI control. Realtime voice may open, observe, click, type, fill, press keys, focus windows, launch apps, scroll, and complete explicit user-authorized social posts/messages through the curated voice_browser_* / voice_desktop_* tools when the content and destination are clear. If the request needs files, shell/run commands, source editing, MCP/connectors, downloads/uploads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, deletes, installs, destructive actions, or durable system changes, choose handoff_new_work or steer_worker instead.',
+    'Use compact voice wrapper tools for fast conversational support and live browser/desktop UI control. Realtime voice may open, observe, click, type, fill, press keys, focus windows, launch apps, scroll, and complete explicit user-authorized social posts/messages through voice_browser and voice_desktop when the content and destination are clear. Use voice_ops for quick search/fetch, notes, memory, timers, runtime voice settings, screenshot delivery, operator status, and simple image/video generation. If the request needs files, shell/run commands, source editing, MCP/connectors, downloads/uploads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, deletes, installs, destructive actions, or durable system changes, choose handoff_new_work or steer_worker instead.',
     '',
     'When the user asks something answerable from your context, answer directly.',
-    'When the user asks for current Worker status/progress/context, call voice_worker_status and answer from the returned live packet; never steer the Worker just to ask it for status.',
+    'When the user asks for current Worker status/progress/context, call voice_ops with action worker_status and answer from the returned live packet; never steer the Worker just to ask it for status.',
     'When the user requests work that can be handled by a voice_* or skill_* tool, call that tool and answer_now from the result.',
-    'Skill scout rule for voice: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call the matching voice_browser_* or voice_desktop_* tool immediately.',
+    'Skill scout rule for voice: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call voice_browser or voice_desktop immediately.',
     identity.handoffLine,
     'When the user interrupts an active worker, decide whether to answer, steer, interrupt, hand off new work, or stay quiet. A normal status question or casual comment is not a steer.',
     '',
@@ -12019,32 +12558,16 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '- no_reply: use only when the transcript is empty, duplicate, or just says continue/resume without needing speech.',
     '',
     'Voice tool rules:',
-    '- voice_web_search: quick factual/current lookup. Use multi mode for latest/current/news/compare/sensitive/current events.',
-    '- voice_web_fetch: one clean text URL only. Social/video/media/auth pages must be handed to Worker.',
-    '- voice_write_note: only for explicit remember/jot/log/save-note requests.',
-    '- voice_agent_memory: read or update workspace/VOICEAGENT.md only when the user explicitly asks to view or change live voice-agent memory/routing/spoken behavior notes.',
-    '- voice_set_wake_phrase: set/change the mobile voice runtime wake phrase. Never substitute voice_write_note or memory for wake phrase changes.',
-    '- voice_enter_quiet_mode: activate quiet mode with the current wake phrase when the user clearly asks Prometheus to be quiet, sleep, stop listening, or stop responding. If no wake phrase is set in [VOICE_RUNTIME], do not call it; tell the user to set a wake phrase first.',
-    '- voice_set_quiet_until: set the wake phrase and enter quiet mode when the user says not to speak/respond/listen until or unless they say a specific phrase.',
+    '- voice_ops: unified quick voice operations. Use action web_search for quick factual/current lookup; web_fetch for one clean text URL; write_note for explicit remember/jot/log/save-note requests; agent_memory for workspace/VOICEAGENT.md routing/spoken-behavior notes with memory_action read/append/replace; set_wake_phrase, enter_quiet_mode, or set_quiet_until for runtime voice settings; memory_search for read-only recall; timer for one-shot timers with timer_action create/list/update/reschedule/cancel; automation_dashboard for operator snapshots; worker_status for Worker progress; send_screenshot for screenshot delivery; generate_image/generate_video for simple media generation. Social/video/media/auth fetches and durable work go to Worker.',
     '- Quiet-mode intent must be a real instruction. Do not call quiet tools for mentions, examples, debugging, or questions about the words "quiet" or "Prometheus".',
     '- When a quiet tool succeeds, give one natural acknowledgement in spokenReply. The runtime will activate quiet mode after the acknowledgement finishes.',
-    '- skill_list: canonical skill discovery. Use it to orient yourself with available workflows and triggers for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use the matching voice_browser_* or voice_desktop_* tool. Use totalInstalled/matchedCount/returnedCount/truncated from the result; never say the returned list length is the total number of skills unless truncated is false and matchedCount equals totalInstalled.',
+    '- skill_list: canonical skill discovery. Use it to orient yourself with available workflows and triggers for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled/matchedCount/returnedCount/truncated from the result; never say the returned list length is the total number of skills unless truncated is false and matchedCount equals totalInstalled.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. When a relevant skill is found or injected by trigger context, load it before acting; follow it only through voice_* tools and hand off to Worker for non-voice capabilities.',
-    '- voice_memory_search: read-only recall for previous decisions, project history, preferences, and "what did we decide" questions.',
-    '- voice_timer: create/list/cancel/reschedule one-shot timers. Timer execution itself happens later through the Worker.',
-    '- voice_automation_dashboard: read-only automation_dashboard v2 snapshot for operator questions: what is going on, priorities, agents/tasks/jobs/watches/teams status, morning/daily snapshots, stuck/blocked automation, or what everyone has done. Use it directly; dispatch Worker only for mutations/control or deeper repairs.',
-    '- voice_browser_open / voice_browser_snapshot / voice_browser_screenshot: open and observe the Prometheus browser. Open accepts explicit URLs/domains or browser search queries and returns DOM refs plus a screenshot preview; snapshot returns @ref targets; screenshot gives visual context.',
-    '- voice_browser_click / voice_browser_vision_click: click browser UI by @ref/selector/saved element or screenshot coordinate, then observe. Explicit user-authorized social posts/messages are allowed when the content and destination are clear. Use Worker for uploads/downloads, purchases/payments, destructive actions, or account settings/security changes.',
-    '- voice_browser_fill / voice_browser_type / voice_browser_vision_type / voice_browser_press_key / voice_browser_scroll / voice_browser_wait: live browser input/navigation, then observe. Use these to draft and submit explicit user-authorized social posts/messages when content and destination are clear. Use Worker for passwords, payment info, files, durable account settings/security changes, destructive actions, or purchases.',
-    '- voice_desktop_screenshot / voice_desktop_list_windows / voice_desktop_focus_window / voice_desktop_window_control / voice_desktop_find_app / voice_desktop_launch_app: observe/find/focus/minimize/maximize/restore/close/launch desktop apps and windows.',
-    '- voice_desktop_click: click full-desktop/monitor/SOM coordinates from voice_desktop_screenshot using screenshot_id, same as Prometheus desktop_click.',
-    '- voice_desktop_window_click / voice_desktop_window_type / voice_desktop_window_press_key / voice_desktop_window_scroll: live desktop window control. Prefer window-scoped selectors (window_id/window_handle/app_id/title) and fresh screenshot coordinates. Explicit user-authorized social posts/messages are allowed when the content and destination are clear. Use Worker for file edits, shell, installs, destructive confirmations, purchases/payments, account settings/security changes, or durable system changes.',
-    '- voice_worker_status: read fresh Worker status/context. Use it for status/progress/update questions before answering; it is read-only and must not alter the Worker.',
-
-    '- voice_send_screenshot: send a browser/desktop screenshot through the delivery router. Default target is origin; use Telegram/mobile only when the user names them or context clearly requires it.',
-    '- Screenshot ownership: when screenshot voice tools are available, screenshot capture and screenshot sending stay in the voice layer. Do not dispatch/steer Worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser_screenshot, voice_desktop_screenshot, or voice_send_screenshot.',
+    '- voice_browser: use action open, snapshot, screenshot, click, vision_click, fill, type, vision_type, press_key, scroll, or wait for live browser UI. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Use Worker for uploads/downloads, passwords/payment info, purchases/payments, destructive actions, account settings/security changes, files, or durable external changes.',
+    '- voice_desktop: use action screenshot, list_windows, focus_window, window_control, find_app, launch_app, click, window_click, window_type, window_press_key, or window_scroll for live desktop UI. For window_control include window_action minimize/maximize/restore/close. Prefer window-scoped selectors and fresh screenshots. Use Worker for file edits, shell, installs, destructive confirmations, purchases/payments, account settings/security changes, or durable system changes.',
+    '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not dispatch/steer Worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
     '- Current time is injected. Do not call a tool just to know the time/date. If [CURRENT_TIME].exactLocalTimeAvailable is true and source is device, answer local time/date questions directly from timeLabel/dateLabel. If exactLocalTimeAvailable is false, do not claim exact user-local time; say the fallbackResponse and direct the user to their device clock.',
-    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer the matching voice_* tool. If the user asks to update live voice-agent behavior memory, use voice_agent_memory. For skills, prefer skill_list, skill_read, skill_resource_list, or skill_resource_read.',
+    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer voice_ops or the matching browser/desktop wrapper. If the user asks to update live voice-agent behavior memory, use voice_ops action agent_memory. For skills, prefer skill_list, skill_read, skill_resource_list, or skill_resource_read.',
     '- For a "test web search" request without a concrete query, run a tiny harmless search for "OpenAI Realtime API voice tools" and report that the smoke test worked.',
     '',
     '[CURRENT_TIME]',
@@ -12402,6 +12925,9 @@ function summarizeTurnToolResultBudget(observations: ToolObservation[]) {
   let argsTokens = 0;
   let totalTokens = 0;
   let resultBytes = 0;
+  let durationMsTotal = 0;
+  let durationMsMax = 0;
+  let durationCallCount = 0;
   for (const obs of observations || []) {
     const name = String(obs?.toolName || 'unknown_tool');
     const estimate = obs?.tokenEstimate || {} as any;
@@ -12409,25 +12935,46 @@ function summarizeTurnToolResultBudget(observations: ToolObservation[]) {
     const args = Math.max(0, Number((estimate as any).argsTokens || 0));
     const total = Math.max(0, Number((estimate as any).totalTokens || result + args));
     const bytes = Math.max(0, Number((estimate as any).resultBytes || 0));
+    const obsDurationMs = Number((obs as any)?.durationMs);
+    const hasDuration = Number.isFinite(obsDurationMs);
+    const duration = hasDuration ? Math.max(0, Math.round(obsDurationMs)) : 0;
     resultTokens += result;
     argsTokens += args;
     totalTokens += total;
     resultBytes += bytes;
-    const row = byTool.get(name) || { tool: name, calls: 0, resultTokens: 0, argsTokens: 0, totalTokens: 0, resultBytes: 0 };
+    if (hasDuration) {
+      durationMsTotal += duration;
+      durationMsMax = Math.max(durationMsMax, duration);
+      durationCallCount += 1;
+    }
+    const row = byTool.get(name) || { tool: name, calls: 0, resultTokens: 0, argsTokens: 0, totalTokens: 0, resultBytes: 0, durationMsTotal: 0, durationMsMax: 0, durationCallCount: 0 };
     row.calls += 1;
     row.resultTokens += result;
     row.argsTokens += args;
     row.totalTokens += total;
     row.resultBytes += bytes;
+    if (hasDuration) {
+      row.durationMsTotal += duration;
+      row.durationMsMax = Math.max(row.durationMsMax, duration);
+      row.durationCallCount += 1;
+    }
     byTool.set(name, row);
   }
+  const tools = [...byTool.values()].map((row) => ({
+    ...row,
+    durationMsAvg: row.durationCallCount > 0 ? Math.round(row.durationMsTotal / row.durationCallCount) : 0,
+  }));
   return {
     calls: observations.length,
     resultTokens,
     argsTokens,
     totalTokens,
     resultBytes,
-    tools: [...byTool.values()].sort((a, b) => b.resultTokens - a.resultTokens || b.calls - a.calls).slice(0, 20),
+    durationMsTotal,
+    durationMsMax,
+    durationMsAvg: durationCallCount > 0 ? Math.round(durationMsTotal / durationCallCount) : 0,
+    tools: tools.sort((a, b) => b.resultTokens - a.resultTokens || b.durationMsMax - a.durationMsMax || b.calls - a.calls).slice(0, 20),
+    slowestTools: [...tools].filter((row) => Number(row.durationMsMax || 0) > 0).sort((a, b) => b.durationMsMax - a.durationMsMax || b.durationMsTotal - a.durationMsTotal).slice(0, 20),
   };
 }
 
@@ -12446,24 +12993,52 @@ function getLastTurnUsageTelemetry(session: any): { providerUsage?: any; toolRes
   return {};
 }
 
-function estimateActiveSkillsContextTokens(sessionId: string, profile: { tokenizer: any }): number {
+function buildActiveSkillsContextEstimate(sessionId: string, profile: { tokenizer: any }) {
+  const children: ContextWindowRow[] = [];
   let text = '';
   try {
     const skillIds = Array.from(getActivatedSkillIds(sessionId));
-    const lines: string[] = [];
+    const lines: string[] = ['[ACTIVE_SKILLS]'];
+    const activeLines: string[] = [];
+    const resourceLines: string[] = [];
+    const hintLines: string[] = [];
     for (const skillId of skillIds) {
       const skill = _skillsManager?.get?.(skillId);
-      lines.push(`Recently used: ${skillId}.`);
-      if (skill?.description) lines.push(`Skill Description: ${skill.description}`);
+      activeLines.push(`Recently used: ${skill?.id || skillId}.`);
+      if (skill?.description) activeLines.push(`Skill Description: ${skill.description}`);
       const resources = getActivatedSkillResources(sessionId, skillId);
-      if (resources.length) lines.push(`Resources read: ${resources.join(', ')}.`);
-      lines.push(`Re-read with skill_read("${skillId}") if needed.`);
+      if (resources.length) resourceLines.push(`Resources read for ${skill?.id || skillId}: ${resources.join(', ')}.`);
+      hintLines.push(`Re-read with skill_read("${skill?.id || skillId}") if you need the full instructions.`);
     }
+    lines.push(...activeLines, ...resourceLines, ...hintLines);
     text = lines.join('\n');
+    const childSpecs = [
+      { id: 'active_skill_reminders', label: 'Active skill reminders', lines: activeLines },
+      { id: 'resource_reminders', label: 'Resource reminders', lines: resourceLines },
+      { id: 'reread_hints', label: 'Re-read hints', lines: hintLines },
+    ];
+    for (const spec of childSpecs) {
+      const body = spec.lines.join('\n').trim();
+      const tokens = estimateTextTokensForModel(body, profile.tokenizer);
+      if (tokens > 0) {
+        children.push({
+          id: `skills.${spec.id}`,
+          label: spec.label,
+          tokens,
+          active: true,
+          includedInContext: true,
+          percentBasis: 'window',
+          estimated: true,
+        });
+      }
+    }
   } catch {
     text = '';
   }
-  return estimateTextTokensForModel(text, profile.tokenizer);
+  return {
+    tokens: estimateTextTokensForModel(text, profile.tokenizer),
+    children,
+  };
 }
 
 type ContextWindowRow = {
@@ -12645,6 +13220,27 @@ function buildProviderUsageChildren(modelUsage: any): ContextWindowRow[] {
   return rows;
 }
 
+function formatDurationMsForContextLabel(value: any): string {
+  const durationMs = Number(value);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(2)}s`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(durationMs / 60_000);
+  const seconds = Math.round((durationMs % 60_000) / 1000);
+  return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
+}
+
+function formatToolBudgetDurationSuffix(tool: any): string {
+  const max = Number(tool?.durationMsMax || 0);
+  const avg = Number(tool?.durationMsAvg || 0);
+  const total = Number(tool?.durationMsTotal || 0);
+  const value = max || avg || total;
+  const label = formatDurationMsForContextLabel(value);
+  if (!label) return '';
+  return ` · ${label}${max > 0 && Number(tool?.calls || 0) > 1 ? ' max' : ''}`;
+}
+
 function buildLastTurnUsageRow(turnTelemetry: any): ContextWindowRow | null {
   const providerUsage = turnTelemetry?.providerUsage || {};
   const toolBudget = turnTelemetry?.toolResultBudget || {};
@@ -12659,7 +13255,7 @@ function buildLastTurnUsageRow(turnTelemetry: any): ContextWindowRow | null {
     const toolChildren: ContextWindowRow[] = Array.isArray(toolBudget.tools)
       ? toolBudget.tools.slice(0, 12).map((tool: any, index: number) => ({
         id: `last_turn_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
-        label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}`,
+        label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${formatToolBudgetDurationSuffix(tool)}`,
         tokens: Math.max(0, Number(tool.resultTokens || 0)),
         active: Number(tool.resultTokens || 0) > 0,
         includedInContext: false,
@@ -12669,7 +13265,7 @@ function buildLastTurnUsageRow(turnTelemetry: any): ContextWindowRow | null {
       : [];
     children.push({
       id: 'last_turn_tool_outputs',
-      label: 'Tool result output',
+      label: `Tool result output${toolBudget.durationMsTotal ? ` · ${formatDurationMsForContextLabel(toolBudget.durationMsTotal)} total` : ''}`,
       tokens: toolResultTokens,
       active: true,
       includedInContext: false,
@@ -12709,7 +13305,8 @@ function buildContextWindowCurrentState(input: {
     Number(lastCall.estimatedToolSchemaTokens || 0) || estimateCurrentSystemToolSchemaTokens(input.sessionId, input.profile),
   );
   const latestProviderInputTokens = Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0));
-  const activeSkillTokens = estimateActiveSkillsContextTokens(input.sessionId, input.profile);
+  const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
+  const activeSkillTokens = activeSkillEstimate.tokens;
   const legacySystemPromptEstimate = Math.max(0, latestMessageInputTokens - input.currentInputTokens - activeSkillTokens);
   const systemPromptTokens = latestSystemPromptTokens > 0
     ? Math.max(0, latestSystemPromptTokens - activeSkillTokens)
@@ -12722,16 +13319,17 @@ function buildContextWindowCurrentState(input: {
   const systemPromptChildren = buildSystemPromptChildren(systemPromptTokens);
   const providerUsageChildren = buildProviderUsageChildren(input.modelUsage);
   const lastTurnUsageRow = buildLastTurnUsageRow(input.turnTelemetry);
-  const skillChildren = allocateContextChildren('skills', activeSkillTokens, [
-    { id: 'active_skills', label: 'Active skills', weight: 8 },
-    { id: 'skills_hint', label: 'Skills hint', weight: 1 },
-    { id: 'matching_skills', label: 'Matching skills', weight: 1 },
-  ]);
+  const skillChildren = activeSkillEstimate.children;
+  const contextWindowTokens = Math.max(0, Number(input.profile.contextWindowTokens || 0));
+  const compactionTriggerTokens = Math.max(0, Number(input.compactionTriggerTokens || 0));
+  const contextLimitTokens = compactionTriggerTokens > 0 && contextWindowTokens > 0
+    ? Math.min(compactionTriggerTokens, contextWindowTokens)
+    : (compactionTriggerTokens || contextWindowTokens);
   const inContextRows: ContextWindowRow[] = [
     { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
     { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0, children: systemToolChildren },
     { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0, children: systemPromptChildren },
-    { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0, children: skillChildren },
+    { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0, children: skillChildren, estimated: activeSkillTokens > 0 },
     { id: 'tool_observations', label: 'Tool observations', tokens: Math.max(0, input.recentToolTokens), active: input.recentToolTokens > 0 },
     { id: 'mcp_tools', label: 'MCP tools', tokens: 0, active: false },
     { id: 'mcp_tools_deferred', label: 'MCP tools (deferred)', tokens: 0, active: false },
@@ -12745,18 +13343,22 @@ function buildContextWindowCurrentState(input: {
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
     : [];
   const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
-  const freeSpaceTokens = Math.max(0, Number(input.profile.contextWindowTokens || 0) - currentStateTokens);
+  const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
   return {
     currentStateTokens,
+    contextLimitTokens,
+    contextWindowTokens,
+    compactionTriggerTokens,
     latestProviderInputTokens,
     nextCallEstimateTokens: input.currentInputTokens,
     freeSpaceTokens,
     rows: [
       ...inContextRows,
       ...runtimeOverheadRow,
-      { id: 'free_space', label: 'Free space', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
+      { id: 'free_space', label: 'Free before compaction', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
       { id: 'next_call_estimate', label: 'Next call estimate', tokens: input.currentInputTokens, active: input.currentInputTokens > 0, includedInContext: false, percentLabel: 'next' },
-      { id: 'compaction_trigger', label: 'Compaction trigger', tokens: Math.max(0, Number(input.compactionTriggerTokens || 0)), active: false, includedInContext: false, percentBasis: 'window', percentLabel: 'limit' },
+      { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, percentBasis: 'window', percentLabel: 'limit' },
+      { id: 'model_context_window', label: 'Model context window', tokens: contextWindowTokens, active: false, includedInContext: false, outOfBand: true, percentLabel: 'full' },
       { id: 'full_stored_thread', label: 'Full stored thread', tokens: Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0)), active: false, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
       { id: 'stored_process_logs', label: 'Stored process logs', tokens: processTokens, active: processTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
       { id: 'stored_tool_observations', label: 'Stored tool observations', tokens: storedObservationTokens, active: storedObservationTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
@@ -13518,7 +14120,7 @@ router.get('/api/mobile/chat/stream/:sessionId', (req, res) => {
     const after = Math.max(0, Math.floor(Number(req.query.after || 0)) || 0);
     const stream = getMainChatStream(sessionId);
     const activeRuntime = listLiveRuntimes()
-      .filter((runtime) => runtime.kind === 'main_chat' && String(runtime.sessionId || '') === sessionId)
+      .filter((runtime) => isLiveRunningRuntime(runtime) && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && String(runtime.sessionId || '') === sessionId)
       .map(summarizeMobileRuntime)
       .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
     const frames = stream
@@ -13557,7 +14159,7 @@ router.get('/api/mobile/chat/stream/:sessionId', (req, res) => {
 router.get('/api/mobile/chat/runs', (_req, res) => {
   try {
     const runtimes = listLiveRuntimes()
-      .filter((runtime) => runtime.kind === 'main_chat')
+      .filter((runtime) => isLiveRunningRuntime(runtime) && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal'))
       .map(summarizeMobileRuntime)
       .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
     res.json({
@@ -13578,7 +14180,7 @@ router.get('/api/mobile/chat/runs/:sessionId', (req, res) => {
       return;
     }
     const active = listLiveRuntimes()
-      .filter((runtime) => runtime.kind === 'main_chat' && String(runtime.sessionId || '') === sessionId)
+      .filter((runtime) => isLiveRunningRuntime(runtime) && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && String(runtime.sessionId || '') === sessionId)
       .map(summarizeMobileRuntime)
       .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
     const session = getSession(sessionId);
@@ -13629,7 +14231,7 @@ router.get('/api/mobile/commands/models', async (_req, res) => {
 
 router.get('/api/mobile/commands/stop-targets', (_req, res) => {
   try {
-    res.json({ success: true, targets: listLiveRuntimes().map(summarizeMobileRuntime) });
+    res.json({ success: true, targets: listLiveRuntimes().filter(isLiveRunningRuntime).map(summarizeMobileRuntime) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
   }
@@ -13642,11 +14244,13 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
     const runtimeById = runtimeId ? getLiveRuntime(runtimeId) : null;
     const target = runtimeById?.kind === 'main_chat'
       && runtimeById.abortable
+      && isLiveRunningRuntime(runtimeById)
       && (!sessionId || String(runtimeById.sessionId || '') === sessionId)
       ? runtimeById
       : listLiveRuntimes()
         .filter((runtime) =>
-          runtime.kind === 'main_chat'
+          isLiveRunningRuntime(runtime)
+            && runtime.kind === 'main_chat'
             && runtime.abortable
             && (!sessionId || String(runtime.sessionId || '') === sessionId)
         )
@@ -14268,7 +14872,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
 const REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
 const DEFAULT_REALTIME_AGENT_MODEL = 'gpt-realtime-2';
 const DEFAULT_REALTIME_AGENT_VOICE = 'marin';
-const DEFAULT_REALTIME_AGENT_TRANSCRIPTION_MODEL = 'gpt-4o-transcribe';
+const DEFAULT_REALTIME_AGENT_TRANSCRIPTION_MODEL = 'gpt-realtime-whisper';
 const REALTIME_AGENT_INSTRUCTIONS_MAX = 18000;
 const realtimeAgentCallTokens = new Map<string, {
   clientSecret: string;
@@ -14400,7 +15004,7 @@ function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): an
     name: 'dispatch_prometheus_worker',
     description: identity.isSubagent
       ? `Technical dispatch signal for heavy or durable work. The app routes this into the selected subagent chat for ${identity.label}, not the main Prometheus chat. Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. In speech, phrase the work as your own work as ${identity.label}; do not say you are getting a worker or asking Prometheus.`
-      : 'Hand off heavy or durable work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that the curated voice_browser_* and voice_desktop_* tools can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Speaking "on it" or "I started that" WITHOUT emitting this function call does nothing and the work never runs. Never claim the worker is running unless you actually called this function or voice_worker_status reports it active.',
+      : 'Hand off heavy or durable work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that voice_browser and voice_desktop can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Speaking "on it" or "I started that" WITHOUT emitting this function call does nothing and the work never runs. Never claim the worker is running unless you actually called this function or voice_ops action worker_status reports it active.',
     parameters: {
       type: 'object',
       required: ['task'],
@@ -14513,26 +15117,13 @@ function buildRealtimeVoiceAgentInstructions(args: {
     args.voiceAgentMemory ? args.voiceAgentMemory : '',
     args.voiceAgentMemory ? '' : '',
     '## When to call which tool',
-    '- voice_web_search: quick factual/current lookup. Multi mode for latest/current/news/compare.',
+    '- voice_ops: unified quick voice operations. Use action web_search for quick factual/current lookup; web_fetch for one clean text URL; write_note for explicit remember/jot/note; agent_memory for workspace/VOICEAGENT.md routing/spoken-behavior notes with memory_action read/append/replace; set_wake_phrase, enter_quiet_mode, or set_quiet_until for runtime voice settings; memory_search for read-only recall; timer for one-shot timers with timer_action create/list/update/reschedule/cancel; automation_dashboard for operator snapshots; worker_status for Worker progress; send_screenshot for screenshot delivery; generate_image/generate_video for simple media generation.',
     '- Visual cards (render a card in the app while you speak the gist — keep speech short, the card carries the detail): show_weather (forecast), show_market (crypto/memecoins), show_stocks (equities/ETFs), show_prediction_market (Polymarket odds), show_map (places/locations), show_sources (news/citations you gathered), show_comparison (side-by-side table), show_chart (line/bar/area from numbers), show_product_carousel (products), show_agent_work (operator snapshot — gather via voice_automation_dashboard first), show_run_result (finished-task summary). All keyless and read-only; call them directly instead of dispatching the Worker for these.',
-    '- voice_web_fetch: one clean text URL only. Social/video/auth pages must be dispatched to Worker.',
-    '- voice_write_note: only when the user explicitly asks to remember/jot/note something.',
-    '- voice_agent_memory: read or update workspace/VOICEAGENT.md only when the user explicitly asks to inspect or change live voice-agent routing/spoken-behavior memory. Use append for small additions; use replace only when the user asks to rewrite the file.',
-    '- voice_set_wake_phrase: set/change the always-listening wake phrase.',
-    '- voice_enter_quiet_mode / voice_set_quiet_until: silence Prometheus when he asks for quiet.',
-    '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use the matching voice_browser_* or voice_desktop_* tool. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
+    '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
-    '- voice_memory_search: read-only recall for prior decisions, project history, preferences.',
-    '- voice_timer: create/list/cancel one-shot timers.',
-    '- voice_automation_dashboard: read-only automation_dashboard v2 snapshot for operator questions: what is going on, priorities, agents/tasks/jobs/watches/teams status, morning/daily snapshots, stuck/blocked automation, or what everyone has done. Use it directly; dispatch Worker only for mutations/control or deeper repairs.',
-    '- voice_browser_open / voice_browser_snapshot / voice_browser_screenshot: open and observe the Prometheus browser. Open accepts explicit URLs/domains or browser search queries and returns DOM refs and a screenshot preview; snapshot gives @ref targets; screenshot gives visual context.',
-    '- voice_browser_click / voice_browser_vision_click / voice_browser_fill / voice_browser_type / voice_browser_vision_type / voice_browser_press_key / voice_browser_scroll / voice_browser_wait: live browser UI control. Use these for fast Jarvis-style navigation, input, drafting, and explicit user-authorized social posts/messages when content and destination are clear. Hand off to Worker for uploads, downloads, password/payment entry, purchases/payments, destructive actions, account settings/security changes, or anything involving files.',
-    '- voice_desktop_screenshot / voice_desktop_list_windows / voice_desktop_focus_window / voice_desktop_window_control / voice_desktop_find_app / voice_desktop_launch_app: observe, find, focus, minimize, maximize, restore, close, and launch desktop apps/windows.',
-    '- voice_desktop_click: click full-desktop/monitor/SOM coordinates from voice_desktop_screenshot using screenshot_id, same as Prometheus desktop_click.',
-    '- voice_desktop_window_click / voice_desktop_window_type / voice_desktop_window_press_key / voice_desktop_window_scroll: live desktop window control. Use window_id/window_handle/app_id/title and fresh screenshot coordinates. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker for file edits, shell commands, installs, destructive confirmations, purchases/payments, account settings/security changes, durable system changes, or anything requiring approvals.',
-    '- voice_send_screenshot: send a browser/desktop screenshot through the delivery router. Use this in Realtime voice when the user asks to send, share, show, or deliver a screenshot.',
-    '- Screenshot ownership: when screenshot voice tools are available, screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser_screenshot, voice_desktop_screenshot, or voice_send_screenshot.',
-    '- voice_worker_status: read fresh Worker status/context for status/progress/update questions. This is read-only; use it instead of steer_active_worker for questions like “what are you doing?”, “where are we?”, or “how’s it going?”.',
+    '- voice_browser: use action open, snapshot, screenshot, click, vision_click, fill, type, vision_type, press_key, scroll, or wait for fast browser navigation, input, drafting, and explicit user-authorized social posts/messages when content and destination are clear. Hand off to Worker for uploads, downloads, password/payment entry, purchases/payments, destructive actions, account settings/security changes, or anything involving files.',
+    '- voice_desktop: use action screenshot, list_windows, focus_window, window_control, find_app, launch_app, click, window_click, window_type, window_press_key, or window_scroll for live desktop UI. For window_control include window_action minimize/maximize/restore/close. Use window_id/window_handle/app_id/title and fresh screenshot coordinates. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker for file edits, shell commands, installs, destructive confirmations, purchases/payments, account settings/security changes, durable system changes, or anything requiring approvals.',
+    '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
     identity.isSubagent
       ? `- dispatch_prometheus_worker: TECHNICAL HANDOFF for heavy/durable work. The browser routes it into ${identity.label}'s selected subagent chat. Call it IMMEDIATELY and do not speak an acknowledgement before or after it. Do not describe this as getting a worker or asking Prometheus.`
       : '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
@@ -14540,10 +15131,10 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '',
     '## Routing decisions you make implicitly',
     '- If the user asks something answerable from your context (memory, identity, recall, small talk) — answer directly, no tool.',
-    '- If the user asks for status/progress/context about the active Worker — call voice_worker_status, then answer from that result. Do not send the status question to the Worker as a steer.',
-    '- Skill scout rule: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call the matching voice_browser_* or voice_desktop_* tool immediately.',
-    '- If the user wants quick voice-scope work — call the matching voice_* or skill_* tool, then narrate the result. For automation/operator status snapshots, call voice_automation_dashboard.',
-    '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_agent_memory instead of voice_write_note.',
+    '- If the user asks for status/progress/context about the active Worker — call voice_ops action worker_status, then answer from that result. Do not send the status question to the Worker as a steer.',
+    '- Skill scout rule: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call voice_browser or voice_desktop immediately.',
+    '- If the user wants quick voice-scope work — call voice_ops, voice_browser, voice_desktop, or skill_* as appropriate, then narrate the result. For automation/operator status snapshots, call voice_ops action automation_dashboard.',
+    '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
       ? `- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app routes it into ${identity.label}'s subagent chat and ${identity.label} will report progress.`
       : '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app shows the handoff and the worker will report progress.',
@@ -14553,17 +15144,17 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '## Tool calls are REAL actions — never fake them',
     '- A tool only runs if you actually emit the function call. Saying "on it", "handing that off", "I started the worker", or "let me search" does NOT run anything by itself.',
     '- CRITICAL for hand-offs: when the user wants real work, emit the dispatch_prometheus_worker function call in the same turn and stay quiet around it. Speaking an acknowledgement WITHOUT emitting the function call is a failure because the work never starts.',
-    '- CRITICAL for live UI control: when the user asks you to click, scroll, press a key, type, fill, focus, maximize, minimize, restore, close, open, or screenshot the current browser/desktop, your next action must be the matching voice_browser_* or voice_desktop_* function call. Do not say you will do it without the function call.',
-    '- CRITICAL for screenshot delivery: when the user asks to send/share/show/deliver a screenshot, call voice_send_screenshot. Do not dispatch Worker for ordinary screenshot delivery while this tool exists.',
-    '- If a browser/desktop target is ambiguous, first call voice_browser_snapshot or voice_desktop_screenshot({mode:"som"}), then call the action tool from the returned refs/coordinates.',
-    '- CRITICAL for status: never say you messaged, asked, notified, or sent something to the Worker when the user only asked a status/update question. Call voice_worker_status and answer from the returned context instead.',
+    '- CRITICAL for live UI control: when the user asks you to click, scroll, press a key, type, fill, focus, maximize, minimize, restore, close, open, or screenshot the current browser/desktop, your next action must be voice_browser or voice_desktop with the matching action. Do not say you will do it without the function call.',
+    '- CRITICAL for screenshot delivery: when the user asks to send/share/show/deliver a screenshot, call voice_ops action send_screenshot. Do not dispatch Worker for ordinary screenshot delivery while this tool exists.',
+    '- If a browser/desktop target is ambiguous, first call voice_browser action snapshot or voice_desktop action screenshot with mode som, then call the action tool from the returned refs/coordinates.',
+    '- CRITICAL for status: never say you messaged, asked, notified, or sent something to the Worker when the user only asked a status/update question. Call voice_ops action worker_status and answer from the returned context instead.',
     '- Likewise, never claim a search/note/screenshot/timer happened unless you actually called the matching voice_* tool and received its result; never claim skill counts or skill instructions unless skill_list, skill_read, skill_resource_list, or skill_resource_read returned them.',
     '- After you say you are doing something, the corresponding function call MUST be in your output.',
     '',
     '## Hard boundaries',
     '- Never claim you used full Worker tools or changed files/accounts from the voice layer unless a voice_* tool result confirms it. Skill_* results only confirm skill discovery or skill instruction reads.',
-    '- Never narrate that you are calling a tool ("let me search for that" → just call voice_web_search and report the result).',
-    '- Screenshot tools provide fresh visual context. Browser/desktop UI control is allowed through the curated voice_browser_* and voice_desktop_window_* tools, including explicit user-authorized social posts/messages when content and destination are clear. Durable/file/account settings/security/destructive work must go to Worker.',
+    '- Never narrate that you are calling a tool ("let me search for that" means just call voice_ops action web_search and report the result).',
+    '- Screenshot tools provide fresh visual context. Browser/desktop UI control is allowed through voice_browser and voice_desktop, including explicit user-authorized social posts/messages when content and destination are clear. Durable/file/account settings/security/destructive work must go to Worker.',
     '',
     '## Worker context (current state — read-only orientation)',
     args.contextBlock || '(no extended context available)',
@@ -15543,11 +16134,16 @@ function normalizeExcludedSkillIdsInput(value: unknown): string[] {
   return ids;
 }
 
+function normalizeForcedSkillIdsInput(value: unknown): string[] {
+  return normalizeExcludedSkillIdsInput(value);
+}
+
 router.post('/api/chat', async (req, res) => {
   const { message, sessionId = 'default', pinnedMessages, attachments, attachmentPreviews, reasoning, callerContext } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
   const resolvedSessionId = String(sessionId || 'default');
   const excludedSkillIds = normalizeExcludedSkillIdsInput(req.body?.excludedSkillIds || req.body?.excludedMatchingSkillIds);
+  const forcedSkillIds = normalizeForcedSkillIdsInput(req.body?.selectedSkillIds || req.body?.forcedSkillIds || req.body?.matchedSkillIds);
   const clientRequestId = normalizeClientRequestId(req.body?.clientRequestId || req.headers['x-client-request-id']);
   setLastMainSessionId(resolvedSessionId);
   const turnOrigin = normalizeTurnOrigin(req.body?.origin, resolvedSessionId, {
@@ -15642,12 +16238,30 @@ router.post('/api/chat', async (req, res) => {
   const rawSendSSE = sendSSE;
   const runtimeProcessEntries: Record<string, any>[] = [];
   let __firstContentLogged = false;
+  let runtimeThinkingTail = '';
+  let lastRuntimeThinkingCheckpointAt = 0;
   sendSSE = (event, data) => {
     rawSendSSE(event, data);
     // Skip per-token checkpointing — token/thinking_delta are high-frequency streaming
     // events that don't need durable persistence. 3 sync fs ops per token was killing
     // streaming throughput by blocking the Node.js event loop on every chunk.
-    if (event === 'token' || event === 'thinking_delta') {
+    if (event === 'thinking_delta') {
+      if (!__firstContentLogged) { __firstContentLogged = true; __turnTimingLog(`FIRST_CONTENT(${event})`); }
+      const delta = String(data?.thinking || data?.text || '').trim();
+      if (delta) runtimeThinkingTail = `${runtimeThinkingTail}${delta}`.slice(-4000);
+      const now = Date.now();
+      if (runtimeThinkingTail && now - lastRuntimeThinkingCheckpointAt >= 2000) {
+        lastRuntimeThinkingCheckpointAt = now;
+        updateLiveRuntimeCheckpoint(runtimeId, {
+          event,
+          at: now,
+          thinkingTail: runtimeThinkingTail,
+          processEntries: runtimeProcessEntries.length ? [...runtimeProcessEntries] : undefined,
+        });
+      }
+      return;
+    }
+    if (event === 'token') {
       if (!__firstContentLogged) { __firstContentLogged = true; __turnTimingLog(`FIRST_CONTENT(${event})`); }
       return;
     }
@@ -15658,6 +16272,11 @@ router.post('/api/chat', async (req, res) => {
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
     if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
     if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+    if (event === 'thinking') {
+      const thinking = String(data?.thinking || data?.text || '').trim();
+      if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
+    }
+    if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
     const processEntry = runtimeProcessEntryFromSseEvent(event, data);
     if (processEntry) {
       runtimeProcessEntries.push(processEntry);
@@ -15675,9 +16294,7 @@ router.post('/api/chat', async (req, res) => {
         console.log(`[v2] Mobile client disconnected — keeping task alive for session ${resolvedSessionId}`);
         return;
       }
-      abortSignal.aborted = true;
-      abortController.abort();
-      console.log(`[v2] Client disconnected — aborting task for session ${resolvedSessionId}`);
+      console.log(`[v2] Desktop client disconnected — keeping task alive for session ${resolvedSessionId}`);
     }
   });
 
@@ -15693,7 +16310,7 @@ router.post('/api/chat', async (req, res) => {
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          excludedSkillIds.length ? { excludedSkillIds } : undefined,
+          (excludedSkillIds.length || forcedSkillIds.length) ? { excludedSkillIds, forcedSkillIds } : undefined,
           turnOrigin,
           { clientRequestId },
 			    );
@@ -16045,9 +16662,13 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
       turnTelemetry,
       calibration,
       contextWindowTokens: profile.contextWindowTokens,
+      contextLimitTokens: currentState.contextLimitTokens,
+      currentContextLimitTokens: currentState.contextLimitTokens,
       inputBudgetTokens: budget.inputBudgetTokens,
       compactionTriggerTokens: budget.compactionTriggerTokens,
       percentOfWindow: profile.contextWindowTokens > 0 ? currentState.currentStateTokens / profile.contextWindowTokens : 0,
+      percentOfContextLimit: currentState.contextLimitTokens > 0 ? currentState.currentStateTokens / currentState.contextLimitTokens : 0,
+      percentOfCompactionTrigger: budget.compactionTriggerTokens > 0 ? currentState.currentStateTokens / budget.compactionTriggerTokens : 0,
       percentOfInputBudget: budget.inputBudgetTokens > 0 ? currentInputTokens / budget.inputBudgetTokens : 0,
       historyMessages: history.length,
       hasToolObservations: !!recentToolContext,
@@ -16070,9 +16691,10 @@ router.post('/api/sessions/:id/main-goal/:action', (req, res) => {
       res.status(400).json({ success: false, error: 'Invalid goal action' });
       return;
     }
+    const note = String(req.body?.goal || req.body?.text || req.body?.reason || req.body?.note || '').trim();
     const suffix = action === 'revise'
-      ? `revise ${String(req.body?.goal || req.body?.text || '').trim()}`
-      : action;
+      ? `revise ${note}`
+      : (note ? `${action} ${note}` : action);
     const result = handleMainChatGoalCommand(sessionId, `/goal ${suffix}`);
     if (result.shouldStartRunner) startMainChatGoalRunner(sessionId, `goal_action:${action}`);
     broadcastMainChatGoalState(sessionId, `action:${action}`, { goal: result.goal });

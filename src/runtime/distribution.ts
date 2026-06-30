@@ -6,6 +6,8 @@ function normalizeFlag(value: unknown): string {
 }
 
 const PUBLIC_BUILD_DISABLED_TOOL_NAMES = new Set([
+  'dev_source_read',
+  'dev_source_edit',
   'read_source',
   'read_dev_sources',
   'list_source',

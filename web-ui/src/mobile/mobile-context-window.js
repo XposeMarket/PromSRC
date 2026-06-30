@@ -19,6 +19,27 @@ let _activeProvider = '';
 let _lastSessionId = '';
 let _modelChangeListenerBound = false;
 let _refreshSeq = 0;
+let _refreshTimer = 0;
+let _getSessionId = null;
+let _liveTurn = null;
+
+function _fmtDuration(value) {
+  const durationMs = Number(value);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(2)}s`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(durationMs / 60_000);
+  const seconds = Math.round((durationMs % 60_000) / 1000);
+  return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
+}
+
+function _toolDurationSuffix(tool) {
+  const value = Math.max(0, Number(tool?.durationMsMax || tool?.durationMsAvg || tool?.durationMsTotal || 0));
+  const label = _fmtDuration(value);
+  if (!label) return '';
+  return ` · ${label}${Number(tool?.durationMsMax || 0) > 0 && Number(tool?.calls || 0) > 1 ? ' max' : ''}`;
+}
 
 function _fmtTokens(value) {
   const n = Number(value);
@@ -26,6 +47,140 @@ function _fmtTokens(value) {
   if (n >= 1_000_000) { const m = n / 1_000_000; return `${m >= 10 ? m.toFixed(0) : m.toFixed(1)}m`; }
   if (n >= 1_000) { const k = n / 1_000; return `${k >= 100 ? k.toFixed(0) : k.toFixed(1)}k`; }
   return String(Math.round(n));
+}
+
+function _estimateTokensFromText(text) {
+  const raw = String(text || '');
+  if (!raw) return 0;
+  return Math.max(1, Math.ceil(raw.length / 4));
+}
+
+function _displayLimit(data, currentState = {}) {
+  return Math.max(0, Number(
+    data?.currentContextLimitTokens
+    || data?.contextLimitTokens
+    || currentState?.contextLimitTokens
+    || data?.compactionTriggerTokens
+    || data?.inputBudgetTokens
+    || data?.contextWindowTokens
+    || 0
+  ));
+}
+
+function _scheduleRefresh(sessionId, delayMs = 500) {
+  if (_refreshTimer) clearTimeout(_refreshTimer);
+  _refreshTimer = setTimeout(() => {
+    _refreshTimer = 0;
+    _refresh(String(sessionId || (typeof _getSessionId === 'function' ? _getSessionId() : '') || _lastSessionId || ''), {});
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function _resetLiveTurn(sessionId) {
+  const sid = String(sessionId || '').trim();
+  _liveTurn = sid ? {
+    sessionId: sid,
+    active: true,
+    startedAt: Date.now(),
+    settledAt: 0,
+    toolResultTokens: 0,
+    toolResultBytes: 0,
+    toolDurationMsTotal: 0,
+    toolDurationMsMax: 0,
+    tools: new Map(),
+  } : null;
+  _scheduleRefresh(sid, 0);
+}
+
+function _settleLiveTurn(sessionId) {
+  if (!_liveTurn || String(_liveTurn.sessionId || '') !== String(sessionId || '')) return;
+  const live = _liveTurn;
+  live.active = false;
+  live.settledAt = Date.now();
+  _scheduleRefresh(sessionId, 450);
+  setTimeout(() => {
+    if (_liveTurn !== live) return;
+    if (Date.now() - Number(live.settledAt || 0) < 7000) return;
+    _liveTurn = null;
+    _scheduleRefresh(sessionId, 0);
+  }, 7500);
+}
+
+function _recordLiveToolResult(sessionId, evt = {}) {
+  const sid = String(sessionId || (typeof _getSessionId === 'function' ? _getSessionId() : '') || _lastSessionId || '').trim();
+  if (!sid) return;
+  if (!_liveTurn || String(_liveTurn.sessionId || '') !== sid) _resetLiveTurn(sid);
+  if (!_liveTurn) return;
+  const telemetry = evt?.extra?.telemetry || evt?.telemetry || {};
+  const resultText = String(evt?.result || evt?.output || evt?.error || '');
+  const resultTokens = Math.max(0, Number(telemetry.resultTokens || telemetry.result_tokens || 0))
+    || _estimateTokensFromText(resultText);
+  if (resultTokens <= 0) return;
+  const resultBytes = Math.max(0, Number(telemetry.resultBytes || telemetry.result_bytes || resultText.length || 0));
+  const durationMsRaw = Number(telemetry.durationMs || telemetry.duration_ms || evt?.durationMs || evt?.elapsedMs || evt?.elapsed_ms || 0);
+  const durationMs = Number.isFinite(durationMsRaw) ? Math.max(0, Math.round(durationMsRaw)) : 0;
+  const action = String(evt?.action || evt?.tool || evt?.name || 'tool').trim() || 'tool';
+  _liveTurn.active = true;
+  _liveTurn.toolResultTokens += resultTokens;
+  _liveTurn.toolResultBytes += resultBytes;
+  if (durationMs > 0) {
+    _liveTurn.toolDurationMsTotal = Math.max(0, Number(_liveTurn.toolDurationMsTotal || 0)) + durationMs;
+    _liveTurn.toolDurationMsMax = Math.max(Math.max(0, Number(_liveTurn.toolDurationMsMax || 0)), durationMs);
+  }
+  const tool = _liveTurn.tools.get(action) || { tool: action, calls: 0, resultTokens: 0, resultBytes: 0, durationMsTotal: 0, durationMsMax: 0 };
+  tool.calls += 1;
+  tool.resultTokens += resultTokens;
+  tool.resultBytes += resultBytes;
+  if (durationMs > 0) {
+    tool.durationMsTotal += durationMs;
+    tool.durationMsMax = Math.max(tool.durationMsMax, durationMs);
+  }
+  _liveTurn.tools.set(action, tool);
+  _scheduleRefresh(sid, 900);
+}
+
+function _applyLiveOverlay(data) {
+  if (!data || data.success === false) return data;
+  const sid = String(typeof _getSessionId === 'function' ? _getSessionId() : _lastSessionId || '').trim();
+  const live = _liveTurn;
+  if (!live || String(live.sessionId || '') !== sid) return data;
+  const stillVisible = live.active || (live.settledAt && Date.now() - live.settledAt < 7000);
+  const liveTokens = Math.max(0, Number(live.toolResultTokens || 0));
+  if (!stillVisible || liveTokens <= 0) return data;
+  const currentState = data.currentState || {};
+  const rows = Array.isArray(currentState.rows)
+    ? currentState.rows.map((row) => ({ ...row, children: Array.isArray(row.children) ? row.children.map((child) => ({ ...child })) : row.children }))
+    : [];
+  const children = Array.from(live.tools?.values?.() || [])
+    .sort((a, b) => Number(b.resultTokens || 0) - Number(a.resultTokens || 0))
+    .slice(0, 12)
+    .map((tool, index) => ({
+      id: `live_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
+      label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${_toolDurationSuffix(tool)}`,
+      tokens: Math.max(0, Number(tool.resultTokens || 0)),
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+    }));
+  const freeIndex = rows.findIndex((row) => row?.id === 'free_space');
+  if (freeIndex >= 0) rows[freeIndex] = { ...rows[freeIndex], tokens: Math.max(0, Number(rows[freeIndex].tokens || 0) - liveTokens) };
+  const liveRow = {
+    id: 'live_tool_results',
+    label: `Live tool results${live.toolDurationMsTotal ? ` · ${_fmtDuration(live.toolDurationMsTotal)} total` : ''}`,
+    tokens: liveTokens,
+    active: true,
+    includedInContext: true,
+    percentBasis: 'window',
+    children,
+  };
+  const insertAt = rows.findIndex((row) => row?.id === 'mcp_tools');
+  if (insertAt >= 0) rows.splice(insertAt, 0, liveRow);
+  else rows.push(liveRow);
+  const overlaidState = {
+    ...currentState,
+    currentStateTokens: Math.max(0, Number(currentState.currentStateTokens || data.currentStateTokens || 0)) + liveTokens,
+    rows,
+  };
+  return { ...data, currentState: overlaidState, currentStateTokens: overlaidState.currentStateTokens };
 }
 
 function _gaugeClass(pct) {
@@ -118,7 +273,9 @@ function _renderRows(rows, windowTokens, depth = 0) {
 }
 
 function _renderContext(data) {
+  data = _applyLiveOverlay(data);
   const ring = document.getElementById('pm-ctx-chip-ring');
+  const chip = document.getElementById('pm-ctx-chip');
   const fill = document.getElementById('pm-ctx-fill');
   const total = document.getElementById('pm-ctx-total');
   const metrics = document.getElementById('pm-ctx-metrics');
@@ -131,9 +288,11 @@ function _renderContext(data) {
   }
   const currentState = data.currentState || {};
   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
-  const windowTokens = Math.max(0, Number(data.contextWindowTokens || 0));
+  const windowTokens = _displayLimit(data, currentState);
+  const modelWindowTokens = Math.max(0, Number(data.contextWindowTokens || currentState.contextWindowTokens || 0));
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   if (ring) ring.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
+  if (chip) chip.title = `Context before compaction: ${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} tokens${modelWindowTokens && modelWindowTokens !== windowTokens ? ` (model window ${_fmtTokens(modelWindowTokens)})` : ''}`;
   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
   if (total) total.textContent = `${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} (${Math.round(percent)}%)`;
 
@@ -236,7 +395,10 @@ function _close() {
   const pop = document.getElementById('pm-ctx-popover');
   const chip = document.getElementById('pm-ctx-chip');
   if (pop) pop.hidden = true;
-  if (chip) chip.setAttribute('aria-expanded', 'false');
+  if (chip) {
+    chip.hidden = false;
+    chip.setAttribute('aria-expanded', 'false');
+  }
   _open = false;
   if (_outsideHandler) {
     document.removeEventListener('pointerdown', _outsideHandler, true);
@@ -251,6 +413,7 @@ function _open_(getSessionId) {
   _open = true;
   pop.hidden = false;
   chip.setAttribute('aria-expanded', 'true');
+  chip.hidden = true;
   _setExpanded(false);
   _refresh(typeof getSessionId === 'function' ? getSessionId() : '');
   // Close when tapping outside the popover or the chip.
@@ -265,7 +428,15 @@ export function wireMobileContextWindow(page, { getSessionId } = {}) {
   const chip = page.querySelector('#pm-ctx-chip');
   const toggle = page.querySelector('#pm-ctx-toggle');
   if (!chip) return;
+  _getSessionId = typeof getSessionId === 'function' ? getSessionId : null;
   _bindModelChangeListener(getSessionId);
+  window.__pmMobileContextTurnStart = (detail = {}) => _resetLiveTurn(String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || ''));
+  window.__pmMobileContextTurnDone = (detail = {}) => _settleLiveTurn(String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || ''));
+  window.__pmMobileContextStreamEvent = (evt = {}, detail = {}) => {
+    const sid = String(detail?.sessionId || evt?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || '');
+    if (String(evt?.type || '') === 'tool_result') _recordLiveToolResult(sid, evt);
+    else if (['tool_call', 'tool_progress', 'vision_injected', 'runtime_registered'].includes(String(evt?.type || ''))) _scheduleRefresh(sid, 650);
+  };
   // Reset transient state for the fresh page render.
   _open = false; _expanded = false; _expandedRows = new Set();
   if (_outsideHandler) { document.removeEventListener('pointerdown', _outsideHandler, true); _outsideHandler = null; }

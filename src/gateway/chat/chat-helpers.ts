@@ -534,7 +534,7 @@ export async function buildPersonalityContext(
   historyLength: number,
   skillsManager: any,
   extraCats?: Set<string>,
-  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[] },
+  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
 ): Promise<string> {
   return _buildPersonalityContext(
     sessionId,
@@ -574,9 +574,6 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
   const catMap: Partial<Record<string, string>> = {
     browser: 'browser_automation',
     desktop: 'desktop_automation',
-    teams: 'agents_and_teams',
-    agents: 'agents_and_teams',
-    routing: 'agents_and_teams',
     integrations: 'integration_admin',
     files: 'workspace_write',
     memory: 'advanced_memory',

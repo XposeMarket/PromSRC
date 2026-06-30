@@ -1314,6 +1314,66 @@ function getDesktopAdvisorPacketByIdInternal(
   return { ok: true, packet: entry.packet };
 }
 
+async function getWindowByHandleFast(handle: number): Promise<DesktopWindowInfo | null> {
+  const h = Math.floor(Number(handle || 0));
+  if (!Number.isFinite(h) || h <= 0 || DELEGATE_TO_BACKEND) return null;
+  const script = `
+${PS_DPI_AWARE_HEADER}
+Add-Type -AssemblyName System.Windows.Forms
+${PS_WINAPI_HEADER}
+$hWnd = [IntPtr]::new([Int64]${h})
+$rect = New-Object PrometheusWinApi+RECT
+$okRect = [PrometheusWinApi]::GetWindowRect($hWnd, [ref]$rect)
+$targetPid = 0
+[void][PrometheusWinApi]::GetWindowThreadProcessId($hWnd, [ref]$targetPid)
+$title = ''
+$tlen = [PrometheusWinApi]::GetWindowTextLength($hWnd)
+if ($tlen -gt 0) {
+  $sb = New-Object System.Text.StringBuilder ($tlen + 1)
+  [void][PrometheusWinApi]::GetWindowText($hWnd, $sb, $sb.Capacity)
+  $title = [string]$sb.ToString()
+}
+$proc = $null
+try { if ($targetPid -gt 0) { $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue } } catch { }
+$mi = -1
+try {
+  $scr = [System.Windows.Forms.Screen]::FromHandle($hWnd)
+  $screens = [System.Windows.Forms.Screen]::AllScreens
+  for ($i = 0; $i -lt $screens.Length; $i++) {
+    if ($screens[$i].DeviceName -eq $scr.DeviceName) { $mi = [int]$i; break }
+  }
+} catch { }
+[ordered]@{
+  ok = [bool]($okRect -and $targetPid -gt 0)
+  pid = [int]$targetPid
+  processName = if ($proc) { [string]$proc.ProcessName } else { 'unknown' }
+  appDisplayName = if ($proc) { [string]$proc.ProcessName } else { 'unknown' }
+  title = [string]$title
+  handle = [Int64]${h}
+  left = if ($okRect) { [int]$rect.Left } else { 0 }
+  top = if ($okRect) { [int]$rect.Top } else { 0 }
+  width = if ($okRect) { [int]($rect.Right - $rect.Left) } else { 0 }
+  height = if ($okRect) { [int]($rect.Bottom - $rect.Top) } else { 0 }
+  monitorIndex = [int]$mi
+} | ConvertTo-Json -Compress
+`;
+  const parsed = parseJsonMaybe(await runPowerShell(script, { timeoutMs: 4000 }).catch(() => ''));
+  if (!parsed?.ok) return null;
+  const mi = Number(parsed.monitorIndex);
+  return {
+    pid: Number(parsed.pid || 0) || 0,
+    processName: String(parsed.processName || 'unknown') || 'unknown',
+    appDisplayName: String(parsed.appDisplayName || parsed.processName || '').trim() || undefined,
+    title: String(parsed.title || '').trim() || '(untitled)',
+    handle: h,
+    left: Number(parsed.left || 0) || 0,
+    top: Number(parsed.top || 0) || 0,
+    width: Number(parsed.width || 0) || 0,
+    height: Number(parsed.height || 0) || 0,
+    ...(Number.isFinite(mi) && mi >= 0 ? { monitorIndex: Math.floor(mi) } : {}),
+  };
+}
+
 async function resolveWindowCoordinateBase(
   target: DesktopCoordinateTarget,
   packet?: DesktopAdvisorPacket,
@@ -1323,16 +1383,19 @@ async function resolveWindowCoordinateBase(
   const query = String(target.window_name || '').trim();
 
   let liveWindow: DesktopWindowInfo | undefined;
+  if (hasHandle && !packet?.targetWindow) {
+    liveWindow = await getWindowByHandleFast(Math.floor(handleNum)) || undefined;
+  }
   if (hasHandle || query || packet?.targetWindow?.handle) {
-    const ctx = await gatherDesktopContextInternal();
+    const ctx = liveWindow ? null : await gatherDesktopContextInternal();
     if (hasHandle) {
-      liveWindow = ctx.windows.find((w) => Number(w.handle) === Math.floor(handleNum));
+      liveWindow = liveWindow || ctx!.windows.find((w) => Number(w.handle) === Math.floor(handleNum));
     }
     if (!liveWindow && query) {
-      liveWindow = findWindowsByName(ctx.windows, query)[0];
+      liveWindow = findWindowsByName(ctx!.windows, query)[0];
     }
     if (!liveWindow && packet?.targetWindow?.handle) {
-      liveWindow = ctx.windows.find((w) => Number(w.handle) === Number(packet.targetWindow?.handle));
+      liveWindow = ctx!.windows.find((w) => Number(w.handle) === Number(packet.targetWindow?.handle));
     }
   }
 
@@ -1710,21 +1773,18 @@ function cleanupDesktopVerificationSnapshot(snapshot?: DesktopVerificationSnapsh
   try { fs.unlinkSync(snapshot.path); } catch {}
 }
 
-function isDesktopAutoVerificationPreferred(coordinateSpace?: DesktopCoordinateSpace): boolean {
-  return coordinateSpace === 'capture' || coordinateSpace === 'window';
-}
-
 export function resolveDesktopVerificationMode(
   value: unknown,
   coordinateSpace?: DesktopCoordinateSpace,
 ): DesktopVerificationMode {
   if (value === false || value === 'false') return 'off';
-  if (value === true || value === 'true') {
-    return isDesktopAutoVerificationPreferred(coordinateSpace) ? 'strict' : 'auto';
-  }
+  if (value === true || value === 'true') return 'strict';
   const raw = String(value ?? '').trim().toLowerCase();
   if (raw === 'off' || raw === 'auto' || raw === 'strict') return raw;
-  return isDesktopAutoVerificationPreferred(coordinateSpace) ? 'auto' : 'off';
+  // Fast default: screenshot/window-anchored desktop actions are already grounded
+  // by the prior screenshot. Expensive before/after probes stay opt-in via
+  // verify:"auto", verify:"strict", or verify:true.
+  return 'off';
 }
 
 export async function desktopMovePointer(x: number, y: number, settleMs: number = 40): Promise<void> {
@@ -1781,6 +1841,51 @@ Write-Output "OK"
   await runPowerShell(script, { timeoutMs: 4000 });
 }
 
+export async function desktopPerformClickAt(
+  x: number,
+  y: number,
+  button: 'left' | 'right',
+  repeat: number,
+  modifier?: 'shift' | 'ctrl' | 'alt',
+  settleMs: number = 0,
+): Promise<void> {
+  const xx = Math.floor(Number(x));
+  const yy = Math.floor(Number(y));
+  if (DELEGATE_TO_BACKEND) {
+    await getPlatformDesktopBackend().movePointer(xx, yy);
+    await getPlatformDesktopBackend().click(
+      button === 'right' ? 'right' : 'left',
+      Math.max(1, Math.min(4, Math.floor(Number(repeat) || 1))),
+      modifier ? [modifier] : [],
+    );
+    return;
+  }
+  const btn = button === 'right' ? 'right' : 'left';
+  const downFlag = btn === 'right' ? '0x0008' : '0x0002';
+  const upFlag = btn === 'right' ? '0x0010' : '0x0004';
+  const clicks = Math.max(1, Math.min(4, Math.floor(Number(repeat) || 1)));
+  const modVk = modifier === 'shift' ? '0x10' : modifier === 'ctrl' ? '0x11' : modifier === 'alt' ? '0x12' : null;
+  const modDown = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0, [UIntPtr]::Zero)` : '';
+  const modUp = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0x0002, [UIntPtr]::Zero)` : '';
+  const waitMs = Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 0)));
+  const script = `
+${PS_DPI_AWARE_HEADER}
+${PS_INPUTAPI_HEADER}
+[void][PrometheusInputApi]::SetCursorPos(${xx}, ${yy})
+${waitMs > 0 ? `Start-Sleep -Milliseconds ${waitMs}` : ''}
+${modDown}
+for ($i = 0; $i -lt ${clicks}; $i++) {
+  [PrometheusInputApi]::mouse_event(${downFlag}, 0, 0, 0, [UIntPtr]::Zero)
+  [PrometheusInputApi]::mouse_event(${upFlag}, 0, 0, 0, [UIntPtr]::Zero)
+  if ($i -lt ${clicks - 1}) { Start-Sleep -Milliseconds 80 }
+}
+${modUp}
+Write-Output "OK"
+`;
+  await runPowerShell(script, { timeoutMs: 4000 });
+}
+
+
 export async function desktopPerformScrollAtCurrent(
   delta: number,
   horizontal: boolean,
@@ -1794,6 +1899,37 @@ export async function desktopPerformScrollAtCurrent(
   const script = `
 ${PS_DPI_AWARE_HEADER}
 ${PS_INPUTAPI_HEADER}
+[PrometheusInputApi]::mouse_event(${flag}, 0, 0, [int]${Math.floor(Number(delta) || 0)}, [UIntPtr]::Zero)
+Write-Output "OK"
+`;
+  await runPowerShell(script, { timeoutMs: 4000 });
+}
+
+
+export async function desktopPerformScrollAt(
+  x: number | undefined,
+  y: number | undefined,
+  delta: number,
+  horizontal: boolean,
+  settleMs: number = 0,
+): Promise<void> {
+  if (DELEGATE_TO_BACKEND) {
+    if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
+      await getPlatformDesktopBackend().movePointer(Math.floor(Number(x)), Math.floor(Number(y)));
+    }
+    await getPlatformDesktopBackend().scroll(horizontal ? Math.floor(Number(delta) || 0) : 0, horizontal ? 0 : Math.floor(Number(delta) || 0));
+    return;
+  }
+  const flag = horizontal ? '0x1000' : '0x0800';
+  const hasPoint = Number.isFinite(Number(x)) && Number.isFinite(Number(y));
+  const xx = Math.floor(Number(x));
+  const yy = Math.floor(Number(y));
+  const waitMs = Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 0)));
+  const script = `
+${PS_DPI_AWARE_HEADER}
+${PS_INPUTAPI_HEADER}
+${hasPoint ? `[void][PrometheusInputApi]::SetCursorPos(${xx}, ${yy})` : ''}
+${hasPoint && waitMs > 0 ? `Start-Sleep -Milliseconds ${waitMs}` : ''}
 [PrometheusInputApi]::mouse_event(${flag}, 0, 0, [int]${Math.floor(Number(delta) || 0)}, [UIntPtr]::Zero)
 Write-Output "OK"
 `;
@@ -2500,11 +2636,11 @@ export async function desktopClick(
     const attempt = attempts[attemptIndex];
     finalX = attempt.x;
     finalY = attempt.y;
-    await desktopMovePointer(finalX, finalY, 40);
     if (verificationMode === 'off') {
-      await desktopPerformClickAtCurrent(btn, repeat, modifier);
+      await desktopPerformClickAt(finalX, finalY, btn, repeat, modifier, 0);
       break;
     }
+    await desktopMovePointer(finalX, finalY, 40);
     const verification = await verifyDesktopAction({
       action: 'click',
       mode: verificationMode,
@@ -2523,7 +2659,9 @@ export async function desktopClick(
   }
   xx = finalX;
   yy = finalY;
-  const monitors = await enumerateMonitorsInternal().catch(() => [] as DesktopMonitorInfo[]);
+  const monitors = verificationMode === 'off'
+    ? [] as DesktopMonitorInfo[]
+    : await enumerateMonitorsInternal().catch(() => [] as DesktopMonitorInfo[]);
   const hit = monitors.find((m) =>
     finalX >= m.left && finalX < (m.left + m.width) && finalY >= m.top && finalY < (m.top + m.height),
   );
@@ -2892,11 +3030,8 @@ export async function desktopScroll(
     verificationOpts?.mode,
     verificationOpts?.coordinateSpace,
   );
-  const performScroll = async (): Promise<void> => {
-    if (mx !== undefined && my !== undefined) {
-      await desktopMovePointer(mx, my, 75);
-    }
-    await desktopPerformScrollAtCurrent(delta, horizontal);
+  const performScroll = async (settleMs: number = 75): Promise<void> => {
+    await desktopPerformScrollAt(mx, my, delta, horizontal, settleMs);
   };
   let verificationSummary = '';
   if (verificationMode !== 'off' && mx !== undefined && my !== undefined) {
@@ -2918,7 +3053,7 @@ export async function desktopScroll(
       signals: [],
     });
   } else {
-    await performScroll();
+    await performScroll(0);
   }
   const axisLabel = horizontal ? 'horizontal' : 'vertical';
   const dirLabel = direction;
@@ -4573,6 +4708,21 @@ export async function desktopGetWindowState(
 async function prepareWindowForInput(
   selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
 ): Promise<{ ok: true; window: DesktopWindowInfo; hint?: string } | { ok: false; message: string }> {
+  const explicitHandle = Number(selector.window_handle);
+  const exactHandle = Number.isFinite(explicitHandle) && explicitHandle > 0
+    ? Math.floor(explicitHandle)
+    : (parseWindowId(selector.window_id) || 0);
+  if (exactHandle > 0) {
+    const fastWindow = await getWindowByHandleFast(exactHandle);
+    if (fastWindow) {
+      const focused = await focusWindowHandle(exactHandle).catch(() => false);
+      if (!focused) {
+        return { ok: false, message: `Could not focus ${shortWindowLabel(fastWindow)} before input. Try desktop_get_window_state to confirm it is still open.` };
+      }
+      markDesktopStateChanged();
+      return { ok: true, window: fastWindow };
+    }
+  }
   const resolved = await resolveCanonicalWindow(selector);
   if (!resolved.ok) return resolved;
   // Restore-if-minimized + focus happens inside focusWindowHandle.
@@ -4581,7 +4731,6 @@ async function prepareWindowForInput(
     return { ok: false, message: `Could not focus ${shortWindowLabel(resolved.window)} before input. Try desktop_get_window_state to confirm it is still open.` };
   }
   markDesktopStateChanged();
-  await new Promise((r) => setTimeout(r, 100));
   return resolved;
 }
 
@@ -4713,6 +4862,196 @@ export function getDesktopToolNames(): string[] {
 
 export function getDesktopToolDefinitions(): any[] {
   return [
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_screen',
+        description: 'Unified desktop screen/state wrapper. Use for health checks, screenshots, monitor geometry, window screenshots, screen-change waits, diffs, and pixel watches.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['doctor', 'screenshot', 'window_screenshot', 'monitors', 'wait_for_change', 'diff_screenshot', 'pixel_watch'] },
+            capture: { type: 'string', enum: ['all', 'primary'] },
+            monitor_index: { type: 'integer' },
+            region: { type: 'array', items: { type: 'number' } },
+            mode: { type: 'string', enum: ['normal', 'som'] },
+            som: { type: 'boolean' },
+            name: { type: 'string', description: 'Window name for window_screenshot.' },
+            handle: { type: 'number', description: 'Window handle for window_screenshot.' },
+            active: { type: 'boolean' },
+            focus_first: { type: 'boolean' },
+            padding: { type: 'number' },
+            timeout_ms: { type: 'number' },
+            poll_ms: { type: 'number' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            target_color: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_apps',
+        description: 'Unified desktop app/process/window discovery and lifecycle wrapper. Prefer canonical list_apps/list_windows before targeting windows.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['list_apps', 'list_windows', 'list_installed_apps', 'find_installed_app', 'launch_app', 'close_app', 'process_list'] },
+            filter: { type: 'string' },
+            include_windows: { type: 'boolean' },
+            app_id: { type: 'string' },
+            process_name: { type: 'string' },
+            title: { type: 'string' },
+            query: { type: 'string' },
+            limit: { type: 'number' },
+            refresh: { type: 'boolean' },
+            app: { type: 'string' },
+            args: { type: 'string' },
+            wait_ms: { type: 'number' },
+            name: { type: 'string' },
+            force: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_window',
+        description: 'Unified desktop window wrapper. Prefer this for app-specific inspection and input; it delegates to the canonical window-scoped handlers where possible.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['find', 'focus', 'control', 'state', 'screenshot', 'text', 'accessibility_tree', 'click', 'type', 'key', 'press_key', 'scroll', 'drag'] },
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            name: { type: 'string' },
+            handle: { type: 'number' },
+            control_action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'], description: 'Sub-action for action="control".' },
+            active: { type: 'boolean' },
+            include_screenshot: { type: 'boolean' },
+            include_text: { type: 'boolean' },
+            focus_first: { type: 'boolean' },
+            padding: { type: 'number' },
+            mode: { type: 'string', enum: ['normal', 'som'] },
+            som: { type: 'boolean' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            from_x: { type: 'number' },
+            from_y: { type: 'number' },
+            to_x: { type: 'number' },
+            to_y: { type: 'number' },
+            text: { type: 'string' },
+            key: { type: 'string' },
+            raw: { type: 'boolean' },
+            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+            amount: { type: 'number' },
+            coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'] },
+            screenshot_id: { type: 'string' },
+            button: { type: 'string', enum: ['left', 'right'] },
+            double_click: { type: 'boolean' },
+            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
+            final_action_approval_id: { type: 'string' },
+            max_depth: { type: 'integer' },
+            max_nodes: { type: 'integer' },
+            steps: { type: 'number' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_input',
+        description: 'Unified host-desktop input fallback wrapper. Use for global/capture/monitor coordinates, focused-window typing, keys, wait, and clipboard actions.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['click', 'drag', 'scroll', 'type', 'type_raw', 'key', 'press_key', 'wait', 'clipboard_get', 'clipboard_set'] },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            from_x: { type: 'number' },
+            from_y: { type: 'number' },
+            to_x: { type: 'number' },
+            to_y: { type: 'number' },
+            element: { type: 'number' },
+            text: { type: 'string' },
+            key: { type: 'string' },
+            file_path: { type: 'string' },
+            file_paths: { type: 'array', items: { type: 'string' } },
+            mode: { type: 'string', enum: ['auto', 'text', 'image', 'files'] },
+            button: { type: 'string', enum: ['left', 'right'] },
+            double_click: { type: 'boolean' },
+            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+            amount: { type: 'number' },
+            axis: { type: 'string', enum: ['vertical', 'horizontal'] },
+            coordinate_space: { type: 'string', enum: ['virtual', 'monitor', 'capture', 'window'] },
+            screenshot_id: { type: 'string' },
+            window_name: { type: 'string' },
+            window_handle: { type: 'number' },
+            monitor_relative: { type: 'boolean' },
+            monitor_index: { type: 'integer' },
+            verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
+            final_action_approval_id: { type: 'string' },
+            capture_after: { type: 'boolean' },
+            steps: { type: 'number' },
+            ms: { type: 'number' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_macro',
+        description: 'Unified desktop macro wrapper. Use to record, stop, replay, and list saved host-desktop macros.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['record', 'stop', 'replay', 'list'] },
+            name: { type: 'string' },
+            speed_multiplier: { type: 'number' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_background',
+        description: 'Unified isolated background-desktop wrapper. This targets the sandbox worker, not the host desktop.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['status', 'prepare_sandbox', 'command'] },
+            command_action: { type: 'string', enum: ['screenshot', 'click', 'type', 'key', 'run', 'wait'], description: 'Sub-action for action="command".' },
+            launch: { type: 'boolean' },
+            networking: { type: 'string', enum: ['enable', 'disable', 'default'] },
+            vgpu: { type: 'string', enum: ['enable', 'disable', 'default'] },
+            memory_mb: { type: 'number' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            text: { type: 'string' },
+            key: { type: 'string' },
+            command: { type: 'string' },
+            ms: { type: 'number' },
+            timeout_ms: { type: 'number' },
+          },
+        },
+      },
+    },
     {
       type: 'function',
       function: {
@@ -4855,7 +5194,7 @@ export function getDesktopToolDefinitions(): any[] {
             verify: {
               type: 'string',
               enum: ['off', 'auto', 'strict'],
-              description: 'Verification mode. auto defaults on for capture/window targeting and off otherwise. strict always probes for confirmation.',
+              description: 'Verification mode. Default is off for speed. Use auto/strict when you need before/after probe confirmation; strict always probes for confirmation.',
             },
             coordinate_space: {
               type: 'string',
@@ -4903,7 +5242,7 @@ export function getDesktopToolDefinitions(): any[] {
             verify: {
               type: 'string',
               enum: ['off', 'auto', 'strict'],
-              description: 'Verification mode. auto defaults on for capture/window targeting and off otherwise.',
+              description: 'Verification mode. Default is off for speed. Use auto/strict when you need before/after probe confirmation.',
             },
             coordinate_space: {
               type: 'string',
@@ -5186,7 +5525,7 @@ export function getDesktopToolDefinitions(): any[] {
             verify: {
               type: 'string',
               enum: ['off', 'auto', 'strict'],
-              description: 'Verification mode. auto defaults on for capture/window targeting and off otherwise.',
+              description: 'Verification mode. Default is off for speed. Use auto/strict when you need before/after probe confirmation.',
             },
             coordinate_space: {
               type: 'string',

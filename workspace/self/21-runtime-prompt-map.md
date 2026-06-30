@@ -157,6 +157,16 @@ This is the main branching logic for memory, tools, and skills.
 | Skills turn hint | `skills-manager.ts` | 839–875 (`buildTurnContext`) |
 | Active pinned skills | `prompt-context.ts` | 939–958 (`buildActiveSkillsContext`) |
 
+Workspace tool surface note: `workspace_write` is wrapper-first. The exposed model schema should prefer `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`; granular file/git/run/safety/code-nav tools remain executable compatibility handlers but are hidden from normal schema injection.
+
+Prometheus dev source note: `prometheus_source_read` exposes `dev_source_read`; `prometheus_source_write` exposes `dev_source_edit` only after the existing approval/category gate. Granular src/web-ui/prom-root read/write tools remain executable compatibility handlers but are hidden from normal schema injection.
+
+Browser/desktop note: `browser_automation` exposes `browser_session`, `browser_observe`, `browser_act`, and `browser_extract`; `desktop_automation` exposes `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background`. Granular browser/desktop tools remain executable compatibility handlers but are hidden from normal schema injection.
+
+External/agents/Creative note: `external_apps` exposes X/xAI wrappers (`x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, `x_admin`) and `vercel_ops` for the large bundled connectors; `agents_and_teams` exposes `agent_ops`, `agent_chat_ops`, `team_ops_wrapper`, and `team_collab_ops`; Creative buckets expose `creative_project`, `creative_scene`, `creative_image_ops`, `creative_video_ops`, `creative_hyperframes_ops`, and `creative_quality_ops`. Granular tools remain executable compatibility handlers but are hidden from normal schema injection.
+
+Realtime voice note: `buildVoiceToolDefinitions()` in `src/gateway/routes/chat.router.ts` is also wrapper-first. The exposed voice schema uses `voice_ops`, `voice_browser`, and `voice_desktop`, plus canonical `skill_*` and rich `show_*` card tools. Granular `voice_web_*`, `voice_browser_*`, `voice_desktop_*`, screenshot/status, and simple generation tools remain executable compatibility handlers behind wrapper normalization.
+
 ### Prompt-cache split
 
 Volatile vs stable parts are joined with `PROMPT_CACHE_MARKER` via `assembleContext()` — `prompt-context.ts:23–35`. Adapters strip the marker before sending to the model.

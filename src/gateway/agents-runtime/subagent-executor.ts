@@ -30,7 +30,7 @@ import { getMCPManager } from '../mcp-manager';
 import { getProcessSupervisor } from '../process/supervisor';
 import { executeAgentBuilderTool } from './agent-builder-integration';
 import { SubagentManager } from './subagent-manager';
-import { appendSubagentChatMessage } from './subagent-chat-store';
+import { appendSubagentChatMessage, getSubagentChatHistory } from './subagent-chat-store';
 import { formatIntradayNoteSourceLine, inferIntradayNoteSource } from '../intraday-note-source';
 import {
   creativeAnalyzeGeneratedVideo,
@@ -104,9 +104,18 @@ import {
   addTeamContextReference,
   updateTeamContextReference,
   deleteTeamContextReference,
+  getOrCreateTeamDirectThread,
+  enqueueTeamDirectThreadUserMessage,
 } from '../teams/managed-teams';
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
-import { parseTeamMemberDirectSessionId, parseTeamMemberRoomSessionId, runTeamMemberRoomTurn, scheduleTeamMemberAutoWake } from '../teams/team-member-room';
+import {
+  parseTeamMemberDirectSessionId,
+  parseTeamMemberRoomSessionId,
+  runTeamMemberDirectTurn,
+  runTeamMemberRoomTurn,
+  scheduleTeamMemberAutoWake,
+  scheduleTeamMemberDirectWake,
+} from '../teams/team-member-room';
 import { routeTeamEvent } from '../teams/team-event-router';
 import { appendTeamMemoryEvent, claimAgentForTeamWorkspace } from '../teams/team-workspace';
 import { notifyMainAgent } from '../teams/notify-bridge';
@@ -1196,6 +1205,118 @@ function getTeamChatTargetMetadata(targetAgentId: string) {
   };
 }
 
+function clampAgentChatTimeoutMs(value: any, fallback = 300000): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.max(1000, Math.min(1800000, Math.floor(n)));
+}
+
+function getStandaloneSubagentChatSessionId(agentId: string): string {
+  return `subagent_chat_${String(agentId || '').trim()}`;
+}
+
+function getStandaloneSubagentForChat(agentId: string): { agent?: any; error?: string } {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return { error: 'agent_id is required' };
+  const agent = getAgentById(cleanAgentId) as any;
+  if (!agent) return { error: `Unknown subagent: ${cleanAgentId}. Call agent_list first.` };
+  if (agent.default === true || cleanAgentId === 'main') {
+    return { error: 'This tool is for standalone subagents, not the main/default agent.' };
+  }
+  const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(cleanAgentId));
+  if (team) {
+    return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use target_type="team_member" with team_id for team agents.` };
+  }
+  return { agent };
+}
+
+async function runStandaloneSubagentChatFromTool(params: {
+  agentId: string;
+  message: string;
+  source: string;
+  parentSessionId: string;
+  timeoutMs?: number;
+  userLabel?: string;
+}): Promise<{ result: { type: string; text: string; thinking?: string }; historyEntry: any; messages: any[] }> {
+  const { runSubagentChatTurnFromChannel } = require('../routes/channels.router') as typeof import('../routes/channels.router');
+  return runSubagentChatTurnFromChannel({
+    agentId: params.agentId,
+    message: params.message,
+    source: params.source,
+    accountId: 'prometheus',
+    peerId: params.parentSessionId,
+    userLabel: params.userLabel || 'Main Agent',
+    timeoutMs: params.timeoutMs,
+    sessionId: getStandaloneSubagentChatSessionId(params.agentId),
+    seedFromSharedChatStore: true,
+  });
+}
+
+function normalizeAgentConversationBackgroundResult(result: any, agentId?: string, teamId?: string): any {
+  if (result && typeof result === 'object' && typeof result.durationMs === 'number' && typeof result.agentName === 'string') {
+    return result;
+  }
+  const text = String(
+    result?.reply
+    || result?.result
+    || result?.message
+    || (result ? JSON.stringify(result) : '')
+  );
+  return {
+    success: result?.success !== false,
+    result: text,
+    error: result?.error,
+    thinking: result?.thinking,
+    durationMs: Number(result?.duration_ms || result?.durationMs || 0) || 0,
+    stepCount: Number(result?.step_count || result?.stepCount || 0) || undefined,
+    agentName: String(result?.agent_name || result?.agent_id || agentId || teamId || 'agent'),
+    taskId: result?.task_id || result?.taskId,
+    warning: result?.warning,
+  };
+}
+
+function startAgentConversationBackground(params: {
+  prefix: string;
+  agentId?: string;
+  teamId?: string;
+  promiseFactory: () => Promise<any>;
+}): string {
+  const taskId = `${params.prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const promise = params.promiseFactory()
+    .then((result) => {
+      const normalized = normalizeAgentConversationBackgroundResult(result, params.agentId, params.teamId);
+      const entry = getBgAgentResults().get(taskId);
+      if (entry) {
+        entry.status = normalized?.success === false ? 'failed' : 'complete';
+        entry.result = normalized;
+      }
+      return normalized;
+    })
+    .catch((err: any) => {
+      const result = {
+        success: false,
+        result: '',
+        error: String(err?.message || err),
+        durationMs: 0,
+        agentName: String(params.agentId || params.teamId || 'agent'),
+      };
+      const entry = getBgAgentResults().get(taskId);
+      if (entry) {
+        entry.status = 'failed';
+        entry.result = result;
+      }
+      return result;
+    });
+  getBgAgentResults().set(taskId, {
+    status: 'running',
+    agentId: String(params.agentId || params.teamId || 'agent'),
+    teamId: String(params.teamId || params.agentId || 'standalone'),
+    startedAt: Date.now(),
+    promise,
+  });
+  return taskId;
+}
+
 function isProposalLikeSourceSessionId(sessionId: string): boolean {
   const sid = String(sessionId || '');
   return sid.startsWith('proposal_') || sid.startsWith('code_exec');
@@ -1418,11 +1539,15 @@ function getPostSourceEditInstructionForSession(sessionId: string, files: string
   return `Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=${surfaceText}; write_note tag=${tagText}.${idText}`;
 }
 
+function normalizeTypeScriptModule(mod: any): typeof import('typescript') {
+  return (mod?.default || mod) as typeof import('typescript');
+}
+
 function validateSourceSyntaxBeforeWrite(absPath: string, content: string): string | null {
   const ext = path.extname(absPath).toLowerCase();
   if (!['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'].includes(ext)) return null;
   try {
-    const ts = require('typescript') as typeof import('typescript');
+    const ts = normalizeTypeScriptModule(require('typescript'));
     const scriptKind = ext === '.tsx'
       ? ts.ScriptKind.TSX
       : ext === '.jsx'
@@ -1459,8 +1584,766 @@ function rejectInvalidSourceEdit(toolName: string, args: any, absPath: string, c
   };
 }
 
+function inferDevSourceSurface(args: any): 'src' | 'web-ui' | 'prom-root' {
+  const surface = String(args?.surface || args?.root || '').trim().toLowerCase();
+  if (['web-ui', 'webui', 'ui', 'frontend'].includes(surface)) return 'web-ui';
+  if (['prom-root', 'prometheus-root', 'root', 'prom'].includes(surface)) return 'prom-root';
+  const raw = String(args?.file || args?.filename || args?.path || args?.directory || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (raw === 'web-ui' || raw.startsWith('web-ui/')) return 'web-ui';
+  if (raw.startsWith('prom-root/') || raw.startsWith('prom:/')) return 'prom-root';
+  return 'src';
+}
+
+function normalizeDevSourceFileArg(args: any, surface: 'src' | 'web-ui' | 'prom-root'): string {
+  const raw = String(args?.file || args?.filename || args?.path || args?.name || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (surface === 'web-ui') return raw.replace(/^web-ui\/?/, '');
+  if (surface === 'prom-root') return raw.replace(/^prom-root\/?/, '').replace(/^prom:\//, '');
+  return raw.replace(/^src\/?/, '');
+}
+
+function normalizeDevSourcePathArg(args: any, surface: 'src' | 'web-ui' | 'prom-root'): string {
+  const raw = String(args?.path || args?.directory || args?.dir || args?.file || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (surface === 'web-ui') return raw.replace(/^web-ui\/?/, '');
+  if (surface === 'prom-root') return raw.replace(/^prom-root\/?/, '').replace(/^prom:\//, '');
+  return raw.replace(/^src\/?/, '');
+}
+
+function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (name !== 'dev_source_read' && name !== 'dev_source_edit') return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: `${name} requires action` };
+  delete args.action;
+  const surface = inferDevSourceSurface(args);
+  const file = normalizeDevSourceFileArg(args, surface);
+  const pathArg = normalizeDevSourcePathArg(args, surface);
+
+  if (name === 'dev_source_read') {
+    if (action === 'batch_read' || action === 'read_batch') {
+      const files = Array.isArray(args.files)
+        ? args.files
+        : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ file: String(p) })) : []);
+      return { name: 'read_dev_sources', args: { ...args, files } };
+    }
+    if (action === 'stats_batch') {
+      const files = Array.isArray(args.files)
+        ? args.files.map((entry: any) => typeof entry === 'string' ? entry : String(entry?.file || entry?.path || '')).filter(Boolean)
+        : [];
+      return { name: 'source_stats_batch', args: { ...args, files } };
+    }
+    if (action === 'list') {
+      if (surface === 'web-ui') return { name: 'list_webui_source', args: { ...args, path: pathArg } };
+      if (surface === 'prom-root') return { name: 'list_prom', args: { ...args, path: pathArg } };
+      return { name: 'list_source', args: { ...args, path: pathArg } };
+    }
+    if (action === 'stats') {
+      if (surface === 'web-ui') return { name: 'webui_source_stats', args: { ...args, file } };
+      if (surface === 'prom-root') return { name: 'prom_file_stats', args: { ...args, file } };
+      return { name: 'source_stats', args: { ...args, file } };
+    }
+    if (action === 'read') {
+      if (surface === 'web-ui') return { name: 'read_webui_source', args: { ...args, file } };
+      if (surface === 'prom-root') return { name: 'read_prom_file', args: { ...args, file } };
+      return { name: 'read_source', args: { ...args, file } };
+    }
+    if (action === 'grep' || action === 'search') {
+      if (surface === 'web-ui') return { name: 'grep_webui_source', args: { ...args, path: pathArg } };
+      if (surface === 'prom-root') return { name: 'grep_prom', args: { ...args, path: pathArg } };
+      return { name: 'grep_source', args: { ...args, path: pathArg, root: args.root || 'src' } };
+    }
+    return { name, args: rawArgs, error: `Unsupported dev_source_read action "${action}".` };
+  }
+
+  if (surface === 'prom-root') {
+    return { name, args: rawArgs, error: 'dev_source_edit supports approved src/ and web-ui/ edits only; prom-root writes are not available in this wrapper.' };
+  }
+
+  if (action === 'patchset') return { name: 'apply_dev_source_patchset', args };
+  if (action === 'verify' || action === 'verify_only') return { name: 'prom_apply_dev_changes', args: { ...args, mode: 'verify_only' } };
+  if (action === 'apply_live' || action === 'apply') return { name: 'prom_apply_dev_changes', args: { ...args, mode: 'apply_live' } };
+
+  const writeTool = (srcBase: string, webUiBase: string) => {
+    if (surface === 'web-ui') return { name: webUiBase, args: { ...args, file } };
+    return { name: srcBase, args: { ...args, file } };
+  };
+  if (action === 'find_replace') return writeTool('find_replace_source', 'find_replace_webui_source');
+  if (action === 'replace_lines') return writeTool('replace_lines_source', 'replace_lines_webui_source');
+  if (action === 'insert_after') return writeTool('insert_after_source', 'insert_after_webui_source');
+  if (action === 'delete_lines') return writeTool('delete_lines_source', 'delete_lines_webui_source');
+  if (action === 'write' || action === 'create') return writeTool('write_source', 'write_webui_source');
+  if (action === 'delete_file') return writeTool('delete_source', 'delete_webui_source');
+  return { name, args: rawArgs, error: `Unsupported dev_source_edit action "${action}".` };
+}
+
+function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (!/^workspace_(read|edit|run|git|safety|code_nav)$/.test(name)) return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: `${name} requires action` };
+  delete args.action;
+
+  const normalizeSearchArgs = () => {
+    const out = { ...args };
+    const rawGlob = String(out.file_glob ?? out.glob ?? '').trim().replace(/\\/g, '/');
+    const rawDirectory = String(out.directory ?? out.path ?? '').trim().replace(/\\/g, '/');
+    if (rawGlob.includes('/')) {
+      const globDir = path.posix.dirname(rawGlob);
+      const globBase = path.posix.basename(rawGlob);
+      if (!rawDirectory || rawDirectory === '.') out.directory = globDir;
+      else if (rawGlob.startsWith(`${rawDirectory.replace(/\/$/, '')}/`)) out.file_glob = globBase;
+      if (out.file_glob == null || out.file_glob === out.glob) out.file_glob = globBase;
+    } else {
+      out.directory = out.directory ?? out.path ?? '.';
+      out.file_glob = out.file_glob ?? out.glob;
+    }
+    delete out.glob;
+    return out;
+  };
+
+  const pathArg = args.path ?? args.filename ?? args.file ?? args.name;
+  const withFilename = () => ({ ...args, filename: pathArg });
+  const withPath = () => ({ ...args, path: pathArg });
+
+  if (name === 'workspace_read') {
+    if (action === 'tree') return { name: 'file_tree', args: withPath() };
+    if (action === 'list') return { name: 'list_directory', args: withPath() };
+    if (action === 'list_files') return { name: 'list_files', args: withPath() };
+    if (action === 'exists') return { name: 'path_exists', args: withPath() };
+    if (action === 'stats') return { name: 'file_stats', args: withFilename() };
+    if (action === 'read') return { name: 'read_file', args: withFilename() };
+    if (action === 'batch_read') {
+      const files = Array.isArray(args.files) && args.files.length
+        ? args.files.map((entry: any) => ({
+          ...entry,
+          filename: entry?.filename ?? entry?.path ?? entry?.file,
+        }))
+        : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ filename: String(p) })) : []);
+      return { name: 'read_files_batch', args: { ...args, files } };
+    }
+    if (action === 'grep') {
+      if (pathArg) return { name: 'grep_file', args: withFilename() };
+      return { name: 'search_files', args: normalizeSearchArgs() };
+    }
+    if (action === 'search') {
+      return { name: 'search_files', args: normalizeSearchArgs() };
+    }
+    return { name, args: rawArgs, error: `Unsupported workspace_read action "${action}".` };
+  }
+
+  if (name === 'workspace_edit') {
+    if (action === 'create') return { name: 'create_file', args: withFilename() };
+    if (action === 'write') return { name: 'write_file', args: withFilename() };
+    if (action === 'find_replace') return { name: 'find_replace', args: withFilename() };
+    if (action === 'replace_lines') return { name: 'replace_lines', args: withFilename() };
+    if (action === 'insert_after') return { name: 'insert_after', args: withFilename() };
+    if (action === 'delete_lines') return { name: 'delete_lines', args: withFilename() };
+    if (action === 'delete_file') return { name: 'delete_file', args: withFilename() };
+    if (action === 'mkdir') return { name: 'mkdir', args: withPath() };
+    if (action === 'move') return { name: 'move_file', args };
+    if (action === 'copy') return { name: 'copy_file', args };
+    if (action === 'move_directory') return { name: 'move_directory', args };
+    if (action === 'copy_directory') return { name: 'copy_directory', args };
+    if (action === 'patchset') return { name: 'apply_workspace_patchset', args };
+    if (action === 'preview_patch') return { name: 'preview_patch', args };
+    if (action === 'apply_patch') return { name: 'apply_patch', args };
+    return { name, args: rawArgs, error: `Unsupported workspace_edit action "${action}".` };
+  }
+
+  if (name === 'workspace_run') {
+    if (['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'].includes(action)) {
+      const runArgs = {
+        ...args,
+        action,
+        runId: args.runId ?? args.process_id,
+        maxChars: args.maxChars ?? args.max_chars,
+        timeoutMs: args.timeoutMs ?? args.timeout_ms,
+      };
+      return { name: 'terminal', args: runArgs };
+    }
+    if (action === 'test') return { name: 'run_tests', args };
+    if (action === 'lint') return { name: 'run_linter', args };
+    if (action === 'format') return { name: 'run_formatter', args };
+    if (action === 'typecheck') return { name: 'run_typecheck', args };
+    return { name, args: rawArgs, error: `Unsupported workspace_run action "${action}".` };
+  }
+
+  if (name === 'workspace_git') {
+    if (action === 'status') return { name: 'git_status', args };
+    if (action === 'diff') return { name: 'git_diff', args };
+    if (action === 'log') return { name: 'git_log', args };
+    if (action === 'branch') return { name: 'git_branch', args };
+    if (action === 'commit') return { name: 'git_commit', args };
+    if (action === 'push') return { name: 'git_push', args };
+    if (action === 'open_pr') return { name: 'open_pr', args };
+    return { name, args: rawArgs, error: `Unsupported workspace_git action "${action}".` };
+  }
+
+  if (name === 'workspace_safety') {
+    if (action === 'snapshot') return { name: 'snapshot_workspace', args };
+    if (action === 'restore') return { name: 'restore_snapshot', args };
+    if (action === 'revert_last') return { name: 'revert_last_tool_change', args };
+    if (action === 'scan_secrets') return { name: 'scan_secrets', args };
+    if (action === 'scan_large_files') return { name: 'scan_large_files', args };
+    if (action === 'operation_plan') return { name: 'operation_plan', args };
+    if (action === 'preview_patch') return { name: 'preview_patch', args };
+    return { name, args: rawArgs, error: `Unsupported workspace_safety action "${action}".` };
+  }
+
+  if (name === 'workspace_code_nav') {
+    if (action === 'outline') return { name: 'code_outline', args };
+    if (action === 'symbols') return { name: 'get_symbols', args };
+    if (action === 'definition') return { name: 'go_to_definition', args };
+    if (action === 'references') return { name: 'find_references', args };
+    return { name, args: rawArgs, error: `Unsupported workspace_code_nav action "${action}".` };
+  }
+
+  return null;
+}
+
+function normalizeBrowserWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (!['browser_session', 'browser_observe', 'browser_act', 'browser_extract'].includes(name)) return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: `${name} requires action` };
+  delete args.action;
+
+  if (name === 'browser_session') {
+    if (action === 'doctor') return { name: 'browser_doctor', args };
+    if (action === 'set_profile_target') return { name: 'browser_set_profile_target', args };
+    if (action === 'open') return { name: 'browser_open', args };
+    if (action === 'list_tabs') return { name: 'browser_list_tabs', args };
+    if (action === 'select_tab') return { name: 'browser_select_tab', args };
+    if (action === 'new_tab') return { name: 'browser_new_tab', args };
+    if (action === 'close_tab') return { name: 'browser_close_tab', args };
+    if (action === 'close') return { name: 'browser_close', args };
+    return { name, args: rawArgs, error: `Unsupported browser_session action "${action}".` };
+  }
+
+  if (name === 'browser_observe') {
+    if (action === 'snapshot') return { name: 'browser_snapshot', args };
+    if (action === 'snapshot_delta' || action === 'delta') return { name: 'browser_snapshot_delta', args };
+    if (action === 'screenshot' || action === 'vision_screenshot') return { name: 'browser_vision_screenshot', args };
+    if (action === 'page_text' || action === 'text') return { name: 'browser_get_page_text', args };
+    if (action === 'focused_item' || action === 'focus') return { name: 'browser_get_focused_item', args };
+    if (action === 'wait') return { name: 'browser_wait', args };
+    if (action === 'element_watch' || action === 'watch') return { name: 'browser_element_watch', args };
+    return { name, args: rawArgs, error: `Unsupported browser_observe action "${action}".` };
+  }
+
+  if (name === 'browser_act') {
+    if (action === 'click') return { name: 'browser_click', args };
+    if (action === 'fill') return { name: 'browser_fill', args };
+    if (action === 'type') return { name: 'browser_type', args };
+    if (action === 'key' || action === 'press_key') return { name: 'browser_press_key', args };
+    if (action === 'upload_file' || action === 'upload') return { name: 'browser_upload_file', args };
+    if (action === 'scroll') return { name: 'browser_scroll', args };
+    if (action === 'drag') return { name: 'browser_drag', args };
+    if (action === 'click_and_download' || action === 'download') return { name: 'browser_click_and_download', args };
+    if (action === 'vision_click') return { name: 'browser_vision_click', args };
+    if (action === 'vision_type') return { name: 'browser_vision_type', args };
+    return { name, args: rawArgs, error: `Unsupported browser_act action "${action}".` };
+  }
+
+  if (name === 'browser_extract') {
+    if (action === 'scroll_collect') return { name: 'browser_scroll_collect', args };
+    if (action === 'scroll_collect_v2' || action === 'collect_structured') return { name: 'browser_scroll_collect_v2', args };
+    if (action === 'extract_structured' || action === 'structured') return { name: 'browser_extract_structured', args };
+    if (action === 'run_js' || action === 'js') return { name: 'browser_run_js', args };
+    if (action === 'network' || action === 'intercept_network') {
+      if (args.network_action != null && args.action == null) args.action = args.network_action;
+      delete args.network_action;
+      return { name: 'browser_intercept_network', args };
+    }
+    if (action === 'console' || action === 'inspect_console') {
+      if (args.console_action != null && args.action == null) args.action = args.console_action;
+      delete args.console_action;
+      return { name: 'inspect_console', args };
+    }
+    if (action === 'accessibility' || action === 'a11y') return { name: 'run_accessibility_check', args };
+    if (action === 'smoke_test' || action === 'smoke') return { name: 'browser_smoke_test', args };
+    if (action === 'teach_verify') return { name: 'browser_teach_verify', args };
+    return { name, args: rawArgs, error: `Unsupported browser_extract action "${action}".` };
+  }
+
+  return null;
+}
+
+function normalizeDesktopWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (!['desktop_screen', 'desktop_apps', 'desktop_window', 'desktop_input', 'desktop_macro', 'desktop_background'].includes(name)) return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: `${name} requires action` };
+  delete args.action;
+  const normalizeModifier = () => {
+    const modifier = String(args.modifier || '').trim().toLowerCase();
+    if (modifier === 'shift' || modifier === 'ctrl' || modifier === 'alt') args.modifier = modifier;
+    else delete args.modifier;
+  };
+
+  if (name === 'desktop_screen') {
+    if (action === 'doctor') return { name: 'desktop_doctor', args };
+    if (action === 'screenshot') return { name: 'desktop_screenshot', args };
+    if (action === 'window_screenshot') return { name: 'desktop_window_screenshot', args };
+    if (action === 'monitors' || action === 'get_monitors') return { name: 'desktop_get_monitors', args };
+    if (action === 'wait_for_change') return { name: 'desktop_wait_for_change', args };
+    if (action === 'diff_screenshot' || action === 'diff') return { name: 'desktop_diff_screenshot', args };
+    if (action === 'pixel_watch') return { name: 'desktop_pixel_watch', args };
+    return { name, args: rawArgs, error: `Unsupported desktop_screen action "${action}".` };
+  }
+
+  if (name === 'desktop_apps') {
+    if (action === 'list_apps') return { name: 'desktop_list_apps', args };
+    if (action === 'list_windows') return { name: 'desktop_list_windows', args };
+    if (action === 'list_installed_apps') return { name: 'desktop_list_installed_apps', args };
+    if (action === 'find_installed_app') return { name: 'desktop_find_installed_app', args };
+    if (action === 'launch_app' || action === 'launch') return { name: 'desktop_launch_app', args };
+    if (action === 'close_app' || action === 'close') return { name: 'desktop_close_app', args };
+    if (action === 'process_list' || action === 'get_process_list') return { name: 'desktop_get_process_list', args };
+    return { name, args: rawArgs, error: `Unsupported desktop_apps action "${action}".` };
+  }
+
+  if (name === 'desktop_window') {
+    if (args.title != null && args.name == null) args.name = args.title;
+    if (args.name != null && args.title == null) args.title = args.name;
+    if (args.window_handle != null && args.handle == null) args.handle = args.window_handle;
+    if (args.handle != null && args.window_handle == null) args.window_handle = args.handle;
+    if (args.window_id != null && args.handle == null) {
+      const match = String(args.window_id || '').trim().match(/^win_(\d+)$/i);
+      if (match) args.handle = Number(match[1]);
+    }
+    if (args.handle != null && args.window_handle == null) args.window_handle = args.handle;
+    normalizeModifier();
+    if (action === 'find') return { name: 'desktop_find_window', args };
+    if (action === 'focus') return { name: 'desktop_focus_window', args };
+    if (action === 'control') {
+      if (args.control_action != null && args.action == null) args.action = args.control_action;
+      delete args.control_action;
+      if (args.window_handle != null && args.handle == null) args.handle = args.window_handle;
+      return { name: 'desktop_window_control', args };
+    }
+    if (action === 'state') return { name: 'desktop_get_window_state', args };
+    if (action === 'screenshot') return { name: 'desktop_window_screenshot', args };
+    if (action === 'text') {
+      if (args.name != null && args.window_name == null) args.window_name = args.name;
+      return { name: 'desktop_get_window_text', args };
+    }
+    if (action === 'accessibility_tree' || action === 'accessibility') {
+      if (args.name != null && args.window_name == null) args.window_name = args.name;
+      return { name: 'desktop_get_accessibility_tree', args };
+    }
+    if (action === 'click') return { name: 'desktop_window_click', args };
+    if (action === 'type') return { name: 'desktop_window_type', args };
+    if (action === 'key' || action === 'press_key') return { name: 'desktop_window_press_key', args };
+    if (action === 'scroll') return { name: 'desktop_window_scroll', args };
+    if (action === 'drag') return { name: 'desktop_window_drag', args };
+    return { name, args: rawArgs, error: `Unsupported desktop_window action "${action}".` };
+  }
+
+  if (name === 'desktop_input') {
+    normalizeModifier();
+    if (action === 'click') return { name: 'desktop_click', args };
+    if (action === 'drag') return { name: 'desktop_drag', args };
+    if (action === 'scroll') return { name: 'desktop_scroll', args };
+    if (action === 'type') return { name: 'desktop_type', args };
+    if (action === 'type_raw') return { name: 'desktop_type_raw', args };
+    if (action === 'key' || action === 'press_key') return { name: 'desktop_press_key', args };
+    if (action === 'wait') return { name: 'desktop_wait', args };
+    if (action === 'clipboard_get' || action === 'get_clipboard') return { name: 'desktop_get_clipboard', args };
+    if (action === 'clipboard_set' || action === 'set_clipboard') return { name: 'desktop_set_clipboard', args };
+    return { name, args: rawArgs, error: `Unsupported desktop_input action "${action}".` };
+  }
+
+  if (name === 'desktop_macro') {
+    if (action === 'record') return { name: 'desktop_record_macro', args };
+    if (action === 'stop') return { name: 'desktop_stop_macro', args };
+    if (action === 'replay') return { name: 'desktop_replay_macro', args };
+    if (action === 'list') return { name: 'desktop_list_macros', args };
+    return { name, args: rawArgs, error: `Unsupported desktop_macro action "${action}".` };
+  }
+
+  if (name === 'desktop_background') {
+    if (action === 'status') return { name: 'desktop_background_status', args };
+    if (action === 'prepare_sandbox') return { name: 'desktop_background_prepare_sandbox', args };
+    if (action === 'command') {
+      if (args.command_action != null && args.action == null) args.action = args.command_action;
+      delete args.command_action;
+      return { name: 'desktop_background_command', args };
+    }
+    return { name, args: rawArgs, error: `Unsupported desktop_background action "${action}".` };
+  }
+
+  return null;
+}
+
+function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  const actionMaps: Record<string, Record<string, string>> = {
+    x_search_ops: {
+      x_search: 'x_search',
+      live_search: 'xai_live_search',
+      search_recent: 'x_api_search_recent',
+      search_all: 'x_api_search_all',
+      search_spaces: 'x_api_search_spaces',
+      get_trends: 'x_api_get_trends',
+      get_personalized_trends: 'x_api_get_personalized_trends',
+      get_space: 'x_api_get_space',
+    },
+    x_posts: {
+      get_post: 'x_api_get_post',
+      get_posts: 'x_api_get_posts',
+      create_post: 'x_api_create_post',
+      delete_post: 'x_api_delete_post',
+      create_bookmark: 'x_api_create_bookmark',
+      delete_bookmark: 'x_api_delete_bookmark',
+      get_bookmarks: 'x_api_get_bookmarks',
+      like: 'x_api_like_post',
+      unlike: 'x_api_unlike_post',
+      get_liked_posts: 'x_api_get_liked_posts',
+      get_liking_users: 'x_api_get_liking_users',
+      repost: 'x_api_repost',
+      unrepost: 'x_api_unrepost',
+      get_reposted_by: 'x_api_get_reposted_by',
+      get_reposts_of_me: 'x_api_get_reposts_of_me',
+    },
+    x_users: {
+      me: 'x_api_me',
+      get_user: 'x_api_get_user',
+      get_user_by_username: 'x_api_get_user_by_username',
+      get_user_posts: 'x_api_get_user_posts',
+      get_user_mentions: 'x_api_get_user_mentions',
+      get_followers: 'x_api_get_followers',
+      get_following: 'x_api_get_following',
+      follow: 'x_api_follow_user',
+      unfollow: 'x_api_unfollow_user',
+      mute: 'x_api_mute_user',
+      unmute: 'x_api_unmute_user',
+      block: 'x_api_block_user',
+      unblock: 'x_api_unblock_user',
+    },
+    x_lists: {
+      get_list: 'x_api_get_list',
+      get_owned_lists: 'x_api_get_owned_lists',
+      get_list_posts: 'x_api_get_list_posts',
+      create_list: 'x_api_create_list',
+      update_list: 'x_api_update_list',
+      delete_list: 'x_api_delete_list',
+      add_member: 'x_api_add_list_member',
+      remove_member: 'x_api_remove_list_member',
+      follow_list: 'x_api_follow_list',
+      unfollow_list: 'x_api_unfollow_list',
+      pin_list: 'x_api_pin_list',
+      unpin_list: 'x_api_unpin_list',
+    },
+    x_dm: {
+      send: 'x_api_send_dm',
+      get_events: 'x_api_get_dm_events',
+    },
+    x_admin: {
+      request: 'x_api_request',
+      get_usage: 'x_api_get_usage',
+    },
+    vercel_ops: {
+      status: 'connector_vercel_status',
+      list_teams: 'connector_vercel_list_teams',
+      list_projects: 'connector_vercel_list_projects',
+      list_deployments: 'connector_vercel_list_deployments',
+      get_deployment: 'connector_vercel_get_deployment',
+      redeploy: 'connector_vercel_redeploy',
+      env: 'connector_vercel_env',
+      domains: 'connector_vercel_domains',
+    },
+  };
+  const map = actionMaps[name];
+  if (!map) return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: `${name} requires action` };
+  delete args.action;
+  const target = map[action];
+  if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
+  return { name: target, args };
+}
+
+function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  const actionMaps: Record<string, Record<string, string>> = {
+    agent_ops: {
+      spawn: 'spawn_subagent',
+      list: 'agent_list',
+      info: 'agent_info',
+      update: 'agent_update',
+      delete: 'delete_agent',
+      deploy_analysis_team: 'deploy_analysis_team',
+    },
+    agent_chat_ops: {
+      talk: 'talk_to_subagent',
+      message: 'message_subagent',
+      send: 'agent_message_send',
+      turn_request: 'agent_turn_request',
+      reply_wait: 'agent_reply_wait',
+      thread_watch: 'agent_thread_watch',
+    },
+    team_ops_wrapper: {
+      manage: 'team_manage',
+      manage_goal: 'manage_team_goal',
+      manage_context_ref: 'manage_team_context_ref',
+      update_goal: 'update_team_goal',
+      reply: 'reply_to_team',
+      post_chat: 'post_to_team_chat',
+      message_main: 'message_main_agent',
+      dispatch: 'dispatch_to_agent',
+      dispatch_team_agent: 'dispatch_team_agent',
+      request_member_turn: 'request_team_member_turn',
+      get_agent_result: 'get_agent_result',
+    },
+    team_collab_ops: {
+      talk_manager: 'talk_to_manager',
+      request_context: 'request_context',
+      request_manager_help: 'request_manager_help',
+      talk_teammate: 'talk_to_teammate',
+      share_artifact: 'share_artifact',
+      update_status: 'update_my_status',
+    },
+  };
+  const map = actionMaps[name];
+  if (!map) return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: `${name} requires action` };
+  delete args.action;
+  const target = map[action];
+  if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
+  if (target === 'team_manage') {
+    if (args.team_action != null && args.action == null) args.action = args.team_action;
+    delete args.team_action;
+  }
+  return { name: target, args };
+}
+
+function normalizeCreativeWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  const actionMaps: Record<string, Record<string, string>> = {
+    creative_project: {
+      get_mode: 'get_creative_mode',
+      switch_mode: 'switch_creative_mode',
+      list_references: 'creative_list_references',
+      get_state: 'creative_get_state',
+      create_project: 'creative_create_project',
+      project_history: 'creative_project_history',
+      create_storyboard: 'creative_create_storyboard',
+      storyboard_history: 'creative_storyboard_history',
+      save_scene: 'creative_save_scene',
+      export: 'creative_export',
+      export_trace: 'creative_export_trace',
+      checkpoint: 'creative_checkpoint',
+      history_status: 'creative_history_status',
+      undo: 'creative_undo',
+      redo: 'creative_redo',
+      reset_scene: 'creative_reset_scene',
+      purge_scene: 'creative_purge_scene',
+      create_library_pack: 'creative_create_library_pack',
+      list_library_packs: 'creative_list_library_packs',
+      toggle_library_pack: 'creative_toggle_library_pack',
+    },
+    creative_scene: {
+      apply_ops: 'creative_apply_ops',
+      set_canvas: 'creative_set_canvas',
+      add_element: 'creative_add_element',
+      update_element: 'creative_update_element',
+      delete_element: 'creative_delete_element',
+      select_element: 'creative_select_element',
+      element_inventory: 'creative_element_inventory',
+      apply_animation: 'creative_apply_animation',
+      arrange: 'creative_arrange',
+      apply_style: 'creative_apply_style',
+      apply_template: 'creative_apply_template',
+      add_effect: 'creative_add_effect',
+      add_mask: 'creative_add_mask',
+      set_blend_mode: 'creative_set_blend_mode',
+      apply_brand_kit: 'creative_apply_brand_kit',
+      search_animations: 'creative_search_animations',
+      chain_scene: 'creative_chain_scene',
+    },
+    creative_image_ops: {
+      add_asset: 'creative_add_asset',
+      import_asset: 'creative_import_asset',
+      analyze_asset: 'creative_analyze_asset',
+      extract_layers: 'creative_extract_layers',
+      extract_layers_for_generation: 'creative_extract_layers_for_generation',
+      search_assets: 'creative_search_assets',
+      generate_asset: 'creative_generate_asset',
+      register_generation: 'creative_register_generation',
+      generation_history: 'creative_generation_history',
+      fit_asset: 'creative_fit_asset',
+      search_icons: 'creative_search_icons',
+      render_ascii_asset: 'creative_render_ascii_asset',
+      normalize_layer_specs: 'creative_normalize_layer_specs',
+    },
+    creative_video_ops: {
+      write_shot_prompt: 'creative_write_shot_prompt',
+      extract_video_frame: 'creative_extract_video_frame',
+      extract_video_frames: 'creative_extract_video_frames',
+      generate_image_shot: 'creative_generate_image_shot',
+      generate_video_shot: 'creative_generate_video_shot',
+      refine_video_shot: 'creative_refine_video_shot',
+      generate_sequence: 'creative_generate_sequence',
+      pick_continuity_frame: 'creative_pick_continuity_frame',
+      wrap_video_as_html_motion_clip: 'creative_wrap_video_as_html_motion_clip',
+      add_generated_clip_to_composition: 'creative_add_generated_clip_to_composition',
+      render_generated_sequence: 'creative_render_generated_sequence',
+      stitch_clips: 'creative_stitch_clips',
+      auto_assemble_rough_cut: 'creative_auto_assemble_rough_cut',
+      import_audio: 'creative_import_audio',
+      download_audio: 'creative_download_audio',
+      extract_audio_from_video: 'creative_extract_audio_from_video',
+      generate_voiceover: 'creative_generate_voiceover',
+      transcribe_audio: 'creative_transcribe_audio',
+      sync_captions_to_audio: 'creative_sync_captions_to_audio',
+      add_audio_track: 'creative_add_audio_track',
+      mix_audio_tracks: 'creative_mix_audio_tracks',
+      add_music_bed: 'creative_add_music_bed',
+      add_sound_effects: 'creative_add_sound_effects',
+      generate_motion_graphics_layer: 'creative_generate_motion_graphics_layer',
+      composite_video_layers: 'creative_composite_video_layers',
+      attach_audio_from_file: 'creative_attach_audio_from_file',
+      attach_audio_from_url: 'creative_attach_audio_from_url',
+      trim_clip: 'creative_trim_clip',
+      list_motion_templates: 'creative_list_motion_templates',
+      preview_motion_template: 'creative_preview_motion_template',
+      apply_motion_template: 'creative_apply_motion_template',
+      generate_motion_variants: 'creative_generate_motion_variants',
+      composition_get: 'creative_composition_get',
+      composition_save: 'creative_composition_save',
+      composition_add_track: 'creative_composition_add_track',
+      composition_add_clip: 'creative_composition_add_clip',
+      composition_select_clip: 'creative_composition_select_clip',
+      composition_move_clip: 'creative_composition_move_clip',
+      composition_trim_clip: 'creative_composition_trim_clip',
+      composition_split_at: 'creative_composition_split_at',
+      composition_set_transition: 'creative_composition_set_transition',
+      composition_delete_clip: 'creative_composition_delete_clip',
+      composition_render: 'creative_composition_render',
+      timeline: 'creative_timeline',
+      render_snapshot: 'creative_render_snapshot',
+    },
+    creative_hyperframes_ops: {
+      browse_catalog: 'hyperframes_browse_catalog',
+      insert_clip: 'hyperframes_insert_clip',
+      apply_patch: 'hyperframes_apply_patch',
+      set_text: 'hyperframes_set_text',
+      set_color: 'hyperframes_set_color',
+      set_timing: 'hyperframes_set_timing',
+      set_variable: 'hyperframes_set_variable',
+      set_asset: 'hyperframes_set_asset',
+      add_animation: 'hyperframes_add_animation',
+      lint: 'hyperframes_lint',
+      qa: 'hyperframes_qa',
+      materialize: 'hyperframes_materialize',
+      export: 'hyperframes_export',
+      list_components: 'creative_list_hyperframes_components',
+      import_component: 'creative_import_hyperframes_component',
+      sync_catalog: 'creative_sync_hyperframes_catalog',
+      apply_component: 'creative_apply_hyperframes_component',
+      overlay_on_video: 'creative_overlay_hyperframes_on_video',
+      list_templates: 'creative_list_html_motion_templates',
+      apply_template: 'creative_apply_html_motion_template',
+      create_clip: 'creative_create_html_motion_clip',
+      save_template: 'creative_save_html_motion_template',
+      save_block: 'creative_save_html_motion_block',
+      promote_scene_to_template: 'creative_promote_scene_to_template',
+      list_blocks: 'creative_list_html_motion_blocks',
+      render_block: 'creative_render_html_motion_block',
+      read_clip: 'creative_read_html_motion_clip',
+      patch_clip: 'creative_patch_html_motion_clip',
+      restore_revision: 'creative_restore_html_motion_revision',
+      render_snapshot: 'creative_render_html_motion_snapshot',
+      export_clip: 'creative_export_html_motion_clip',
+    },
+    creative_quality_ops: {
+      quality_report: 'creative_quality_report',
+      validate_layout: 'creative_validate_layout',
+      validate_composition_layers: 'creative_validate_composition_layers',
+      preflight_overlay: 'creative_preflight_overlay',
+      sample_composite_frames: 'creative_sample_composite_frames',
+      frame_trace: 'creative_frame_trace',
+      frame_diff: 'creative_frame_diff',
+      analyze_generated_video: 'creative_analyze_generated_video',
+      compare_shots: 'creative_compare_shots',
+      select_best_take: 'creative_select_best_take',
+      retry_shot_until_pass: 'creative_retry_shot_until_pass',
+      lint_html_motion_clip: 'creative_lint_html_motion_clip',
+      measure_text: 'creative_measure_text',
+      text_fit_report: 'creative_text_fit_report',
+      composition_lint: 'creative_composition_lint',
+      image_get_element_at_point: 'image_get_element_at_point',
+      image_get_overlaps: 'image_get_overlaps',
+      image_get_bounds_summary: 'image_get_bounds_summary',
+      image_check_text_overflow: 'image_check_text_overflow',
+      image_check_contrast: 'image_check_contrast',
+      image_detect_empty_regions: 'image_detect_empty_regions',
+      video_render_frame: 'video_render_frame',
+      video_render_contact_sheet: 'video_render_contact_sheet',
+      video_analyze_frame: 'video_analyze_frame',
+      video_analyze_timeline: 'video_analyze_timeline',
+      video_check_keyframes: 'video_check_keyframes',
+      video_check_caption_timing: 'video_check_caption_timing',
+      video_check_audio_sync: 'video_check_audio_sync',
+      video_extract_clip_frames: 'video_extract_clip_frames',
+      video_analyze_imported_video: 'video_analyze_imported_video',
+    },
+  };
+  const map = actionMaps[name];
+  if (!map) return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: `${name} requires action` };
+  delete args.action;
+  const target = map[action];
+  if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
+  return { name: target, args };
+}
+
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
   let approvalDisplayToolName = name;
+  const devSourceWrapper = normalizeDevSourceWrapperTool(name, args);
+  if (devSourceWrapper) {
+    if (devSourceWrapper.error) return { name, args, result: devSourceWrapper.error, error: true };
+    name = devSourceWrapper.name;
+    args = devSourceWrapper.args;
+  }
+  const workspaceWrapper = normalizeWorkspaceWrapperTool(name, args);
+  if (workspaceWrapper) {
+    if (workspaceWrapper.error) return { name, args, result: workspaceWrapper.error, error: true };
+    name = workspaceWrapper.name;
+    args = workspaceWrapper.args;
+  }
+  const browserWrapper = normalizeBrowserWrapperTool(name, args);
+  if (browserWrapper) {
+    if (browserWrapper.error) return { name, args, result: browserWrapper.error, error: true };
+    name = browserWrapper.name;
+    args = browserWrapper.args;
+  }
+  const desktopWrapper = normalizeDesktopWrapperTool(name, args);
+  if (desktopWrapper) {
+    if (desktopWrapper.error) return { name, args, result: desktopWrapper.error, error: true };
+    name = desktopWrapper.name;
+    args = desktopWrapper.args;
+  }
+  const externalAppWrapper = normalizeExternalAppWrapperTool(name, args);
+  if (externalAppWrapper) {
+    if (externalAppWrapper.error) return { name, args, result: externalAppWrapper.error, error: true };
+    name = externalAppWrapper.name;
+    args = externalAppWrapper.args;
+  }
+  const agentTeamWrapper = normalizeAgentTeamWrapperTool(name, args);
+  if (agentTeamWrapper) {
+    if (agentTeamWrapper.error) return { name, args, result: agentTeamWrapper.error, error: true };
+    name = agentTeamWrapper.name;
+    args = agentTeamWrapper.args;
+  }
+  const creativeWrapper = normalizeCreativeWrapperTool(name, args);
+  if (creativeWrapper) {
+    if (creativeWrapper.error) return { name, args, result: creativeWrapper.error, error: true };
+    name = creativeWrapper.name;
+    args = creativeWrapper.args;
+  }
   if (name === 'terminal') {
     const action = String(args?.action || '').trim().toLowerCase();
     const background = args?.background === true || args?.mode === 'background' || action === 'start';
@@ -2181,7 +3064,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return { line: lines.length, character: (lines[lines.length - 1] || '').length + 1 };
   }
   async function buildCodeOutlineForFile(filePath: string, maxSymbols = 300): Promise<any> {
-    const ts = await import('typescript');
+    const ts = normalizeTypeScriptModule(await import('typescript'));
     const content = fs.readFileSync(filePath, 'utf-8');
     const kind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : filePath.endsWith('.jsx') ? ts.ScriptKind.JSX : filePath.endsWith('.js') || filePath.endsWith('.mjs') || filePath.endsWith('.cjs') ? ts.ScriptKind.JS : ts.ScriptKind.TS;
     const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, kind);
@@ -2708,7 +3591,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       return {
         name,
         args,
-        result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native file tools instead: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Use run_command for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
+        result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native workspace wrappers instead: workspace_read(action:"stats"/"read"/"grep") first, then workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"write"/"create") or workspace_edit(action:"patchset"). Use workspace_run for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
         error: true,
       };
     }
@@ -3264,12 +4147,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return capabilityDispatch.result;
   }
 
-	  const broadcastBrowserStatus = async (toolName: string) => {
+	  const broadcastBrowserStatus = async (toolName: string, options?: { includeFrame?: boolean }) => {
     try {
       if (!deps.broadcastWS) return;
       const info = getBrowserSessionInfo(sessionId);
       const browserMeta = getBrowserSessionMetadata(sessionId);
-      const frame = info.active === true && toolName !== 'browser_close'
+      const defaultIncludeFrame = toolName === 'browser_snapshot' || toolName === 'browser_vision_screenshot';
+      const shouldIncludeFrame = info.active === true && (options?.includeFrame ?? defaultIncludeFrame);
+      const frame = shouldIncludeFrame
         ? await browserVisionScreenshot(sessionId).catch(() => null)
         : null;
       const payload = {
@@ -3307,6 +4192,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
     } catch {}
   };
+  const maybeBroadcastBrowserStatus = async (toolName: string, observe?: unknown, options?: { includeFrame?: boolean }) => {
+    if (String(observe || '').trim().toLowerCase() === 'none') {
+      void broadcastBrowserStatus(toolName, options).catch(() => {});
+      return;
+    }
+    await broadcastBrowserStatus(toolName, options);
+  };
 
   try {
     if (BROWSER_CONTROL_GATED_TOOLS.has(name)) {
@@ -3326,6 +4218,468 @@ export async function executeTool(name: string, args: any, workspacePath: string
         // Handled upstream in server-v2 before executeTool is called.
         // This passthrough prevents "unknown tool" errors if it reaches the executor.
         return { name, args, result: 'Plan acknowledged.', error: false };
+      }
+
+      case 'chat_with_subagent': {
+        const agentId = String(args?.agent_id || '').trim();
+        const message = String(args?.message || '').trim();
+        const context = String(args?.context || '').trim();
+        if (!message) return { name, args, result: 'chat_with_subagent requires message', error: true };
+        const { error } = getStandaloneSubagentForChat(agentId);
+        if (error) return { name, args, result: error, error: true };
+
+        const startedAt = Date.now();
+        const chatMessage = context ? `${message}\n\nContext:\n${context}` : message;
+        try {
+          const chat = await runStandaloneSubagentChatFromTool({
+            agentId,
+            message: chatMessage,
+            source: 'chat_with_subagent',
+            parentSessionId: sessionId,
+            userLabel: String(args?.user_label || 'Main Agent').trim() || 'Main Agent',
+            timeoutMs: clampAgentChatTimeoutMs(args?.timeout_ms),
+          });
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              target_type: 'standalone_subagent',
+              agent_id: agentId,
+              thread_id: getStandaloneSubagentChatSessionId(agentId),
+              after_ts: startedAt,
+              reply: chat.result?.text || '',
+              thinking: chat.result?.thinking,
+              messages: chat.messages,
+            }, null, 2),
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `chat_with_subagent error: ${err.message}`, error: true };
+        }
+      }
+
+      case 'agent_message_send': {
+        const targetType = String(args?.target_type || (args?.team_id ? 'team_member' : 'standalone_subagent')).trim();
+        const message = String(args?.message || '').trim();
+        const context = String(args?.context || '').trim();
+        const content = context ? `${message}\n\nContext:\n${context}` : message;
+        const requestTurn = args?.request_turn === true;
+        const background = args?.background === true;
+        const userLabel = String(args?.user_label || 'Main Agent').trim() || 'Main Agent';
+        if (!message) return { name, args, result: 'agent_message_send requires message', error: true };
+
+        if (targetType === 'standalone_subagent') {
+          const agentId = String(args?.agent_id || '').trim();
+          const { error } = getStandaloneSubagentForChat(agentId);
+          if (error) return { name, args, result: error, error: true };
+          if (requestTurn) {
+            const run = async () => {
+              const chat = await runStandaloneSubagentChatFromTool({
+                agentId,
+                message: content,
+                source: 'agent_message_send',
+                parentSessionId: sessionId,
+                userLabel,
+                timeoutMs: clampAgentChatTimeoutMs(args?.timeout_ms),
+              });
+              return {
+                success: true,
+                target_type: 'standalone_subagent',
+                agent_id: agentId,
+                thread_id: getStandaloneSubagentChatSessionId(agentId),
+                reply: chat.result?.text || '',
+                thinking: chat.result?.thinking,
+                messages: chat.messages,
+              };
+            };
+            if (background) {
+              const taskId = startAgentConversationBackground({
+                prefix: 'agent_chat',
+                agentId,
+                promiseFactory: run,
+              });
+              return {
+                name,
+                args,
+                result: JSON.stringify({
+                  success: true,
+                  status: 'running',
+                  task_id: taskId,
+                  target_type: 'standalone_subagent',
+                  agent_id: agentId,
+                  thread_id: getStandaloneSubagentChatSessionId(agentId),
+                  response: 'Message sent and a background chat turn was started. Use get_agent_result(task_id) or agent_reply_wait(...) to collect the reply.',
+                }, null, 2),
+                error: false,
+              };
+            }
+            const result = await run();
+            return { name, args, result: JSON.stringify(result, null, 2), error: false };
+          }
+
+          const chatMsg = appendSubagentChatMessage(agentId, {
+            role: 'user',
+            content,
+            metadata: {
+              source: 'agent_message_send',
+              parentSessionId: sessionId,
+              from: userLabel,
+              requestTurn: false,
+            },
+          });
+          deps.broadcastWS?.({ type: 'subagent_chat_message', agentId, message: chatMsg });
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              status: 'delivered',
+              request_turn: false,
+              target_type: 'standalone_subagent',
+              agent_id: agentId,
+              thread_id: getStandaloneSubagentChatSessionId(agentId),
+              message_id: chatMsg.id,
+              after_ts: chatMsg.ts,
+            }, null, 2),
+            error: false,
+          };
+        }
+
+        if (targetType === 'team_member') {
+          const teamId = String(args?.team_id || '').trim();
+          const agentId = String(args?.agent_id || '').trim();
+          if (!teamId || !agentId) return { name, args, result: 'agent_message_send target_type=team_member requires team_id and agent_id', error: true };
+          const team = getManagedTeam(teamId);
+          if (!team) return { name, args, result: `Team not found: ${teamId}`, error: true };
+          if (team.manager?.paused === true) return { name, args, result: `Team "${team.name}" is paused.`, error: true };
+          if (!team.subagentIds.includes(agentId)) return { name, args, result: `Agent "${agentId}" is not a member of team "${team.name}".`, error: true };
+          if (team.agentPauseStates?.[agentId]?.paused === true) return { name, args, result: `Agent "${agentId}" is paused on team "${team.name}".`, error: true };
+
+          const agentName = String((getAgentById(agentId) as any)?.name || agentId).trim();
+          const thread = getOrCreateTeamDirectThread(teamId, 'member', agentId, agentName);
+          if (!thread) return { name, args, result: 'Could not create team direct thread.', error: true };
+          const userMsg = appendTeamChat(teamId, {
+            from: 'user',
+            fromName: userLabel,
+            content,
+            threadId: String(thread.id || '').trim(),
+            metadata: {
+              source: 'agent_message_send',
+              targetType: 'member',
+              targetId: agentId,
+              targetLabel: agentName,
+            },
+          });
+          deps.broadcastTeamEvent?.({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: userMsg, text: userMsg?.content || '' });
+          enqueueTeamDirectThreadUserMessage(teamId, 'member', agentId, agentName, content, userMsg?.id);
+
+          if (requestTurn) {
+            if (background) {
+              const scheduled = scheduleTeamMemberDirectWake(teamId, agentId, String(thread.id || '').trim(), {
+                reason: 'A direct agent_message_send requested a team member reply.',
+                delayMs: Number.isFinite(Number(args?.delay_ms)) ? Math.max(0, Math.floor(Number(args.delay_ms))) : 0,
+              });
+              return {
+                name,
+                args,
+                result: JSON.stringify({
+                  success: scheduled,
+                  status: scheduled ? 'scheduled' : 'not_scheduled',
+                  target_type: 'team_member',
+                  team_id: teamId,
+                  agent_id: agentId,
+                  thread_id: thread.id,
+                  message_id: userMsg?.id,
+                  after_ts: userMsg?.timestamp,
+                }, null, 2),
+                error: !scheduled,
+              };
+            }
+            const result = await runTeamMemberDirectTurn(teamId, agentId, String(thread.id || '').trim(), {
+              autoWakeReason: 'A direct agent_message_send requested a team member reply.',
+            });
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: result.success,
+                target_type: 'team_member',
+                team_id: teamId,
+                agent_id: agentId,
+                thread_id: thread.id,
+                message_id: userMsg?.id,
+                after_ts: userMsg?.timestamp,
+                reply: result.result,
+                error: result.error,
+                duration_ms: result.durationMs,
+                step_count: result.stepCount,
+              }, null, 2),
+              error: result.success !== true,
+            };
+          }
+
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              status: 'delivered',
+              request_turn: false,
+              target_type: 'team_member',
+              team_id: teamId,
+              agent_id: agentId,
+              thread_id: thread.id,
+              message_id: userMsg?.id,
+              after_ts: userMsg?.timestamp,
+            }, null, 2),
+            error: false,
+          };
+        }
+
+        if (targetType === 'team_manager') {
+          const teamId = String(args?.team_id || '').trim();
+          if (!teamId) return { name, args, result: 'agent_message_send target_type=team_manager requires team_id', error: true };
+          const team = getManagedTeam(teamId);
+          if (!team) return { name, args, result: `Team not found: ${teamId}`, error: true };
+          if (team.manager?.paused === true) return { name, args, result: `Team "${team.name}" is paused.`, error: true };
+          const thread = getOrCreateTeamDirectThread(teamId, 'manager', 'manager', 'manager');
+          if (!thread) return { name, args, result: 'Could not create manager direct thread.', error: true };
+          const userMsg = appendTeamChat(teamId, {
+            from: 'user',
+            fromName: userLabel,
+            content,
+            threadId: String(thread.id || '').trim(),
+            metadata: {
+              source: 'agent_message_send',
+              targetType: 'manager',
+              targetId: 'manager',
+              targetLabel: 'manager',
+            },
+          });
+          deps.broadcastTeamEvent?.({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: userMsg, text: userMsg?.content || '' });
+
+          if (requestTurn) {
+            const run = async () => {
+              await handleManagerConversation(teamId, content, deps.broadcastTeamEvent, false, {
+                sessionIdOverride: String(thread.sessionId || '').trim() || undefined,
+                threadId: String(thread.id || '').trim() || undefined,
+                replyTargetType: 'user',
+                replyTargetId: 'user',
+                replyTargetLabel: userLabel,
+              });
+              return {
+                success: true,
+                target_type: 'team_manager',
+                team_id: teamId,
+                thread_id: thread.id,
+                message_id: userMsg?.id,
+                after_ts: userMsg?.timestamp,
+              };
+            };
+            if (background) {
+              const taskId = startAgentConversationBackground({
+                prefix: 'team_manager_chat',
+                teamId,
+                promiseFactory: run,
+              });
+              return {
+                name,
+                args,
+                result: JSON.stringify({
+                  success: true,
+                  status: 'running',
+                  task_id: taskId,
+                  target_type: 'team_manager',
+                  team_id: teamId,
+                  thread_id: thread.id,
+                  message_id: userMsg?.id,
+                  after_ts: userMsg?.timestamp,
+                }, null, 2),
+                error: false,
+              };
+            }
+            const result = await run();
+            return { name, args, result: JSON.stringify(result, null, 2), error: false };
+          }
+
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              status: 'delivered',
+              request_turn: false,
+              target_type: 'team_manager',
+              team_id: teamId,
+              thread_id: thread.id,
+              message_id: userMsg?.id,
+              after_ts: userMsg?.timestamp,
+            }, null, 2),
+            error: false,
+          };
+        }
+
+        return { name, args, result: `Unsupported target_type "${targetType}". Use standalone_subagent, team_member, or team_manager.`, error: true };
+      }
+
+      case 'agent_turn_request': {
+        const targetType = String(args?.target_type || (args?.team_id ? 'team_member' : 'standalone_subagent')).trim();
+        const prompt = String(args?.prompt || args?.message || '').trim();
+        if (!prompt) return { name, args, result: 'agent_turn_request requires prompt', error: true };
+
+        if (targetType === 'standalone_subagent') {
+          const delegated = await executeTool('chat_with_subagent', {
+            agent_id: args?.agent_id,
+            message: prompt,
+            context: args?.context,
+            timeout_ms: args?.timeout_ms,
+            user_label: args?.user_label || 'Main Agent',
+          }, workspacePath, deps, sessionId);
+          return { name, args, result: delegated.result, error: delegated.error };
+        }
+
+        if (targetType === 'team_member' || targetType === 'team_manager') {
+          const delegated = await executeTool('agent_message_send', {
+            target_type: targetType,
+            team_id: args?.team_id,
+            agent_id: args?.agent_id,
+            message: prompt,
+            context: args?.context,
+            request_turn: true,
+            background: args?.background === true,
+            delay_ms: args?.delay_ms,
+            timeout_ms: args?.timeout_ms,
+            user_label: args?.user_label || 'Main Agent',
+          }, workspacePath, deps, sessionId);
+          return { name, args, result: delegated.result, error: delegated.error };
+        }
+
+        return { name, args, result: `Unsupported target_type "${targetType}". Use standalone_subagent, team_member, or team_manager.`, error: true };
+      }
+
+      case 'agent_reply_wait': {
+        const targetType = String(args?.target_type || (args?.team_id ? 'team_member' : 'standalone_subagent')).trim();
+        const afterTs = Math.max(0, Number(args?.after_ts || args?.after || 0) || 0);
+        const block = args?.block !== false;
+        const timeoutMs = block ? clampAgentChatTimeoutMs(args?.timeout_ms, 30000) : 0;
+        const pollMs = Math.max(250, Math.min(5000, Number(args?.poll_ms) || 1000));
+        const deadline = Date.now() + timeoutMs;
+
+        const collect = () => {
+          if (targetType === 'standalone_subagent') {
+            const agentId = String(args?.agent_id || '').trim();
+            const { error } = getStandaloneSubagentForChat(agentId);
+            if (error) return { error };
+            const replies = getSubagentChatHistory(agentId, 100)
+              .filter((msg: any) => msg?.role === 'agent' && Number(msg?.ts || 0) > afterTs)
+              .map((msg: any) => ({
+                id: msg.id,
+                ts: msg.ts,
+                role: msg.role,
+                content: msg.content,
+                metadata: msg.metadata,
+              }));
+            return {
+              success: true,
+              target_type: 'standalone_subagent',
+              agent_id: agentId,
+              thread_id: getStandaloneSubagentChatSessionId(agentId),
+              replies,
+            };
+          }
+
+          if (targetType === 'team_member' || targetType === 'team_manager') {
+            const teamId = String(args?.team_id || '').trim();
+            const agentId = String(args?.agent_id || '').trim();
+            const threadId = String(args?.thread_id || '').trim();
+            const team = getManagedTeam(teamId);
+            if (!team) return { error: `Team not found: ${teamId}` };
+            if (targetType === 'team_member' && !agentId) return { error: 'agent_reply_wait target_type=team_member requires agent_id' };
+            const messages = (Array.isArray(team.teamChat) ? team.teamChat : [])
+              .filter((msg: any) => Number(msg?.timestamp || 0) > afterTs)
+              .filter((msg: any) => !threadId || String(msg?.threadId || '') === threadId)
+              .filter((msg: any) => {
+                if (targetType === 'team_manager') return msg?.from === 'manager';
+                return msg?.from === 'subagent' && String(msg?.fromAgentId || '') === agentId;
+              })
+              .map((msg: any) => ({
+                id: msg.id,
+                ts: msg.timestamp,
+                from: msg.from,
+                fromName: msg.fromName,
+                fromAgentId: msg.fromAgentId,
+                threadId: msg.threadId,
+                content: msg.content,
+                metadata: msg.metadata,
+              }));
+            return {
+              success: true,
+              target_type: targetType,
+              team_id: teamId,
+              agent_id: targetType === 'team_member' ? agentId : undefined,
+              thread_id: threadId || undefined,
+              replies: messages,
+            };
+          }
+
+          return { error: `Unsupported target_type "${targetType}". Use standalone_subagent, team_member, or team_manager.` };
+        };
+
+        let snapshot = collect();
+        while (!snapshot.error && Array.isArray((snapshot as any).replies) && (snapshot as any).replies.length === 0 && block && Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, pollMs));
+          snapshot = collect();
+        }
+        if (snapshot.error) return { name, args, result: snapshot.error, error: true };
+        const replies = Array.isArray((snapshot as any).replies) ? (snapshot as any).replies : [];
+        const latestTs = replies.reduce((max: number, msg: any) => Math.max(max, Number(msg?.ts || 0)), afterTs);
+        return {
+          name,
+          args,
+          result: JSON.stringify({
+            ...(snapshot as any),
+            status: replies.length ? 'reply_available' : 'no_reply',
+            latest_ts: latestTs,
+          }, null, 2),
+          error: false,
+        };
+      }
+
+      case 'agent_thread_watch': {
+        const targetType = String(args?.target_type || (args?.team_id ? 'team_member' : 'standalone_subagent')).trim();
+        const watchId = String(args?.watch_id || args?.id || `agent_watch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`).trim();
+        const afterTs = Math.max(0, Number(args?.after_ts || args?.after || Date.now()) || Date.now());
+        if (args?.block === true) {
+          const delegated = await executeTool('agent_reply_wait', {
+            target_type: targetType,
+            agent_id: args?.agent_id,
+            team_id: args?.team_id,
+            thread_id: args?.thread_id,
+            after_ts: afterTs,
+            block: true,
+            timeout_ms: args?.timeout_ms,
+            poll_ms: args?.poll_ms,
+          }, workspacePath, deps, sessionId);
+          return { name, args, result: delegated.result, error: delegated.error };
+        }
+        return {
+          name,
+          args,
+          result: JSON.stringify({
+            success: true,
+            status: 'watch_descriptor_created',
+            watch_id: watchId,
+            target_type: targetType,
+            agent_id: args?.agent_id,
+            team_id: args?.team_id,
+            thread_id: args?.thread_id,
+            after_ts: afterTs,
+            poll_with: 'agent_reply_wait',
+            note: 'This is a lightweight agent-thread watch descriptor. Use it from heartbeat/schedule code, or call agent_reply_wait with the returned fields. For durable task completion watches, use internal_watch on a task_id.',
+          }, null, 2),
+          error: false,
+        };
       }
 
       case 'talk_to_subagent': {
@@ -10270,10 +11624,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const snapDir = path.join(root, id);
           const filesDir = path.join(snapDir, 'files');
           fs.mkdirSync(filesDir, { recursive: true });
-          const files = walkFiles(workspacePath, {
+          const scopeArg = String(args.path || args.directory || '').trim();
+          const scope = scopeArg
+            ? resolveAllowedWorkspacePath(scopeArg, { requireDirectory: true, allowEmpty: true })
+            : { absPath: workspacePath, normalizedRel: '', displayPath: '.' };
+          const scopedFiles = walkFiles(scope.absPath, {
             maxFiles: Math.max(1, Math.min(20000, Number(args.max_files || 2000))),
             maxBytes: Math.max(1, Number(args.max_bytes || 50_000_000)),
           });
+          const scopePrefix = String(scope.normalizedRel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+          const files = scopedFiles.map((file) => ({
+            ...file,
+            relPath: scopePrefix ? `${scopePrefix}/${file.relPath}`.replace(/\\/g, '/') : file.relPath,
+          }));
           for (const file of files) {
             const dest = path.join(filesDir, file.relPath);
             fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -10283,6 +11646,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             id,
             label: String(args.label || '').trim(),
             workspacePath,
+            scope: scopePrefix || '.',
             createdAt: Date.now(),
             fileCount: files.length,
             totalBytes: files.reduce((sum, f) => sum + f.size, 0),
@@ -10564,7 +11928,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return {
             name,
             args,
-            result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native file tools instead: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Use run_command for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
+            result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native workspace wrappers instead: workspace_read(action:"stats"/"read"/"grep") first, then workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"write"/"create") or workspace_edit(action:"patchset"). Use workspace_run for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
             error: true,
           };
         }
@@ -12289,7 +13653,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch (err: any) {
           result = `ERROR: browser_open did not finish in time: ${err?.message || err}`;
         }
-        await broadcastBrowserStatus('browser_open');
+        await broadcastBrowserStatus('browser_open', {
+          includeFrame: resolveBrowserObserveMode('browser_open', args.observe) === 'screenshot',
+        });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'browser_snapshot': {
@@ -12324,14 +13690,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
           if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
         }
+        const observeMode = resolveBrowserObserveMode('browser_click', hasFinalActionApproval ? 'snapshot' : (args.capture_after === true ? 'snapshot' : args.observe));
         const result = await browserClick(sessionId, {
           ref: args.ref != null ? Number(args.ref) : undefined,
           element: args.element != null ? String(args.element) : (args.element_name != null ? String(args.element_name) : undefined),
           selector: args.selector != null ? String(args.selector) : undefined,
         }, {
-          observe: resolveBrowserObserveMode('browser_click', hasFinalActionApproval ? 'snapshot' : (args.capture_after === true ? 'snapshot' : args.observe)),
+          observe: observeMode,
         });
-        await broadcastBrowserStatus('browser_click');
+        await maybeBroadcastBrowserStatus('browser_click', observeMode);
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'browser_fill': {
@@ -12365,10 +13732,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: keyToolName, toolArgs: args });
           if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
         }
+        const observeMode = resolveBrowserObserveMode(keyToolName, hasFinalActionApproval ? 'snapshot' : args.observe);
         const result = await browserPressKey(sessionId, String(args.key || 'Enter'), {
-          observe: resolveBrowserObserveMode(keyToolName, hasFinalActionApproval ? 'snapshot' : args.observe),
+          observe: observeMode,
         });
-        await broadcastBrowserStatus('browser_press_key');
+        await maybeBroadcastBrowserStatus('browser_press_key', observeMode);
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'browser_type': {

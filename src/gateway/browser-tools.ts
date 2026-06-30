@@ -288,22 +288,25 @@ const BROWSER_TOOL_DEFAULT_OBSERVE_MODE: Record<string, BrowserObserveMode> = {
   browser_wait: 'none',
   browser_get_page_text: 'none',
   browser_get_focused_item: 'none',
-  browser_click: 'delta',
-  browser_fill: 'delta',
+  // Cheap action tools default to the fast ack path. Callers can still request
+  // compact/delta/snapshot/screenshot observation explicitly when they need refs
+  // or visual confirmation after the action.
+  browser_click: 'none',
+  browser_fill: 'none',
   browser_upload_file: 'screenshot',
   browser_press_key: 'none',
   browser_key: 'none',
-  browser_type: 'snapshot',
-  browser_drag: 'delta',
-  browser_click_and_download: 'delta',
-  browser_scroll_collect: 'delta',
+  browser_type: 'none',
+  browser_drag: 'none',
+  browser_click_and_download: 'none',
+  browser_scroll_collect: 'none',
   browser_scroll: 'none',
   browser_open: 'screenshot',
   browser_vision_click: 'screenshot',
   browser_snapshot: 'snapshot',
   browser_snapshot_delta: 'none',
   browser_vision_screenshot: 'screenshot',
-  browser_vision_type: 'delta',
+  browser_vision_type: 'none',
   browser_send_to_telegram: 'none',
   browser_run_js: 'screenshot',
 };
@@ -620,7 +623,12 @@ async function buildCompactBrowserObservation(
   return lines.join('\n');
 }
 
-async function buildMinimalBrowserAck(session: BrowserSession, base: string): Promise<string> {
+async function buildMinimalBrowserAck(
+  session: BrowserSession,
+  base: string,
+  options?: { syncMetadata?: boolean },
+): Promise<string> {
+  if (options?.syncMetadata === false) return base;
   const meta = await syncPageMetadata(session);
   const extras: string[] = [];
   if (meta.urlChanged && meta.url) extras.push(`URL: ${meta.url}`);
@@ -634,6 +642,10 @@ function shouldReturnSnapshot(mode: BrowserObserveMode): boolean {
 
 function shouldUseCompactObservation(mode: BrowserObserveMode): boolean {
   return mode === 'compact';
+}
+
+function shouldUseFastBrowserAck(mode: BrowserObserveMode): boolean {
+  return mode === 'none';
 }
 
 // ─── Session Management ────────────────────────────────────────────────────────
@@ -3196,13 +3208,14 @@ async function resolveViewportPointFromTarget(
 }
 
 // Click a page element by its stable data-sc-ref number
-async function clickByRef(page: PwPage, ref: number): Promise<{ role: string; name: string }> {
+async function clickByRef(page: PwPage, ref: number, options?: { settleMs?: number }): Promise<{ role: string; name: string }> {
+  const settleMs = Math.max(0, Number(options?.settleMs ?? 1500) || 0);
   const locator = await findLocatorByStableRef(page, ref);
   if (locator) {
     const meta = await describeLocator(locator);
     await locator.scrollIntoViewIfNeeded().catch(() => {});
     await locator.click();
-    await page.waitForTimeout(1500);
+    if (settleMs > 0) await page.waitForTimeout(settleMs);
     return { role: meta.role, name: meta.name };
   }
 
@@ -3240,11 +3253,12 @@ async function clickByRef(page: PwPage, ref: number): Promise<{ role: string; na
     return null;
   }, { refIdx: ref, sel: INTERACTIVE_SELECTOR });
   if (!fallback) throw new Error(`Element @${ref} not found`);
-  await page.waitForTimeout(1500);
+  if (settleMs > 0) await page.waitForTimeout(settleMs);
   return fallback;
 }
 
-async function clickBySelector(page: PwPage, selector: string): Promise<{ role: string; name: string }> {
+async function clickBySelector(page: PwPage, selector: string, options?: { settleMs?: number }): Promise<{ role: string; name: string }> {
+  const settleMs = Math.max(0, Number(options?.settleMs ?? 1500) || 0);
   const locator = page.locator(selector).first();
   const count = await locator.count().catch(() => 0);
   if (!count) throw new Error(`No element found for selector "${selector}"`);
@@ -3262,7 +3276,7 @@ async function clickBySelector(page: PwPage, selector: string): Promise<{ role: 
   }).catch(() => null);
   await locator.scrollIntoViewIfNeeded().catch(() => {});
   await locator.click();
-  await page.waitForTimeout(1500);
+  if (settleMs > 0) await page.waitForTimeout(settleMs);
   return {
     role: String(meta?.role || 'element'),
     name: String(meta?.name || selector).trim() || selector,
@@ -3433,10 +3447,11 @@ async function fillBySelector(
 }
 
 // Press a key (e.g. Enter, Tab)
-async function pressKey(page: PwPage, key: string): Promise<void> {
+async function pressKey(page: PwPage, key: string, options?: { settleMs?: number }): Promise<void> {
+  const settleMs = Math.max(0, Number(options?.settleMs ?? 1500) || 0);
   await page.keyboard.press(key);
   // Allow page navigation / React state updates to settle
-  await page.waitForTimeout(1500);
+  if (settleMs > 0) await page.waitForTimeout(settleMs);
 }
 
 function parseSnapshotElementCount(snapshot: string): number {
@@ -4491,8 +4506,10 @@ async function browserClickInHouse(
   }
   try {
     const clicked: any = await callInHouseBrowser('click', { sessionId: resolved, ref: requestedRef, selector: requestedSelector });
-    await new Promise((resolve) => setTimeout(resolve, 400));
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_click');
+    if (!shouldUseFastBrowserAck(observeMode)) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await browserSnapshotInHouse(resolved);
       return `Clicked ${requestedSelector || `@${requestedRef}`} (${clicked?.role || 'element'}: "${clicked?.name || ''}")\n\n${snapshot}`;
@@ -4678,7 +4695,7 @@ export async function browserOpen(
 
   try {
     let targetUrl = rawUrl;
-    if (!targetUrl.startsWith('http')) targetUrl = 'https://' + targetUrl;
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(targetUrl)) targetUrl = 'https://' + targetUrl;
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_open');
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
@@ -4686,11 +4703,15 @@ export async function browserOpen(
 
     await emitBrowserAgentCursor(sessionId, { kind: 'navigate', phase: 'start', label: targetUrl });
     await session.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    // Best-effort networkidle wait — catches SPAs that hydrate after domcontentloaded
-    // Non-blocking: if it times out that's fine, we just take a snapshot with what's loaded
-    await session.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-    // Extra settle time for React/Next hydration
-    await session.page.waitForTimeout(1500);
+    // Observation-aware settle: compact/none opens should be quick metadata acks;
+    // snapshot/screenshot opens still wait for SPA hydration before returning proof.
+    const needsSettledObservation = observeMode === 'snapshot' || observeMode === 'screenshot';
+    if (needsSettledObservation) {
+      await session.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+      await session.page.waitForTimeout(1200);
+    } else if (shouldUseCompactObservation(observeMode)) {
+      await session.page.waitForTimeout(100);
+    }
     await syncPageMetadata(session).catch(() => {});
     await emitBrowserAgentCursor(sessionId, { kind: 'navigate', phase: 'end', label: session.page.url() });
 
@@ -4724,10 +4745,9 @@ export async function browserSnapshot(sessionId: string): Promise<string> {
   try {
     // Wait for the DOM to settle before snapshotting — SPAs (like x.com) may still
     // be hydrating after domcontentloaded, leaving querySelectorAll with 0 results.
-    // networkidle is best-effort; we proceed even if it times out.
-    await session.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-    // Additional settle time for React/Next/Vue hydration to mount interactive elements.
-    await session.page.waitForTimeout(600);
+    // Keep this bounded so routine snapshots don't become a multi-second tax.
+    await session.page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => {});
+    await session.page.waitForTimeout(250);
     const snapshot = await takeSnapshot(session.page);
     rememberSnapshot(session, snapshot);
     return attachShortcutsContext(snapshot, session.page.url(), sessionId);
@@ -4872,15 +4892,16 @@ export async function browserClick(
     : Number((target && typeof target === 'object' ? target.ref : 0) || 0);
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_click');
+    const fastAck = shouldUseFastBrowserAck(observeMode);
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
     if (requestedSelector) {
-      const cursorPoint = await resolveSelectorViewportCenter(session.page, requestedSelector, `selector "${requestedSelector}"`);
+      const cursorPoint = fastAck ? null : await resolveSelectorViewportCenter(session.page, requestedSelector, `selector "${requestedSelector}"`);
       if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'start' });
-      const el = await clickBySelector(session.page, requestedSelector);
-      await session.page.waitForTimeout(500);
-      await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'click', phase: 'end', label: cursorPoint?.label || `Clicked selector "${requestedSelector}"` });
+      const el = await clickBySelector(session.page, requestedSelector, { settleMs: fastAck ? 0 : 1500 });
+      if (!fastAck) await session.page.waitForTimeout(500);
+      if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'end', label: cursorPoint?.label || `Clicked selector "${requestedSelector}"` });
       if (shouldReturnSnapshot(observeMode)) {
         const snapshot = await takeSnapshot(session.page);
         rememberSnapshot(session, snapshot);
@@ -4897,7 +4918,7 @@ export async function browserClick(
           compactBefore,
         );
       }
-      return buildMinimalBrowserAck(session, `Clicked selector "${requestedSelector}" (${el.role}: "${el.name}").`);
+      return buildMinimalBrowserAck(session, `Clicked selector "${requestedSelector}" (${el.role}: "${el.name}").`, { syncMetadata: !fastAck });
     }
     if (requestedElement) {
       const resolvedElement = await resolveNamedBrowserElement(sessionId, requestedElement);
@@ -4912,11 +4933,11 @@ export async function browserClick(
           sessionId,
         );
       }
-      const cursorPoint = await resolveSelectorViewportCenter(session.page, resolvedElement.selector, `saved element "${resolvedElement.entry.name}"`);
+      const cursorPoint = fastAck ? null : await resolveSelectorViewportCenter(session.page, resolvedElement.selector, `saved element "${resolvedElement.entry.name}"`);
       if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'start' });
-      const el = await clickBySelector(session.page, resolvedElement.selector);
-      await session.page.waitForTimeout(500);
-      await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'click', phase: 'end', label: cursorPoint?.label || `Clicked saved element "${resolvedElement.entry.name}"` });
+      const el = await clickBySelector(session.page, resolvedElement.selector, { settleMs: fastAck ? 0 : 1500 });
+      if (!fastAck) await session.page.waitForTimeout(500);
+      if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'end', label: cursorPoint?.label || `Clicked saved element "${resolvedElement.entry.name}"` });
       if (shouldReturnSnapshot(observeMode)) {
         const snapshot = await takeSnapshot(session.page);
         rememberSnapshot(session, snapshot);
@@ -4933,17 +4954,17 @@ export async function browserClick(
           compactBefore,
         );
       }
-      return buildMinimalBrowserAck(session, `Clicked saved element "${resolvedElement.entry.name}" (${el.role}: "${el.name}").`);
+      return buildMinimalBrowserAck(session, `Clicked saved element "${resolvedElement.entry.name}" (${el.role}: "${el.name}").`, { syncMetadata: !fastAck });
     }
     if (!Number.isFinite(requestedRef) || requestedRef <= 0) {
       return 'ERROR: browser_click requires ref, element, or selector.';
     }
-    const cursorPoint = await resolveViewportPointFromTarget(session.page, { ref: requestedRef }, 'browser_click').catch(() => null);
+    const cursorPoint = fastAck ? null : await resolveViewportPointFromTarget(session.page, { ref: requestedRef }, 'browser_click').catch(() => null);
     if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'start' });
-    const el = await clickByRef(session.page, requestedRef);
-    // Extra settle before snapshot — dialogs / dropdowns / navigation need time
-    await session.page.waitForTimeout(500);
-    await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'click', phase: 'end', label: cursorPoint?.label || `Clicked @${requestedRef}` });
+    const el = await clickByRef(session.page, requestedRef, { settleMs: fastAck ? 0 : 1500 });
+    // Extra settle before snapshot/delta — dialogs / dropdowns / navigation need time.
+    if (!fastAck) await session.page.waitForTimeout(500);
+    if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'end', label: cursorPoint?.label || `Clicked @${requestedRef}` });
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await takeSnapshot(session.page);
       rememberSnapshot(session, snapshot);
@@ -4952,7 +4973,7 @@ export async function browserClick(
     if (compactBefore) {
       return buildCompactBrowserObservation(session, `Clicked @${requestedRef} (${el.role}: "${el.name}").`, compactBefore);
     }
-    return buildMinimalBrowserAck(session, `Clicked @${requestedRef} (${el.role}: "${el.name}").`);
+    return buildMinimalBrowserAck(session, `Clicked @${requestedRef} (${el.role}: "${el.name}").`, { syncMetadata: !fastAck });
   } catch (err: any) {
     if (requestedSelector) {
       return attachShortcutsContext(`ERROR: Click selector "${requestedSelector}" failed: ${err.message}`, session.page.url(), sessionId);
@@ -4982,15 +5003,16 @@ export async function browserFill(
     let submitHint: { ref: number; label: string; strategy: string } | null = null;
     let resultLabel = '';
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_fill');
+    const fastAck = shouldUseFastBrowserAck(observeMode);
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
 
     if (requestedSelector) {
-      const cursorPoint = await resolveSelectorViewportCenter(session.page, requestedSelector, `selector "${requestedSelector}"`);
+      const cursorPoint = fastAck ? null : await resolveSelectorViewportCenter(session.page, requestedSelector, `selector "${requestedSelector}"`);
       if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'fill', phase: 'start' });
       el = await fillBySelector(session.page, requestedSelector, text);
-      await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'fill', phase: 'end', label: cursorPoint?.label || `Filled selector "${requestedSelector}"` });
+      if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'fill', phase: 'end', label: cursorPoint?.label || `Filled selector "${requestedSelector}"` });
       resultLabel = `selector "${requestedSelector}"`;
     } else if (requestedElement) {
       const resolvedElement = await resolveNamedBrowserElement(sessionId, requestedElement);
@@ -5005,19 +5027,19 @@ export async function browserFill(
           sessionId,
         );
       }
-      const cursorPoint = await resolveSelectorViewportCenter(session.page, resolvedElement.selector, `saved element "${resolvedElement.entry.name}"`);
+      const cursorPoint = fastAck ? null : await resolveSelectorViewportCenter(session.page, resolvedElement.selector, `saved element "${resolvedElement.entry.name}"`);
       if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'fill', phase: 'start' });
       el = await fillBySelector(session.page, resolvedElement.selector, text);
-      await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'fill', phase: 'end', label: cursorPoint?.label || `Filled saved element "${resolvedElement.entry.name}"` });
+      if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'fill', phase: 'end', label: cursorPoint?.label || `Filled saved element "${resolvedElement.entry.name}"` });
       resultLabel = `saved element "${resolvedElement.entry.name}"`;
     } else {
       if (!Number.isFinite(requestedRef) || requestedRef <= 0) {
         return 'ERROR: browser_fill requires ref, element, or selector, plus text.';
       }
-      const cursorPoint = await resolveViewportPointFromTarget(session.page, { ref: requestedRef }, 'browser_fill').catch(() => null);
+      const cursorPoint = fastAck ? null : await resolveViewportPointFromTarget(session.page, { ref: requestedRef }, 'browser_fill').catch(() => null);
       if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'fill', phase: 'start' });
       el = await fillByRef(session.page, requestedRef, text);
-      await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'fill', phase: 'end', label: cursorPoint?.label || `Filled @${requestedRef}` });
+      if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'fill', phase: 'end', label: cursorPoint?.label || `Filled @${requestedRef}` });
       resultLabel = `@${requestedRef}`;
 
       // After filling, find the submit button closest to the filled element in the DOM.
@@ -5026,7 +5048,7 @@ export async function browserFill(
       // Find the Post/Tweet submit button ref after filling.
       // Strategy: use X.com's stable data-testid first, then fall back to DOM walk.
       // We recount refs using the same filter logic as takeSnapshot to get the correct number.
-      submitHint = await session.page.evaluate((args: { ref: number; sel: string }) => {
+      submitHint = fastAck ? null : await session.page.evaluate((args: { ref: number; sel: string }) => {
         const doc = (globalThis as any).document as any;
         const openModal: any = (
           doc.querySelector('[role="dialog"][aria-modal="true"]')
@@ -5096,7 +5118,7 @@ export async function browserFill(
       }, { ref: requestedRef, sel: INTERACTIVE_SELECTOR }).catch(() => null);
     }
 
-    if (observeMode !== 'none') {
+    if (!fastAck) {
       await broadcastBrowserViewportUpdate(
         sessionId,
         session,
@@ -5165,7 +5187,7 @@ export async function browserFill(
     if (compactBefore) {
       return buildCompactBrowserObservation(session, result, compactBefore);
     }
-    return buildMinimalBrowserAck(session, result);
+    return buildMinimalBrowserAck(session, result, { syncMetadata: !fastAck });
   } catch (err: any) {
     if (requestedSelector) {
       return attachShortcutsContext(`ERROR: Fill selector "${requestedSelector}" failed: ${err.message}`, session.page.url(), sessionId);
@@ -5326,15 +5348,19 @@ export async function browserPressKey(
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_press_key');
+    const fastAck = shouldUseFastBrowserAck(observeMode);
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
-    const cursorPoint = await resolveActiveElementViewportCenter(session.page).catch(() => null);
-    await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'key', phase: 'start', label: key });
-    await pressKey(session.page, key);
-    // Best-effort networkidle after key press (Enter often triggers navigation)
-    await session.page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
-    await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'key', phase: 'end', label: key });
+    const cursorPoint = fastAck ? null : await resolveActiveElementViewportCenter(session.page).catch(() => null);
+    if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'key', phase: 'start', label: key });
+    await pressKey(session.page, key, { settleMs: fastAck ? 0 : 1500 });
+    // Best-effort networkidle after potentially navigational keypresses, but do not
+    // charge low-latency observe:none keyboard shortcuts for a 4s idle probe.
+    if (!fastAck || /^(enter|return)$/i.test(String(key || '').trim())) {
+      await session.page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+    }
+    if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'key', phase: 'end', label: key });
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await takeSnapshot(session.page);
       rememberSnapshot(session, snapshot);
@@ -5344,7 +5370,7 @@ export async function browserPressKey(
     if (compactBefore) {
       return buildCompactBrowserObservation(session, `Pressed "${key}".`, compactBefore);
     }
-    return buildMinimalBrowserAck(session, `Pressed "${key}".`);
+    return buildMinimalBrowserAck(session, `Pressed "${key}".`, { syncMetadata: !fastAck });
   } catch (err: any) {
     return attachShortcutsContext(`ERROR: Key press failed: ${err.message}`, session.page.url(), sessionId);
   }
@@ -5365,14 +5391,15 @@ export async function browserType(
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_type');
+    const fastAck = shouldUseFastBrowserAck(observeMode);
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
-    const cursorPoint = await resolveActiveElementViewportCenter(session.page).catch(() => null);
-    await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'type', phase: 'start', label: `Typing ${String(text || '').length} characters` });
-    await session.page.keyboard.type(String(text || ''), { delay: 25 });
-    await session.page.waitForTimeout(400);
-    await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'type', phase: 'end', label: `Typed ${String(text || '').length} characters` });
+    const cursorPoint = fastAck ? null : await resolveActiveElementViewportCenter(session.page).catch(() => null);
+    if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'type', phase: 'start', label: `Typing ${String(text || '').length} characters` });
+    await session.page.keyboard.type(String(text || ''), { delay: fastAck ? 0 : 25 });
+    if (!fastAck) await session.page.waitForTimeout(400);
+    if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'type', phase: 'end', label: `Typed ${String(text || '').length} characters` });
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await takeSnapshot(session.page);
       rememberSnapshot(session, snapshot);
@@ -5382,7 +5409,7 @@ export async function browserType(
     if (compactBefore) {
       return buildCompactBrowserObservation(session, `Typed ${String(text).length} chars into focused element.`, compactBefore);
     }
-    return buildMinimalBrowserAck(session, `Typed ${String(text).length} chars into focused element.`);
+    return buildMinimalBrowserAck(session, `Typed ${String(text).length} chars into focused element.`, { syncMetadata: !fastAck });
   } catch (err: any) {
     return `ERROR: browser_type failed: ${err.message}`;
   }
@@ -5593,30 +5620,35 @@ export async function browserScroll(
 
   try {
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_scroll');
+    const fastAck = shouldUseFastBrowserAck(observeMode);
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
     const viewport = getBrowserViewportSize(session);
-    await emitBrowserAgentCursor(sessionId, {
-      x: Math.round(viewport.width / 2),
-      y: Math.round(viewport.height * 0.72),
-      kind: 'scroll',
-      phase: 'start',
-      label: `Scroll ${direction}`,
-    });
+    if (!fastAck) {
+      await emitBrowserAgentCursor(sessionId, {
+        x: Math.round(viewport.width / 2),
+        y: Math.round(viewport.height * 0.72),
+        kind: 'scroll',
+        phase: 'start',
+        label: `Scroll ${direction}`,
+      });
+    }
     await session.page.evaluate((mult: number) => {
       const pageGlobal = globalThis as any;
       pageGlobal.scrollBy(0, pageGlobal.innerHeight * mult);
     }, direction === 'up' ? -clampedMult : clampedMult);
 
-    await session.page.waitForTimeout(1200); // X/Twitter needs ~1s for new articles to mount
-    await emitBrowserAgentCursor(sessionId, {
-      x: Math.round(viewport.width / 2),
-      y: Math.round(viewport.height * 0.72),
-      kind: 'scroll',
-      phase: 'end',
-      label: `Scrolled ${direction}`,
-    });
+    if (!fastAck) await session.page.waitForTimeout(1200); // X/Twitter needs ~1s for new articles to mount before observation.
+    if (!fastAck) {
+      await emitBrowserAgentCursor(sessionId, {
+        x: Math.round(viewport.width / 2),
+        y: Math.round(viewport.height * 0.72),
+        kind: 'scroll',
+        phase: 'end',
+        label: `Scrolled ${direction}`,
+      });
+    }
 
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await takeSnapshot(session.page);
@@ -6244,6 +6276,140 @@ export async function getBrowserAdvisorPacket(
 
 export function getBrowserToolDefinitions(): any[] {
   return [
+    {
+      type: 'function',
+      function: {
+        name: 'browser_session',
+        description: 'Unified browser session/navigation wrapper. Use for health checks, profile target selection, opening URLs, tab management, and closing the browser lane.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['doctor', 'set_profile_target', 'open', 'list_tabs', 'select_tab', 'new_tab', 'close_tab', 'close'] },
+            url: { type: 'string', description: 'URL for open/new_tab.' },
+            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Browser target for open/set_profile_target.' },
+            profile: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Alias for target.' },
+            inhouse_profile: { type: 'string' },
+            profile_directory: { type: 'string' },
+            close_existing: { type: 'boolean' },
+            index: { type: 'number', description: 'Tab index for select_tab/close_tab.' },
+            observe: { type: 'string', enum: OBSERVE_MODE_ENUM },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_observe',
+        description: 'Unified browser observation wrapper. Use for snapshots, deltas, viewport screenshots, text/focus inspection, waits, and DOM element watches.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['snapshot', 'snapshot_delta', 'screenshot', 'page_text', 'focused_item', 'wait', 'element_watch'] },
+            element: { type: 'string', description: 'Saved named element for page_text.' },
+            element_name: { type: 'string' },
+            selector: { type: 'string', description: 'CSS selector for element_watch.' },
+            wait_for: { type: 'string', enum: ['appear', 'disappear', 'text_contains'] },
+            text: { type: 'string', description: 'Text for text_contains watches.' },
+            timeout_ms: { type: 'number' },
+            ms: { type: 'number', description: 'Milliseconds for wait.' },
+            observe: { type: 'string', enum: OBSERVE_MODE_ENUM },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_act',
+        description: 'Unified browser interaction wrapper. Use for DOM, keyboard, upload, scroll, drag, download, and vision-coordinate actions. Final-action approval ids pass through unchanged.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['click', 'fill', 'type', 'key', 'press_key', 'upload_file', 'scroll', 'drag', 'click_and_download', 'vision_click', 'vision_type'] },
+            ref: { type: 'number' },
+            element: { type: 'string' },
+            element_name: { type: 'string' },
+            selector: { type: 'string' },
+            text: { type: 'string' },
+            key: { type: 'string' },
+            file_path: { type: 'string' },
+            file_paths: { type: 'array', items: { type: 'string' } },
+            direction: { type: 'string', enum: ['down', 'up'] },
+            multiplier: { type: 'number' },
+            from_ref: { type: 'number' },
+            to_ref: { type: 'number' },
+            from_x: { type: 'number' },
+            from_y: { type: 'number' },
+            to_x: { type: 'number' },
+            to_y: { type: 'number' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            button: { type: 'string', enum: ['left', 'right'] },
+            steps: { type: 'number' },
+            timeout_ms: { type: 'number' },
+            filename_hint: { type: 'string' },
+            output_dir: { type: 'string' },
+            final_action_approval_id: { type: 'string' },
+            observe: { type: 'string', enum: OBSERVE_MODE_ENUM },
+            capture_after: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_extract',
+        description: 'Unified browser extraction/diagnostics wrapper. Use for scroll collection, structured extraction, JS fallback, network/console/a11y diagnostics, smoke tests, and Teach verification.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['scroll_collect', 'scroll_collect_v2', 'extract_structured', 'run_js', 'network', 'console', 'accessibility', 'smoke_test', 'teach_verify'] },
+            code: { type: 'string', description: 'JavaScript for run_js.' },
+            schema: { type: 'object', description: 'Structured extraction schema.' },
+            network_action: { type: 'string', enum: ['start', 'stop', 'read', 'clear'], description: 'Sub-action for action="network".' },
+            console_action: { type: 'string', enum: ['read', 'clear'], description: 'Sub-action for action="console".' },
+            url: { type: 'string', description: 'URL for smoke_test.' },
+            wait_ms: { type: 'number' },
+            max_console_entries: { type: 'number' },
+            max_a11y_results: { type: 'number' },
+            max_entries: { type: 'number' },
+            max_results: { type: 'number' },
+            url_filter: { type: 'string' },
+            scrolls: { type: 'number' },
+            direction: { type: 'string', enum: ['down', 'up'] },
+            multiplier: { type: 'number' },
+            delay_ms: { type: 'number' },
+            stop_text: { type: 'string' },
+            max_chars: { type: 'number' },
+            include_initial: { type: 'boolean' },
+            max_seconds: { type: 'number' },
+            stop_after_no_new: { type: 'number' },
+            include_snapshots: { type: 'boolean' },
+            include_structured: { type: 'boolean' },
+            schema_name: { type: 'string' },
+            use_schema: { type: 'string' },
+            item_root: { type: 'string' },
+            root_name: { type: 'string' },
+            container_name: { type: 'string' },
+            container_selector: { type: 'string' },
+            fields: { type: 'object' },
+            dedupe_key: { type: 'string' },
+            limit: { type: 'number' },
+            max_scrolls: { type: 'number' },
+            save_as: { type: 'string' },
+            mode: { type: 'string', enum: ['full', 'safe', 'step'] },
+            stop_before_step: { type: 'number' },
+            observe: { type: 'string', enum: OBSERVE_MODE_ENUM },
+          },
+        },
+      },
+    },
     {
       type: 'function',
       function: {
