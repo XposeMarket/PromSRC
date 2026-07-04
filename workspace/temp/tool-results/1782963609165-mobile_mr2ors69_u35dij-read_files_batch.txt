@@ -1,0 +1,165 @@
+games/mobile-sideways-fps/index.html (531 lines) [window 250-329, truncated]:
+250:     ctx.fillRect(x,H/2-h/2,cw+1,h);
+251:   }
+252:   const sprites=[];
+253:   for(const z of state.zombies)sprites.push({...z,kind:'z'});
+254:   for(const p of state.powerups)sprites.push({...p,kind:'p'});
+255:   for(const b of buys)sprites.push({...b,kind:'b'});
+256:   sprites.sort((a,b)=>Math.hypot(b.x-state.player.x,b.y-state.player.y)-Math.hypot(a.x-state.player.x,a.y-state.player.y));
+257:   for(const s of sprites)drawSprite(s,zbuf,cols,cw);
+258:   drawGun();drawMini();
+259:   if(state.noticeTimer>0||state.gameOver)ui.msg.textContent=state.notice;else ui.msg.textContent='';
+260:   const it=interactable();
+261:   ui.prompt.style.display=it?'block':'none';
+262:   ui.prompt.textContent=it?(it.type==='gun'?'BUY '+weapons[it.id].name+' $'+weapons[it.id].price:it.type==='perk'?'BUY '+it.name+' $'+it.cost:'OPEN '+it.door.name+' $'+it.door.cost):'';
+263:   const am=state.ammo[state.weapon];
+264:   ui.left.textContent=`WAVE ${state.wave} · ZOMBIES ${state.zombies.length}${state.zombiesToSpawn?` +${state.zombiesToSpawn}`:''}`;
+265:   ui.mid.textContent=`${weapons[state.weapon].name} · ${am.mag}/${am.reserve} · $${state.points}${state.reloadTimer>0?' · RELOAD':''}`;
+266:   ui.right.textContent=`HP ${Math.max(0,Math.ceil(state.player.hp))}`;
+267: }
+268: function drawSprite(s,zbuf,cols,cw){
+269:   let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+270:   let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+271:   if(Math.abs(da)>FOV*.72||dist<.15)return;
+272:   let sx=(da/FOV+.5)*W,sz=H/(dist+.05)*(s.kind==='z'?1.35:.42),sy=H/2-sz*.55+(state.player.pitch||0)*H*.35;
+273:   if(zbuf[Math.max(0,Math.min(cols-1,Math.floor(sx/W*cols)))]<dist-.2)return;
+274:   ctx.save();
+275:   ctx.translate(sx,sy+sz/2);
+276:   if(s.kind==='z'){
+277:     let scale=s.variant==='brute'?1.18:(s.variant==='runner'?0.88:1),w=sz*.7*scale,h=sz*1.08*scale;
+278:     ctx.globalAlpha=s.hurt?0.72:1;
+279:     if(zombieImg.complete&&zombieImg.naturalWidth){ctx.drawImage(zombieImg,-w/2,-h*.58,w,h)}
+280:     else{ctx.fillStyle=s.hurt?'#fff':(s.variant==='brute'?'#6b1b22':s.variant==='runner'?'#407a35':'#2d6b35');ctx.fillRect(-w/2,-h*.5,w,h);ctx.fillStyle='#151';ctx.fillRect(-w*.28,-h*.7,w*.56,h*.24);ctx.fillStyle='#ffd86b';ctx.fillRect(-w*.18,-h*.64,w*.08,w*.08);ctx.fillRect(w*.1,-h*.64,w*.08,w*.08)}
+281:   }else if(s.kind==='p'){
+282:     ctx.fillStyle='#ffd94b';ctx.fillRect(-sz*.28,-sz*.28,sz*.56,sz*.56);ctx.fillStyle='#000';ctx.font=`${Math.max(9,sz*.18)}px sans-serif`;ctx.textAlign='center';ctx.fillText(s.type[0],0,4);
+283:   }else{
+284:     ctx.fillStyle=s.type==='perk'?'#55d6ff':'#e0d07c';ctx.fillRect(-sz*.35,-sz*.35,sz*.7,sz*.7);
+285:   }
+286:   ctx.restore();
+287: }
+288: function drawGun(){
+289:   const bob=Math.sin(performance.now()/120)*6*devicePixelRatio;
+290:   const smoothing=ctx.imageSmoothingEnabled;
+291:   ctx.imageSmoothingEnabled=false;
+292:   const isFiring=touch.fire||keys[' ']||(state.gunFlash||0)>0;
+293:   const sprite=(isFiring&&fireGunImg.complete&&fireGunImg.naturalWidth)?fireGunImg:gunImg;
+294:   const aspect=(sprite.naturalWidth&&sprite.naturalHeight)?sprite.naturalHeight/sprite.naturalWidth:1.8;
+295:   const gunW=Math.min(W*.48,H*.7),gunH=Math.min(gunW*aspect,H*.55);
+296:   if(sprite.complete&&sprite.naturalWidth){
+297:     ctx.drawImage(sprite,W/2-gunW/2,H-gunH+bob*.9,gunW,gunH);
+298:   }else{
+299:     const r=gunW*.18;
+300:     ctx.fillStyle='#1b1a19';ctx.fillRect(W/2-r,H-r*.8+bob,r*1.4,r*.4);
+301:     ctx.fillStyle='#3b3328';ctx.fillRect(W/2-r*.3,H-r*2.8+bob,r*.6,r*2.2);
+302:     ctx.fillStyle='#e7d2a7';ctx.fillRect(W/2-r*.18,H-r*3.2+bob,r*.36,r*.4);
+303:   }
+304:   ctx.imageSmoothingEnabled=smoothing;
+305: }
+306: function drawMini(){let scale=7*devicePixelRatio,x=10*devicePixelRatio,y=46*devicePixelRatio;ctx.save();ctx.globalAlpha=.8;for(let yy=0;yy<map.length;yy++)for(let xx=0;xx<map[0].length;xx++){ctx.fillStyle=map[yy][xx]==='0'?'rgba(255,255,255,.08)':map[yy][xx]==='D'?'#8d4a1d':'#555';ctx.fillRect(x+xx*scale,y+yy*scale,scale-1,scale-1)}ctx.fillStyle='#66d9ff';ctx.fillRect(x+state.player.x*scale-2,y+state.player.y*scale-2,4,4);ctx.fillStyle='#d53';state.zombies.forEach(z=>ctx.fillRect(x+z.x*scale-1,y+z.y*scale-1,3,3));ctx.restore()}
+307: function loop(t){let now=t/1000,dt=Math.min(.05,now-(last||now));last=now;update(dt);render();publishDebug();raf=requestAnimationFrame(loop)}
+308: function publishDebug(){window.__pocketZombiesDebug={running:state.running,paused:state.paused,gameOver:state.gameOver,wave:state.wave,waveState:state.waveState,zombies:state.zombies.length,zombiesToSpawn:state.zombiesToSpawn,spawnTimer:+state.spawnTimer.toFixed(2),player:{x:+state.player.x.toFixed(2),y:+state.player.y.toFixed(2),health:Math.ceil(state.player.hp),ammo:state.ammo[state.weapon].mag,reserve:state.ammo[state.weapon].reserve},weapon:state.weapon,points:state.points,kills:state.kills,errors:0}}
+309: function beep(f,d){if(muted)return;try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.value=.025;o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+310: function startGame(){ui.start.querySelector('h1').textContent='POCKET ZOMBIES';reset();ui.start.style.display='none';if(audio&&audio.state==='suspended')audio.resume()}
+311: function forceStart(){startGame();console.log('START_TRIGGERED')}
+312: function startClick(e){if(ui.start.style.display==='none')return;if(e){e.preventDefault();e.stopPropagation()}startGame()}
+313: window.__pocketStart=startGame;
+314: window.__pocketForceStart=forceStart;
+315: const startInputs=['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'];
+316: startInputs.forEach(ev=>{if(ui.startBtn)ui.startBtn.addEventListener(ev,startClick,{passive:false});if(ui.start)ui.start.addEventListener(ev,startClick,{passive:false})});
+317: if(ui.startBtn){ui.startBtn.onclick=startClick;ui.startBtn.onpointerdown=startClick;ui.startBtn.onpointerup=startClick;ui.startBtn.ontouchend=startClick}
+318: let stickId=null;
+319: document.getElementById('stick').addEventListener('pointerdown',e=>{stickId=e.pointerId;e.currentTarget.setPointerCapture(stickId)});
+320: document.getElementById('stick').addEventListener('pointermove',e=>{if(e.pointerId!==stickId)return;let r=e.currentTarget.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=(e.clientX-cx)/(r.width/2),dy=(e.clientY-cy)/(r.height/2),m=Math.max(1,Math.hypot(dx,dy));touch.mx=dx/m;touch.my=-dy/m;ui.knob.style.transform=`translate(${touch.mx*31}px,${-touch.my*31}px)`});
+321: document.getElementById('stick').addEventListener('pointerup',()=>{touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)'});
+322: document.getElementById('stick').addEventListener('pointercancel',()=>{touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)'});
+323: const fireButton=document.getElementById('fire');
+324: function setFiring(on,e){if(e){e.preventDefault();e.stopPropagation()}touch.fire=on;keys.Mouse=on;if(on&&state.running&&!state.paused&&state.fireCooldown<=0)shoot()}
+325: ['pointerdown','touchstart','mousedown','click'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(true,e),{passive:false}));
+326: ['pointerup','pointercancel','pointerleave','touchend','touchcancel','mouseup','mouseleave'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(false,e),{passive:false}));
+327: window.addEventListener('pointerup',()=>setFiring(false));
+328: window.addEventListener('mouseup',()=>setFiring(false));
+329: let lookDragging=false,lookLastX=0,lookLastY=0;canvas.addEventListener('pointerdown',e=>{if(e.target.id==='stick'||e.target.closest('#stick'))return;lookDragging=true;lookLastX=e.clientX;lookLastY=e.clientY});canvas.addEventListener('pointermove',e=>{if(!lookDragging)return;const dx=e.clientX-lookLastX,dy=e.clientY-lookLastY;state.player.a+=dx*0.0035;state.player.pitch=Math.max(-1.2,Math.min(1.2,state.player.pitch-dy*0.0035));lookLastX=e.clientX;lookLastY=e.clientY});['pointerup','pointercancel','pointerleave'].forEach(ev=>canvas.addEventListener(ev,()=>{lookDragging=false}));addEventListener('keydown',e=>{keys[e.key]=true;if(e.key==='r'||e.key==='R')reload();if(e.key==='e'||e.key==='E')use(...[line truncated]
+[READ_TRUNCATED] Use start_line:330, num_lines:80 for the next chunk, or full:true only when needed.
+
+games/mobile-sideways-fps/index.html (531 lines) [window 320-399, truncated]:
+320: document.getElementById('stick').addEventListener('pointermove',e=>{if(e.pointerId!==stickId)return;let r=e.currentTarget.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=(e.clientX-cx)/(r.width/2),dy=(e.clientY-cy)/(r.height/2),m=Math.max(1,Math.hypot(dx,dy));touch.mx=dx/m;touch.my=-dy/m;ui.knob.style.transform=`translate(${touch.mx*31}px,${-touch.my*31}px)`});
+321: document.getElementById('stick').addEventListener('pointerup',()=>{touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)'});
+322: document.getElementById('stick').addEventListener('pointercancel',()=>{touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)'});
+323: const fireButton=document.getElementById('fire');
+324: function setFiring(on,e){if(e){e.preventDefault();e.stopPropagation()}touch.fire=on;keys.Mouse=on;if(on&&state.running&&!state.paused&&state.fireCooldown<=0)shoot()}
+325: ['pointerdown','touchstart','mousedown','click'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(true,e),{passive:false}));
+326: ['pointerup','pointercancel','pointerleave','touchend','touchcancel','mouseup','mouseleave'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(false,e),{passive:false}));
+327: window.addEventListener('pointerup',()=>setFiring(false));
+328: window.addEventListener('mouseup',()=>setFiring(false));
+329: let lookDragging=false,lookLastX=0,lookLastY=0;canvas.addEventListener('pointerdown',e=>{if(e.target.id==='stick'||e.target.closest('#stick'))return;lookDragging=true;lookLastX=e.clientX;lookLastY=e.clientY});canvas.addEventListener('pointermove',e=>{if(!lookDragging)return;const dx=e.clientX-lookLastX,dy=e.clientY-lookLastY;state.player.a+=dx*0.0035;state.player.pitch=Math.max(-1.2,Math.min(1.2,state.player.pitch-dy*0.0035));lookLastX=e.clientX;lookLastY=e.clientY});['pointerup','pointercancel','pointerleave'].forEach(ev=>canvas.addEventListener(ev,()=>{lookDragging=false}));addEventListener('keydown',e=>{keys[e.key]=true;if(e.key==='r'||e.key==='R')reload();if(e.key==='e'||e.key==='E')use(...[line truncated]
+330: window.addEventListener('error',e=>{window.__pocketZombiesLastError=String(e.message||e.error)});rebuildMap();publishDebug();raf=requestAnimationFrame(loop);startClockId=raf;
+331: })();
+332: </script>
+333: </body>
+334: </html>
+335: +it.cost);state.points-=it.cost;state.owned.push(it.id);if(it.id==='JUG'){state.player.maxHp=260;state.player.hp=260}msg(it.name)}else if(it.type==='door'){if(state.points<it.door.cost)return msg('NEED 
+336: function endGame(){state.gameOver=true;state.running=false;msg('GAME OVER - WAVE '+state.wave+' · KILLS '+state.kills,99);ui.start.style.display='flex';ui.start.querySelector('h1').textContent='GAME OVER';ui.start.querySelector('p').textContent='Wave '+state.wave+' · '+state.kills+' kills · $'+state.points+'. Tap to restart.'}
+337: function cast(a){let x=state.player.x,y=state.player.y,step=.035,dist=0;while(dist<18){x+=Math.cos(a)*step;y+=Math.sin(a)*step;dist+=step;if(solid(x,y))return{dist,x,y,t:tile(x,y)}}return{dist:18,x,y,t:'0'}}
+338: function render(){
+339:   ctx.fillStyle='#0a0908';ctx.fillRect(0,0,W,H);
+340:   let sky=ctx.createLinearGradient(0,0,0,H*.5);sky.addColorStop(0,'#151819');sky.addColorStop(1,'#312014');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H/2);
+341:   let floor=ctx.createLinearGradient(0,H/2,0,H);floor.addColorStop(0,'#1b1a16');floor.addColorStop(1,'#070706');ctx.fillStyle=floor;ctx.fillRect(0,H/2,W,H/2);
+342:   const cols=Math.min(320,Math.floor(W/4)),cw=W/cols,zbuf=[];
+343:   for(let i=0;i<cols;i++){
+344:     let a=state.player.a-FOV/2+FOV*i/cols,r=cast(a),d=r.dist*Math.cos(a-state.player.a);
+345:     zbuf[i]=d;
+346:     let h=Math.min(H,H/(d+.08)*.82),shade=Math.max(35,210-d*18),x=i*cw;
+347:     ctx.fillStyle=r.t==='D'?`rgb(${shade*.7},${shade*.35},20)`: `rgb(${shade*.45},${shade*.42},${shade*.38})`;
+348:     ctx.fillRect(x,H/2-h/2,cw+1,h);
+349:   }
+350:   const sprites=[];
+351:   for(const z of state.zombies)sprites.push({...z,kind:'z'});
+352:   for(const p of state.powerups)sprites.push({...p,kind:'p'});
+353:   for(const b of buys)sprites.push({...b,kind:'b'});
+354:   sprites.sort((a,b)=>Math.hypot(b.x-state.player.x,b.y-state.player.y)-Math.hypot(a.x-state.player.x,a.y-state.player.y));
+355:   for(const s of sprites)drawSprite(s,zbuf,cols,cw);
+356:   drawGun();drawMini();
+357:   if(state.noticeTimer>0||state.gameOver)ui.msg.textContent=state.notice;else ui.msg.textContent='';
+358:   const it=interactable();
+359:   ui.prompt.style.display=it?'block':'none';
+360:   ui.prompt.textContent=it?(it.type==='gun'?'BUY '+weapons[it.id].name+' $'+weapons[it.id].price:it.type==='perk'?'BUY '+it.name+' $'+it.cost:'OPEN '+it.door.name+' $'+it.door.cost):'';
+361:   const am=state.ammo[state.weapon];
+362:   ui.left.textContent=`WAVE ${state.wave} · ZOMBIES ${state.zombies.length}${state.zombiesToSpawn?` +${state.zombiesToSpawn}`:''}`;
+363:   ui.mid.textContent=`${weapons[state.weapon].name} · ${am.mag}/${am.reserve} · $${state.points}${state.reloadTimer>0?' · RELOAD':''}`;
+364:   ui.right.textContent=`HP ${Math.max(0,Math.ceil(state.player.hp))}`;
+365: }
+366: function drawSprite(s,zbuf,cols,cw){
+367:   let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+368:   let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+369:   if(Math.abs(da)>FOV*.72||dist<.15)return;
+370:   let sx=(da/FOV+.5)*W,sz=H/(dist+.05)*(s.kind==='z'?1.35:.42),sy=H/2-sz*.55;
+371:   if(zbuf[Math.max(0,Math.min(cols-1,Math.floor(sx/W*cols)))]<dist-.2)return;
+372:   ctx.save();
+373:   ctx.translate(sx,sy+sz/2);
+374:   if(s.kind==='z'){
+375:     let scale=s.variant==='brute'?1.18:(s.variant==='runner'?0.88:1),w=sz*.7*scale,h=sz*1.08*scale;
+376:     ctx.globalAlpha=s.hurt?0.72:1;
+377:     if(zombieImg.complete&&zombieImg.naturalWidth){ctx.drawImage(zombieImg,-w/2,-h*.58,w,h)}
+378:     else{ctx.fillStyle=s.hurt?'#fff':(s.variant==='brute'?'#6b1b22':s.variant==='runner'?'#407a35':'#2d6b35');ctx.fillRect(-w/2,-h*.5,w,h);ctx.fillStyle='#151';ctx.fillRect(-w*.28,-h*.7,w*.56,h*.24);ctx.fillStyle='#ffd86b';ctx.fillRect(-w*.18,-h*.64,w*.08,w*.08);ctx.fillRect(w*.1,-h*.64,w*.08,w*.08)}
+379:   }else if(s.kind==='p'){
+380:     ctx.fillStyle='#ffd94b';ctx.fillRect(-sz*.28,-sz*.28,sz*.56,sz*.56);ctx.fillStyle='#000';ctx.font=`${Math.max(9,sz*.18)}px sans-serif`;ctx.textAlign='center';ctx.fillText(s.type[0],0,4);
+381:   }else{
+382:     ctx.fillStyle=s.type==='perk'?'#55d6ff':'#e0d07c';ctx.fillRect(-sz*.35,-sz*.35,sz*.7,sz*.7);
+383:   }
+384:   ctx.restore();
+385: }
+386: function drawGun(){
+387:   const bob=Math.sin(performance.now()/120)*6*devicePixelRatio;
+388:   const smoothing=ctx.imageSmoothingEnabled;
+389:   ctx.imageSmoothingEnabled=false;
+390:   const isFiring=touch.fire||keys[' ']||(state.gunFlash||0)>0;
+391:   const sprite=(isFiring&&fireGunImg.complete&&fireGunImg.naturalWidth)?fireGunImg:gunImg;
+392:   const aspect=(sprite.naturalWidth&&sprite.naturalHeight)?sprite.naturalHeight/sprite.naturalWidth:1.8;
+393:   const gunW=Math.min(W*.48,H*.7),gunH=Math.min(gunW*aspect,H*.55);
+394:   if(sprite.complete&&sprite.naturalWidth){
+395:     ctx.drawImage(sprite,W/2-gunW/2,H-gunH+bob*.9,gunW,gunH);
+396:   }else{
+397:     const r=gunW*.18;
+398:     ctx.fillStyle='#1b1a19';ctx.fillRect(W/2-r,H-r*.8+bob,r*1.4,r*.4);
+399:     ctx.fillStyle='#3b3328';ctx.fillRect(W/2-r*.3,H-r*2.8+bob,r*.6,r*2.2);
+[READ_TRUNCATED] Use start_line:400, num_lines:80 for the next chunk, or full:true only when needed.

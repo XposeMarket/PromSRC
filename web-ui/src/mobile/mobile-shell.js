@@ -2,7 +2,7 @@
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { timeAgo } from '../utils.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
-import { mobileGatewayFetch } from './mobile-api.js';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
 
 // ── Pinned sessions (localStorage) ────────────────────────────────────────────
 const PM_PINNED_SESSIONS_KEY = 'pm_mobile_pinned_sessions';
@@ -54,6 +54,7 @@ export const ICONS = {
   robot:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><circle cx="9" cy="13" r="1.4"/><circle cx="15" cy="13" r="1.4"/><line x1="12" y1="3" x2="12" y2="7"/><line x1="2" y1="13" x2="4" y2="13"/><line x1="20" y1="13" x2="22" y2="13"/></svg>',
   doc:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 13 12 16 17 11"/></svg>',
   dots:      '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+  compose:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
   chev:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
   fork:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v2a4 4 0 0 0 4 4h2"/><path d="M18 8v2a4 4 0 0 1-4 4h-2"/><path d="M12 14v2"/></svg>',
   refresh:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg>',
@@ -1747,17 +1748,24 @@ export function closeDrawer() {
 }
 
 export function renderMobileHeader({ title, online = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {
+  const settingsButton = `<button class="pm-icon-btn" data-action="settings" aria-label="More">${ICONS.dots}</button>`;
+  const modelBadge = online ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
+          <span class="pm-model-badge-label">${escapeHtml(mobileModelBadgeSeedLabel())}</span>
+          <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
+        </button>` : '';
+  const headerRightActions = String(rightActions || '').trim()
+    ? `<span class="pm-header-action-cluster">
+          ${rightActions}
+          ${settingsButton}
+        </span>`
+    : settingsButton;
   return `
     <header class="pm-header${hideBrand ? ' pm-header-hide-brand' : ''}">
       <button class="pm-icon-btn" data-action="${leftIcon === 'back' ? 'back' : 'menu'}" aria-label="${leftIcon === 'back' ? 'Back' : 'Menu'}">${ICONS[leftIcon]}</button>
+      ${modelBadge}
       <div class="pm-brand"><span class="pm-brand-flame">🔥</span><span>Prometheus</span></div>
       <div class="pm-header-actions">
-        ${online ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
-          <span class="pm-model-badge-label">${escapeHtml(mobileModelBadgeSeedLabel())}</span>
-          <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
-        </button>` : ''}
-        ${rightActions}
-        <button class="pm-icon-btn" data-action="settings" aria-label="More">${ICONS.dots}</button>
+        ${headerRightActions}
       </div>
     </header>
     ${(!hideTitle || (extras && String(extras).trim()))
@@ -1850,15 +1858,20 @@ export function initMobileCanvasSheet() {
           <button type="button" class="pm-canvas-interaction-btn" data-canvas-interaction-mode="interact" aria-pressed="false">Interact</button>
           <button type="button" class="pm-canvas-interaction-btn" data-canvas-interaction-mode="inspect" aria-pressed="false">Inspect</button>
         </span>
+        <button type="button" class="pm-canvas-sheet-save-btn" id="pm-canvas-fullscreen" style="display:none;" aria-label="Open fullscreen canvas">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M21 16v5h-5"/><path d="M3 16v5h5"/></svg>
+          Fullscreen
+        </button>
         <button type="button" class="pm-canvas-sheet-save-btn" id="pm-canvas-preview" style="display:none;" aria-label="Render preview">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12s1.5-3 4-3 4 3 4 3-1.5 3-4 3-4-3-4-3z"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
           Preview
         </button>
-        <a class="pm-canvas-sheet-save-btn" id="pm-canvas-save" href="#" download target="_blank" rel="noopener noreferrer">
+        <button type="button" class="pm-canvas-sheet-save-btn" id="pm-canvas-save" aria-label="Save current canvas file">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           Save
-        </a>
+        </button>
       </div>
+      <button type="button" class="pm-canvas-fullscreen-exit" id="pm-canvas-fullscreen-exit" aria-label="Exit fullscreen canvas">✕</button>
       <div class="pm-canvas-sheet-body" id="pm-canvas-body">
         <div class="pm-canvas-sheet-empty">No file open</div>
       </div>
@@ -1893,6 +1906,7 @@ export function initMobileCanvasSheet() {
     },
 
     close() {
+      api.setFullscreen(false);
       sheetEl.classList.remove('open');
     },
 
@@ -1915,6 +1929,7 @@ export function initMobileCanvasSheet() {
       const fileNameEl = document.getElementById('pm-canvas-file-name');
       const saveEl = document.getElementById('pm-canvas-save');
       const previewBtn = document.getElementById('pm-canvas-preview');
+      const fullscreenBtn = document.getElementById('pm-canvas-fullscreen');
       const interactionToggle = document.getElementById('pm-canvas-interaction-toggle');
       if (!tabsEl || !bodyEl) return;
 
@@ -1922,6 +1937,8 @@ export function initMobileCanvasSheet() {
       if (tab && !normalizeCanvasInteractionMode(tab.interactionMode)) {
         tab.interactionMode = defaultCanvasInteractionMode(tab);
       }
+      const liveWebCanvas = !!(tab && isLiveWebCanvasFile(tab));
+      bodyEl.classList.toggle('has-live-frame', liveWebCanvas);
 
       tabsEl.innerHTML = api.tabs.map((t, i) => `
         <button type="button" class="pm-canvas-sheet-tab${i === api.activeIdx ? ' active' : ''}" data-cs-tab="${i}" title="${escapeHtml(t.name)}">
@@ -1932,16 +1949,18 @@ export function initMobileCanvasSheet() {
 
       if (fileNameEl) fileNameEl.textContent = tab?.name || '';
       if (saveEl) {
-        saveEl.href = tab?.download || tab?.src || '#';
-        saveEl.download = tab?.name || 'file';
+        saveEl.disabled = !tab;
+        saveEl.dataset.href = tab?.download || tab?.src || '';
+        saveEl.dataset.filename = tab?.name || 'file';
       }
 
       // Show Preview button for file types that benefit from screenshot rendering
       const previewable = tab && tab.path && !['image', 'video', 'audio'].includes(tab.kind);
       if (previewBtn) previewBtn.style.display = previewable ? '' : 'none';
+      if (fullscreenBtn) fullscreenBtn.style.display = tab ? '' : 'none';
       const iframeBacked = !!(tab && !['image', 'video', 'audio'].includes(tab.kind));
       if (interactionToggle) {
-        interactionToggle.style.display = iframeBacked ? 'inline-flex' : 'none';
+        interactionToggle.style.display = iframeBacked && !liveWebCanvas ? 'inline-flex' : 'none';
         interactionToggle.querySelectorAll('[data-canvas-interaction-mode]').forEach((button) => {
           const mode = button.getAttribute('data-canvas-interaction-mode');
           const active = mode === (tab?.interactionMode || 'inspect');
@@ -1966,7 +1985,9 @@ export function initMobileCanvasSheet() {
         sheetEl.classList.remove('is-interacting', 'is-inspecting');
         resetCanvasZoom(bodyEl);
       } else if (isLiveWebCanvasFile(tab)) {
-        bodyEl.innerHTML = canvasZoomHtml(`<iframe src="${escapeHtml(tab.src)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`);
+        tab.interactionMode = 'interact';
+        const liveSrc = canvasWorkspaceUrl(tab);
+        bodyEl.innerHTML = canvasLiveFrameHtml(`<iframe src="${escapeHtml(liveSrc)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock allow-downloads" referrerpolicy="same-origin"></iframe>`);
       } else if (tab.openMode === 'diff' && isCanvasCodeExt(getCanvasFileExt(tab)) && tab._canvasPreviewView !== 'full') {
         // Opened from the end-of-turn diff card: default to the collapsed,
         // syntax-highlighted edited-regions view (Codex-style). The Preview
@@ -1980,6 +2001,21 @@ export function initMobileCanvasSheet() {
         renderCanvasTextInto(bodyEl, tab);
       }
       applyCanvasInteractionMode(sheetEl, bodyEl, tab);
+    },
+
+    setFullscreen(enabled) {
+      const active = !!enabled && !!api.tabs[api.activeIdx];
+      sheetEl.classList.toggle('is-fullscreen', active);
+      document.body.classList.toggle('pm-canvas-fullscreen-open', active);
+      const btn = document.getElementById('pm-canvas-fullscreen');
+      if (btn) {
+        btn.setAttribute('aria-pressed', String(active));
+        btn.setAttribute('aria-label', active ? 'Canvas is fullscreen' : 'Open fullscreen canvas');
+      }
+    },
+
+    toggleFullscreen() {
+      api.setFullscreen(!sheetEl.classList.contains('is-fullscreen'));
     },
 
     setInteractionMode(mode) {
@@ -2009,6 +2045,12 @@ export function initMobileCanvasSheet() {
     const btn = ev.target?.closest?.('[data-canvas-interaction-mode]');
     if (!btn) return;
     api.setInteractionMode(btn.getAttribute('data-canvas-interaction-mode'));
+  });
+  document.getElementById('pm-canvas-fullscreen')?.addEventListener('click', () => api.toggleFullscreen());
+  document.getElementById('pm-canvas-fullscreen-exit')?.addEventListener('click', () => api.setFullscreen(false));
+  document.getElementById('pm-canvas-save')?.addEventListener('click', () => saveActiveCanvasFile(api));
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && sheetEl.classList.contains('is-fullscreen')) api.setFullscreen(false);
   });
 
   // Preview button — render a screenshot of the current file via /api/preview/screenshot
@@ -2124,13 +2166,86 @@ export function initMobileCanvasSheet() {
   window.__pmCanvasSheet = api;
 }
 
+function canvasSheetToast(message, kind = 'info') {
+  try {
+    if (typeof window.pmToast === 'function') {
+      window.pmToast(message, kind);
+      return;
+    }
+  } catch {}
+  try { console.info('[mobile canvas]', message); } catch {}
+}
+
+function canvasFilenameFromDisposition(value, fallback = 'file') {
+  const header = String(value || '');
+  const utf = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (utf?.[1]) {
+    try { return decodeURIComponent(utf[1]).replace(/[/\\]+/g, '-'); } catch {}
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(header);
+  return String(plain?.[1] || fallback || 'file').replace(/[/\\]+/g, '-');
+}
+
+async function saveActiveCanvasFile(api) {
+  const tab = api?.tabs?.[api.activeIdx];
+  const saveBtn = document.getElementById('pm-canvas-save');
+  const href = String(tab?.download || tab?.src || saveBtn?.dataset?.href || '').trim();
+  if (!tab || !href || href === '#') {
+    canvasSheetToast('No file is open to save.', 'error');
+    return;
+  }
+  const previous = saveBtn?.innerHTML || '';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = 'Saving...';
+  }
+  try {
+    const res = await fetch(href, { credentials: 'include' });
+    if (!res.ok) throw new Error(`Save failed (${res.status})`);
+    const blob = await res.blob();
+    const filename = canvasFilenameFromDisposition(res.headers.get('Content-Disposition'), tab.name || 'file');
+    const mimeType = blob.type || 'application/octet-stream';
+    const file = typeof File !== 'undefined' ? new File([blob], filename, { type: mimeType }) : null;
+    if (file && navigator.canShare?.({ files: [file] }) && navigator.share) {
+      try {
+        await navigator.share({ files: [file], title: filename });
+      } catch (err) {
+        if (err?.name === 'AbortError') return;
+        throw err;
+      }
+      canvasSheetToast('Ready to save from the share sheet.', 'success');
+      return;
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      canvasSheetToast('Download started.', 'success');
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 15000);
+    }
+  } catch (err) {
+    canvasSheetToast(err?.message || 'Could not save this file.', 'error');
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = previous || `${ICONS.download}<span>Save</span>`;
+    }
+  }
+}
+
 function normalizeCanvasInteractionMode(mode) {
   const value = String(mode || '').trim().toLowerCase();
   return value === 'interact' || value === 'inspect' ? value : '';
 }
 
 function getCanvasFileExt(file = {}) {
-  const source = String(file.name || file.path || file.src || '').split(/[?#]/)[0];
+  const source = String(file.path || file.name || file.src || '').split(/[?#]/)[0];
   const name = source.split(/[\\/]/).pop() || '';
   const idx = name.lastIndexOf('.');
   return idx >= 0 ? name.slice(idx + 1).toLowerCase() : '';
@@ -2162,10 +2277,20 @@ function canvasZoomHtml(innerHtml) {
   `;
 }
 
+function canvasLiveFrameHtml(innerHtml) {
+  return `<div class="pm-canvas-live-frame" data-canvas-live-frame>${innerHtml}</div>`;
+}
+
 // True only for files that should run as live web content (their own HTML doc).
 // Everything else text-like is rendered as readable, scrollable formatted text.
 function isLiveWebCanvasFile(file = {}) {
   return ['html', 'htm'].includes(getCanvasFileExt(file));
+}
+
+function canvasWorkspaceUrl(file = {}) {
+  const path = String(file.path || '').trim().replace(/^\/+/, '');
+  if (!path) return String(file.src || '');
+  return buildWorkspaceCanvasUrl(path);
 }
 
 // Build a styled, self-contained HTML document for a text/markdown/code file.
@@ -2442,10 +2567,12 @@ function initCanvasZoom(root, options = {}) {
   const content = root?.querySelector?.('[data-canvas-zoom-content]');
   if (!viewport || !content) return;
   if (options.enabled === false) {
-    content.style.transform = 'translate3d(0px, 0px, 0px) scale(1)';
+    content.style.transform = '';
+    content.style.willChange = 'auto';
     viewport.classList.remove('is-zoomed');
     return;
   }
+  content.style.willChange = 'transform';
 
   const state = {
     pointers: new Map(),

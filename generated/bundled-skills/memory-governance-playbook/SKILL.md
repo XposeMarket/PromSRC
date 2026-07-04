@@ -1,8 +1,9 @@
 ---
 name: memory-governance-playbook
-description:
-emoji: "🧩"
-version: 1.0.0
+description: Use this skill when deciding whether to write memory, where to store a fact, how to route facts between USER.md, SOUL.md, MEMORY.md, daily notes, write_note, or when auditing memory hygiene. Triggers on phrases like remember this, should this go in memory, update USER.md, update SOUL.md, write a note, memory governance, memory cleanup, durable fact, user preference, Prom behavior rule, and skip memory. Use it to avoid noisy memory writes and preserve only useful, scoped, audit-safe context.
+emoji: "🧠"
+version: 1.1.0
+triggers: remember this, should this go in memory, update USER.md, update SOUL.md, write a note, memory governance, memory cleanup, durable fact, user preference, Prom behavior rule, skip memory, memory hygiene, where should this be stored, long-term memory
 ---
 
 # Memory Governance Playbook

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when analyzing financial statements, business performance, unit economics, revenue/cost trends, margins, valuations, investment metrics, or company financial health.",
+  "triggers": [
+    "analyze financials",
+    "financial analysis",
+    "income statement",
+    "balance sheet",
+    "cash flow",
+    "profit margin",
+    "revenue trend",
+    "unit economics",
+    "valuation metrics",
+    "company financial health",
+    "financial KPI",
+    "expense analysis",
+    "gross margin",
+    "EBITDA",
+    "break-even",
+    "investment analysis",
+    "business performance numbers"
+  ],
+  "categories": [
+    "finance",
+    "analysis",
+    "business"
+  ],
+  "requiredTools": [
+    "web_search",
+    "workspace_write",
+    "show_ui_card"
+  ],
+  "lifecycle": "active",
+  "name": "Financial Analyst",
+  "id": "financial-analyst"
+}

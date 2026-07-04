@@ -1,0 +1,118 @@
+---
+# Thought 1 - 2026-07-03 | Window: 2026-07-02 17:24 UTC-2026-07-03 05:24 UTC
+_Generated: 2026-07-03 01:24 local_
+
+## Summary
+
+Overnight into early morning, Raul’s momentum stayed on **mobile playables**, not business or Prometheus internals. Two threads dominated: **Pocket Zombies** (`games/mobile-sideways-fps/index.html`) in `mobile_mr2ors69_u35dij`—control yaw, iOS textures, flipY on billboards, and a late-window **firing-direction** fix—and a fresh **Figure 8 Drift** session (`mobile_mr4ees3z_ytvzm4`) that stacked speed, slippery drift physics, localStorage track saves, a tabbed menu/build UI pass, a render break from a stale `#startBtn` hook, then recovery. Between those, **Brain Dream 2026-07-02** synthesized a heavy prior day (110 skill episodes, Pocket Zombies arc) while an earlier Thought run logged verification but often failed to persist markdown; **`12-04-thought.md`** and intraday notes show a **platform win**: `dev_edit_mr4b73nv_03640271` for canvas `?pt=` auth on inline/download/workspace routes plus mobile `buildWorkspaceCanvasUrl`.
+
+I verified **current disk**, not just chat: Pocket Zombies still carries **CanvasTexture / flipY** sprite plumbing; Figure 8 Drift still has **`readTrackLibrary` / `writeTrackLibrary`**, a **`#start` overlay**, and **tabbed `buildTabs` / `buildGroup`** UI—so the drift/menu work is real, not aspirational. Residual risk is **paired-phone E2E** after the canvas auth change (relative PNG/JS in the iframe), and **repeat yaw vs raycast coupling** in the zombie build after UI refactors.
+
+I wonder if a single **“mobile canvas game smoke”** composite (open iframe, START, one texture, one input) would have caught the `#startBtn` regression and the canvas 401s before Raul did. I wonder whether Figure 8’s iterative physics tweaks deserve a tiny **“arcade drift tuning”** skill so Prom doesn’t re-derive grip/drag constants every session. I wonder if Raul is circling a **mini-game lab** pattern—HTML canvas games edited from the phone—that could become a first-class workspace surface, not one-off file surgery.
+
+## Pulse Cards
+
+```json
+[
+  {
+    "title": "Figure 8 Drift Polish",
+    "body": "You iterated hard on menu, physics, and track saves—worth a quick playtest pass.",
+    "prompt": "Open games/figure-8-drift/index.html and verify the current menu, build tabs, localStorage track library, and drift physics match what we shipped last night. List anything still broken on mobile build mode or pinch/zoom, then fix the top issue."
+  },
+  {
+    "title": "Pocket Zombies Aim Check",
+    "body": "Movement and firing both had yaw fixes—let's confirm they still agree on device.",
+    "prompt": "Review games/mobile-sideways-fps/index.html for camera yaw, movement, and shooting ray direction. Confirm they use the same convention, then suggest a minimal on-phone test checklist for fire accuracy and sprite orientation."
+  },
+  {
+    "title": "Mobile Game Canvas Smoke",
+    "body": "Canvas ?pt= auth landed—paired-phone checks may still be the gap.",
+    "prompt": "Check how mobile opens workspace HTML games (canvas routes and buildWorkspaceCanvasUrl). Propose and run the smallest smoke test to confirm relative assets load in the paired mobile iframe without 401/404."
+  }
+]
+```
+
+## A. Activity Summary
+
+- **Pocket Zombies (`mobile_mr2ors69_u35dij`):** Control formula aligned to Three.js camera yaw (~00:50 UTC); PlaneGeometry + textured billboards for missing iOS PNG sprites (~00:58 UTC); flipY fix for upside-down non-weapon sprites (~04:49 UTC); firing ray direction matched to movement yaw (~05:10 UTC). evidence: `memory/2026-07-03-intraday-notes.md:2-8,30-36` (confidence: high)
+- **Figure 8 Drift (`mobile_mr4ees3z_ytvzm4`, from ~03:56 UTC):** Straight-segment attach UX complaint; faster car + **localStorage** track library; slippery/drift physics; large UI/menu/tabbed build panel + mobile pinch/zoom ask; user report “not rendering track”; fix for **missing `#startBtn`** after menu refactor (~04:41 UTC). evidence: `audit/chats/transcripts/mobile_mr4ees3z_ytvzm4.jsonl:1-14`; `Brain/skill-gardener/2026-07-03/live-candidates.jsonl`; `memory/2026-07-03-intraday-notes.md:22-28` (confidence: high)
+- **Platform / Brain meta:** Prior Thought verification note (~01:59 UTC); **DEV_EDIT_COMPLETE** `dev_edit_mr4b73nv_03640271` canvas `?pt=` (~02:27 UTC); **Brain Dream 2026-07-02** completed (~03:46 UTC). evidence: `memory/2026-07-03-intraday-notes.md:10-18`; `Brain/dreams/2026-07-02/03-42-dream.md`; `Brain/thoughts/2026-07-03/12-04-thought.md` (confidence: high)
+- **Cron in window:** No new `audit/cron/runs` JSONL timestamps matched 2026-07-02T17:24–2026-07-03T05:24 in sampled search; Sparky/Pocket Zombies cron narrative is mostly prior-day. evidence: `audit/cron/runs` search (confidence: medium)
+- **Files changed (observed):** `games/mobile-sideways-fps/index.html`, `games/figure-8-drift/index.html`; gateway/mobile canvas paths per intraday DEV_EDIT note. evidence: intraday + disk grep `flipY`, `localStorage` (confidence: high)
+
+## B. Behavior Quality
+
+**Went well:**
+- Fast, concrete game edits with notes tagged DEBUG and file paths | evidence: `memory/2026-07-03-intraday-notes.md`
+- Figure 8 render break diagnosed to **orphaned `#startBtn` onclick** after UI restructure | evidence: intraday note 04:41; gardener candidate `mobile_mr4ees3z_ytvzm4`
+- Relevant skills loaded for drift UI (`codex-frontend-engineer`, `dev-debugging`, `threejs-mobile-webgl`) and zombie edits (`file-surgery`) | evidence: `Brain/skill-episodes/2026-07-03/episodes.jsonl`
+
+**Stalled or struggled:**
+- Figure 8 turn with **87 tool calls**, 8 errors, ~170k context cost est. on one assistant turn | evidence: `mobile_mr4ees3z_ytvzm4.jsonl` tool summary line 4
+- Menu/UI refactor introduced **runtime TypeError** before user “not rendering” report | evidence: intraday 04:33–04:41
+- Brain Thought persistence historically flaky (prior runs blocked or note-only); **`12-04-thought.md`** exists for earlier 2026-07-03 window | evidence: `Brain/thoughts/2026-07-03/12-04-thought.md:8`
+
+**Tool usage patterns:**
+- Heavy `read_file` / `grep_file` / `find_replace` on single large `index.html` games; skill reads batched on complex UI request.
+- Disk verification via workspace search worked for `flipY` and `localStorage`; minified JS limits keyword grep for `shoot`/`menu` literals.
+
+**User corrections:**
+- Figure 8: frustration with compass-style straight placement (“north east west”); demand for menu separation and mobile build pinch/zoom; explicit “something broke” after UI pass. evidence: `mobile_mr4ees3z_ytvzm4.jsonl:1,7,13`
+
+## C. Skill And Workflow Signals
+
+| Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
+|----------------|--------|-----------------|------------|----------|
+| threejs-mobile-webgl | Pocket Zombies: textures, flipY, mobile canvas | update triggers (yaw/fire) — **applied C2** | high | episodes.jsonl:9-11; intraday :30-36 |
+| file-surgery | Repeated single-file HTML game patches | no change; already fit | high | episodes.jsonl:9-10 |
+| codex-frontend-engineer + dev-debugging | Figure 8 menu/tabs/render break | add example: verify DOM ids after UI refactor | medium | episodes.jsonl:4-8; gardener sg_b2cbca8d |
+| local-file-browser-verification | Drift tuning + storage | ensure trigger includes “localStorage track save” | medium | episodes.jsonl:1; gardener sg_3dfdf9bf |
+| html-canvas-mobile-game-iteration (none) | Two sessions, same pattern: mobile game HTML + physics + UI | **propose new skill** to Dream | medium | gardener 2026-07-03 workflow-episodes |
+
+## C2. Existing Skill Maintenance
+
+**Applied during this Thought:**
+- threejs-mobile-webgl | `skill_update_metadata` added triggers: yaw mismatch, shooting direction wrong, movement and fire misaligned, camera yaw convention | why: 2026-07-03 Pocket Zombies firing regression after movement yaw fix | evidence: `memory/2026-07-03-intraday-notes.md:34-36`; `Brain/skill-episodes/2026-07-03/episodes.jsonl:11` | verification: `skill_read` shows bundle intact; metadata update reported quality 90
+
+**Deferred for Dream review:**
+- Arcade drift / localStorage track editor workflow for Figure 8 | new skill or composite; multi-step physics+UI | evidence: `Brain/skill-gardener/2026-07-03/live-candidates.jsonl:1-7`
+- Post-menu-refactor DOM id checklist for codex-frontend-engineer | resource example | evidence: intraday 04:41; `dev-debugging` episode line 7
+
+## D. Business Candidates
+
+| Candidate | Destination | Action | Confidence | Evidence |
+|-----------|-------------|--------|-----------|---------|
+| — | — | — | — | No Xpose Market, lead-gen, or client-facing business events in window |
+
+**Business candidate JSONL:** not needed
+
+## E. Memory Candidates
+
+| Item | Target | Recall Trigger | Future Behavior | Staleness Risk | Confidence | Evidence |
+|------|--------|----------------|-----------------|----------------|-----------|---------|
+| — | — | — | — | — | — | Game-session DEBUG notes already capture tactical fixes; no new durable USER/SOUL rule beyond existing mobile-game/tool-report preferences |
+
+## F. Opportunity Seeds
+
+| Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
+|------|----------------|----------------------------|-----------|---------|
+| Mobile canvas HTML game E2E smoke | `?pt=` fix claimed; relatives unverified on phone | `src/gateway/routes/canvas.router.ts`; `web-ui/src/mobile/mobile-shell.js` | high | `12-04-thought.md:9`; intraday DEV_EDIT |
+| Figure 8 Drift as ledger project | Active user thread; not in active-work | `games/figure-8-drift/index.html` | high | transcripts `mr4ees3z`; disk menu/build/localStorage |
+| html-canvas-mobile-game skill | Repeat tool-heavy HTML game loops | `Brain/skill-gardener/2026-07-03/` | medium | 18 live candidates; 11 episodes |
+| Brain Thought write persistence | Prior runs failed to save thoughts | Brain cron tool filter / file_ops activation | medium | `12-04-thought.md:8`; dream 2026-07-02 “0 thoughts” dir |
+
+## G. Improvement Candidates
+
+| Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
+|-------|---------------|--------------------------|------------|---------|
+| Mobile iframe game asset smoke (START + 1 PNG + console) | feature_addition / composite | action | high | intraday DEV_EDIT; ledger `mobile-html-canvas-workspace-asset-loading` |
+| Guardrail: after large game UI refactor, grep `getElementById` vs markup | skill_evolution | general | medium | figure-8 `#startBtn` break |
+| Reduce single-turn tool sprawl on minified HTML games | prompt_mutation | general | low | mr4ees3z 87 calls |
+
+## H. Window Verdict
+
+**Active:** yes  
+**Signal quality:** high  
+**Summary:** Mobile game iteration (Pocket Zombies + new Figure 8 Drift session) plus canvas-auth platform fix and Brain Dream synthesis; strong gardener/skill-episode signal, no business thread.
+
+---

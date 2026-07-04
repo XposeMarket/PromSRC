@@ -1,8 +1,9 @@
 ---
 name: mcp-ops-troubleshooting
-description: Transport-aware MCP diagnostics and safe recovery playbook for Prometheus.
+description: Use this skill when MCP servers are disconnected, flapping, missing tools, failing to connect, returning empty list_tools output, or breaking after config/env changes. Triggers on phrases like MCP not working, MCP disconnected, missing MCP tools, list_tools empty, MCP connect failed, server flapping, MCP transport error, stdio MCP, SSE MCP, HTTP MCP, and rollback MCP config. Use it to snapshot state, validate transport config, sanitize env inputs, reconnect minimally, and verify tool discovery without leaking secrets.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: MCP not working, MCP disconnected, missing MCP tools, list_tools empty, MCP connect failed, server flapping, MCP transport error, stdio MCP, SSE MCP, HTTP MCP, rollback MCP config, MCP troubleshooting, MCP server status, MCP tool discovery, MCP auth error
 ---
 
 # MCP Ops Troubleshooting

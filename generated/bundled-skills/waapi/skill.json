@@ -1,53 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "waapi",
-  "name": "waapi",
-  "description": "Web Animations API adapter patterns for HyperFrames. Use when authoring element.animate() motion, Animation currentTime seeking, document.getAnimations(), KeyframeEffect timing, fill modes, or native browser animations that must render deterministically in HyperFrames.",
-  "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when the user asks for Web Animations API work, browser-native animations, JS timeline effects, keyframe animations, animation controls, playback timing, or lightweight UI motion without external libraries. It maps motion to native WAAPI patterns.",
   "triggers": [
-    "waapi"
+    "WAAPI",
+    "Web Animations API",
+    "Element.animate",
+    "native browser animation",
+    "keyframe effect",
+    "animation playback",
+    "JS animation",
+    "animation controls",
+    "browser animation",
+    "timeline effect",
+    "lightweight animation",
+    "web animation API",
+    "animate with JavaScript",
+    "keyframes API"
   ],
   "categories": [
-    "generic",
-    "imported"
+    "frontend",
+    "animation",
+    "creative"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "shell",
-      "browser"
-    ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": true,
-    "browser": true,
-    "desktop": false,
-    "externalSideEffects": false
-  },
-  "resources": [],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium"
+  "requiredTools": [
+    "workspace_write",
+    "creative_mode"
+  ],
+  "lifecycle": "active",
+  "name": "Web Animations API",
+  "id": "waapi"
 }

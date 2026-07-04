@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { getConfig, getAgents, getAgentById, ensureAgentWorkspace, resolveAgentWorkspace } from '../../config/config';
 import { broadcastWS, broadcastTeamEvent, resolveChannelsConfig, normalizeTelegramConfig, normalizeDiscordConfig, normalizeWhatsAppConfig } from '../comms/broadcaster';
-import { listManagedTeams, getManagedTeam, saveManagedTeam, deleteManagedTeam } from '../teams/managed-teams';
+import { listManagedTeams, getManagedTeam } from '../teams/managed-teams';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
 import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
@@ -19,6 +19,7 @@ import { getTeamWorkspacePath } from '../teams/team-workspace';
 import type { RuntimeVisionAttachment } from '../chat/attachment-context';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { installAgentProfilePack, isMarketplaceImportedAgent, previewAgentProfilePack } from '../marketplace/agent-profile-packs';
+import { deleteAgentCompletely } from '../agents-runtime/entity-delete';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
@@ -1770,98 +1771,17 @@ router.put('/api/agents/:id', (req, res) => {
 
 router.delete('/api/agents/:id', (req, res) => {
   const targetId = _sanitizeAgentId(req.params.id);
-  const cm = getConfig();
-  const current = cm.getConfig() as any;
-  const explicitAgents = Array.isArray(current.agents) ? current.agents : [];
-  // Protect the main agent — it must always exist
-  const target = explicitAgents.find((a: any) => _sanitizeAgentId(a.id) === targetId);
-  if (targetId === 'main') {
-    res.status(403).json({ success: false, error: 'Cannot delete the main agent.' });
-    return;
-  }
-  const next = explicitAgents.filter((a: any) => _sanitizeAgentId(a.id) !== targetId);
-  if (next.length === explicitAgents.length) {
-    res.status(404).json({ success: false, error: `Agent "${targetId}" not found` });
-    return;
-  }
-  const finalAgents = _normalizeAgentsForSave(next);
-  cm.updateConfig({ agents: finalAgents } as any);
-
-  // Remove this agent from managed team membership and pending changes.
-  const affectedTeams: Array<{ id: string; name: string; removedFromMembers: boolean; removedTeam: boolean }> = [];
-  for (const team of listManagedTeams()) {
-    let touched = false;
-    const beforeCount = (team.subagentIds || []).length;
-    team.subagentIds = (team.subagentIds || []).filter(id => _sanitizeAgentId(id) !== targetId);
-    if (team.subagentIds.length !== beforeCount) touched = true;
-
-    const pendingBefore = (team.pendingChanges || []).length;
-    team.pendingChanges = (team.pendingChanges || []).filter(c => _sanitizeAgentId(c.targetSubagentId || '') !== targetId);
-    if (team.pendingChanges.length !== pendingBefore) touched = true;
-
-    const historyBefore = (team.changeHistory || []).length;
-    team.changeHistory = (team.changeHistory || []).filter(c => _sanitizeAgentId(c.targetSubagentId || '') !== targetId);
-    if (team.changeHistory.length !== historyBefore) touched = true;
-
-    if (team.manager?.savedSchedules && Object.prototype.hasOwnProperty.call(team.manager.savedSchedules, targetId)) {
-      const copy = { ...(team.manager.savedSchedules || {}) };
-      delete copy[targetId];
-      team.manager = { ...team.manager, savedSchedules: copy };
-      touched = true;
-    }
-
-    if (!touched) continue;
-    if ((team.subagentIds || []).length === 0) {
-      deleteManagedTeam(team.id);
-      affectedTeams.push({ id: team.id, name: team.name, removedFromMembers: true, removedTeam: true });
-      broadcastTeamEvent({ type: 'team_deleted', teamId: team.id, teamName: team.name });
-    } else {
-      saveManagedTeam(team);
-      affectedTeams.push({ id: team.id, name: team.name, removedFromMembers: true, removedTeam: false });
-      broadcastTeamEvent({ type: 'team_updated', teamId: team.id, teamName: team.name });
-    }
-  }
-
-  // Delete one-shot/recurring scheduler jobs bound to this subagent.
-  let deletedScheduledJobs = 0;
-  for (const job of _cronScheduler.getJobs()) {
-    if (_sanitizeAgentId((job as any).subagent_id || '') !== targetId) continue;
-    if (_cronScheduler.deleteJob(job.id)) deletedScheduledJobs++;
-  }
-
-  // Hard-delete generated subagent directories for this agent.
-  const cfgWorkspace = getConfig().getWorkspacePath() || process.cwd();
-  const candidateDirs = new Set<string>([
-    path.join(cfgWorkspace, '.prometheus', 'subagents', targetId),
-    path.join(process.cwd(), '.prometheus', 'subagents', targetId),
-  ]);
-  if (target?.workspace) candidateDirs.add(String(target.workspace));
-
-  const safeSuffixes = [
-    `/.prometheus/subagents/${targetId}`.toLowerCase(),
-    `/subagents/${targetId}`.toLowerCase(),
-  ];
-  const removedPaths: string[] = [];
-  for (const dir of candidateDirs) {
-    try {
-	      const resolved = path.resolve(dir);
-	      const normalized = resolved.replace(/\\/g, '/').toLowerCase();
-	      const underWorkspace = normalized.startsWith(path.resolve(cfgWorkspace).replace(/\\/g, '/').toLowerCase() + '/');
-	      if (!underWorkspace || !safeSuffixes.some((suffix) => normalized.endsWith(suffix))) continue;
-      if (!fs.existsSync(resolved)) continue;
-      fs.rmSync(resolved, { recursive: true, force: true });
-      removedPaths.push(resolved);
-    } catch {}
-  }
-
-  reloadAgentSchedules();
-  res.json({
-    success: true,
+  const result = deleteAgentCompletely({
     agentId: targetId,
-    removedPaths,
-    deletedScheduledJobs,
-    affectedTeams,
+    cronScheduler: _cronScheduler,
+    broadcastTeamEvent,
   });
+  if (!result.success) {
+    const status = targetId === 'main' ? 403 : (String(result.error || '').includes('not found') ? 404 : 400);
+    res.status(status).json(result);
+    return;
+  }
+  res.json(result);
 });
 
 // Helper: resolve the correct workspace for an agent, preferring the registered

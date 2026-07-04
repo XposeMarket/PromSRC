@@ -164,6 +164,149 @@ function skillTriggerMatchesText(trigger: string, rawText: string, words: string
   });
 }
 
+const SKILL_METADATA_MATCH_ALIASES: Record<string, string[]> = {
+  bug: ['debug', 'fix', 'repair', 'issue', 'broken', 'error', 'troubleshoot'],
+  fix: ['bug', 'debug', 'repair', 'issue', 'broken', 'error'],
+  debug: ['bug', 'fix', 'repair', 'issue', 'troubleshoot'],
+  lead: ['lead generation', 'lead-generation', 'prospect', 'prospecting', 'outreach'],
+  generation: ['lead generation', 'lead-generation', 'prospecting'],
+  maps: ['google maps', 'google-maps', 'local', 'places'],
+  website: ['site', 'web', 'domain', 'homepage'],
+  source: ['src', 'code', 'self edit', 'dev source'],
+  src: ['source', 'code', 'self edit', 'dev source'],
+  edit: ['modify', 'change', 'patch', 'update'],
+  mobile: ['web ui', 'frontend', 'responsive', 'ios'],
+  browser: ['web', 'page', 'dom', 'automation', 'click', 'screenshot'],
+  desktop: ['window', 'screen', 'automation', 'click', 'screenshot'],
+  shopping: ['buying', 'product', 'deal', 'price', 'commerce'],
+  product: ['shopping', 'deal', 'price', 'commerce'],
+  hyperframes: ['hyper frames', 'hyperframe', 'video', 'creative'],
+  video: ['creative', 'promo', 'social', 'motion', 'hyperframes'],
+};
+
+function expandedSkillMetadataWords(text: string): string[] {
+  const base = normalizeSkillMatchTextLoose(text)
+    .split(' ')
+    .filter((word) => word.length >= 3);
+  const words = new Set<string>(base);
+  for (const word of base) {
+    for (const alias of SKILL_METADATA_MATCH_ALIASES[word] || []) {
+      normalizeSkillMatchTextLoose(alias)
+        .split(' ')
+        .filter((item) => item.length >= 3)
+        .forEach((item) => words.add(item));
+    }
+  }
+  return Array.from(words);
+}
+
+function skillMetadataFallbackScore(skill: Skill, rawText: string): number {
+  const words = expandedSkillMetadataWords(rawText);
+  if (!words.length) return 0;
+  const fields: Array<{ weight: number; text: string }> = [
+    { weight: 10, text: skill.id },
+    { weight: 8, text: skill.name },
+    { weight: 7, text: skill.triggers.join(' ') },
+    { weight: 7, text: skill.categories.join(' ') },
+    { weight: 4, text: skill.requiredTools.join(' ') },
+    { weight: 3, text: skill.description },
+  ];
+  let score = 0;
+  for (const field of fields) {
+    const hay = normalizeSkillMatchTextLoose(field.text);
+    if (!hay) continue;
+    for (const word of words) {
+      if (hay.includes(word)) score += field.weight;
+    }
+  }
+  return score;
+}
+
+const COMPOSER_SKILL_MATCH_IGNORED_WORDS = new Set([
+  ...Array.from(SKILL_TRIGGER_STOPWORDS),
+  'can', 'could', 'would', 'should', 'may', 'might',
+  'want', 'wants', 'wanted', 'need', 'needs', 'needed',
+  'like', 'just', 'thing', 'things', 'something', 'anything', 'stuff',
+  'help', 'helps', 'helped', 'make', 'makes', 'made', 'create', 'creates', 'created',
+  'use', 'uses', 'used', 'using', 'get', 'gets', 'got', 'give', 'gives', 'gave',
+  'pls',
+]);
+const COMPOSER_SKILL_MATCH_SHORT_WORDS = new Set(['x', 'ui', 'ux', 'ai', 'seo', '3d', 'js', 'ts']);
+const COMPOSER_METADATA_AMBIGUOUS_WORDS = new Set(['post']);
+
+function composerSkillWords(rawText: string): string[] {
+  return normalizeSkillMatchTextLoose(rawText)
+    .split(' ')
+    .map((word) => word.trim())
+    .filter((word) =>
+      (word.length >= 3 || COMPOSER_SKILL_MATCH_SHORT_WORDS.has(word)) &&
+      !COMPOSER_SKILL_MATCH_IGNORED_WORDS.has(word)
+    );
+}
+
+function composerWordSet(rawText: string): Set<string> {
+  return new Set<string>(composerSkillWords(rawText));
+}
+
+function composerTriggerScore(trigger: string, rawText: string, queryWords: Set<string>): number {
+  const triggerText = normalizeSkillMatchTextLoose(trigger);
+  if (!triggerText || queryWords.size === 0) return 0;
+  const queryText = Array.from(queryWords).join(' ');
+  const triggerWords = triggerText
+    .split(' ')
+    .filter((word) => word.length >= 3 && !COMPOSER_SKILL_MATCH_IGNORED_WORDS.has(word));
+  if (!triggerWords.length) return 0;
+
+  if (triggerWords.length > 1) {
+    if (queryText.includes(triggerText) || normalizeSkillMatchTextLoose(rawText).includes(triggerText)) return 40;
+    const overlap = triggerWords.filter((word) => queryWords.has(word)).length;
+    if (overlap >= Math.min(2, triggerWords.length)) return 18 + overlap;
+    if (queryWords.size === 1) {
+      const [onlyWord] = Array.from(queryWords);
+      if (onlyWord.length >= 5 && triggerWords.includes(onlyWord)) return 12;
+    }
+    return 0;
+  }
+
+  const triggerWord = triggerWords[0];
+  if (COMPOSER_SKILL_MATCH_IGNORED_WORDS.has(triggerWord)) return 0;
+  if (queryWords.has(triggerWord)) return 14;
+  if (triggerWord.length < 5) return 0;
+  return Array.from(queryWords).some((word) =>
+    word.length >= 5 && (word.startsWith(triggerWord) || triggerWord.startsWith(word))
+  ) ? 10 : 0;
+}
+
+function composerMetadataScore(skill: Skill, rawText: string, queryWords: Set<string>): number {
+  if (queryWords.size === 0) return 0;
+  const fields: Array<{ weight: number; text: string }> = [
+    { weight: 10, text: skill.id },
+    { weight: 8, text: skill.name },
+    { weight: 7, text: skill.categories.join(' ') },
+  ];
+  let score = 0;
+  for (const field of fields) {
+    const hayWords = new Set(composerSkillWords(field.text));
+    for (const word of queryWords) {
+      if (COMPOSER_METADATA_AMBIGUOUS_WORDS.has(word)) continue;
+      if (hayWords.has(word)) score += field.weight;
+    }
+  }
+  return score;
+}
+
+function mergeSkillIds(primary: string[], fallback: string[], limit = 8): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const id of [...primary, ...fallback]) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(id);
+    if (merged.length >= limit) break;
+  }
+  return merged;
+}
+
 export class SkillsManager {
   private skillsDir: string;
   private skills: Map<string, Skill> = new Map();
@@ -338,7 +481,12 @@ export class SkillsManager {
         matches.push(skill.id);
       }
     }
-    return matches;
+    const fallback = Array.from(this.skills.values())
+      .map((skill) => ({ id: skill.id, score: skillMetadataFallbackScore(skill, text) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.id);
+    return mergeSkillIds(matches, fallback);
   }
 
   findMatchingSkillsForMessage(messageText: string): string[] {
@@ -351,7 +499,28 @@ export class SkillsManager {
         matches.push(skill.id);
       }
     }
-    return matches;
+    const fallback = Array.from(this.skills.values())
+      .map((skill) => ({ id: skill.id, score: skillMetadataFallbackScore(skill, text) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.id);
+    return mergeSkillIds(matches, fallback);
+  }
+
+  findComposerSkillMatches(messageText: string, limit = 8): string[] {
+    const text = String(messageText || '').trim();
+    const queryWords = composerWordSet(text);
+    if (queryWords.size === 0) return [];
+    return Array.from(this.skills.values())
+      .map((skill) => {
+        const triggerScore = Math.max(0, ...skill.triggers.map((trigger) => composerTriggerScore(trigger, text, queryWords)));
+        const metadataScore = composerMetadataScore(skill, text, queryWords);
+        return { id: skill.id, score: triggerScore + metadataScore };
+      })
+      .filter((item) => item.score >= 10)
+      .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+      .slice(0, Math.max(1, limit))
+      .map((item) => item.id);
   }
 
   createSkill(data: {

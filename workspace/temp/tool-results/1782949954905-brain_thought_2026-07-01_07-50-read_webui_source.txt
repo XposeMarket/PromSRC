@@ -1,0 +1,242 @@
+web-ui/src/mobile/mobile-shell.js (2689 lines) [window 1-240, truncated]:
+1: // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
+2: import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
+3: import { timeAgo } from '../utils.js';
+4: import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
+5: import { mobileGatewayFetch } from './mobile-api.js';
+6: 
+7: // ── Pinned sessions (localStorage) ────────────────────────────────────────────
+8: const PM_PINNED_SESSIONS_KEY = 'pm_mobile_pinned_sessions';
+9: 
+10: function _getPinnedSessionIds() {
+11:   try {
+12:     const raw = localStorage.getItem(PM_PINNED_SESSIONS_KEY);
+13:     const parsed = raw ? JSON.parse(raw) : [];
+14:     return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+15:   } catch { return []; }
+16: }
+17: 
+18: function _savePinnedSessionIds(ids) {
+19:   try { localStorage.setItem(PM_PINNED_SESSIONS_KEY, JSON.stringify(ids)); } catch {}
+20: }
+21: 
+22: function _isPinned(sessionId) {
+23:   return _getPinnedSessionIds().includes(String(sessionId || ''));
+24: }
+25: 
+26: function _togglePin(sessionId) {
+27:   const id = String(sessionId || '');
+28:   if (!id) return false;
+29:   const ids = _getPinnedSessionIds();
+30:   const idx = ids.indexOf(id);
+31:   if (idx >= 0) {
+32:     ids.splice(idx, 1);
+33:     _savePinnedSessionIds(ids);
+34:     return false; // unpinned
+35:   } else {
+36:     ids.unshift(id);
+37:     _savePinnedSessionIds(ids);
+38:     return true; // pinned
+39:   }
+40: }
+41: 
+42: // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
+43: export const ICONS = {
+44:   menu:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7"  x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>',
+45:   gear:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a...[line truncated]
+46:   bell:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
+47:   back:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
+48:   chat:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+49:   mic:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>',
+50:   clipboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/></svg>',
+51:   spark:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/><path d="M19 5l1 1M5 5l-1 1"/></svg>',
+52:   calendar:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>',
+53:   users:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+54:   robot:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><circle cx="9" cy="13" r="1.4"/><circle cx="15" cy="13" r="1.4"/><line x1="12" y1="3" x2="12" y2="7"/><line x1="2" y1="13" x2="4" y2="13"/><line x1="20" y1="13" x2="22" y2="13"/></svg>',
+55:   doc:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 13 12 16 17 11"/></svg>',
+56:   dots:      '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+57:   chev:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
+58:   fork:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v2a4 4 0 0 0 4 4h2"/><path d="M18 8v2a4 4 0 0 1-4 4h-2"/><path d="M12 14v2"/></svg>',
+59:   refresh:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg>',
+60:   plus:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+61:   x:         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+62:   play:      '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
+63:   pause:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>',
+64:   trash:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+65:   clock:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+66:   paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>',
+67:   send:      '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg>',
+68:   micSmall:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/></svg>',
+69:   volume:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
+70:   pin:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 2h6l-1 6 4 4-3 3H9l-3-3 4-4z"/></svg>',
+71:   brain:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a3 3 0 0 0-3 3v12a3 3 0 0 0 5 2 3 3 0 0 0 5-2V6a3 3 0 0 0-5-2 3 3 0 0 0-2-1z"/></svg>',
+72:   monitor:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+73:   globe:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>',
+74:   upload:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
+75:   check:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+76:   target:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg>',
+77:   moon:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.8 6.8 0 0 0 9.8 9.8z"/></svg>',
+78:   sun:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+79:   image:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+80:   video:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>',
+81:   layers:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 18l9 5 9-5"/></svg>',
+82:   preset:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 14.9 8.6 22 9.3 16.6 14 18.2 21 12 17.4 5.8 21 7.4 14 2 9.3 9.1 8.6 12 2"/></svg>',
+83:   download:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+84:   eye:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+85:   hf:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>',
+86:   wand:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M17.8 6.2L19 5M3 21l9-9"/></svg>',
+87: };
+88: 
+89: export function icon(name, cls = '') {
+90:   return `<span class="pm-i ${cls}" aria-hidden="true">${ICONS[name] || ''}</span>`;
+91: }
+92: 
+93: export function escapeHtml(s) {
+94:   return String(s == null ? '' : s)
+95:     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+96:     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+97: }
+98: 
+99: export function el(html) {
+100:   const t = document.createElement('template');
+101:   t.innerHTML = String(html).trim();
+102:   return t.content.firstElementChild;
+103: }
+104: 
+105: let _drawerEl = null;
+106: let _scrimEl = null;
+107: let _drawerSearch = '';
+108: let _drawerSearchTimer = null;
+109: let _drawerSearchSeq = 0;
+110: let _tabResizeHandlerBound = false;
+111: let _drawerCallbacks = null;
+112: let _drawerRefreshing = false;
+113: let _mobileNoSelectGuardInstalled = false;
+114: const PM_DRAWER_REFRESH_TTL_MS = 30_000;
+115: const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
+116:   'button',
+117:   '[role="button"]',
+118:   '[data-action]',
+119:   '[data-route]',
+120:   '[data-tab]',
+121:   '.pm-tab',
+122:   '.pm-icon-btn',
+123:   '.pm-drawer-item',
+124:   '.pm-drawer-new-chat',
+125:   '.pm-drawer-close',
+126:   '.pm-session-row',
+127:   '.pm-channel-card',
+128:   '.pm-command-action',
+129:   '.pm-command-chip',
+130:   '.pm-mobile-queued-text',
+131:   '.pm-mobile-queued-icon',
+132:   '.pm-background-spawn-summary',
+133:   '.pm-msg-action',
+134:   '.pm-msg-lp-btn',
+135: ].join(',');
+136: 
+137: function _isEditableTarget(target) {
+138:   return !!target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .pm-composer-input, .pm-mobile-edit-input, .pm-drawer-search input');
+139: }
+140: 
+141: function _installMobileNoSelectGuard() {
+142:   if (_mobileNoSelectGuardInstalled) return;
+143:   _mobileNoSelectGuardInstalled = true;
+144:   const suppress = (ev) => {
+145:     if (!document.body?.classList?.contains('pm-mobile-active')) return;
+146:     if (_isEditableTarget(ev.target)) return;
+147:     const interactive = ev.target?.closest?.(PM_NO_SELECT_INTERACTIVE_SELECTOR);
+148:     if (!interactive) return;
+149:     ev.preventDefault();
+150:     ev.stopPropagation();
+151:   };
+152:   document.addEventListener('selectstart', suppress, true);
+153:   document.addEventListener('contextmenu', suppress, true);
+154: }
+155: export async function refreshMobileDrawerSessions({ force = false, channel = '' } = {}) {
+156:   if (!_drawerEl || !_drawerCallbacks) return;
+157:   if (_drawerSearch) return;
+158:   if (_drawerRefreshing && !force) return;
+159:   _drawerRefreshing = true;
+160:   try {
+161:     const targetChannel = String(channel || _currentDrawerSessionChannel() || 'mobile').trim() || 'mobile';
+162:     const state = _drawerPageStateFor(targetChannel);
+163:     const freshEnough = state.initialized
+164:       && Number(state.loadedAt || 0) > 0
+165:       && Date.now() - Number(state.loadedAt || 0) < PM_DRAWER_REFRESH_TTL_MS;
+166:     if (!force && freshEnough) return;
+167:     _resetDrawerPageState(targetChannel);
+168:     await _renderDrawerSessions(_drawerCallbacks);
+169:   } catch (err) {
+170:     console.warn('[mobile drawer] refresh failed', err);
+171:   } finally {
+172:     _drawerRefreshing = false;
+173:   }
+174: }
+175: 
+176: // Drag-down-to-refresh for the drawer session list. Installed PWAs in iOS
+177: // standalone mode have no native pull-to-refresh, so this gives the user a way
+178: // to force-reload sessions by dragging the panel down from the top.
+179: let _pullToRefreshBound = false;
+180: function _wireDrawerPullToRefresh() {
+181:   if (!_drawerEl || _pullToRefreshBound) return;
+182:   _pullToRefreshBound = true;
+183: 
+184:   // Inject the spinner keyframes once (avoids depending on the CSS bundle).
+185:   if (!document.getElementById('pm-ptr-style')) {
+186:     const st = document.createElement('style');
+187:     st.id = 'pm-ptr-style';
+188:     st.textContent = '@keyframes pm-ptr-spin{to{transform:rotate(360deg)}}';
+189:     document.head.appendChild(st);
+190:   }
+191: 
+192:   const THRESHOLD = 64;   // px of pull needed to trigger a refresh
+193:   const MAX_PULL = 96;    // clamp so the indicator never overshoots
+194:   let startY = 0;
+195:   let pulling = false;
+196:   let armed = false;
+197: 
+198:   // Lightweight spinner shown above the list while pulling/refreshing.
+199:   const indicator = document.createElement('div');
+200:   indicator.className = 'pm-drawer-ptr';
+201:   indicator.setAttribute('aria-hidden', 'true');
+202:   indicator.style.cssText = [
+203:     'position:absolute', 'top:0', 'left:0', 'right:0',
+204:     'display:flex', 'align-items:center', 'justify-content:center',
+205:     'height:0', 'overflow:hidden', 'pointer-events:none',
+206:     'opacity:0', 'transition:opacity .15s ease', 'z-index:5',
+207:   ].join(';');
+208:   indicator.innerHTML = '<span class="pm-drawer-ptr-spinner" style="width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,.25);border-top-color:var(--pm-orange,#ea6a1f);display:inline-block"></span>';
+209:   try { _drawerEl.appendChild(indicator); } catch {}
+210: 
+211:   const setPull = (dist) => {
+212:     const d = Math.max(0, Math.min(MAX_PULL, dist));
+213:     indicator.style.height = `${d}px`;
+214:     indicator.style.opacity = d > 4 ? '1' : '0';
+215:     const spin = indicator.firstElementChild;
+216:     if (spin) spin.style.transform = `rotate(${d * 4}deg)`;
+217:   };
+218: 
+219:   const reset = () => {
+220:     pulling = false;
+221:     armed = false;
+222:     indicator.style.transition = 'height .2s ease, opacity .15s ease';
+223:     setPull(0);
+224:     setTimeout(() => { indicator.style.transition = 'opacity .15s ease'; }, 200);
+225:   };
+226: 
+227:   const spin = (on) => {
+228:     const el = indicator.firstElementChild;
+229:     if (el) el.style.animation = on ? 'pm-ptr-spin .7s linear infinite' : '';
+230:   };
+231: 
+232:   _drawerEl.addEventListener('touchstart', (e) => {
+233:     if (_drawerSearch) return;
+234:     if (_drawerEl.scrollTop > 0) return;
+235:     startY = e.touches?.[0]?.clientY || 0;
+236:     pulling = true;
+237:     armed = false;
+238:   }, { passive: true });
+239: 
+240:   _drawerEl.addEventListener('touchmove', (e) => {
+[READ_TRUNCATED] Returned 240 of 2689 lines. Use start_line:241, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

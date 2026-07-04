@@ -11,7 +11,7 @@ import { getConfig, getAgents, getAgentById } from '../../config/config';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
-import { scoreSkillMetadata, skillMatchesScope, buildMetadataManifest, splitCsv, type SkillMetadataAudit } from './capabilities/skills-executor';
+import { scoreSkillMetadata, skillMatchesScope, buildMetadataManifest, splitCsv, formatCompactSkillList, type SkillMetadataAudit } from './capabilities/skills-executor';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
 import { executeWebFetch, executeWebFetchBatch, executeShoppingSearchProducts } from '../../tools/web';
@@ -26,6 +26,28 @@ import { executeAnalyzeImage, executeAnalyzeVideo } from '../../tools/media-anal
 import { executeGenerateImage } from '../../tools/generate-image';
 import { executeGenerateVideo } from '../../tools/generate-video';
 import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope } from '../../tools/workspace-context';
+import { createWorkspaceSnapshot, listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot, toSnapshotRef } from '../../workspace-history';
+import {
+  DEFAULT_FILE_TOOL_EXCLUDES,
+  buildFileIntelligence,
+  buildNoMatchHints,
+  buildRepoMapHeader,
+  collectGrepMatchesInText,
+  compareGrepMatches,
+  createSearchMatcher,
+  formatPhysicalLineWindow,
+  formatFileIntelligence,
+  formatSyntaxValidationResult,
+  matchesGlobList,
+  parseGlobList,
+  readSimpleGitignore,
+  resolvePositiveLineArg,
+  resolveResultCharBudget,
+  shouldSkipSearchPath,
+  summarizeFileForTool,
+  validateFileSyntax,
+  type SearchMatcher,
+} from '../../tools/file-intelligence';
 import { getMCPManager } from '../mcp-manager';
 import { getProcessSupervisor } from '../process/supervisor';
 import { executeAgentBuilderTool } from './agent-builder-integration';
@@ -83,7 +105,6 @@ import {
   createManagedTeam,
   getManagedTeam,
   saveManagedTeam,
-  deleteManagedTeam,
   appendTeamChat,
   appendTeamRoomMessage,
   appendMainAgentThread,
@@ -107,6 +128,7 @@ import {
   getOrCreateTeamDirectThread,
   enqueueTeamDirectThreadUserMessage,
 } from '../teams/managed-teams';
+import { deleteAgentCompletely, deleteTeamCompletely } from './entity-delete';
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
 import {
   parseTeamMemberDirectSessionId,
@@ -185,6 +207,7 @@ import {
   browserScrollCollect,
   browserScrollCollectV2,
   browserRunJs,
+  browserInspectConsole,
   browserInterceptNetwork,
   browserElementWatch,
   browserSnapshotDelta,
@@ -308,6 +331,7 @@ import {
   type PrometheusQuestionAnswer,
 } from '../prometheus-questions.js';
 import { findCommandPermissionGrant, type ToolPermissionCandidate } from '../command-permissions';
+import { isSessionAllowedPath } from '../path-permissions';
 import {
   evaluateHardToolDeny,
   formatHardToolDeny,
@@ -363,12 +387,34 @@ import { appendEntityEvent, listEntities, readEntity, writeEntity } from '../bus
 const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
 const getCreativeAssets = () => require('../creative/assets') as typeof import('../creative/assets');
 const getCreativeLayerExtraction = () => require('../creative/layer-extraction') as typeof import('../creative/layer-extraction');
+const getCreativeModelPaths = () => require('../creative/onnx/model-paths') as typeof import('../creative/onnx/model-paths');
 const getCreativeAsciiRenderRuntime = () => require('../creative/ascii-render-runtime') as typeof import('../creative/ascii-render-runtime');
 const getHyperframesCatalog = () => require('../creative/hyperframes-catalog') as typeof import('../creative/hyperframes-catalog');
 const getHyperframesBridge = () => require('../creative/hyperframes-bridge') as typeof import('../creative/hyperframes-bridge');
 const getHyperframesExportAdapter = () => require('../creative/hyperframes-export-adapter') as typeof import('../creative/hyperframes-export-adapter');
 const getHyperframesQa = () => require('../creative/hyperframes-qa') as typeof import('../creative/hyperframes-qa');
 const getHyperframesProducer = () => require('../creative/hyperframes-producer') as typeof import('../creative/hyperframes-producer');
+
+const FILE_TOOL_DEFAULT_READ_LINES = 180;
+const FILE_TOOL_DEFAULT_BATCH_FILES = 2;
+const FILE_TOOL_MAX_BATCH_FILES = 8;
+const FILE_TOOL_DEFAULT_BATCH_LINES = 80;
+const FILE_TOOL_MAX_BATCH_LINES = 240;
+const FILE_TOOL_DEFAULT_TREE_DEPTH = 2;
+const FILE_TOOL_DEFAULT_TREE_ENTRIES = 180;
+const FILE_TOOL_MAX_LINE_CHARS = 700;
+const FILE_TOOL_BATCH_INLINE_LIMIT_CHARS = 6000;
+const FILE_TOOL_READ_INLINE_LIMIT_CHARS = 12000;
+const FILE_TOOL_TREE_INLINE_LIMIT_CHARS = 8000;
+
+function hasProvidedArg(args: Record<string, any>, key: string): boolean {
+  return args[key] !== undefined && args[key] !== null && args[key] !== '';
+}
+
+function trimReturnedFileLine(line: string, maxChars = FILE_TOOL_MAX_LINE_CHARS): string {
+  const value = String(line ?? '');
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}...[line truncated]`;
+}
 
 const VIDEO_MODE_REMOVED_SCENE_TOOL_NAMES = new Set([
   'creative_apply_ops',
@@ -1847,7 +1893,12 @@ function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { name: stri
       const files = Array.isArray(args.files)
         ? args.files
         : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ file: String(p) })) : []);
-      return { name: 'read_dev_sources', args: { ...args, files } };
+      const readArgs = { ...args, files };
+      if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
+      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
+        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
+      }
+      return { name: 'read_dev_sources', args: readArgs };
     }
     if (action === 'stats_batch') {
       const files = Array.isArray(args.files)
@@ -1869,6 +1920,11 @@ function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { name: stri
       if (surface === 'web-ui') return { name: 'read_webui_source', args: { ...args, file } };
       if (surface === 'prom-root') return { name: 'read_prom_file', args: { ...args, file } };
       return { name: 'read_source', args: { ...args, file } };
+    }
+    if (action === 'validate' || action === 'validate_syntax' || action === 'syntax') {
+      if (surface === 'web-ui') return { name: 'validate_webui_source', args: { ...args, file } };
+      if (surface === 'prom-root') return { name: 'validate_prom_file', args: { ...args, file } };
+      return { name: 'validate_source', args: { ...args, file } };
     }
     if (action === 'grep' || action === 'search') {
       if (surface === 'web-ui') return { name: 'grep_webui_source', args: { ...args, path: pathArg } };
@@ -1899,6 +1955,192 @@ function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { name: stri
   return { name, args: rawArgs, error: `Unsupported dev_source_edit action "${action}".` };
 }
 
+function normalizeWorkspacePatchOp(value: unknown): string {
+  const op = String(value || '').trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    create: 'create_file',
+    create_file: 'create_file',
+    write: 'write_file',
+    write_file: 'write_file',
+    overwrite: 'write_file',
+    find_replace: 'find_replace',
+    replace: 'find_replace',
+    replace_text: 'find_replace',
+    replace_lines: 'replace_lines',
+    line_replace: 'replace_lines',
+    insert_after: 'insert_after',
+    insert: 'insert_after',
+    delete_lines: 'delete_lines',
+    delete: 'delete_lines',
+    remove_lines: 'delete_lines',
+    rename_file: 'rename_file',
+    rename: 'rename_file',
+  };
+  return aliases[op] || op;
+}
+
+function positiveNumberArg(value: unknown): number | undefined {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function hasNonEmptyValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'boolean') return value === true;
+  return true;
+}
+
+function copyIfPresent(target: Record<string, any>, source: Record<string, any>, keys: string[]): void {
+  for (const key of keys) {
+    if (hasNonEmptyValue(source[key])) target[key] = source[key];
+  }
+}
+
+function compactWorkspaceReadArgs(args: Record<string, any>, pathArg: any): Record<string, any> {
+  const out: Record<string, any> = { filename: pathArg };
+  const startLine = positiveNumberArg(args.start_line ?? args.startLine);
+  const aroundLine = positiveNumberArg(args.around_line ?? args.aroundLine);
+  const exactLine = positiveNumberArg(args.line ?? args.line_number ?? args.lineNumber ?? args.physical_line);
+  if (startLine !== undefined) out.start_line = startLine;
+  if (aroundLine !== undefined) {
+    out.around_line = aroundLine;
+    if (args.before !== undefined && Number.isFinite(Number(args.before))) out.before = Math.max(0, Math.floor(Number(args.before)));
+    if (args.after !== undefined && Number.isFinite(Number(args.after))) out.after = Math.max(0, Math.floor(Number(args.after)));
+  }
+  if (exactLine !== undefined) out.line = exactLine;
+  copyIfPresent(out, args, ['num_lines', 'max_lines', 'head', 'tail', 'char_window', 'max_result_tokens', 'hard_max_result_tokens']);
+  if (positiveNumberArg(args.column) !== undefined) out.column = positiveNumberArg(args.column);
+  if (args.full === true || args.full_file === true) out.full = true;
+  if (args.full_line === true || args.fullLine === true) out.full_line = true;
+  if (args.show_full_line === true || args.showFullLine === true) out.show_full_line = true;
+  if (args.inline === true) out.inline = true;
+  if (args.no_spool === true) out.no_spool = true;
+  return out;
+}
+
+function compactWorkspaceGrepArgs(args: Record<string, any>, pathArg: any): Record<string, any> {
+  const out: Record<string, any> = pathArg ? { filename: pathArg } : {};
+  copyIfPresent(out, args, ['pattern', 'glob', 'file_glob', 'directory', 'query', 'exclude']);
+  copyIfPresent(out, args, ['max_results', 'context', 'context_lines', 'before', 'after', 'char_window', 'char_before', 'char_after']);
+  if (args.regex === true) out.regex = true;
+  if (args.literal === true) out.literal = true;
+  if (args.case_insensitive === true) out.case_insensitive = true;
+  if (args.include_lockfiles === true) out.include_lockfiles = true;
+  if (args.gitignore === false) out.gitignore = false;
+  if (args.respect_gitignore === false) out.respect_gitignore = false;
+  return out;
+}
+
+function compactWorkspaceBatchReadArgs(args: Record<string, any>): Record<string, any> {
+  const files = Array.isArray(args.files) && args.files.length
+    ? args.files.map((entry: any) => {
+      const item = entry && typeof entry === 'object' ? entry : {};
+      const out: Record<string, any> = { filename: item.filename ?? item.path ?? item.file };
+      const startLine = positiveNumberArg(item.start_line ?? item.startLine);
+      const numLines = positiveNumberArg(item.num_lines ?? item.numLines);
+      if (startLine !== undefined) out.start_line = startLine;
+      if (numLines !== undefined) out.num_lines = numLines;
+      if (item.full === true || item.allow_large === true) out.full = true;
+      return out;
+    })
+    : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ filename: String(p) })) : []);
+  const out: Record<string, any> = { files };
+  copyIfPresent(out, args, ['max_files', 'max_lines_per_file', 'num_lines', 'query', 'max_result_tokens', 'hard_max_result_tokens']);
+  if (args.content === true || args.include_content === true) out.content = true;
+  if (String(args.mode || '').trim()) out.mode = String(args.mode).trim();
+  if (args.full === true || args.allow_large === true) out.full = true;
+  if (args.inline === true) out.inline = true;
+  return out;
+}
+
+function compactWorkspaceEditArgs(args: Record<string, any>, pathArg: any, action: string): Record<string, any> {
+  const out: Record<string, any> = {};
+  if (pathArg !== undefined && pathArg !== null && String(pathArg).trim()) out.filename = pathArg;
+  if (action === 'find_replace') {
+    out.find = args.find ?? args.old_text ?? args.oldText;
+    out.replace = args.replace ?? args.new_text ?? args.newText ?? '';
+    if (args.replace_all === true || args.replaceAll === true) out.replace_all = true;
+  } else if (action === 'replace_lines') {
+    out.start_line = args.start_line;
+    out.end_line = args.end_line;
+    out.new_content = args.new_content ?? args.content ?? '';
+  } else if (action === 'insert_after') {
+    out.after_line = args.after_line;
+    out.content = args.content ?? args.new_content ?? '';
+  } else if (action === 'delete_lines') {
+    out.start_line = args.start_line;
+    out.end_line = args.end_line;
+  } else if (action === 'create' || action === 'write') {
+    out.content = args.content ?? '';
+    if (args.overwrite === true) out.overwrite = true;
+    if (args.create_dirs === true) out.create_dirs = true;
+  } else {
+    copyIfPresent(out, args, ['source', 'destination', 'patch', 'check', 'dry_run', 'max_entries']);
+  }
+  return out;
+}
+
+function normalizeWorkspacePatchsetArgs(rawArgs: any): any {
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const rawEdits = Array.isArray(args.edits) ? args.edits : [];
+  return {
+    ...args,
+    edits: rawEdits.map((entry: any) => {
+      const edit = entry && typeof entry === 'object' ? { ...entry } : {};
+      const op = normalizeWorkspacePatchOp(edit.op ?? edit.action ?? edit.type);
+      const filename = edit.filename ?? edit.path ?? edit.file ?? edit.name;
+      if (op === 'find_replace') {
+        return {
+          filename,
+          op,
+          find: edit.find ?? edit.old_text ?? edit.oldText,
+          replace: edit.replace ?? edit.new_text ?? edit.newText ?? '',
+          ...(edit.replace_all === true || edit.replaceAll === true ? { replace_all: true } : {}),
+        };
+      }
+      if (op === 'replace_lines') {
+        return {
+          filename,
+          op,
+          start_line: edit.start_line ?? edit.startLine,
+          end_line: edit.end_line ?? edit.endLine,
+          new_content: edit.new_content ?? edit.content ?? '',
+        };
+      }
+      if (op === 'insert_after') {
+        return {
+          filename,
+          op,
+          after_line: edit.after_line ?? edit.afterLine,
+          content: edit.content ?? edit.new_content ?? '',
+        };
+      }
+      if (op === 'delete_lines') {
+        return {
+          filename,
+          op,
+          start_line: edit.start_line ?? edit.startLine,
+          end_line: edit.end_line ?? edit.endLine,
+        };
+      }
+      if (op === 'write_file' || op === 'create_file') {
+        return {
+          filename,
+          op,
+          content: edit.content ?? edit.new_content ?? '',
+        };
+      }
+      return {
+        ...edit,
+        filename,
+        op,
+      };
+    }),
+  };
+}
+
 function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
   if (!/^workspace_(read|edit|run|git|safety|code_nav)$/.test(name)) return null;
   const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
@@ -1925,27 +2167,37 @@ function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: stri
   };
 
   const pathArg = args.path ?? args.filename ?? args.file ?? args.name;
-  const withFilename = () => ({ ...args, filename: pathArg });
-  const withPath = () => ({ ...args, path: pathArg });
 
   if (name === 'workspace_read') {
-    if (action === 'tree') return { name: 'file_tree', args: withPath() };
-    if (action === 'list') return { name: 'list_directory', args: withPath() };
-    if (action === 'list_files') return { name: 'list_files', args: withPath() };
-    if (action === 'exists') return { name: 'path_exists', args: withPath() };
-    if (action === 'stats') return { name: 'file_stats', args: withFilename() };
-    if (action === 'read') return { name: 'read_file', args: withFilename() };
+    if (action === 'tree') {
+      const treeArgs: Record<string, any> = { path: pathArg };
+      copyIfPresent(treeArgs, args, ['glob', 'exclude', 'max_result_tokens', 'hard_max_result_tokens']);
+      if (!hasProvidedArg(treeArgs, 'max_depth')) treeArgs.max_depth = FILE_TOOL_DEFAULT_TREE_DEPTH;
+      if (!hasProvidedArg(treeArgs, 'max_entries')) treeArgs.max_entries = FILE_TOOL_DEFAULT_TREE_ENTRIES;
+      return { name: 'file_tree', args: treeArgs };
+    }
+    if (action === 'list') {
+      const listArgs: Record<string, any> = { path: pathArg };
+      copyIfPresent(listArgs, args, ['glob', 'exclude']);
+      if (!hasProvidedArg(listArgs, 'max_depth')) listArgs.max_depth = 1;
+      if (!hasProvidedArg(listArgs, 'max_entries')) listArgs.max_entries = 250;
+      return { name: 'list_directory', args: listArgs };
+    }
+    if (action === 'list_files') return { name: 'list_files', args: { path: pathArg } };
+    if (action === 'exists') return { name: 'path_exists', args: { path: pathArg } };
+    if (action === 'stats') return { name: 'file_stats', args: { filename: pathArg } };
+    if (action === 'read') return { name: 'read_file', args: compactWorkspaceReadArgs(args, pathArg) };
+    if (action === 'validate' || action === 'validate_syntax' || action === 'syntax') return { name: 'validate_file', args: { filename: pathArg } };
     if (action === 'batch_read') {
-      const files = Array.isArray(args.files) && args.files.length
-        ? args.files.map((entry: any) => ({
-          ...entry,
-          filename: entry?.filename ?? entry?.path ?? entry?.file,
-        }))
-        : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ filename: String(p) })) : []);
-      return { name: 'read_files_batch', args: { ...args, files } };
+      const readArgs = compactWorkspaceBatchReadArgs(args);
+      if (!hasProvidedArg(readArgs, 'max_files')) readArgs.max_files = FILE_TOOL_DEFAULT_BATCH_FILES;
+      if (!hasProvidedArg(readArgs, 'max_lines_per_file') && !hasProvidedArg(readArgs, 'num_lines')) {
+        readArgs.max_lines_per_file = FILE_TOOL_DEFAULT_BATCH_LINES;
+      }
+      return { name: 'read_files_batch', args: readArgs };
     }
     if (action === 'grep') {
-      if (pathArg) return { name: 'grep_file', args: withFilename() };
+      if (pathArg) return { name: 'grep_file', args: compactWorkspaceGrepArgs(args, pathArg) };
       return { name: 'search_files', args: normalizeSearchArgs() };
     }
     if (action === 'search') {
@@ -1955,19 +2207,19 @@ function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: stri
   }
 
   if (name === 'workspace_edit') {
-    if (action === 'create') return { name: 'create_file', args: withFilename() };
-    if (action === 'write') return { name: 'write_file', args: withFilename() };
-    if (action === 'find_replace') return { name: 'find_replace', args: withFilename() };
-    if (action === 'replace_lines') return { name: 'replace_lines', args: withFilename() };
-    if (action === 'insert_after') return { name: 'insert_after', args: withFilename() };
-    if (action === 'delete_lines') return { name: 'delete_lines', args: withFilename() };
-    if (action === 'delete_file') return { name: 'delete_file', args: withFilename() };
-    if (action === 'mkdir') return { name: 'mkdir', args: withPath() };
+    if (action === 'create') return { name: 'create_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
+    if (action === 'write') return { name: 'write_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
+    if (action === 'find_replace') return { name: 'find_replace', args: compactWorkspaceEditArgs(args, pathArg, action) };
+    if (action === 'replace_lines') return { name: 'replace_lines', args: compactWorkspaceEditArgs(args, pathArg, action) };
+    if (action === 'insert_after') return { name: 'insert_after', args: compactWorkspaceEditArgs(args, pathArg, action) };
+    if (action === 'delete_lines') return { name: 'delete_lines', args: compactWorkspaceEditArgs(args, pathArg, action) };
+    if (action === 'delete_file') return { name: 'delete_file', args: { filename: pathArg } };
+    if (action === 'mkdir') return { name: 'mkdir', args: { path: pathArg } };
     if (action === 'move') return { name: 'move_file', args };
     if (action === 'copy') return { name: 'copy_file', args };
     if (action === 'move_directory') return { name: 'move_directory', args };
     if (action === 'copy_directory') return { name: 'copy_directory', args };
-    if (action === 'patchset') return { name: 'apply_workspace_patchset', args };
+    if (action === 'patchset') return { name: 'apply_workspace_patchset', args: normalizeWorkspacePatchsetArgs(args) };
     if (action === 'preview_patch') return { name: 'preview_patch', args };
     if (action === 'apply_patch') return { name: 'apply_patch', args };
     return { name, args: rawArgs, error: `Unsupported workspace_edit action "${action}".` };
@@ -1982,6 +2234,17 @@ function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: stri
         maxChars: args.maxChars ?? args.max_chars,
         timeoutMs: args.timeoutMs ?? args.timeout_ms,
       };
+      if (action === 'start') {
+        const rawNoOutput = runArgs.noOutputTimeoutMs ?? runArgs.no_output_timeout_ms;
+        if (rawNoOutput == null || rawNoOutput === '') {
+          runArgs.noOutputTimeoutMs = 0;
+        } else {
+          const parsedNoOutput = Number(rawNoOutput);
+          if (Number.isFinite(parsedNoOutput) && parsedNoOutput > 0 && parsedNoOutput < 300_000) {
+            runArgs.noOutputTimeoutMs = 300_000;
+          }
+        }
+      }
       return { name: 'terminal', args: runArgs };
     }
     if (action === 'test') return { name: 'run_tests', args };
@@ -2307,6 +2570,7 @@ function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: stri
     },
     team_ops_wrapper: {
       manage: 'team_manage',
+      delete: 'team_manage',
       manage_goal: 'manage_team_goal',
       manage_context_ref: 'manage_team_context_ref',
       update_goal: 'update_team_goal',
@@ -2340,6 +2604,106 @@ function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: stri
     delete args.team_action;
   }
   return { name: target, args };
+}
+
+function isPlainObjectArg(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeCreativeImageSourceCandidate(args: Record<string, any>): string {
+  const inputs = isPlainObjectArg(args.inputs) ? args.inputs : {};
+  const options = isPlainObjectArg(args.options) ? args.options : {};
+  return firstNonEmptyString(
+    args.source,
+    args.path,
+    args.url,
+    args.sourceImage,
+    args.source_image,
+    args.image,
+    args.imagePath,
+    args.image_path,
+    args.assetPath,
+    args.asset_path,
+    args.file,
+    args.filename,
+    inputs.source,
+    inputs.path,
+    inputs.url,
+    inputs.sourceImage,
+    inputs.source_image,
+    inputs.image,
+    inputs.imagePath,
+    inputs.image_path,
+    options.source,
+    options.path,
+    options.url,
+    options.sourceImage,
+    options.source_image,
+    options.image,
+    options.imagePath,
+    options.image_path,
+  );
+}
+
+function normalizeCreativeAssetIdCandidate(args: Record<string, any>): string {
+  const inputs = isPlainObjectArg(args.inputs) ? args.inputs : {};
+  const options = isPlainObjectArg(args.options) ? args.options : {};
+  return firstNonEmptyString(
+    args.assetId,
+    args.asset_id,
+    inputs.assetId,
+    inputs.asset_id,
+    options.assetId,
+    options.asset_id,
+  );
+}
+
+function normalizeCreativeWrapperArgs(target: string, rawArgs: Record<string, any>): Record<string, any> {
+  const inputs = isPlainObjectArg(rawArgs.inputs) ? rawArgs.inputs : {};
+  const options = isPlainObjectArg(rawArgs.options) ? rawArgs.options : {};
+  const args = { ...inputs, ...options, ...rawArgs };
+  if (target === 'creative_import_asset'
+    || target === 'creative_analyze_asset'
+    || target === 'creative_extract_layers'
+    || target === 'creative_extract_layers_for_generation') {
+    if (!String(args.source ?? '').trim()) {
+      const source = normalizeCreativeImageSourceCandidate(rawArgs);
+      if (source) args.source = source;
+    }
+    if (!String(args.assetId ?? args.asset_id ?? '').trim()) {
+      const assetId = normalizeCreativeAssetIdCandidate(rawArgs);
+      if (assetId) args.assetId = assetId;
+    }
+  }
+  return args;
+}
+
+function resolveCreativeToolSource(storage: any, args: Record<string, any>, toolName: string, label: string): { source: string; error?: string } {
+  const source = normalizeCreativeImageSourceCandidate(args);
+  if (source) return { source };
+  const assetId = normalizeCreativeAssetIdCandidate(args);
+  if (assetId) {
+    const index = getCreativeAssets().readCreativeAssetIndex(storage);
+    const asset = index.assets.find((item: any) => item?.id === assetId || item?.name === assetId || item?.path === assetId || item?.relativePath === assetId);
+    const assetSource = firstNonEmptyString(asset?.absPath, asset?.path, asset?.relativePath, asset?.source);
+    if (assetSource) return { source: assetSource };
+    return {
+      source: '',
+      error: `${toolName} could not find assetId "${assetId}" in the Creative asset index. Pass source, path, url, inputs.sourceImage, inputs.image, or a valid assetId.`,
+    };
+  }
+  return {
+    source: '',
+    error: `${toolName} requires a ${label}. Pass source, path, url, inputs.sourceImage, inputs.image, or assetId.`,
+  };
 }
 
 function normalizeCreativeWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
@@ -2391,6 +2755,7 @@ function normalizeCreativeWrapperTool(name: string, rawArgs: any): { name: strin
       analyze_asset: 'creative_analyze_asset',
       extract_layers: 'creative_extract_layers',
       extract_layers_for_generation: 'creative_extract_layers_for_generation',
+      model_status: 'creative_model_status',
       search_assets: 'creative_search_assets',
       generate_asset: 'creative_generate_asset',
       register_generation: 'creative_register_generation',
@@ -2521,7 +2886,7 @@ function normalizeCreativeWrapperTool(name: string, rawArgs: any): { name: strin
   delete args.action;
   const target = map[action];
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
-  return { name: target, args };
+  return { name: target, args: normalizeCreativeWrapperArgs(target, args) };
 }
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
@@ -2613,7 +2978,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return executeTool(targetTool, payload, workspacePath, deps, sessionId);
   }
   // Filename inference: if the model forgot to pass filename, use the last one
-  const needsFilename = ['read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'delete_file'];
+  const needsFilename = ['read_file', 'validate_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'delete_file'];
   if (needsFilename.includes(name)) {
     // Normalize: secondary AI sometimes returns "path" or "file" instead of "filename"
     if (!args.filename && !args.name) {
@@ -2794,20 +3159,75 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	    }
 	    return resolved;
 	  }
-		  function ensureProposalPromWriteTool(toolName: string): ToolResult | null {
+	  function ensureProposalPromWriteTool(toolName: string): ToolResult | null {
         return ensureDevSrcSelfEditWriteSession(toolName, 'prom-root');
 		  }
-	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any, defaultCap = 300): string {
+  function writeToolResultOverflow(toolName: string, output: string): string | null {
+    try {
+      const safeTool = String(toolName || 'tool')
+        .replace(/[^a-z0-9_-]+/gi, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 48) || 'tool';
+      const safeSession = String(sessionId || 'default')
+        .replace(/[^a-z0-9_-]+/gi, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 48) || 'default';
+      const dir = path.resolve(workspacePath, 'temp', 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = `${Date.now()}-${safeSession}-${safeTool}.txt`;
+      const absPath = path.join(dir, file);
+      fs.writeFileSync(absPath, output, 'utf-8');
+      return path.relative(workspacePath, absPath).replace(/\\/g, '/');
+    } catch {
+      return null;
+    }
+  }
+  function maybeSpoolToolOutput(toolName: string, output: string, inlineLimit: number, opts: { allowInline?: boolean; summary?: string } = {}): string {
+    const text = String(output || '');
+    if (opts.allowInline || text.length <= inlineLimit) return text;
+    const relPath = writeToolResultOverflow(toolName, text);
+    if (!relPath) {
+      return `${opts.summary ? `${opts.summary}\n` : ''}[TOOL_RESULT_TRUNCATED] Output was ${text.length} chars; returning first ${inlineLimit} chars because overflow artifact write failed.\n${text.slice(0, inlineLimit)}`;
+    }
+    return [
+      opts.summary || `${toolName} output was ${text.length} chars, which exceeds the ${inlineLimit} char inline budget.`,
+      `[TOOL_RESULT_ARTIFACT] Full output saved to ${relPath}. Read targeted ranges from that artifact only if needed.`,
+    ].join('\n');
+  }
+	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any, defaultCap = FILE_TOOL_DEFAULT_READ_LINES): string {
+    const exactLine = resolvePositiveLineArg(argsObj.line ?? argsObj.line_number ?? argsObj.lineNumber ?? argsObj.physical_line);
+    if (exactLine != null) {
+      const renderedLine = formatPhysicalLineWindow(displayPath, allLines, {
+        line: exactLine,
+        column: argsObj.column != null ? Number(argsObj.column) : undefined,
+        char_window: argsObj.char_window ?? argsObj.charWindow,
+        full_line: argsObj.full_line === true || argsObj.fullLine === true,
+        show_full_line: argsObj.show_full_line === true || argsObj.showFullLine === true,
+      });
+      return maybeSpoolToolOutput(name, renderedLine, resolveResultCharBudget(argsObj, FILE_TOOL_READ_INLINE_LIMIT_CHARS), {
+        allowInline: argsObj.inline === true || argsObj.no_spool === true,
+        summary: `${displayPath} exact physical-line read exceeded inline budget. Requested line ${exactLine}.`,
+      });
+    }
     const head = argsObj.head ? Number(argsObj.head) : 0;
     const tail = argsObj.tail ? Number(argsObj.tail) : 0;
+    const aroundLine = argsObj.around_line ?? argsObj.aroundLine ? Math.max(1, Math.floor(Number(argsObj.around_line ?? argsObj.aroundLine))) : 0;
+    const beforeLines = Math.max(0, Math.min(240, Math.floor(Number(argsObj.before) || 40)));
+    const afterLines = Math.max(0, Math.min(240, Math.floor(Number(argsObj.after) || 80)));
     const startLine = argsObj.start_line ? Math.max(1, Math.floor(Number(argsObj.start_line))) : 0;
     const numLines = argsObj.num_lines ? Math.max(1, Math.floor(Number(argsObj.num_lines))) : 0;
     const allowFull = argsObj.full === true || argsObj.full_file === true || argsObj.allow_large === true;
-    const cap = Math.max(1, Math.floor(Number(argsObj.max_lines) || defaultCap));
+    const cap = Math.max(1, Math.min(480, Math.floor(Number(argsObj.max_lines) || defaultCap)));
     let sliced: string[];
     let firstLineNum: number;
     let requestedFull = false;
-    if (startLine > 0) {
+    if (aroundLine > 0) {
+      const fromLine = Math.max(1, aroundLine - beforeLines);
+      const requested = beforeLines + afterLines + 1;
+      const window = allowFull ? requested : Math.min(requested, cap);
+      sliced = allLines.slice(fromLine - 1, fromLine - 1 + window);
+      firstLineNum = fromLine;
+    } else if (startLine > 0) {
       const from = startLine - 1;
       const requested = numLines > 0 ? numLines : (allowFull ? allLines.length : cap);
       const window = allowFull ? requested : Math.min(requested, cap);
@@ -2834,8 +3254,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
     const fullHint = requestedFull && !allowFull && truncated
       ? `\n[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.`
       : '';
-    const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${line}`).join('\n');
-    return `${displayPath} (${allLines.length} lines)${range}:\n${numbered}${fullHint}${hint}`;
+    const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${trimReturnedFileLine(line)}`).join('\n');
+    const rendered = `${displayPath} (${allLines.length} lines)${range}:\n${numbered}${fullHint}${hint}`;
+    return maybeSpoolToolOutput(name, rendered, resolveResultCharBudget(argsObj, FILE_TOOL_READ_INLINE_LIMIT_CHARS), {
+      allowInline: argsObj.inline === true || argsObj.no_spool === true,
+      summary: `${displayPath} (${allLines.length} lines) read result exceeded inline budget. Requested window ${firstLineNum}-${endLine}.`,
+    });
+  }
+  function validateSyntaxFileResult(displayPath: string, absPath: string): ToolResult {
+    const content = fs.readFileSync(absPath, 'utf-8');
+    const validation = validateFileSyntax(displayPath, content);
+    return {
+      name,
+      args,
+      result: formatSyntaxValidationResult(validation),
+      error: validation.supported && !validation.ok,
+      data: validation,
+    };
   }
   function normalizeFindTextForRecovery(text: string): string {
     return String(text || '').replace(/\s+/g, ' ').trim();
@@ -2875,7 +3310,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
     find: string,
     replace: string,
     replaceAll: boolean,
-  ): { updated: string; count: number } | null {
+  ): { updated: string; count: number; variant: string; firstIndex: number } | null {
     const fileUsesCRLF = /\r\n/.test(content);
     const variants: string[] = [];
     const pushVariant = (v: string) => { if (v && !variants.includes(v)) variants.push(v); };
@@ -2892,9 +3327,50 @@ export async function executeTool(name: string, args: any, workspacePath: string
       const updated = replaceAll
         ? content.split(variant).join(normalizedReplace)
         : content.replace(variant, normalizedReplace);
-      return { updated, count };
+      return { updated, count, variant, firstIndex: content.indexOf(variant) };
     }
     return null;
+  }
+
+  function lineNumberAtOffset(content: string, offset: number): number {
+    const target = Math.max(0, Math.floor(Number(offset) || 0));
+    let line = 1;
+    for (let index = 0; index < Math.min(target, content.length); index += 1) {
+      if (content.charCodeAt(index) === 10) line += 1;
+    }
+    return line;
+  }
+
+  function formatPostEditContext(
+    displayPath: string,
+    content: string,
+    changedStartLine: number,
+    changedEndLine: number,
+    summary: string,
+    opts: { before?: number; after?: number; maxChars?: number } = {},
+  ): string {
+    const lines = String(content || '').split('\n');
+    const lineCount = lines.length;
+    const start = Math.max(1, Math.min(Math.floor(Number(changedStartLine) || 1), Math.max(1, lineCount)));
+    const end = Math.max(start, Math.min(Math.floor(Number(changedEndLine) || start), Math.max(1, lineCount)));
+    const before = Math.max(0, Math.min(12, Math.floor(Number(opts.before) || 3)));
+    const after = Math.max(0, Math.min(12, Math.floor(Number(opts.after) || 3)));
+    const snippetStart = Math.max(1, start - before);
+    const snippetEnd = Math.min(lineCount, end + after);
+    const maxChars = Math.max(120, Math.min(1200, Math.floor(Number(opts.maxChars) || 360)));
+    const snippet = lines.slice(snippetStart - 1, snippetEnd)
+      .map((line, index) => {
+        const lineNumber = snippetStart + index;
+        const marker = lineNumber >= start && lineNumber <= end ? '>' : ' ';
+        return `${marker} ${lineNumber}: ${trimReturnedFileLine(line, maxChars)}`;
+      })
+      .join('\n');
+    return [
+      summary,
+      `Changed lines: ${displayPath}:${start}-${end} (${lineCount} total lines)`,
+      `Post-edit context:`,
+      snippet || '(empty)',
+    ].join('\n');
   }
   function buildTextNotFoundRecovery(displayPath: string, content: string, findText: string, readToolName: string): string {
     const allLines = content.split('\n');
@@ -3132,6 +3608,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	    const resolved = resolveAllowedWorkspacePath(relPath, opts);
 	    return { absPath: resolved.absPath, normalizedRel: resolved.normalizedRel };
 	  }
+  function snapshotPreMutation(target: { absPath: string; normalizedRel?: string; displayPath?: string }, operation: string) {
+    return toSnapshotRef(createWorkspaceSnapshot({
+      workspacePath,
+      targetPath: target.absPath,
+      displayPath: target.displayPath || target.normalizedRel,
+      operation,
+    }));
+  }
+  function withWorkspaceSnapshots<T extends ToolResult>(result: T, snapshots: Array<ReturnType<typeof snapshotPreMutation>>): T {
+    const refs = snapshots.filter(Boolean);
+    if (!refs.length) return result;
+    return {
+      ...result,
+      data: { ...(result.data || {}), workspaceSnapshots: refs },
+      extra: { ...(result.extra || {}), workspaceSnapshots: refs },
+    };
+  }
   function resolveWorkspaceDirectory(relPath: string, opts: { allowEmpty?: boolean } = {}): { absPath: string; normalizedRel: string; displayPath: string } {
     return resolveAllowedWorkspacePath(relPath, { requireDirectory: true, allowEmpty: opts.allowEmpty === true });
   }
@@ -3490,8 +3983,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
   function resolveRunCommandCwd(rawCwd?: unknown): { cwd: string; displayCwd: string } {
     const requested = String(rawCwd || '').trim();
     if (requested) {
-      const resolved = resolveAllowedWorkspacePath(requested, { requireDirectory: true, allowEmpty: true });
-      return { cwd: resolved.absPath, displayCwd: resolved.displayPath };
+      const root = path.resolve(workspacePath);
+      const resolved = path.isAbsolute(requested)
+        ? path.resolve(requested)
+        : path.resolve(path.join(root, normalizeWorkspaceAliasPath(requested, root) || '.'));
+      const permissions = ((getConfig().getConfig() as any)?.tools?.permissions?.files || {});
+      const blockedRoots = Array.isArray(permissions.blocked_paths)
+        ? permissions.blocked_paths.map((p: any) => String(p || '').trim()).filter(Boolean).map((p: string) => path.resolve(p))
+        : [];
+      for (const blocked of blockedRoots) {
+        if (isPathInsideForPermissions(blocked, resolved)) {
+          throw new Error(`cwd is in blocked directory: ${blocked}`);
+        }
+      }
+      if (!fs.existsSync(resolved)) throw new Error(`"${requested}" not found`);
+      if (!fs.statSync(resolved).isDirectory()) throw new Error(`"${requested}" is not a directory`);
+      const insideWorkspace = isPathInsideForPermissions(root, resolved);
+      return {
+        cwd: resolved,
+        displayCwd: insideWorkspace ? (path.relative(root, resolved).replace(/\\/g, '/') || '.') : resolved,
+      };
     }
 
     const root = path.resolve(workspacePath);
@@ -3682,36 +4193,45 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return boundary;
   }
 
-  function analyzeRunCommandBoundary(command: string): CommandBoundaryAnalysis {
+  function applyCommandPathBoundary(boundary: CommandBoundaryAnalysis, candidate: string, kind: 'cwd' | 'path'): CommandBoundaryAnalysis {
     const allowedRoots = getRunCommandAllowedRoots();
     const blockedRoots = ((getConfig().getConfig() as any)?.tools?.permissions?.files?.blocked_paths || [])
       .map((p: any) => String(p || '').trim())
       .filter(Boolean)
       .map((p: string) => path.resolve(p));
+    const resolved = path.resolve(candidate);
+    if (blockedRoots.some((blocked: string) => isPathInsideForPermissions(blocked, resolved))) {
+      return mergeCommandBoundary(boundary, {
+        scope: 'admin_required',
+        reason: `Command ${kind === 'cwd' ? 'uses' : 'references'} blocked path "${candidate}".`,
+        externalPaths: [candidate],
+        requiresExplicitApproval: true,
+        requiresAdmin: true,
+        blocked: { name, args, result: `Blocked: command ${kind === 'cwd' ? 'uses' : 'references'} blocked path "${candidate}".`, error: true },
+      });
+    }
+    const isAllowed = allowedRoots.some((allowed) => isPathInsideForPermissions(allowed, resolved))
+      || isSessionAllowedPath(sessionId, resolved);
+    if (!isAllowed) {
+      const userProfile = isInsideUserProfile(resolved);
+      return mergeCommandBoundary(boundary, {
+        scope: userProfile ? 'user_profile' : 'unknown_external',
+        reason: userProfile
+          ? `Command ${kind === 'cwd' ? 'cwd is' : 'references'} a user-profile path outside the workspace: "${candidate}".`
+          : `Command ${kind === 'cwd' ? 'cwd is' : 'references'} an external path outside the workspace: "${candidate}".`,
+        externalPaths: [candidate],
+        requiresExplicitApproval: true,
+      });
+    }
+    return boundary;
+  }
+
+  function analyzeRunCommandBoundary(command: string, cwd?: string): CommandBoundaryAnalysis {
     let boundary = commandBoundaryFromPatterns(command);
+    if (cwd) boundary = applyCommandPathBoundary(boundary, cwd, 'cwd');
     for (const candidate of extractAbsolutePathsFromCommand(command)) {
-      const resolved = path.resolve(candidate);
-      if (blockedRoots.some((blocked: string) => isPathInsideForPermissions(blocked, resolved))) {
-        return mergeCommandBoundary(boundary, {
-          scope: 'admin_required',
-          reason: `Command references blocked path "${candidate}".`,
-          externalPaths: [candidate],
-          requiresExplicitApproval: true,
-          requiresAdmin: true,
-          blocked: { name, args, result: `Blocked: command references blocked path "${candidate}".`, error: true },
-        });
-      }
-      if (!allowedRoots.some((allowed) => isPathInsideForPermissions(allowed, resolved))) {
-        const userProfile = isInsideUserProfile(resolved);
-        boundary = mergeCommandBoundary(boundary, {
-          scope: userProfile ? 'user_profile' : 'unknown_external',
-          reason: userProfile
-            ? `Command references a user-profile path outside the workspace: "${candidate}".`
-            : `Command references an external path outside the workspace: "${candidate}".`,
-          externalPaths: [candidate],
-          requiresExplicitApproval: true,
-        });
-      }
+      boundary = applyCommandPathBoundary(boundary, candidate, 'path');
+      if (boundary.blocked) return boundary;
     }
     return boundary;
   }
@@ -3746,14 +4266,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
     const blockedPattern = commandContainsBlockedPattern(cmd, deps.BLOCKED_PATTERNS);
     if (blockedPattern) {
       return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blockedPattern}"`, error: true };
-    }
-    if (!deps.isAllowedShellCommand(normalizedCmd)) {
-      return {
-        name,
-        args,
-        result: `Blocked: shell command is not allowed by Lite terminal permissions: "${rawCmd}"`,
-        error: true,
-      };
     }
     return null;
   }
@@ -3808,7 +4320,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
   }
 
 	  let approvedCommandApprovalId = '';
-	  if (name === 'run_command' && evaluation.tier === 'commit') {
+	  if ((name === 'run_command' || name === 'start_process') && (evaluation.tier === 'commit' || getShellApprovalMode() !== 'lite')) {
 	    const rawCmd = String(args?.command || '').trim();
 	    if (!rawCmd) return { name, args, result: 'command is required', error: true };
     if (looksLikeNativeFileToolBypass(rawCmd)) {
@@ -3820,22 +4332,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
       };
     }
 
-    const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
-    const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
-    if (commandBoundary.blocked) return commandBoundary.blocked;
-    const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
-    if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
-
     let commandCwdForApproval: { cwd: string; displayCwd: string };
     try {
       commandCwdForApproval = resolveRunCommandCwd(args?.cwd);
     } catch (err: any) {
-      return { name, args, result: `Invalid cwd for run_command: ${err.message || err}`, error: true };
+      return { name, args, result: `Invalid cwd for ${name}: ${err.message || err}`, error: true };
     }
+    const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
+    const commandBoundary = analyzeRunCommandBoundary(normalizedCmd, commandCwdForApproval.cwd);
+    if (commandBoundary.blocked) return commandBoundary.blocked;
+    const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
+    if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
 
     const permissionCandidate: ToolPermissionCandidate = {
       sessionId,
-      toolName: 'run_command' as const,
+      toolName: name,
       action: normalizedCmd,
       targetKind: 'command_cwd' as const,
       target: commandCwdForApproval.cwd,
@@ -3854,10 +4365,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
       requiresAdmin: commandBoundary.requiresAdmin,
     };
     const shellApprovalMode = getShellApprovalMode();
-    const isLiteCommandApprovalBypass = shellApprovalMode === 'lite' && !commandBoundary.requiresExplicitApproval;
+    const needsCommandApproval = evaluation.tier === 'commit' || (shellApprovalMode !== 'lite' && commandBoundary.requiresExplicitApproval);
+    const isLiteCommandApprovalBypass = shellApprovalMode === 'lite';
     const existingCommandGrant = findCommandPermissionGrant(permissionCandidate);
     const isAutonomousCommandApprovalBypass = isGoalAutonomousApprovalBypass && !commandBoundary.requiresExplicitApproval;
-    if (existingCommandGrant || isAutonomousCommandApprovalBypass || isLiteCommandApprovalBypass) {
+    if (!needsCommandApproval || existingCommandGrant || isAutonomousCommandApprovalBypass || isLiteCommandApprovalBypass) {
       try {
         appendAuditEntry({
           timestamp: new Date().toISOString(),
@@ -3872,6 +4384,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             ? `Allowed by ${existingCommandGrant.scope} command permission ${existingCommandGrant.id}`
             : isLiteCommandApprovalBypass
             ? 'Auto-allowed by Lite terminal permissions.'
+            : !needsCommandApproval
+            ? 'Auto-allowed workspace terminal command.'
             : 'Auto-allowed by main-chat goal autonomous policy.',
         });
       } catch {}
@@ -6020,9 +6534,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const targetDir = resolvedDir.absPath;
 
-        const maxEntries = Math.max(1, Math.min(1000, Math.floor(Number(listArgs.max_entries) || 500)));
-        const maxDepth = Math.max(0, Math.min(8, Math.floor(Number(listArgs.max_depth ?? listArgs.depth) || 2)));
-        const skipDirs = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.cache']);
+        const maxEntries = Math.max(1, Math.min(1000, Math.floor(Number(listArgs.max_entries) || 250)));
+        const maxDepth = Math.max(0, Math.min(8, Math.floor(Number(listArgs.max_depth ?? listArgs.depth) || 1)));
+        const skipDirs = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.cache', '.prometheus', 'coverage', 'generated', 'temp', 'logs']);
         const entries: string[] = [];
         let truncated = false;
 
@@ -6066,72 +6580,122 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const listedPath = resolvedDir.displayPath;
         const header = `Directory ${listedPath} (max_depth=${maxDepth}, entries=${entries.length}${truncated ? `/${maxEntries}+` : ''}):`;
         const footer = truncated ? `\n...[truncated; pass max_depth or max_entries to narrow/expand]` : '';
-        return { name, args, result: `${header}\n${entries.join('\n') || '(empty directory)'}${footer}`, error: false };
+        const repoHeader = args.map === false ? '' : buildRepoMapHeader(targetDir, listedPath, { excludes: Array.from(skipDirs) });
+        const rendered = `${repoHeader ? `${repoHeader}\n\n` : ''}${header}\n${entries.join('\n') || '(empty directory)'}${footer}`;
+        return {
+          name,
+          args,
+          result: maybeSpoolToolOutput(name, rendered, resolveResultCharBudget(args, FILE_TOOL_TREE_INLINE_LIMIT_CHARS), {
+            allowInline: args.inline === true || args.no_spool === true,
+            summary: `${header}\nDirectory listing exceeded inline budget.`,
+          }),
+          error: false,
+        };
       }
 
       case 'read_files_batch': {
         const batchFiles = Array.isArray(args.files) ? args.files : [];
         if (!batchFiles.length) return { name, args, result: 'files array is required and must not be empty', error: true };
-        const maxFiles = Math.max(1, Math.min(12, Math.floor(Number(args.max_files) || 8)));
-        const batchCap = Math.max(1, Math.min(480, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || 200)));
-        const batchResults: Array<{ filename: string; content?: string; line_count?: number; truncated?: boolean; next_start_line?: number; error?: string }> = [];
+        const maxFiles = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_FILES, Math.floor(Number(args.max_files) || FILE_TOOL_DEFAULT_BATCH_FILES)));
+        const batchCap = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_LINES, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || FILE_TOOL_DEFAULT_BATCH_LINES)));
+        const resultChunks: string[] = [];
+        const batchSummaryLines: string[] = [];
+        const forceContent = args.content === true || args.include_content === true || String(args.mode || '').toLowerCase() === 'content';
+        const forceSummary = args.summary === true || args.content === false || String(args.mode || '').toLowerCase() === 'summary';
+        const summarizeFile = (display: string, absPath: string): string => {
+          return summarizeFileForTool(display, absPath, {
+            readCap: batchCap,
+            query: args.query ? String(args.query) : undefined,
+          });
+        };
         for (const entry of batchFiles.slice(0, maxFiles)) {
           const bFilename = entry?.filename || entry?.name;
-          if (!bFilename) { batchResults.push({ filename: String(bFilename || ''), error: 'filename is required' }); continue; }
+          if (!bFilename) { resultChunks.push('--- [missing filename] ---\nERROR: filename is required'); continue; }
           try {
             const bNorm = String(bFilename).replace(/\\/g, '/');
             let bContent: string;
             let bDisplay: string;
+            const entryFull = entry.full === true || entry.allow_large === true || args.full === true || args.allow_large === true;
+            const hasWindow = entry.start_line !== undefined || entry.num_lines !== undefined || args.num_lines !== undefined;
+            const summaryOnly = forceSummary || (!forceContent && !hasWindow && !entryFull);
             if (bNorm.startsWith('src/')) {
-              const r = await executeTool('read_source', { file: bNorm, start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full, allow_large: entry.allow_large }, workspacePath, deps, sessionId);
-              batchResults.push({ filename: bFilename, content: r.result, line_count: undefined });
+              if (summaryOnly) {
+                const projectRoot = resolveProjectRootForSourceAccess();
+                const srcRoot = path.join(projectRoot, 'src');
+                const rel = bNorm.replace(/^src\//, '');
+                const absPath = path.resolve(srcRoot, rel);
+                if (!absPath.startsWith(srcRoot)) throw new Error('Path escapes src/ directory.');
+                resultChunks.push(summarizeFile(bNorm, absPath));
+                batchSummaryLines.push(`${bNorm}: summary`);
+                continue;
+              }
+              const r = await executeTool('read_source', { file: bNorm, start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full ?? args.full, allow_large: entry.allow_large ?? args.allow_large }, workspacePath, deps, sessionId);
+              resultChunks.push(`--- ${bFilename} ---\n${r.result}`);
+              batchSummaryLines.push(`${bFilename}: content`);
               continue;
             }
             if (bNorm.startsWith('web-ui/')) {
-              const r = await executeTool('read_webui_source', { file: bNorm.slice('web-ui/'.length), start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full, allow_large: entry.allow_large }, workspacePath, deps, sessionId);
-              batchResults.push({ filename: bFilename, content: r.result, line_count: undefined });
+              if (summaryOnly) {
+                const projectRoot = resolveProjectRootForSourceAccess();
+                const webUiRoot = path.join(projectRoot, 'web-ui');
+                const rel = bNorm.slice('web-ui/'.length);
+                const absPath = path.resolve(webUiRoot, rel);
+                if (!absPath.startsWith(webUiRoot)) throw new Error('Path escapes web-ui/ directory.');
+                resultChunks.push(summarizeFile(bNorm, absPath));
+                batchSummaryLines.push(`${bNorm}: summary`);
+                continue;
+              }
+              const r = await executeTool('read_webui_source', { file: bNorm.slice('web-ui/'.length), start_line: entry.start_line, num_lines: entry.num_lines ?? batchCap, max_lines: batchCap, full: entry.full ?? args.full, allow_large: entry.allow_large ?? args.allow_large }, workspacePath, deps, sessionId);
+              resultChunks.push(`--- ${bFilename} ---\n${r.result}`);
+              batchSummaryLines.push(`${bFilename}: content`);
               continue;
             }
             const bResolved = resolveAllowedWorkspacePath(String(bFilename), { requireFile: true });
             bDisplay = bResolved.displayPath;
+            if (summaryOnly) {
+              resultChunks.push(summarizeFile(bDisplay, bResolved.absPath));
+              batchSummaryLines.push(`${bDisplay}: summary`);
+              continue;
+            }
             bContent = fs.readFileSync(bResolved.absPath, 'utf-8');
             const bAllLines = bContent.split('\n');
             if (entry.start_line !== undefined || entry.num_lines !== undefined) {
               const bStart = Math.max(1, Math.floor(Number(entry.start_line) || 1));
               const requested = Math.max(1, Math.floor(Number(entry.num_lines) || batchCap));
-              const bNum = entry.full === true || entry.allow_large === true ? requested : Math.min(requested, batchCap);
+              const bNum = entryFull ? requested : Math.min(requested, batchCap);
               const bIdx = bStart - 1;
               const bWindow = bAllLines.slice(bIdx, bIdx + bNum);
-              const bNumbered = bWindow.map((l, i) => `${bStart + i}: ${l}`).join('\n');
+              const bNumbered = bWindow.map((l, i) => `${bStart + i}: ${trimReturnedFileLine(l)}`).join('\n');
               const bEnd = bStart + bWindow.length - 1;
               const truncated = bEnd < bAllLines.length;
-              batchResults.push({
-                filename: bFilename,
-                content: `${bDisplay} (${bAllLines.length} lines) [window ${bStart}-${bEnd}${truncated ? ', truncated' : ''}]:\n${bNumbered}`,
-                line_count: bAllLines.length,
-                truncated,
-                next_start_line: truncated ? bEnd + 1 : undefined,
-              });
+              resultChunks.push(`${bDisplay} (${bAllLines.length} lines) [window ${bStart}-${bEnd}${truncated ? ', truncated' : ''}]:\n${bNumbered}${truncated ? `\n[READ_TRUNCATED] Use start_line:${bEnd + 1}, num_lines:${batchCap} for the next chunk, or full:true only when needed.` : ''}`);
+              batchSummaryLines.push(`${bDisplay}: lines ${bStart}-${bEnd}${truncated ? ' truncated' : ''}`);
             } else {
-              const bWindow = entry.full === true || entry.allow_large === true ? bAllLines : bAllLines.slice(0, batchCap);
-              const bNumbered = bWindow.map((l, i) => `${i + 1}: ${l}`).join('\n');
+              const bWindow = entryFull ? bAllLines : bAllLines.slice(0, batchCap);
+              const bNumbered = bWindow.map((l, i) => `${i + 1}: ${trimReturnedFileLine(l)}`).join('\n');
               const truncated = bWindow.length < bAllLines.length;
-              batchResults.push({
-                filename: bFilename,
-                content: `${bDisplay} (${bAllLines.length} lines) [window 1-${bWindow.length}${truncated ? ', truncated' : ''}]:\n${bNumbered}${truncated ? `\n[READ_DEFAULT_CAP] Use start_line:${bWindow.length + 1}, num_lines:${batchCap} for the next chunk, or full:true only when needed.` : ''}`,
-                line_count: bAllLines.length,
-                truncated,
-                next_start_line: truncated ? bWindow.length + 1 : undefined,
-              });
+              resultChunks.push(`${bDisplay} (${bAllLines.length} lines) [window 1-${bWindow.length}${truncated ? ', truncated' : ''}]:\n${bNumbered}${truncated ? `\n[READ_DEFAULT_CAP] Batch reads default to ${batchCap} lines per file. Use start_line:${bWindow.length + 1}, num_lines:${batchCap} for the next chunk, or full:true only when needed.` : ''}`);
+              batchSummaryLines.push(`${bDisplay}: lines 1-${bWindow.length}${truncated ? ' truncated' : ''}`);
             }
           } catch (err: any) {
-            batchResults.push({ filename: String(bFilename), error: err?.message || String(err) });
+            resultChunks.push(`--- ${String(bFilename)} ---\nERROR: ${err?.message || String(err)}`);
+            batchSummaryLines.push(`${String(bFilename)}: error`);
           }
         }
         if (batchFiles.length > maxFiles) {
-          batchResults.push({ filename: '[batch truncated]', error: `Only first ${maxFiles} files read. Re-run with remaining files if needed.` });
+          resultChunks.push(`--- [batch truncated] ---\nOnly first ${maxFiles} files read. Re-run with remaining files if needed.`);
+          batchSummaryLines.push(`[batch truncated]: ${batchFiles.length - maxFiles} file(s) omitted`);
         }
-        return { name, args, result: JSON.stringify(batchResults, null, 2), error: false };
+        const rendered = resultChunks.join('\n\n');
+        return {
+          name,
+          args,
+          result: maybeSpoolToolOutput(name, rendered, resolveResultCharBudget(args, FILE_TOOL_BATCH_INLINE_LIMIT_CHARS), {
+            allowInline: args.inline === true || args.no_spool === true,
+            summary: `read_files_batch returned ${Math.min(batchFiles.length, maxFiles)} file entry result(s):\n${batchSummaryLines.join('\n')}`,
+          }),
+          error: false,
+        };
       }
 
 	      case 'read_file': {
@@ -6155,27 +6719,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const filePath = resolvedFile.absPath;
         const content = fs.readFileSync(filePath, 'utf-8');
         const allLines = content.split('\n');
-        const readCap = Math.max(1, Math.min(480, Math.floor(Number(args.max_lines) || 240)));
-        const allowFull = args.full === true || args.full_file === true || args.allow_large === true;
-        const hasWindowArgs = args.start_line !== undefined || args.num_lines !== undefined;
-        if (hasWindowArgs) {
-          const startLine = Math.max(1, Math.floor(Number(args.start_line) || 1));
-          const requested = Math.max(1, Math.floor(Number(args.num_lines) || readCap));
-          const numLines = allowFull ? requested : Math.min(requested, readCap);
-          const startIdx = startLine - 1;
-          if (startIdx >= allLines.length) {
-            return { name, args, result: buildLineOutOfRangeRecovery(resolvedFile.displayPath, allLines, startLine, 'read_file', 'start_line'), error: true };
-          }
-          const windowLines = allLines.slice(startIdx, startIdx + numLines);
-          const numberedWindow = windowLines.map((line, i) => `${startLine + i}: ${line}`).join('\n');
-          const endLine = startLine + windowLines.length - 1;
-          const truncated = endLine < allLines.length;
-          return { name, args, result: `${resolvedFile.displayPath} (${allLines.length} lines) [window ${startLine}-${endLine}${truncated ? ', truncated' : ''}]:\n${numberedWindow}${truncated ? `\n[READ_TRUNCATED] Use start_line:${endLine + 1}, num_lines:${readCap} for the next chunk, or full:true only when needed.` : ''}`, error: false };
+        const explicitStart = Math.floor(Number(args.start_line) || 0);
+        const aroundLine = Math.floor(Number(args.around_line ?? args.aroundLine) || 0);
+        if (explicitStart > allLines.length || aroundLine > allLines.length) {
+          return { name, args, result: buildLineOutOfRangeRecovery(resolvedFile.displayPath, allLines, explicitStart || aroundLine, 'read_file', explicitStart ? 'start_line' : 'around_line'), error: true };
         }
-        const selectedLines = allowFull ? allLines : allLines.slice(0, readCap);
-	        const numbered = selectedLines.map((line, i) => `${i + 1}: ${line}`).join('\n');
-        const truncated = selectedLines.length < allLines.length;
-	        return { name, args, result: `${resolvedFile.displayPath} (${allLines.length} lines) [window 1-${selectedLines.length}${truncated ? ', truncated' : ''}]:\n${numbered}${truncated ? `\n[READ_DEFAULT_CAP] Whole-file reads are capped by default. Use start_line:${selectedLines.length + 1}, num_lines:${readCap} for the next chunk, or full:true only when needed.` : ''}`, error: false };
+        return { name, args, result: renderNumberedRead(resolvedFile.displayPath, allLines, args), error: false };
 	      }
 
 	      case 'mkdir': {
@@ -6185,8 +6734,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const resolved = resolveWorkspacePath(String(requestedPath));
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'dir', 'mkdir');
 	          if (blocked) return blocked;
+	          const snapshot = snapshotPreMutation(resolved, 'mkdir');
 	          fs.mkdirSync(resolved.absPath, { recursive: true });
-	          return { name, args, result: `OK directory created: ${resolved.normalizedRel}`, error: false };
+	          return withWorkspaceSnapshots({ name, args, result: `OK directory created: ${resolved.normalizedRel}`, error: false }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, requestedPath, 'list_dir'), error: true };
 	        }
@@ -6203,9 +6753,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          if (fs.existsSync(resolved.absPath)) {
 	            return { name, args, result: `ERROR: File "${resolved.normalizedRel}" already exists. Use write_file, replace_lines, or find_replace to edit it.`, error: true };
 	          }
+	          const snapshot = snapshotPreMutation(resolved, 'create_file');
 	          fs.mkdirSync(path.dirname(resolved.absPath), { recursive: true });
 	          fs.writeFileSync(resolved.absPath, content, 'utf-8');
-	          return { name, args, result: `OK created ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false };
+	          return withWorkspaceSnapshots({ name, args, result: `OK created ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -6219,9 +6770,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const resolved = resolveWorkspacePath(String(filename));
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'write_file');
 	          if (blocked) return blocked;
+	          const snapshot = snapshotPreMutation(resolved, 'write_file');
 	          fs.mkdirSync(path.dirname(resolved.absPath), { recursive: true });
 	          fs.writeFileSync(resolved.absPath, content, 'utf-8');
-	          return { name, args, result: `OK wrote ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false };
+	          return withWorkspaceSnapshots({ name, args, result: `OK wrote ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -6242,8 +6794,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const endClamped = Math.min(end, lines.length);
 	          const newLines = String(args.new_content ?? '').split('\n');
 	          lines.splice(start - 1, endClamped - start + 1, ...newLines);
-	          fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
-	          return { name, args, result: `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped}.`, error: false };
+	          const updated = lines.join('\n');
+	          const snapshot = snapshotPreMutation(resolved, 'replace_lines');
+	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
+	          return withWorkspaceSnapshots({
+	            name,
+	            args,
+	            result: formatPostEditContext(
+	              resolved.normalizedRel,
+	              updated,
+	              start,
+	              Math.max(start, start + newLines.length - 1),
+	              `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped}.`,
+	            ),
+	            error: false,
+	          }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -6261,8 +6826,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          if (afterLine > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, afterLine, 'read_file', 'after_line'), error: true };
 	          const newLines = String(args.content ?? '').split('\n');
 	          lines.splice(afterLine, 0, ...newLines);
-	          fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
-	          return { name, args, result: `OK ${resolved.normalizedRel}: inserted after line ${afterLine}.`, error: false };
+	          const updated = lines.join('\n');
+	          const snapshot = snapshotPreMutation(resolved, 'insert_after');
+	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
+	          return withWorkspaceSnapshots({
+	            name,
+	            args,
+	            result: formatPostEditContext(
+	              resolved.normalizedRel,
+	              updated,
+	              afterLine + 1,
+	              Math.max(afterLine + 1, afterLine + newLines.length),
+	              `OK ${resolved.normalizedRel}: inserted after line ${afterLine}.`,
+	            ),
+	            error: false,
+	          }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -6282,8 +6860,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          if (start > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_file', 'start_line'), error: true };
 	          const endClamped = Math.min(end, lines.length);
 	          lines.splice(start - 1, endClamped - start + 1);
-	          fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
-	          return { name, args, result: `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped}.`, error: false };
+	          const updated = lines.join('\n');
+	          const snapshot = snapshotPreMutation(resolved, 'delete_lines');
+	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
+	          return withWorkspaceSnapshots({
+	            name,
+	            args,
+	            result: formatPostEditContext(
+	              resolved.normalizedRel,
+	              updated,
+	              Math.min(start, Math.max(1, lines.length)),
+	              Math.min(start, Math.max(1, lines.length)),
+	              `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped}.`,
+	            ),
+	            error: false,
+	          }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -6303,8 +6894,22 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const fr = applyTolerantFindReplace(content, find, replace, args.replace_all === true);
 		          if (!fr) return { name, args, result: buildTextNotFoundRecovery(resolved.normalizedRel, content, find, 'read_file'), error: true };
 	          const updated = fr.updated;
+	          const snapshot = snapshotPreMutation(resolved, 'find_replace');
 	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
-	          return { name, args, result: `OK ${resolved.normalizedRel}: replaced ${args.replace_all === true ? `all occurrences (${fr.count})` : 'first occurrence'}.`, error: false };
+	          const startLine = lineNumberAtOffset(content, fr.firstIndex);
+	          const replacementLineCount = Math.max(1, String(replace ?? '').replace(/\r\n/g, '\n').split('\n').length);
+	          return withWorkspaceSnapshots({
+	            name,
+	            args,
+	            result: formatPostEditContext(
+	              resolved.normalizedRel,
+	              updated,
+	              startLine,
+	              Math.max(startLine, startLine + replacementLineCount - 1),
+	              `OK ${resolved.normalizedRel}: replaced ${args.replace_all === true ? `all occurrences (${fr.count})` : 'first occurrence'}.`,
+	            ),
+	            error: false,
+	          }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -6321,9 +6926,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          if (oldBlocked) return oldBlocked;
 	          const newBlocked = enforceMutationScope(newResolved.normalizedRel, 'file', 'rename_file');
 	          if (newBlocked) return newBlocked;
+	          const snapshots = [
+	            snapshotPreMutation(oldResolved, 'rename_file:source'),
+	            snapshotPreMutation(newResolved, 'rename_file:destination'),
+	          ];
 	          fs.mkdirSync(path.dirname(newResolved.absPath), { recursive: true });
 	          fs.renameSync(oldResolved.absPath, newResolved.absPath);
-	          return { name, args, result: `OK renamed ${oldResolved.normalizedRel} to ${newResolved.normalizedRel}.`, error: false };
+	          return withWorkspaceSnapshots({ name, args, result: `OK renamed ${oldResolved.normalizedRel} to ${newResolved.normalizedRel}.`, error: false }, snapshots);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, oldPath, 'list_dir'), error: true };
 	        }
@@ -6336,8 +6945,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const resolved = resolveWorkspacePath(String(filename), { requireFile: true });
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'delete_file');
 	          if (blocked) return blocked;
+	          const snapshot = snapshotPreMutation(resolved, 'delete_file');
 	          fs.unlinkSync(resolved.absPath);
-	          return { name, args, result: `OK deleted ${resolved.normalizedRel}.`, error: false };
+	          return withWorkspaceSnapshots({ name, args, result: `OK deleted ${resolved.normalizedRel}.`, error: false }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -6361,11 +6971,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
           const plan = { operation: name, from: src.displayPath, to: dest.displayPath, overwrite, will_overwrite: fs.existsSync(dest.absPath) };
           if (args.dry_run === true) return { name, args, result: JSON.stringify(plan, null, 2), error: false };
+          const snapshots = [
+            snapshotPreMutation(dest, `${name}:destination`),
+            name === 'move_file' ? snapshotPreMutation(src, `${name}:source`) : null,
+          ];
           if (args.create_dirs !== false) fs.mkdirSync(path.dirname(dest.absPath), { recursive: true });
           if (fs.existsSync(dest.absPath) && overwrite) fs.rmSync(dest.absPath, { force: true });
           if (name === 'copy_file') fs.copyFileSync(src.absPath, dest.absPath);
           else fs.renameSync(src.absPath, dest.absPath);
-          return { name, args, result: `OK ${name === 'copy_file' ? 'copied' : 'moved'} ${src.displayPath} to ${dest.displayPath}.`, error: false };
+          return withWorkspaceSnapshots({ name, args, result: `OK ${name === 'copy_file' ? 'copied' : 'moved'} ${src.displayPath} to ${dest.displayPath}.`, error: false }, snapshots);
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
@@ -6392,11 +7006,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
           const plan = { operation: name, from: src.displayPath, to: dest.displayPath, overwrite, will_overwrite: fs.existsSync(dest.absPath), ...counts };
           if (args.dry_run === true) return { name, args, result: JSON.stringify(plan, null, 2), error: false };
+          const snapshots = [
+            snapshotPreMutation(dest, `${name}:destination`),
+            name === 'move_directory' ? snapshotPreMutation(src, `${name}:source`) : null,
+          ];
           if (fs.existsSync(dest.absPath) && overwrite) fs.rmSync(dest.absPath, { recursive: true, force: true });
           fs.mkdirSync(path.dirname(dest.absPath), { recursive: true });
           if (name === 'copy_directory') fs.cpSync(src.absPath, dest.absPath, { recursive: true, force: overwrite, errorOnExist: !overwrite });
           else fs.renameSync(src.absPath, dest.absPath);
-          return { name, args, result: `OK ${name === 'copy_directory' ? 'copied' : 'moved'} directory ${src.displayPath} to ${dest.displayPath} (${counts.files} files).`, error: false };
+          return withWorkspaceSnapshots({ name, args, result: `OK ${name === 'copy_directory' ? 'copied' : 'moved'} directory ${src.displayPath} to ${dest.displayPath} (${counts.files} files).`, error: false }, snapshots);
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
@@ -6463,15 +7081,89 @@ export async function executeTool(name: string, args: any, workspacePath: string
             if (name === 'preview_patch' || args.check === true) {
               return { name, args, result: JSON.stringify({ checked_only: true, files: targets, file_count: targets.length }, null, 2), error: false };
             }
+            const snapshots = targets.map((target) => {
+              const resolved = resolveAllowedWorkspacePath(String(target), { allowEmpty: true });
+              return snapshotPreMutation(resolved, 'apply_patch');
+            });
             const applied = await deps.runCommandCaptured(`git apply --whitespace=nowarn ${quoteArg(tmpPath)}`, workspacePath, 120000);
             const appliedOutput = [applied.stdout, applied.stderr].filter(Boolean).join('\n').trim();
-            return { name, args, result: applied.code === 0 ? `Patch applied to ${targets.length} file(s).` : `Patch apply failed:\n${truncateText(appliedOutput, 8000)}`, error: applied.code !== 0 };
+            return withWorkspaceSnapshots({ name, args, result: applied.code === 0 ? `Patch applied to ${targets.length} file(s).` : `Patch apply failed:\n${truncateText(appliedOutput, 8000)}`, error: applied.code !== 0 }, applied.code === 0 ? snapshots : []);
           } finally {
             try { fs.unlinkSync(tmpPath); } catch {}
           }
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
+      }
+
+      case 'validate_file': {
+        const filename = args.filename || args.name || args.path || args.file;
+        if (!filename) return { name, args, result: 'filename is required', error: true };
+        const normalizedFilename = String(filename).replace(/\\/g, '/');
+        if (normalizedFilename.startsWith('src/')) {
+          return executeTool('validate_source', { ...args, file: normalizedFilename }, workspacePath, deps, sessionId);
+        }
+        if (normalizedFilename.startsWith('web-ui/')) {
+          return executeTool('validate_webui_source', { ...args, file: normalizedFilename }, workspacePath, deps, sessionId);
+        }
+        let resolvedFile: { absPath: string; normalizedRel: string; displayPath: string };
+        try {
+          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true });
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+        return validateSyntaxFileResult(resolvedFile.displayPath, resolvedFile.absPath);
+      }
+
+      case 'validate_source': {
+        const rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/');
+        if (!rel) return { name, args, result: 'file path is required', error: true };
+        const projectRoot = resolveProjectRootForSourceAccess();
+        const srcRoot = path.join(projectRoot, 'src');
+        const normalizedRel = rel.replace(/^\.?\//, '').replace(/^src\//, '');
+        const absPath = path.resolve(srcRoot, normalizedRel);
+        if (!absPath.startsWith(srcRoot)) {
+          return { name, args, result: 'ERROR: validate_source only allows access to src/ directory.', error: true };
+        }
+        if (!fs.existsSync(absPath)) {
+          return { name, args, result: buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+        }
+        if (!fs.statSync(absPath).isFile()) return { name, args, result: `"src/${normalizedRel}" is not a file`, error: true };
+        return validateSyntaxFileResult(`src/${normalizedRel}`, absPath);
+      }
+
+      case 'validate_prom_file': {
+        const rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/');
+        const projectRoot = resolveProjectRootForSourceAccess();
+        let resolved: { absPath: string; normalizedRel: string };
+        try {
+          resolved = resolvePromAllowedFilePath(projectRoot, rel);
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+        const promDisplay = resolved.normalizedRel || rel;
+        if (!fs.existsSync(resolved.absPath)) {
+          return { name, args, result: buildPathNotFoundRecovery(promDisplay, projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+        }
+        if (!fs.statSync(resolved.absPath).isFile()) return { name, args, result: `"${promDisplay}" is not a file`, error: true };
+        return validateSyntaxFileResult(promDisplay, resolved.absPath);
+      }
+
+      case 'validate_webui_source': {
+        const rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/');
+        if (!rel) return { name, args, result: 'file path is required', error: true };
+        const projectRoot = resolveProjectRootForSourceAccess();
+        const webUiRoot = path.join(projectRoot, 'web-ui');
+        const normalizedRel = rel.replace(/^\.?\//, '').replace(/^web-ui\//, '');
+        const absPath = path.resolve(webUiRoot, normalizedRel);
+        if (!absPath.startsWith(webUiRoot)) {
+          return { name, args, result: 'ERROR: validate_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!fs.existsSync(absPath)) {
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${normalizedRel}`, webUiRoot, normalizedRel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+        }
+        if (!fs.statSync(absPath).isFile()) return { name, args, result: `"web-ui/${normalizedRel}" is not a file`, error: true };
+        return validateSyntaxFileResult(`web-ui/${normalizedRel}`, absPath);
       }
 
 	      case 'file_stats': {
@@ -6493,14 +7185,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const filePath = resolvedFile.absPath;
         const stat = fs.statSync(filePath);
         const content = fs.readFileSync(filePath, 'utf-8');
-        const lineCount = content.split('\n').length;
-        const readCap = 240;
-        const payload = {
-          file: resolvedFile.displayPath,
-          line_count: lineCount,
-          last_modified: stat.mtime.toISOString(),
-          is_large: lineCount > readCap,
-        };
+        const payload = buildFileIntelligence(resolvedFile.displayPath, content, stat, {
+          readCap: FILE_TOOL_DEFAULT_READ_LINES,
+          query: args.query ? String(args.query) : undefined,
+        });
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
 
@@ -6508,8 +7196,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const batchPaths = Array.isArray(args.files) ? args.files : [];
         if (!batchPaths.length) return { name, args, result: 'files array is required', error: true };
         const projectRoot = resolveProjectRootForSourceAccess();
-        const batchStatResults: Array<{ file: string; line_count?: number; last_modified?: string; is_large?: boolean; error?: string }> = [];
-        for (const rawPath of batchPaths) {
+        const batchStatResults: Array<any> = [];
+        const maxBatchStats = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_FILES, Math.floor(Number(args.max_files) || FILE_TOOL_MAX_BATCH_FILES)));
+        for (const rawPath of batchPaths.slice(0, maxBatchStats)) {
           const normalized = String(rawPath || '').replace(/\\/g, '/').replace(/^\.?\//, '');
           if (!normalized) { batchStatResults.push({ file: String(rawPath), error: 'path required' }); continue; }
           const isWebUi = normalized.startsWith('web-ui/');
@@ -6522,9 +7211,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const bsStat = fs.statSync(absPath);
           if (!bsStat.isFile()) { batchStatResults.push({ file: display, error: 'not a file' }); continue; }
           const content = fs.readFileSync(absPath, 'utf-8');
-          const lineCount = content.split('\n').length;
-          batchStatResults.push({ file: display, line_count: lineCount, last_modified: bsStat.mtime.toISOString(), is_large: lineCount > 300 });
+          batchStatResults.push(buildFileIntelligence(display, content, bsStat, {
+            readCap: FILE_TOOL_DEFAULT_READ_LINES,
+            query: args.query ? String(args.query) : undefined,
+          }));
         }
+        if (batchPaths.length > maxBatchStats) batchStatResults.push({ file: '[batch truncated]', error: `Only first ${maxBatchStats} files inspected.` });
         return { name, args, result: JSON.stringify(batchStatResults, null, 2), error: false };
       }
 
@@ -6545,14 +7237,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return { name, args, result: `"src/${normalizedRel}" is not a file`, error: true };
         const content = fs.readFileSync(absPath, 'utf-8');
-        const lineCount = content.split('\n').length;
-        const readCap = 300;
-        const payload = {
-          file: `src/${normalizedRel}`,
-          line_count: lineCount,
-          last_modified: stat.mtime.toISOString(),
-          is_large: lineCount > readCap,
-        };
+        const payload = buildFileIntelligence(`src/${normalizedRel}`, content, stat, {
+          readCap: FILE_TOOL_DEFAULT_READ_LINES,
+          query: args.query ? String(args.query) : undefined,
+        });
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
 
@@ -6572,14 +7260,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const stat = fs.statSync(resolved.absPath);
         if (!stat.isFile()) return { name, args, result: `"${promDisplay}" is not a file`, error: true };
         const content = fs.readFileSync(resolved.absPath, 'utf-8');
-        const lineCount = content.split('\n').length;
-        const readCap = 300;
-        const payload = {
-          file: promDisplay,
-          line_count: lineCount,
-          last_modified: stat.mtime.toISOString(),
-          is_large: lineCount > readCap,
-        };
+        const payload = buildFileIntelligence(promDisplay, content, stat, {
+          readCap: FILE_TOOL_DEFAULT_READ_LINES,
+          query: args.query ? String(args.query) : undefined,
+        });
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
 
@@ -6600,14 +7284,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return { name, args, result: `"web-ui/${normalizedRel}" is not a file`, error: true };
         const content = fs.readFileSync(absPath, 'utf-8');
-        const lineCount = content.split('\n').length;
-        const readCap = 300;
-        const payload = {
-          file: `web-ui/${normalizedRel}`,
-          line_count: lineCount,
-          last_modified: stat.mtime.toISOString(),
-          is_large: lineCount > readCap,
-        };
+        const payload = buildFileIntelligence(`web-ui/${normalizedRel}`, content, stat, {
+          readCap: FILE_TOOL_DEFAULT_READ_LINES,
+          query: args.query ? String(args.query) : undefined,
+        });
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
 
@@ -6623,58 +7303,45 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         const filePath = resolvedFile.absPath;
-        const stat = fs.statSync(filePath);
-        let regex: RegExp;
+        let matcher: SearchMatcher;
         try {
-          regex = new RegExp(pattern, args.case_insensitive ? 'gi' : 'g');
-        } catch {
+          matcher = createSearchMatcher(pattern, {
+            regex: args.regex === true,
+            literal: args.literal === true,
+            caseInsensitive: args.case_insensitive === true,
+          });
+        } catch (err: any) {
           return { name, args, result: `Invalid regex pattern: ${pattern}`, error: true };
         }
         const requestedMaxResults = Math.floor(Number(args.max_results) || 50);
         const contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context ?? args.context_lines) || 0)));
         const maxResults = Math.max(1, Math.min(80, requestedMaxResults));
-        const trimLine = (line: string, max = 500): string => {
-          const value = String(line || '');
-          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
-        };
-        const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
-        const matches: Array<{
-          line_number: number;
-          line: string;
-          context_before?: string[];
-          context_after?: string[];
-        }> = [];
-        for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
-          regex.lastIndex = 0;
-          if (!regex.test(lines[i])) continue;
-          const item: {
-            line_number: number;
-            line: string;
-            context_before?: string[];
-            context_after?: string[];
-          } = {
-            line_number: i + 1,
-            line: trimLine(lines[i]),
-          };
-          if (contextLines > 0) {
-            item.context_before = lines.slice(Math.max(0, i - contextLines), i).map((line) => trimLine(line, 260));
-            item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines)).map((line) => trimLine(line, 260));
-          }
-          matches.push(item);
-        }
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const grep = collectGrepMatchesInText(resolvedFile.displayPath, content, matcher, {
+          maxResults,
+          contextLines,
+          before: Number(args.before) || 40,
+          after: Number(args.after) || 80,
+          charBefore: Number(args.char_before) || undefined,
+          charAfter: Number(args.char_after) || undefined,
+          charWindow: Number(args.char_window) || undefined,
+        });
         const payload = {
           file: resolvedFile.displayPath,
           pattern,
-          match_count: matches.length,
-          returned_count: matches.length,
+          search_mode: matcher.mode,
+          match_count: grep.totalMatches,
+          returned_count: grep.matches.length,
+          truncated_count: grep.truncatedCount,
           result_limit: {
             requested: requestedMaxResults,
             applied: maxResults,
             context_lines: contextLines,
-            limit_reached: matches.length >= maxResults,
+            limit_reached: grep.limitReached,
             note: 'Result payloads are hard-clamped. Narrow pattern/path/glob or rerun with a smaller directory to inspect more matches.',
           },
-          matches,
+          no_match_hints: grep.totalMatches === 0 ? buildNoMatchHints({ pattern, searched: resolvedFile.displayPath, mode: matcher.mode }) : undefined,
+          matches: grep.matches,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
@@ -6701,6 +7368,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
             case_insensitive: args.case_insensitive,
             context: args.context ?? args.context_lines,
             max_results: args.max_results,
+            regex: args.regex,
+            literal: args.literal,
+            before: args.before,
+            after: args.after,
+            exclude: args.exclude,
+            gitignore: args.gitignore,
+            respect_gitignore: args.respect_gitignore,
+            include_lockfiles: args.include_lockfiles,
           }, workspacePath, deps, sessionId);
         }
         let resolvedDir: { absPath: string; normalizedRel: string; displayPath: string };
@@ -6710,96 +7385,118 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         const searchDir = resolvedDir.absPath;
-        let regex: RegExp;
+        let matcher: SearchMatcher;
         try {
-          regex = new RegExp(pattern, args.case_insensitive ? 'gi' : 'g');
+          matcher = createSearchMatcher(pattern, {
+            regex: args.regex === true,
+            literal: args.literal === true,
+            caseInsensitive: args.case_insensitive === true,
+          });
         } catch {
           return { name, args, result: `Invalid regex pattern: ${pattern}`, error: true };
         }
-        const rawGlob = sourceSearchRawGlob.toLowerCase();
-        const globs = rawGlob ? rawGlob.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
+        const globs = parseGlobList(sourceSearchRawGlob);
         const requestedMaxResults = Math.floor(Number(args.max_results) || 50);
         const contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context ?? args.context_lines) || 0)));
         const maxResults = Math.max(1, Math.min(80, requestedMaxResults));
-        const trimLine = (line: string, max = 500): string => {
-          const value = String(line || '');
-          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
-        };
-        const matches: Array<{ file: string; line_number: number; line: string; context_before?: string[]; context_after?: string[] }> = [];
-        const matchesGlob = (filename: string): boolean => {
-          if (!globs.length) return true;
-          const lower = filename.toLowerCase();
-          return globs.some((g: string) => {
-            if (g.startsWith('*.')) return lower.endsWith(g.slice(1));
-            return lower.includes(g.replace(/\*/g, ''));
-          });
-        };
+        const storeLimit = Math.max(maxResults, Math.min(240, maxResults * 3));
+        const defaultExcludes = new Set<string>([
+          ...DEFAULT_FILE_TOOL_EXCLUDES,
+          ...String(args.exclude || '').split(',').map((item: string) => item.trim()).filter(Boolean),
+        ]);
+        const gitignoreRules = args.gitignore === false || args.respect_gitignore === false ? [] : readSimpleGitignore(searchDir);
+        const matches: any[] = [];
+        let totalMatches = 0;
+        let filesSearched = 0;
+        let filesSkipped = 0;
         const walk = (dir: string): void => {
-          if (matches.length >= maxResults) return;
           let entries: fs.Dirent[] = [];
           try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
           for (const entry of entries) {
-            if (matches.length >= maxResults) break;
             const abs = path.join(dir, entry.name);
             const rel = path.join(resolvedDir.displayPath === '.' ? '' : resolvedDir.displayPath, path.relative(searchDir, abs)).replace(/\\/g, '/');
+            const relForIgnore = path.relative(searchDir, abs).replace(/\\/g, '/');
             if (entry.isDirectory()) {
-              if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
+              if (shouldSkipSearchPath(relForIgnore, entry.name, { excludes: defaultExcludes, gitignoreRules })) { filesSkipped += 1; continue; }
               walk(abs);
               continue;
             }
             if (!entry.isFile()) continue;
-            if (!matchesGlob(entry.name)) continue;
+            if (shouldSkipSearchPath(relForIgnore, entry.name, { excludes: defaultExcludes, gitignoreRules })) { filesSkipped += 1; continue; }
+            if (!args.include_lockfiles && /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/i.test(rel)) { filesSkipped += 1; continue; }
+            if (!matchesGlobList(rel, globs)) continue;
             let content = '';
             try { content = fs.readFileSync(abs, 'utf-8'); } catch { continue; }
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
-              regex.lastIndex = 0;
-              if (!regex.test(lines[i])) continue;
-              const item = { file: rel, line_number: i + 1, line: trimLine(lines[i]), context_before: undefined as string[] | undefined, context_after: undefined as string[] | undefined };
-              if (contextLines > 0) {
-                item.context_before = lines.slice(Math.max(0, i - contextLines), i).map((line) => trimLine(line, 260));
-                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines)).map((line) => trimLine(line, 260));
-              }
-              matches.push(item);
+            filesSearched += 1;
+            const grep = collectGrepMatchesInText(rel || entry.name, content, matcher, {
+              maxResults: Math.max(1, storeLimit - matches.length),
+              contextLines,
+              before: Number(args.before) || 40,
+              after: Number(args.after) || 80,
+              charBefore: Number(args.char_before) || undefined,
+              charAfter: Number(args.char_after) || undefined,
+              charWindow: Number(args.char_window) || undefined,
+            });
+            totalMatches += grep.totalMatches;
+            if (matches.length < storeLimit) {
+              matches.push(...grep.matches.slice(0, Math.max(0, storeLimit - matches.length)));
             }
           }
         };
         walk(searchDir);
+        const sortedMatches = matches.sort(compareGrepMatches(pattern)).slice(0, maxResults);
         const payload = {
           directory: resolvedDir.displayPath,
           pattern,
-          match_count: matches.length,
-          returned_count: matches.length,
+          search_mode: matcher.mode,
+          files_searched: filesSearched,
+          files_skipped: filesSkipped,
+          match_count: totalMatches,
+          returned_count: sortedMatches.length,
+          truncated_count: Math.max(0, totalMatches - sortedMatches.length),
           result_limit: {
             requested: requestedMaxResults,
             applied: maxResults,
             context_lines: contextLines,
-            limit_reached: matches.length >= maxResults,
+            limit_reached: totalMatches > sortedMatches.length,
             note: 'Result payloads are hard-clamped. Narrow directory, glob, or pattern to inspect more matches.',
           },
-          matches,
+          no_match_hints: totalMatches === 0 ? buildNoMatchHints({ pattern, searched: resolvedDir.displayPath, mode: matcher.mode, excluded: Array.from(defaultExcludes), pathHint: String(directoryArg || '.') }) : undefined,
+          matches: sortedMatches,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
 
       case 'apply_workspace_patchset': {
+        args = normalizeWorkspacePatchsetArgs(args);
         const patchEdits = Array.isArray(args.edits) ? args.edits : [];
         if (!patchEdits.length) return { name, args, result: 'edits array is required and must not be empty', error: true };
-        const patchResults: Array<{ filename: string; op: string; ok: boolean; error?: string }> = [];
+        const patchResults: Array<{ filename: string; op: string; ok: boolean; result?: string; error?: string }> = [];
+        const patchSnapshots: Array<ReturnType<typeof snapshotPreMutation>> = [];
         for (const edit of patchEdits) {
           const pFilename = edit?.filename;
-          const pOp = String(edit?.op || '');
+          const pOp = normalizeWorkspacePatchOp(edit?.op);
           if (!pFilename || !pOp) { patchResults.push({ filename: String(pFilename || ''), op: pOp, ok: false, error: 'filename and op are required' }); continue; }
           try {
-            const resolvedPOp = pOp === 'find_replace' ? 'find_replace' : pOp === 'replace_lines' ? 'replace_lines' : pOp === 'insert_after' ? 'insert_after' : pOp === 'delete_lines' ? 'delete_lines' : pOp === 'write_file' ? 'write_file' : pOp === 'rename_file' ? 'rename_file' : 'create_file';
+            const supportedPatchOps = new Set(['find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'write_file', 'create_file', 'rename_file']);
+            if (!supportedPatchOps.has(pOp)) {
+              patchResults.push({ filename: String(pFilename), op: pOp, ok: false, error: `Unsupported patchset op: ${pOp}` });
+              continue;
+            }
+            const resolvedPOp = pOp;
             const r = await executeTool(resolvedPOp, { filename: pFilename, old_path: pFilename, ...edit }, workspacePath, deps, sessionId);
-            patchResults.push({ filename: pFilename, op: pOp, ok: !r.error, error: r.error ? r.result : undefined });
+            const snapshots = [
+              ...(Array.isArray((r as any)?.extra?.workspaceSnapshots) ? (r as any).extra.workspaceSnapshots : []),
+              ...(Array.isArray((r as any)?.data?.workspaceSnapshots) ? (r as any).data.workspaceSnapshots : []),
+            ];
+            patchSnapshots.push(...snapshots);
+            patchResults.push({ filename: pFilename, op: pOp, ok: !r.error, result: r.error ? undefined : r.result, error: r.error ? r.result : undefined });
           } catch (err: any) {
             patchResults.push({ filename: pFilename, op: pOp, ok: false, error: err?.message || String(err) });
           }
         }
         const allOk = patchResults.every(r => r.ok);
-        return { name, args, result: JSON.stringify({ applied: patchResults.filter(r => r.ok).length, failed: patchResults.filter(r => !r.ok).length, results: patchResults }, null, 2), error: !allOk };
+        return withWorkspaceSnapshots({ name, args, result: JSON.stringify({ applied: patchResults.filter(r => r.ok).length, failed: patchResults.filter(r => !r.ok).length, results: patchResults }, null, 2), error: !allOk }, allOk ? patchSnapshots : []);
       }
 
       case 'file_tree': {
@@ -6825,9 +7522,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
-        const ftMaxDepth = Math.max(1, Math.min(8, Math.floor(Number(args.max_depth) || 3)));
+        const ftMaxDepth = Math.max(1, Math.min(8, Math.floor(Number(args.max_depth) || FILE_TOOL_DEFAULT_TREE_DEPTH)));
+        const ftMaxEntries = Math.max(1, Math.min(1000, Math.floor(Number(args.max_entries) || FILE_TOOL_DEFAULT_TREE_ENTRIES)));
         const ftGlobs = String(args.glob || '').trim().toLowerCase().split(',').map((g: string) => g.trim()).filter(Boolean);
-        const ftDefaultExclude = ['node_modules', '.git', 'dist', '.prometheus'];
+        const ftDefaultExclude = DEFAULT_FILE_TOOL_EXCLUDES;
         const ftExclude = new Set<string>([
           ...ftDefaultExclude,
           ...String(args.exclude || '').split(',').map((e: string) => e.trim()).filter(Boolean),
@@ -6841,31 +7539,56 @@ export async function executeTool(name: string, args: any, workspacePath: string
           });
         };
         const ftLines: string[] = [];
+        let ftEntryCount = 0;
+        let ftTruncated = false;
+        const ftPushEntry = (line: string): boolean => {
+          if (ftEntryCount >= ftMaxEntries) {
+            ftTruncated = true;
+            return false;
+          }
+          ftLines.push(line);
+          ftEntryCount += 1;
+          return true;
+        };
         const ftWalk = (dir: string, depth: number, prefix: string): void => {
           if (depth > ftMaxDepth) return;
           let entries: fs.Dirent[];
           try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+          entries = entries.filter((entry) => !ftExclude.has(entry.name));
           entries.sort((a, b) => {
             if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
             return a.name.localeCompare(b.name);
           });
           for (let i = 0; i < entries.length; i++) {
+            if (ftTruncated) return;
             const entry = entries[i];
-            if (ftExclude.has(entry.name)) continue;
             const isLast = i === entries.length - 1;
             const connector = isLast ? '└── ' : '├── ';
             const childPrefix = isLast ? prefix + '    ' : prefix + '│   ';
             if (entry.isDirectory()) {
-              ftLines.push(`${prefix}${connector}${entry.name}/`);
+              if (!ftPushEntry(`${prefix}${connector}${entry.name}/`)) return;
               ftWalk(path.join(dir, entry.name), depth + 1, childPrefix);
             } else if (ftMatchesGlob(entry.name)) {
-              ftLines.push(`${prefix}${connector}${entry.name}`);
+              if (!ftPushEntry(`${prefix}${connector}${entry.name}`)) return;
             }
           }
         };
         ftLines.push(ftResolved.displayPath || '.');
         ftWalk(ftResolved.absPath, 1, '');
-        return { name, args, result: ftLines.join('\n'), error: false };
+        if (ftTruncated) {
+          ftLines.push(`[TREE_TRUNCATED] Returned first ${ftEntryCount} entries. Narrow path/glob or pass max_depth/max_entries when you truly need more.`);
+        }
+        const ftRepoHeader = args.map === false ? '' : buildRepoMapHeader(ftResolved.absPath, ftResolved.displayPath || '.', { excludes: Array.from(ftExclude) });
+        const rendered = `${ftRepoHeader ? `${ftRepoHeader}\n\n` : ''}${ftLines.join('\n')}`;
+        return {
+          name,
+          args,
+          result: maybeSpoolToolOutput(name, rendered, resolveResultCharBudget(args, FILE_TOOL_TREE_INLINE_LIMIT_CHARS), {
+            allowInline: args.inline === true || args.no_spool === true,
+            summary: `file_tree ${ftResolved.displayPath || '.'} returned ${ftEntryCount} entries and exceeded inline budget.`,
+          }),
+          error: false,
+        };
       }
 
       case 'grep_webui_source':
@@ -6880,58 +7603,61 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const gs_searchBoth = gs_rootParam === 'both';
         const gs_useSrc = gs_searchBoth || gs_rootParam === 'src';
         const gs_useWebUi = gs_searchBoth || gs_rootParam === 'web-ui';
-        const gs_rawGlob = String(args.glob || '').trim().toLowerCase();
-        const gs_globs = gs_rawGlob ? gs_rawGlob.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
-        let gs_regex: RegExp;
+        const gs_globs = parseGlobList(args.glob);
+        let gs_matcher: SearchMatcher;
         try {
-          gs_regex = new RegExp(gs_pattern, args.case_insensitive ? 'gi' : 'g');
+          gs_matcher = createSearchMatcher(gs_pattern, {
+            regex: args.regex === true,
+            literal: args.literal === true,
+            caseInsensitive: args.case_insensitive === true,
+          });
         } catch {
           return { name, args, result: `Invalid regex pattern: ${gs_pattern}`, error: true };
         }
         const gs_requestedMaxResults = Math.floor(Number(args.max_results) || 50);
         const gs_contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context || 0))));
         const gs_maxResults = Math.max(1, Math.min(80, gs_requestedMaxResults));
-        const gs_trimLine = (line: string, max = 500): string => {
-          const value = String(line || '');
-          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
-        };
-        const gs_matchesGlob = (filename: string): boolean => {
-          if (!gs_globs.length) return true;
-          const lower = filename.toLowerCase();
-          return gs_globs.some((g: string) => {
-            if (g.startsWith('*.')) return lower.endsWith(g.slice(1));
-            return lower.includes(g.replace(/\*/g, ''));
-          });
-        };
-        type GrepMatch = { file: string; line_number: number; line: string; context_before?: string[]; context_after?: string[] };
-        const gs_matches: GrepMatch[] = [];
+        const gs_storeLimit = Math.max(gs_maxResults, Math.min(240, gs_maxResults * 3));
+        const gs_excludes = new Set<string>([
+          ...DEFAULT_FILE_TOOL_EXCLUDES,
+          ...String(args.exclude || '').split(',').map((item: string) => item.trim()).filter(Boolean),
+        ]);
+        const gs_matches: any[] = [];
+        let gs_totalMatches = 0;
+        let gs_filesSearched = 0;
+        let gs_filesSkipped = 0;
         const gs_walkDir = (dir: string, rootDir: string, label: string): void => {
-          if (gs_matches.length >= gs_maxResults) return;
           let entries: fs.Dirent[] = [];
           try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+          const gitignoreRules = args.gitignore === false || args.respect_gitignore === false ? [] : readSimpleGitignore(rootDir);
           for (const entry of entries) {
-            if (gs_matches.length >= gs_maxResults) break;
             const abs = path.join(dir, entry.name);
+            const relPathNoLabel = path.relative(rootDir, abs).replace(/\\/g, '/');
             if (entry.isDirectory()) {
-              if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist') continue;
+              if (shouldSkipSearchPath(relPathNoLabel, entry.name, { excludes: gs_excludes, gitignoreRules })) { gs_filesSkipped += 1; continue; }
               gs_walkDir(abs, rootDir, label);
               continue;
             }
             if (!entry.isFile()) continue;
-            if (!gs_matchesGlob(entry.name)) continue;
+            const relPath = label + '/' + relPathNoLabel;
+            if (shouldSkipSearchPath(relPathNoLabel, entry.name, { excludes: gs_excludes, gitignoreRules })) { gs_filesSkipped += 1; continue; }
+            if (!args.include_lockfiles && /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/i.test(relPath)) { gs_filesSkipped += 1; continue; }
+            if (!matchesGlobList(relPath, gs_globs)) continue;
             let content = '';
             try { content = fs.readFileSync(abs, 'utf-8'); } catch { continue; }
-            const lines = content.split('\n');
-            const relPath = label + '/' + path.relative(rootDir, abs).replace(/\\/g, '/');
-            for (let i = 0; i < lines.length && gs_matches.length < gs_maxResults; i++) {
-              gs_regex.lastIndex = 0;
-              if (!gs_regex.test(lines[i])) continue;
-              const item: GrepMatch = { file: relPath, line_number: i + 1, line: gs_trimLine(lines[i]) };
-              if (gs_contextLines > 0) {
-                item.context_before = lines.slice(Math.max(0, i - gs_contextLines), i).map((line) => gs_trimLine(line, 260));
-                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + gs_contextLines)).map((line) => gs_trimLine(line, 260));
-              }
-              gs_matches.push(item);
+            gs_filesSearched += 1;
+            const grep = collectGrepMatchesInText(relPath, content, gs_matcher, {
+              maxResults: Math.max(1, gs_storeLimit - gs_matches.length),
+              contextLines: gs_contextLines,
+              before: Number(args.before) || 40,
+              after: Number(args.after) || 80,
+              charBefore: Number(args.char_before) || undefined,
+              charAfter: Number(args.char_after) || undefined,
+              charWindow: Number(args.char_window) || undefined,
+            });
+            gs_totalMatches += grep.totalMatches;
+            if (gs_matches.length < gs_storeLimit) {
+              gs_matches.push(...grep.matches.slice(0, Math.max(0, gs_storeLimit - gs_matches.length)));
             }
           }
         };
@@ -6949,19 +7675,25 @@ export async function executeTool(name: string, args: any, workspacePath: string
           gs_walkDir(gs_webUiSubdir, gs_webUiRoot, 'web-ui');
         }
         const gs_searchedLabel = gs_searchBoth ? 'src/ + web-ui/' : (gs_useSrc ? 'src/' + (gs_rawPath ? gs_rawPath : '') : 'web-ui/' + (gs_rawPath ? gs_rawPath : ''));
+        const gs_sortedMatches = gs_matches.sort(compareGrepMatches(gs_pattern)).slice(0, gs_maxResults);
         const gs_payload = {
           searched: gs_searchedLabel,
           pattern: gs_pattern,
-          match_count: gs_matches.length,
-          returned_count: gs_matches.length,
+          search_mode: gs_matcher.mode,
+          files_searched: gs_filesSearched,
+          files_skipped: gs_filesSkipped,
+          match_count: gs_totalMatches,
+          returned_count: gs_sortedMatches.length,
+          truncated_count: Math.max(0, gs_totalMatches - gs_sortedMatches.length),
           result_limit: {
             requested: gs_requestedMaxResults,
             applied: gs_maxResults,
             context_lines: gs_contextLines,
-            limit_reached: gs_matches.length >= gs_maxResults,
+            limit_reached: gs_totalMatches > gs_sortedMatches.length,
             note: 'Result payloads are hard-clamped. Narrow root/path/glob/pattern or rerun a targeted read_source/read_webui_source for exact code.',
           },
-          matches: gs_matches,
+          no_match_hints: gs_totalMatches === 0 ? buildNoMatchHints({ pattern: gs_pattern, searched: gs_searchedLabel, mode: gs_matcher.mode, excluded: Array.from(gs_excludes) }) : undefined,
+          matches: gs_sortedMatches,
         };
         return { name, args, result: JSON.stringify(gs_payload, null, 2), error: false };
       }
@@ -6969,9 +7701,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'grep_prom': {
         const gp_pattern = String(args.pattern || '');
         if (!gp_pattern) return { name, args, result: 'pattern is required', error: true };
-        let gp_regex: RegExp;
+        let gp_matcher: SearchMatcher;
         try {
-          gp_regex = new RegExp(gp_pattern, args.case_insensitive ? 'gi' : 'g');
+          gp_matcher = createSearchMatcher(gp_pattern, {
+            regex: args.regex === true,
+            literal: args.literal === true,
+            caseInsensitive: args.case_insensitive === true,
+          });
         } catch {
           return { name, args, result: `Invalid regex pattern: ${gp_pattern}`, error: true };
         }
@@ -6993,84 +7729,103 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const gp_requestedMaxResults = Math.floor(Number(args.max_results) || 50);
         const gp_contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context || 0))));
         const gp_maxResults = Math.max(1, Math.min(80, gp_requestedMaxResults));
-        const gp_trimLine = (line: string, max = 500): string => {
-          const value = String(line || '');
-          return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
-        };
-        const gp_rawGlob = String(args.glob || '').trim().toLowerCase();
-        const gp_globs = gp_rawGlob ? gp_rawGlob.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
-        const gp_matchesGlob = (filename: string): boolean => {
-          if (!gp_globs.length) return true;
-          const lower = filename.toLowerCase();
-          return gp_globs.some((g: string) => {
-            if (g.startsWith('*.')) return lower.endsWith(g.slice(1));
-            return lower.includes(g.replace(/\*/g, ''));
-          });
-        };
-        type PromGrepMatch = { file: string; line_number: number; line: string; context_before?: string[]; context_after?: string[] };
-        const gp_matches: PromGrepMatch[] = [];
+        const gp_storeLimit = Math.max(gp_maxResults, Math.min(240, gp_maxResults * 3));
+        const gp_globs = parseGlobList(args.glob);
+        const gp_excludes = new Set<string>([
+          ...DEFAULT_FILE_TOOL_EXCLUDES,
+          ...String(args.exclude || '').split(',').map((item: string) => item.trim()).filter(Boolean),
+        ]);
+        const gp_gitignoreRules = args.gitignore === false || args.respect_gitignore === false ? [] : readSimpleGitignore(gp_projectRoot);
+        const gp_matches: any[] = [];
+        let gp_totalMatches = 0;
+        let gp_filesSearched = 0;
+        let gp_filesSkipped = 0;
         const gp_walkDir = (dir: string): void => {
-          if (gp_matches.length >= gp_maxResults) return;
           let entries: fs.Dirent[] = [];
           try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
           for (const entry of entries) {
-            if (gp_matches.length >= gp_maxResults) break;
             const abs = path.join(dir, entry.name);
             const relFromRoot = path.relative(gp_projectRoot, abs).replace(/\\/g, '/');
             if (entry.isDirectory()) {
               if (!isPromAllowedPath(relFromRoot)) continue;
+              if (shouldSkipSearchPath(relFromRoot, entry.name, { excludes: gp_excludes, gitignoreRules: gp_gitignoreRules })) { gp_filesSkipped += 1; continue; }
               gp_walkDir(abs);
               continue;
             }
             if (!entry.isFile()) continue;
             if (!isPromAllowedPath(relFromRoot)) continue;
-            if (!gp_matchesGlob(entry.name)) continue;
+            if (shouldSkipSearchPath(relFromRoot, entry.name, { excludes: gp_excludes, gitignoreRules: gp_gitignoreRules })) { gp_filesSkipped += 1; continue; }
+            if (!args.include_lockfiles && /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/i.test(relFromRoot)) { gp_filesSkipped += 1; continue; }
+            if (!matchesGlobList(relFromRoot, gp_globs)) continue;
             let content = '';
             try { content = fs.readFileSync(abs, 'utf-8'); } catch { continue; }
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length && gp_matches.length < gp_maxResults; i++) {
-              gp_regex.lastIndex = 0;
-              if (!gp_regex.test(lines[i])) continue;
-              const item: PromGrepMatch = { file: relFromRoot || '.', line_number: i + 1, line: gp_trimLine(lines[i]) };
-              if (gp_contextLines > 0) {
-                item.context_before = lines.slice(Math.max(0, i - gp_contextLines), i).map((line) => gp_trimLine(line, 260));
-                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + gp_contextLines)).map((line) => gp_trimLine(line, 260));
-              }
-              gp_matches.push(item);
+            gp_filesSearched += 1;
+            const grep = collectGrepMatchesInText(relFromRoot || '.', content, gp_matcher, {
+              maxResults: Math.max(1, gp_storeLimit - gp_matches.length),
+              contextLines: gp_contextLines,
+              before: Number(args.before) || 40,
+              after: Number(args.after) || 80,
+              charBefore: Number(args.char_before) || undefined,
+              charAfter: Number(args.char_after) || undefined,
+              charWindow: Number(args.char_window) || undefined,
+            });
+            gp_totalMatches += grep.totalMatches;
+            if (gp_matches.length < gp_storeLimit) {
+              gp_matches.push(...grep.matches.slice(0, Math.max(0, gp_storeLimit - gp_matches.length)));
             }
           }
         };
         gp_walkDir(gp_resolved.absPath);
+        const gp_sortedMatches = gp_matches.sort(compareGrepMatches(gp_pattern)).slice(0, gp_maxResults);
         const gp_payload = {
           searched: gp_resolved.normalizedRel || '.',
           pattern: gp_pattern,
-          match_count: gp_matches.length,
-          returned_count: gp_matches.length,
+          search_mode: gp_matcher.mode,
+          files_searched: gp_filesSearched,
+          files_skipped: gp_filesSkipped,
+          match_count: gp_totalMatches,
+          returned_count: gp_sortedMatches.length,
+          truncated_count: Math.max(0, gp_totalMatches - gp_sortedMatches.length),
           result_limit: {
             requested: gp_requestedMaxResults,
             applied: gp_maxResults,
             context_lines: gp_contextLines,
-            limit_reached: gp_matches.length >= gp_maxResults,
+            limit_reached: gp_totalMatches > gp_sortedMatches.length,
             note: 'Result payloads are hard-clamped. Narrow path/glob/pattern or rerun a targeted read_prom_file for exact content.',
           },
-          matches: gp_matches,
+          no_match_hints: gp_totalMatches === 0 ? buildNoMatchHints({ pattern: gp_pattern, searched: gp_resolved.normalizedRel || '.', mode: gp_matcher.mode, excluded: Array.from(gp_excludes) }) : undefined,
+          matches: gp_sortedMatches,
         };
         return { name, args, result: JSON.stringify(gp_payload, null, 2), error: false };
       }
       case 'read_dev_sources': {
         const files = Array.isArray(args.files) ? args.files : [];
         if (!files.length) return { name, args, result: 'ERROR: files[] is required.', error: true };
-        const maxFiles = Math.max(1, Math.min(12, Math.floor(Number(args.max_files) || 8)));
-        const defaultLines = Math.max(1, Math.min(480, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || 220)));
+        const maxFiles = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_FILES, Math.floor(Number(args.max_files) || FILE_TOOL_DEFAULT_BATCH_FILES)));
+        const defaultLines = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_LINES, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || FILE_TOOL_DEFAULT_BATCH_LINES)));
         const results: string[] = [];
+        const summaryLines: string[] = [];
         let sawError = false;
+        const forceContent = args.content === true || args.include_content === true || String(args.mode || '').toLowerCase() === 'content';
+        const forceSummary = args.summary === true || args.content === false || String(args.mode || '').toLowerCase() === 'summary';
         const normalizeDevSourcePath = (entry: any): string => String(entry?.file || entry?.path || '').replace(/\\/g, '/').replace(/^\.\//, '');
+        const summarizeDevSource = (requested: string, isWebUi: boolean, sourceFile: string): string => {
+          const projectRoot = resolveProjectRootForSourceAccess();
+          const root = path.join(projectRoot, isWebUi ? 'web-ui' : 'src');
+          const absPath = path.resolve(root, sourceFile);
+          if (!absPath.startsWith(root)) throw new Error(`Path escapes ${isWebUi ? 'web-ui/' : 'src/'}: ${requested}`);
+          return summarizeFileForTool(requested, absPath, {
+            readCap: defaultLines,
+            query: args.query ? String(args.query) : undefined,
+          });
+        };
         for (let i = 0; i < files.slice(0, maxFiles).length; i++) {
           const entry = files[i] || {};
           const requested = normalizeDevSourcePath(entry);
           if (!requested) {
             sawError = true;
             results.push(`--- read_dev_sources[${i + 1}] ---\nERROR: file path required.`);
+            summaryLines.push(`entry ${i + 1}: error`);
             continue;
           }
           const isWebUi = requested.startsWith('web-ui/');
@@ -7080,15 +7835,30 @@ export async function executeTool(name: string, args: any, workspacePath: string
           let delegatedTool: string;
           if (around) {
             delegatedTool = isWebUi ? 'grep_webui_source' : 'grep_source';
-            const pattern = entry?.regex === true ? around : around.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             result = await executeTool(delegatedTool, {
-              pattern,
+              pattern: around,
               path: path.dirname(sourceFile) === '.' ? '' : path.dirname(sourceFile),
               glob: path.basename(sourceFile),
               context: entry?.context,
               max_results: entry?.occurrence ? Math.max(1, Number(entry.occurrence)) : 20,
+              regex: entry?.regex === true,
             }, workspacePath, deps, sessionId);
           } else {
+            const hasWindow = entry?.start_line !== undefined || entry?.num_lines !== undefined || entry?.head !== undefined || entry?.tail !== undefined || args.num_lines !== undefined;
+            const entryFull = entry?.full === true || entry?.allow_large === true || args.full === true || args.allow_large === true;
+            const summaryOnly = forceSummary || (!forceContent && !hasWindow && !entryFull);
+            if (summaryOnly) {
+              try {
+                const summary = summarizeDevSource(requested, isWebUi, sourceFile);
+                results.push(summary);
+                summaryLines.push(`${requested}: summary`);
+              } catch (err: any) {
+                sawError = true;
+                results.push(`--- ${requested} ---\nERROR: ${err?.message || String(err)}`);
+                summaryLines.push(`${requested}: error`);
+              }
+              continue;
+            }
             delegatedTool = isWebUi ? 'read_webui_source' : 'read_source';
             const readArgs: any = { file: sourceFile, max_lines: defaultLines };
             for (const key of ['start_line', 'num_lines', 'head', 'tail', 'full', 'allow_large']) {
@@ -7101,11 +7871,22 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
           if (result.error) sawError = true;
           results.push(`--- ${requested} via ${delegatedTool} ---\n${result.result}`);
+          summaryLines.push(`${requested}: ${result.error ? 'error' : 'content'}`);
         }
         if (files.length > maxFiles) {
           results.push(`--- read_dev_sources truncated ---\nOnly first ${maxFiles} files read. Re-run with remaining files if needed.`);
+          summaryLines.push(`[batch truncated]: ${files.length - maxFiles} file(s) omitted`);
         }
-        return { name, args, result: results.join('\n\n'), error: sawError };
+        const rendered = results.join('\n\n');
+        return {
+          name,
+          args,
+          result: maybeSpoolToolOutput(name, rendered, resolveResultCharBudget(args, FILE_TOOL_BATCH_INLINE_LIMIT_CHARS), {
+            allowInline: args.inline === true || args.no_spool === true,
+            summary: `read_dev_sources returned ${Math.min(files.length, maxFiles)} file entry result(s):\n${summaryLines.join('\n')}`,
+          }),
+          error: sawError,
+        };
       }
 
       case 'apply_dev_source_patchset': {
@@ -7203,7 +7984,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
           if (result.error) return { name, args, result: results.join('\n\n'), error: true };
           touched.add(target.display);
         }
-        return { name, args, result: JSON.stringify({ ok: true, edit_count: edits.length, touched_files: Array.from(touched) }, null, 2), error: false };
+        const touchedFiles = Array.from(touched);
+        return {
+          name,
+          args,
+          result: [
+            JSON.stringify({ ok: true, edit_count: edits.length, touched_files: touchedFiles }, null, 2),
+            results.join('\n\n'),
+            getPostSourceEditInstructionForSession(sessionId, touchedFiles),
+          ].filter(Boolean).join('\n\n'),
+          error: false,
+        };
       }
 
       // ── read_source: read a file from src/ only ───────────────────────────────
@@ -7359,7 +8150,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const occurrences = _frProm.count; const updated = _frProm.updated;
 	        fs.writeFileSync(resolved.absPath, updated, 'utf-8');
 	        console.log(`[edit_prom] find_replace_prom: ${resolved.normalizedRel} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel} updated (${occurrences} occurrence${occurrences !== 1 ? 's' : ''} replaced). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
+	        const startLine = lineNumberAtOffset(content, _frProm.firstIndex);
+	        const replacementLineCount = Math.max(1, replaceText.replace(/\r\n/g, '\n').split('\n').length);
+	        return {
+	          name,
+	          args,
+	          result: `${formatPostEditContext(
+	            resolved.normalizedRel,
+	            updated,
+	            startLine,
+	            Math.max(startLine, startLine + replacementLineCount - 1),
+	            `OK ${resolved.normalizedRel} updated (${occurrences} occurrence${occurrences !== 1 ? 's' : ''} replaced).`,
+	          )}\n${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`,
+	          error: false,
+	        };
 	      }
 
 	      case 'replace_lines_prom': {
@@ -7389,10 +8193,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_prom_file', 'start_line'), error: true };
 	        }
 	        const endClamped = Math.min(end, lines.length);
-	        lines.splice(start - 1, endClamped - start + 1, ...newContent.split('\n'));
-	        fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
+	        const newLines = newContent.split('\n');
+	        lines.splice(start - 1, endClamped - start + 1, ...newLines);
+	        const updated = lines.join('\n');
+	        fs.writeFileSync(resolved.absPath, updated, 'utf-8');
 	        console.log(`[edit_prom] replace_lines_prom: ${resolved.normalizedRel} lines ${start}-${endClamped} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped} (now ${lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
+	        return {
+	          name,
+	          args,
+	          result: `${formatPostEditContext(
+	            resolved.normalizedRel,
+	            updated,
+	            start,
+	            Math.max(start, start + newLines.length - 1),
+	            `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped} (now ${lines.length} lines).`,
+	          )}\n${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`,
+	          error: false,
+	        };
 	      }
 
 	      case 'insert_after_prom': {
@@ -7418,10 +8235,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
 	        const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
 	        const insertAt = Math.min(afterLine, lines.length);
-	        lines.splice(insertAt, 0, ...content.split('\n'));
-	        fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
+	        const newLines = content.split('\n');
+	        lines.splice(insertAt, 0, ...newLines);
+	        const updated = lines.join('\n');
+	        fs.writeFileSync(resolved.absPath, updated, 'utf-8');
 	        console.log(`[edit_prom] insert_after_prom: ${resolved.normalizedRel} after line ${afterLine} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel}: inserted after line ${afterLine} (now ${lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
+	        return {
+	          name,
+	          args,
+	          result: `${formatPostEditContext(
+	            resolved.normalizedRel,
+	            updated,
+	            insertAt + 1,
+	            Math.max(insertAt + 1, insertAt + newLines.length),
+	            `OK ${resolved.normalizedRel}: inserted after line ${afterLine} (now ${lines.length} lines).`,
+	          )}\n${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`,
+	          error: false,
+	        };
 	      }
 
 	      case 'delete_lines_prom': {
@@ -7451,9 +8281,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        }
 	        const endClamped = Math.min(end, lines.length);
 	        lines.splice(start - 1, endClamped - start + 1);
-	        fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
+	        const updated = lines.join('\n');
+	        fs.writeFileSync(resolved.absPath, updated, 'utf-8');
 	        console.log(`[edit_prom] delete_lines_prom: ${resolved.normalizedRel} lines ${start}-${endClamped} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped} (now ${lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
+	        return {
+	          name,
+	          args,
+	          result: `${formatPostEditContext(
+	            resolved.normalizedRel,
+	            updated,
+	            Math.min(start, Math.max(1, lines.length)),
+	            Math.min(start, Math.max(1, lines.length)),
+	            `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped} (now ${lines.length} lines).`,
+	          )}\n${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`,
+	          error: false,
+	        };
 	      }
 
 	      case 'write_prom_file': {
@@ -7587,7 +8429,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(frs_absPath, frs_updated, 'utf-8');
         const frs_display = 'src/' + frs_absPath.slice(frs_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] find_replace_source: ${frs_display} (session: ${frs_sid})`);
-        return { name, args, result: `✅ ${frs_display} updated (${frs_occurrences} occurrence${frs_occurrences !== 1 ? 's' : ''} replaced). ${getPostSourceEditInstructionForSession(sessionId, [frs_display])}`, error: false };
+        const frs_startLine = lineNumberAtOffset(frs_content, _frSrc.firstIndex);
+        const frs_replacementLineCount = Math.max(1, frs_replace.replace(/\r\n/g, '\n').split('\n').length);
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            frs_display,
+            frs_updated,
+            frs_startLine,
+            Math.max(frs_startLine, frs_startLine + frs_replacementLineCount - 1),
+            `✅ ${frs_display} updated (${frs_occurrences} occurrence${frs_occurrences !== 1 ? 's' : ''} replaced).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [frs_display])}`,
+          error: false,
+        };
       }
 
 	      case 'replace_lines_source': {
@@ -7617,14 +8472,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: buildLineOutOfRangeRecovery(`src/${rls_rel.replace(/^\.?\/?src\//, '')}`, rls_lines, rls_start, 'read_source', 'start_line'), error: true };
         }
         const rls_endClamped = Math.min(rls_end, rls_lines.length);
-        rls_lines.splice(rls_start - 1, rls_endClamped - rls_start + 1, ...rls_newContent.split('\n'));
+        const rls_newLines = rls_newContent.split('\n');
+        rls_lines.splice(rls_start - 1, rls_endClamped - rls_start + 1, ...rls_newLines);
         const rls_updated = rls_lines.join('\n');
         const rls_invalidEdit = rejectInvalidSourceEdit(name, args, rls_absPath, rls_updated);
         if (rls_invalidEdit) return rls_invalidEdit;
         fs.writeFileSync(rls_absPath, rls_updated, 'utf-8');
         const rls_display = 'src/' + rls_absPath.slice(rls_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] replace_lines_source: ${rls_display} lines ${rls_start}-${rls_endClamped} (session: ${rls_sid})`);
-        return { name, args, result: `✅ ${rls_display}: replaced lines ${rls_start}-${rls_endClamped} (now ${rls_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [rls_display])}`, error: false };
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            rls_display,
+            rls_updated,
+            rls_start,
+            Math.max(rls_start, rls_start + rls_newLines.length - 1),
+            `✅ ${rls_display}: replaced lines ${rls_start}-${rls_endClamped} (now ${rls_lines.length} lines).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [rls_display])}`,
+          error: false,
+        };
       }
 
       // ── insert_after_source: insert lines after a given line in src/ ─────────
@@ -7651,14 +8518,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const ias_lines = fs.readFileSync(ias_absPath, 'utf-8').split('\n');
         const ias_insertAt = Math.min(ias_afterLine, ias_lines.length);
-        ias_lines.splice(ias_insertAt, 0, ...ias_content.split('\n'));
+        const ias_newLines = ias_content.split('\n');
+        ias_lines.splice(ias_insertAt, 0, ...ias_newLines);
         const ias_updated = ias_lines.join('\n');
         const ias_invalidEdit = rejectInvalidSourceEdit(name, args, ias_absPath, ias_updated);
         if (ias_invalidEdit) return ias_invalidEdit;
         fs.writeFileSync(ias_absPath, ias_updated, 'utf-8');
         const ias_display = 'src/' + ias_absPath.slice(ias_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] insert_after_source: ${ias_display} after line ${ias_afterLine} (session: ${ias_sid})`);
-        return { name, args, result: `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [ias_display])}`, error: false };
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            ias_display,
+            ias_updated,
+            ias_insertAt + 1,
+            Math.max(ias_insertAt + 1, ias_insertAt + ias_newLines.length),
+            `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_lines.length} lines).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [ias_display])}`,
+          error: false,
+        };
       }
 
       // ── delete_lines_source: delete a range of lines from a src/ file ─────────
@@ -7695,7 +8574,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(dls_absPath, dls_updated, 'utf-8');
         const dls_display = 'src/' + dls_absPath.slice(dls_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] delete_lines_source: ${dls_display} lines ${dls_start}-${dls_endClamped} (session: ${dls_sid})`);
-        return { name, args, result: `✅ ${dls_display}: deleted lines ${dls_start}-${dls_endClamped} (now ${dls_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [dls_display])}`, error: false };
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            dls_display,
+            dls_updated,
+            Math.min(dls_start, Math.max(1, dls_lines.length)),
+            Math.min(dls_start, Math.max(1, dls_lines.length)),
+            `✅ ${dls_display}: deleted lines ${dls_start}-${dls_endClamped} (now ${dls_lines.length} lines).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [dls_display])}`,
+          error: false,
+        };
       }
 
       // ── write_source: create or overwrite a file in src/ ─────────────────────
@@ -7860,7 +8750,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(frwu_absPath, frwu_updated, 'utf-8');
         const frwu_display = 'web-ui/' + frwu_absPath.slice(frwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] find_replace_webui_source: ${frwu_display} (session: ${frwu_sid})`);
-        return { name, args, result: `OK ${frwu_display} updated (${frwu_occurrences} occurrence${frwu_occurrences !== 1 ? 's' : ''} replaced). ${getPostSourceEditInstructionForSession(sessionId, [frwu_display])}`, error: false };
+        const frwu_startLine = lineNumberAtOffset(frwu_content, _frWui.firstIndex);
+        const frwu_replacementLineCount = Math.max(1, frwu_replace.replace(/\r\n/g, '\n').split('\n').length);
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            frwu_display,
+            frwu_updated,
+            frwu_startLine,
+            Math.max(frwu_startLine, frwu_startLine + frwu_replacementLineCount - 1),
+            `OK ${frwu_display} updated (${frwu_occurrences} occurrence${frwu_occurrences !== 1 ? 's' : ''} replaced).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [frwu_display])}`,
+          error: false,
+        };
       }
 
       // ── replace_lines_webui_source ────────────────────────────────────────────
@@ -7890,14 +8793,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: buildLineOutOfRangeRecovery(`web-ui/${rlwu_rel}`, rlwu_lines, rlwu_start, 'read_webui_source', 'start_line'), error: true };
         }
         const rlwu_endClamped = Math.min(rlwu_end, rlwu_lines.length);
-        rlwu_lines.splice(rlwu_start - 1, rlwu_endClamped - rlwu_start + 1, ...rlwu_newContent.split('\n'));
+        const rlwu_newLines = rlwu_newContent.split('\n');
+        rlwu_lines.splice(rlwu_start - 1, rlwu_endClamped - rlwu_start + 1, ...rlwu_newLines);
         const rlwu_updated = rlwu_lines.join('\n');
         const rlwu_invalidEdit = rejectInvalidSourceEdit(name, args, rlwu_absPath, rlwu_updated);
         if (rlwu_invalidEdit) return rlwu_invalidEdit;
         fs.writeFileSync(rlwu_absPath, rlwu_updated, 'utf-8');
         const rlwu_display = 'web-ui/' + rlwu_absPath.slice(rlwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] replace_lines_webui_source: ${rlwu_display} lines ${rlwu_start}-${rlwu_endClamped} (session: ${rlwu_sid})`);
-        return { name, args, result: `OK ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [rlwu_display])}`, error: false };
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            rlwu_display,
+            rlwu_updated,
+            rlwu_start,
+            Math.max(rlwu_start, rlwu_start + rlwu_newLines.length - 1),
+            `OK ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [rlwu_display])}`,
+          error: false,
+        };
       }
 
       // ── insert_after_webui_source ─────────────────────────────────────────────
@@ -7923,14 +8838,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const iawu_lines = fs.readFileSync(iawu_absPath, 'utf-8').split('\n');
         const iawu_insertAt = Math.min(iawu_afterLine, iawu_lines.length);
-        iawu_lines.splice(iawu_insertAt, 0, ...iawu_content.split('\n'));
+        const iawu_newLines = iawu_content.split('\n');
+        iawu_lines.splice(iawu_insertAt, 0, ...iawu_newLines);
         const iawu_updated = iawu_lines.join('\n');
         const iawu_invalidEdit = rejectInvalidSourceEdit(name, args, iawu_absPath, iawu_updated);
         if (iawu_invalidEdit) return iawu_invalidEdit;
         fs.writeFileSync(iawu_absPath, iawu_updated, 'utf-8');
         const iawu_display = 'web-ui/' + iawu_absPath.slice(iawu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] insert_after_webui_source: ${iawu_display} after line ${iawu_afterLine} (session: ${iawu_sid})`);
-        return { name, args, result: `OK ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [iawu_display])}`, error: false };
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            iawu_display,
+            iawu_updated,
+            iawu_insertAt + 1,
+            Math.max(iawu_insertAt + 1, iawu_insertAt + iawu_newLines.length),
+            `OK ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [iawu_display])}`,
+          error: false,
+        };
       }
 
       // ── delete_lines_webui_source ─────────────────────────────────────────────
@@ -7966,7 +8893,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(dlwu_absPath, dlwu_updated, 'utf-8');
         const dlwu_display = 'web-ui/' + dlwu_absPath.slice(dlwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] delete_lines_webui_source: ${dlwu_display} lines ${dlwu_start}-${dlwu_endClamped} (session: ${dlwu_sid})`);
-        return { name, args, result: `OK ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [dlwu_display])}`, error: false };
+        return {
+          name,
+          args,
+          result: `${formatPostEditContext(
+            dlwu_display,
+            dlwu_updated,
+            Math.min(dlwu_start, Math.max(1, dlwu_lines.length)),
+            Math.min(dlwu_start, Math.max(1, dlwu_lines.length)),
+            `OK ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines).`,
+          )}\n${getPostSourceEditInstructionForSession(sessionId, [dlwu_display])}`,
+          error: false,
+        };
       }
 
       // ── write_webui_source: create or overwrite a file in web-ui/ ────────────
@@ -8288,8 +9226,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_import_asset': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        const sourceInput = resolveCreativeToolSource(storage, args || {}, 'creative_import_asset', 'source asset');
+        if (!sourceInput.source) {
+          return { name, args, result: sourceInput.error || 'creative_import_asset requires a source asset.', error: true };
+        }
         const asset = await getCreativeAssets().importCreativeAsset(storage, {
-          source: String(args?.source || '').trim(),
+          source: sourceInput.source,
           filename: args?.filename ? String(args.filename) : undefined,
           tags: args?.tags,
           brandId: args?.brandId ? String(args.brandId) : null,
@@ -8477,8 +9419,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_analyze_asset': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        const sourceInput = resolveCreativeToolSource(storage, args || {}, 'creative_analyze_asset', 'source asset');
+        if (!sourceInput.source) {
+          return { name, args, result: sourceInput.error || 'creative_analyze_asset requires a source asset.', error: true };
+        }
         const asset = await getCreativeAssets().analyzeCreativeAsset(storage, {
-          source: String(args?.source || '').trim(),
+          source: sourceInput.source,
           tags: args?.tags,
           brandId: args?.brandId ? String(args.brandId) : null,
           license: args?.license && typeof args.license === 'object' && !Array.isArray(args.license) ? args.license : null,
@@ -9200,8 +10146,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'creative_extract_layers_for_generation': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
         try {
+          const sourceInput = resolveCreativeToolSource(storage, args || {}, 'creative_extract_layers_for_generation', 'source image');
+          if (!sourceInput.source) {
+            return { name, args, result: sourceInput.error || 'creative_extract_layers_for_generation requires a source image.', error: true };
+          }
           const extracted = await creativeExtractLayersForGeneration(storage, {
-            source: String(args?.source || '').trim(),
+            source: sourceInput.source,
             prompt: args?.prompt ? String(args.prompt) : undefined,
             shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
             parentGenerationId: args?.parentGenerationId || args?.parent_generation_id ? String(args.parentGenerationId || args.parent_generation_id) : undefined,
@@ -9215,14 +10165,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
             useSam: args?.useSam !== false,
             inpaintBackground: args?.inpaintBackground !== false,
             vectorTraceShapes: args?.vectorTraceShapes !== false,
+            saveLayerAssets: args?.saveLayerAssets === true || args?.autoSaveLayerAssets === true,
+            layerAssetBatchName: args?.layerAssetBatchName ? String(args.layerAssetBatchName) : undefined,
           });
           return {
             name,
             args,
-            result: `Extracted ${extracted.extraction.layers.length} layer${extracted.extraction.layers.length === 1 ? '' : 's'} and registered ${extracted.registeredLayers.length} reusable layer generation record${extracted.registeredLayers.length === 1 ? '' : 's'}.\n${JSON.stringify({
+            result: `Extracted ${extracted.extraction.layers.length} layer${extracted.extraction.layers.length === 1 ? '' : 's'} and registered ${extracted.registeredLayers.length} reusable layer generation record${extracted.registeredLayers.length === 1 ? '' : 's'}${extracted.extraction.savedLayerAssets ? `; saved ${extracted.extraction.savedLayerAssets.count} layer PNG asset${extracted.extraction.savedLayerAssets.count === 1 ? '' : 's'} to ${extracted.extraction.savedLayerAssets.directory}` : ''}.\n${JSON.stringify({
               generation: extracted.generation,
               scenePath: extracted.extraction.scenePath,
               registeredLayers: extracted.registeredLayers,
+              savedLayerAssets: extracted.extraction.savedLayerAssets || null,
               diagnostics: extracted.extraction.diagnostics,
             }).slice(0, 9000)}`,
             error: false,
@@ -9928,12 +10881,36 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
       }
 
+      case 'creative_model_status': {
+        try {
+          const models = getCreativeModelPaths().listCreativeModelStatus();
+          const lines = models.map((model: any) => {
+            const size = typeof model.sizeBytes === 'number' ? `${(model.sizeBytes / 1e6).toFixed(1)}MB` : 'missing';
+            const candidateCount = Array.isArray(model.candidates) ? model.candidates.length : 0;
+            return `${model.key}: ${model.available ? 'available' : 'missing'} (${size}) -> ${model.path} (${candidateCount} candidate${candidateCount === 1 ? '' : 's'})`;
+          });
+          return {
+            name,
+            args,
+            result: `Creative model status:\n${lines.join('\n')}\n\n${JSON.stringify({ models }, null, 2).slice(0, 12000)}`,
+            error: false,
+            data: { models },
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
       case 'creative_extract_layers': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
         let extraction;
         try {
+          const sourceInput = resolveCreativeToolSource(storage, args || {}, 'creative_extract_layers', 'source image');
+          if (!sourceInput.source) {
+            return { name, args, result: sourceInput.error || 'creative_extract_layers requires a source image.', error: true };
+          }
           extraction = await getCreativeLayerExtraction().extractCreativeLayers(storage, {
-            source: String(args?.source || '').trim(),
+            source: sourceInput.source,
             mode: args?.mode,
             prompt: args?.prompt ? String(args.prompt) : undefined,
             textEditable: args?.textEditable === true,
@@ -9947,6 +10924,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             useSam: args?.useSam !== false,
             inpaintBackground: args?.inpaintBackground !== false,
             vectorTraceShapes: args?.vectorTraceShapes !== false,
+            saveLayerAssets: args?.saveLayerAssets === true || args?.autoSaveLayerAssets === true,
+            layerAssetBatchName: args?.layerAssetBatchName ? String(args.layerAssetBatchName) : undefined,
           });
         } catch (err: any) {
           return {
@@ -10000,12 +10979,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
             : creativeMode === 'image' || creativeMode === 'canvas'
               ? `Scene was extracted but not applied: ${applyResult?.error || resetResult?.error || 'creative editor did not accept the command.'}`
           : 'Scene was extracted but not applied because an image workspace is not selected.';
+        const savedLayerAssets = extraction.savedLayerAssets || null;
+        const savedLayerNote = savedLayerAssets
+          ? `Saved ${savedLayerAssets.count} separate layer PNG asset${savedLayerAssets.count === 1 ? '' : 's'}: ${savedLayerAssets.directory}`
+          : (args?.saveLayerAssets === true || args?.autoSaveLayerAssets === true)
+            ? 'Layer asset auto-save was requested, but no separate PNG assets were saved.'
+            : '';
         return {
           name,
           args,
           result: [
             `Extracted ${layerCounts.total} editable layer${layerCounts.total === 1 ? '' : 's'} from ${extraction.source.name}.`,
             `Saved scene: ${extraction.scenePath}`,
+            savedLayerNote,
             applyNote,
             extraction.diagnostics.warnings.length ? `Warnings: ${extraction.diagnostics.warnings.join(' | ')}` : '',
           ].filter(Boolean).join('\n'),
@@ -12050,6 +13036,33 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'revert_last_tool_change':
       case 'revert_own_patch': {
         try {
+          const recentHistory = listWorkspaceHistory(workspacePath);
+          const requestedId = String(args.snapshot_id || args.checkpoint_id || args.id || recentHistory[0]?.id || '').trim();
+          if (requestedId) {
+            const entry = recentHistory.find((item) => item.id === requestedId);
+            const isCheckpoint = entry?.kind === 'checkpoint' || requestedId.startsWith('turn_');
+            const preview = isCheckpoint
+              ? restoreWorkspaceCheckpoint(workspacePath, requestedId, { dryRun: true })
+              : restoreWorkspaceSnapshot(workspacePath, requestedId, { dryRun: true });
+            if (preview.ok) {
+              if (args.dry_run === true) return { name, args, result: JSON.stringify(preview.preview || preview, null, 2), error: false };
+              if (args.confirm !== true) {
+                return { name, args, result: `ERROR: confirm=true is required to restore ${isCheckpoint ? 'checkpoint' : 'snapshot'}. Preview:\n${JSON.stringify(preview.preview || preview, null, 2)}`, error: true };
+              }
+              const restored = isCheckpoint
+                ? restoreWorkspaceCheckpoint(workspacePath, requestedId)
+                : restoreWorkspaceSnapshot(workspacePath, requestedId);
+              if (!restored.ok) return { name, args, result: `ERROR: ${restored.error || 'restore failed'}`, error: true };
+              return {
+                name,
+                args,
+                result: `Restored ${restored.restored.length} path(s) and deleted ${restored.deleted.length} path(s) from ${requestedId}.`,
+                error: false,
+                data: { restored: restored.restored, deleted: restored.deleted, snapshot_id: requestedId },
+              };
+            }
+          }
+
           const snapshots = listSnapshots();
           const snapshotId = String(args.snapshot_id || snapshots[0]?.id || '').trim();
           if (!snapshotId) return { name, args, result: 'ERROR: no snapshots available.', error: true };
@@ -12222,25 +13235,27 @@ export async function executeTool(name: string, args: any, workspacePath: string
           };
         }
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
-        const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
-        if (commandBoundary.blocked) return commandBoundary.blocked;
-        const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
-        if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
-        if (commandBoundary.requiresExplicitApproval) {
-          return {
-            name,
-            args,
-            result: `start_process requires an explicit outside-workspace approval for this command (${commandBoundary.scope}): ${commandBoundary.reason || rawCmd}`,
-            error: true,
-          };
-        }
         let commandCwd: { cwd: string; displayCwd: string };
         try {
           commandCwd = resolveRunCommandCwd(args.cwd);
         } catch (err: any) {
           return { name, args, result: `Invalid cwd for start_process: ${err.message || err}`, error: true };
         }
+        const commandBoundary = analyzeRunCommandBoundary(normalizedCmd, commandCwd.cwd);
+        if (commandBoundary.blocked) return commandBoundary.blocked;
+        const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
+        if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
         try {
+          const rawNoOutput = args.noOutputTimeoutMs ?? args.no_output_timeout_ms;
+          let noOutputTimeoutMs: number | undefined;
+          if (rawNoOutput == null || rawNoOutput === '') {
+            noOutputTimeoutMs = 0;
+          } else {
+            const parsedNoOutput = Number(rawNoOutput);
+            noOutputTimeoutMs = Number.isFinite(parsedNoOutput) && parsedNoOutput > 0 && parsedNoOutput < 300_000
+              ? 300_000
+              : parsedNoOutput;
+          }
           const run = await getProcessSupervisor().spawn({
             command: normalizedCmd,
             cwd: commandCwd.cwd,
@@ -12249,7 +13264,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             pty: args.pty === true,
             title: args.title ? String(args.title) : undefined,
             stdinMode: args.stdin === true ? 'pipe' : 'ignore',
-            noOutputTimeoutMs: args.noOutputTimeoutMs == null ? undefined : Number(args.noOutputTimeoutMs),
+            noOutputTimeoutMs,
             sessionId,
           });
           return {
@@ -12329,10 +13344,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
           };
         }
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
-        const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
-        if (commandBoundary.blocked) return commandBoundary.blocked;
-        const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
-        if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
         const wantVisible = args.visible === true || args.window === true;
         let commandCwd: { cwd: string; displayCwd: string };
         try {
@@ -12340,6 +13351,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch (err: any) {
           return { name, args, result: `Invalid cwd for run_command: ${err.message || err}`, error: true };
         }
+        const commandBoundary = analyzeRunCommandBoundary(normalizedCmd, commandCwd.cwd);
+        if (commandBoundary.blocked) return commandBoundary.blocked;
+        const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
+        if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
         let execCmd = '';
 
         // 1. Check allowlist (exact match)
@@ -13390,6 +14405,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
             };
           }
 
+          if (action === 'delete') {
+            const teamId = String(args.team_id || args.teamId || '').trim();
+            if (!teamId) return { name, args, result: 'team_manage(delete) requires team_id', error: true };
+            if (args.confirm !== true) {
+              return { name, args, result: 'team_manage(delete) requires confirm=true because this permanently deletes the managed team, team workspace files, and member agents by default.', error: true };
+            }
+            const result = deleteTeamCompletely({
+              teamId,
+              cronScheduler: deps.cronScheduler,
+              broadcastTeamEvent: deps.broadcastTeamEvent,
+              deleteAgents: args.delete_agents !== false && args.deleteAgents !== false,
+            });
+            return {
+              name,
+              args,
+              result: JSON.stringify(result, null, 2),
+              error: result.success !== true,
+            };
+          }
+
           if (action === 'create') {
             const teamName = String(args.name || '').trim();
             const teamContext = String(args.team_context || args.teamContext || args.purpose || '').trim();
@@ -14287,39 +15322,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'inspect_console': {
         const maxEntries = Math.max(1, Math.min(500, Number(args.max_entries || 100)));
         const action = String(args.action || 'read').toLowerCase();
-        const result = await browserRunJs(sessionId, `
-          const g = globalThis;
-          if (!g.__promConsoleLog) {
-            g.__promConsoleLog = [];
-            const push = (entry) => {
-              try {
-                g.__promConsoleLog.push({ ...entry, ts: Date.now(), url: location.href });
-                if (g.__promConsoleLog.length > 1000) g.__promConsoleLog.splice(0, g.__promConsoleLog.length - 1000);
-              } catch {}
-            };
-            for (const level of ['log', 'info', 'warn', 'error']) {
-              const original = console[level]?.bind(console);
-              console[level] = (...items) => {
-                push({ level, message: items.map(item => {
-                  try { return typeof item === 'string' ? item : JSON.stringify(item); } catch { return String(item); }
-                }).join(' ') });
-                return original?.(...items);
-              };
-            }
-            g.addEventListener('error', event => push({ level: 'error', message: event.message || 'window error', source: event.filename, line: event.lineno, column: event.colno }));
-            g.addEventListener('unhandledrejection', event => push({ level: 'error', message: 'unhandledrejection: ' + (event.reason?.message || event.reason || '') }));
-          }
-          if (${JSON.stringify(action)} === 'clear') {
-            g.__promConsoleLog = [];
-            return { cleared: true, url: location.href, title: document.title };
-          }
-          return {
-            url: location.href,
-            title: document.title,
-            count: g.__promConsoleLog.length,
-            entries: g.__promConsoleLog.slice(-${maxEntries})
-          };
-        `);
+        const result = await browserInspectConsole(sessionId, { action, maxEntries });
         await broadcastBrowserStatus('inspect_console');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -15051,6 +16054,31 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        }
 	      }
 
+	      case 'delete_agent': {
+	        try {
+	          const agentId = String(args.agent_id || args.agentId || args.id || '').trim();
+	          if (!agentId) {
+	            return { name, args, result: 'delete_agent requires agent_id. Call agent_list first to get IDs.', error: true };
+	          }
+	          if (args.confirm !== true) {
+	            return { name, args, result: 'delete_agent requires confirm=true because this permanently deletes the subagent, workspace files, stored chat, schedules, and team membership.', error: true };
+	          }
+	          const result = deleteAgentCompletely({
+	            agentId,
+	            cronScheduler: deps.cronScheduler,
+	            broadcastTeamEvent: deps.broadcastTeamEvent,
+	          });
+	          return {
+	            name,
+	            args,
+	            result: JSON.stringify(result, null, 2),
+	            error: result.success !== true,
+	          };
+	        } catch (err: any) {
+	          return { name, args, result: `delete_agent error: ${err.message}`, error: true };
+	        }
+	      }
+
 	      case 'memory_browse': {
         const mbFileRaw = String(args.file || 'user').toLowerCase().trim();
         const mbFile = mbFileRaw === 'memory' ? 'memory' : (mbFileRaw === 'soul' ? 'soul' : 'user');
@@ -15388,43 +16416,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (all.length === 0) {
           return { name, args, result: 'No skills installed yet. Use skill_create to save a new one.', error: false };
         }
-        const query = String(args?.query || args?.q || '').trim().toLowerCase();
-        const includeDescriptions = args?.include_descriptions === true || args?.includeDescriptions === true;
-        const requestedLimit = Math.floor(Number(args?.limit) || 24);
-        const limit = Math.max(1, Math.min(80, requestedLimit));
-        const haystackFor = (s: any): string => [
-          s?.id,
-          s?.name,
-          s?.description,
-          ...(Array.isArray(s?.triggers) ? s.triggers : []),
-          ...(Array.isArray(s?.categories) ? s.categories : []),
-          ...(Array.isArray(s?.requiredTools) ? s.requiredTools : []),
-        ].map((v) => String(v || '')).join(' ').toLowerCase();
-        const matched = query ? all.filter((s: any) => haystackFor(s).includes(query)) : all;
-        const rows = matched.slice(0, limit).map((s: any) => {
-          const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? String(s.eligibility.status || '') : undefined;
-          const row: any = {
-            id: String(s.id || ''),
-            name: String(s.name || s.id || ''),
-          };
-          if (status) row.status = status;
-          if (Array.isArray(s.categories) && s.categories.length) row.categories = s.categories.slice(0, 4);
-          if (Array.isArray(s.requiredTools) && s.requiredTools.length) row.requiredTools = s.requiredTools.slice(0, 6);
-          if (includeDescriptions) row.description = String(s.description || '').slice(0, 180);
-          return row;
-        });
         return {
           name, args,
-          result: JSON.stringify({
-            totalInstalled: all.length,
-            query: query || undefined,
-            matchedCount: matched.length,
-            returnedCount: rows.length,
-            truncated: matched.length > rows.length,
-            compact: !includeDescriptions,
-            note: 'Compact skill discovery. Use query to narrow, include_descriptions:true only when descriptions are needed, then call skill_read(id) for one relevant skill.',
-            skills: rows,
-          }, null, 2),
+          result: formatCompactSkillList(all, args),
           error: false,
         };
       }

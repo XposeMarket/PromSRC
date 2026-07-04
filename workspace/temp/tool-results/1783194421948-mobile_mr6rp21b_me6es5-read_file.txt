@@ -1,0 +1,183 @@
+reports/nebulax-trading-platform-analysis.md (385 lines) [window 1-180, truncated]:
+1: # NebulaX Trading Platform Analysis
+2: 
+3: _Date: 2026-07-01_  
+4: _Analyst: Sparky (`sparky_v1`)_
+5: 
+6: ## Executive Summary
+7: 
+8: NebulaX is a static, browser-first Solana trading/arcade platform prototype. The main repo (`repos/nebulax-test/`) contains a multi-page HTML/CSS/JS app with Phantom wallet connection, Jupiter swap attempts, token discovery pages, portfolio/watchlist/store/game surfaces, Supabase schema planning, and Vercel deployment scaffolding. The companion repo (`repos/nebulax-exchange/`) is a small landing/custom-domain site pointing at `www.nebulax.exchange`.
+9: 
+10: The strongest parts already built are the UI breadth, Solana/Phantom connection work, GeckoTerminal/DexScreener data feeds, Jupiter quote/swap code, game/store prototypes, and an initial Supabase database schema. The biggest launch blockers are security and production architecture: exposed API/RPC keys, direct browser-side trading calls, no real backend/session/auth layer, many features stored only in `localStorage`, no package/build/test system, fragmented duplicated scripts, and a failing included integration check.
+11: 
+12: Bottom line: this is a promising visual/product prototype, not production-ready trading infrastructure yet. P0 work should focus on key rotation, backend proxy hardening, wallet/trade safety, deployment sanity, and consolidating duplicated code before any public relaunch.
+13: 
+14: ## Repo Inventory
+15: 
+16: ### `repos/nebulax-test/` — main platform
+17: 
+18: Observed structure:
+19: 
+20: - Static entry/login page: `repos/nebulax-test/index.html`.
+21: - Main app shell/dashboard: `repos/nebulax-test/NebulaX.html`.
+22: - Trading/token pages:
+23:   - `repos/nebulax-test/Trending.html`
+24:   - `repos/nebulax-test/NewPairs-official.html`
+25:   - `repos/nebulax-test/Coinpage-Official.html`
+26:   - `repos/nebulax-test/Adrenaline-official.html`
+27:   - `repos/nebulax-test/portfolio_official_v_2_fixed.html`
+28:   - `repos/nebulax-test/watchlist_official_v_2.html`
+29: - Store/arcade surfaces:
+30:   - `repos/nebulax-test/nebula_x_store_official.html`
+31:   - `repos/nebulax-test/Arcadegamepanel.html`
+32:   - `repos/nebulax-test/NEBX-Arcade.html`
+33:   - `repos/nebulax-test/games/` with several standalone games.
+34: - Shared scripts:
+35:   - `repos/nebulax-test/assets/nx-wallet.js`
+36:   - `repos/nebulax-test/assets/jupiter-swap-engine.js`
+37:   - `repos/nebulax-test/assets/js/nx-jupiter.js`
+38:   - `repos/nebulax-test/assets/js/nx-search.js`
+39:   - `repos/nebulax-test/trending-engine.js`
+40:   - `repos/nebulax-test/adrenaline-engine.js`
+41: - Serverless API:
+42:   - `repos/nebulax-test/api/jupiter.js`
+43: - Database plan:
+44:   - `repos/nebulax-test/supabase/migrations/001_init.sql`
+45:   - `repos/nebulax-test/supabase/README.md`
+46: - Vercel config:
+47:   - `repos/nebulax-test/vercel.json` contains only `{ "version": 2 }`.
+48: - Docs/status files:
+49:   - `COMPREHENSIVE_ANALYSIS.md`, `DEPLOYMENT_READY.md`, `NEBULAX_CURRENT_SPECS.md`, `JUPITER_*`, `MOBILE_PHANTOM_UX.md`, etc.
+50: 
+51: No `package.json` exists in `repos/nebulax-test/`; a safe check returned `NO_PACKAGE_JSON`. That means there are no npm scripts, dependency locking, lint/build pipeline, or standard test runner in the repo root.
+52: 
+53: ### `repos/nebulax-exchange/` — landing/custom-domain repo
+54: 
+55: Observed files:
+56: 
+57: - `repos/nebulax-exchange/index.html`
+58: - `repos/nebulax-exchange/Shortdocs.html`
+59: - `repos/nebulax-exchange/NebulaX-logo.png`
+60: - `repos/nebulax-exchange/CNAME`
+61: 
+62: `repos/nebulax-exchange/CNAME:1` points to `www.nebulax.exchange`. This appears to be a lightweight static landing/custom-domain repo rather than the core app.
+63: 
+64: ## Product/Feature Map
+65: 
+66: Built/prototyped features found in code and docs:
+67: 
+68: - **Wallet gate/login**: `index.html` is a “Connect Phantom” page. It uses `sessionStorage` key `nebula:wallet:session` at `index.html:74-84`, connects Phantom via `window.phantom?.solana` / `window.solana` at `index.html:101+`, and redirects into the app after connection.
+69: - **Main trading dashboard/app shell**: `NebulaX.html` is the primary app surface and defines global RPC config (`NebulaX.html:141`).
+70: - **Token discovery/trending**: `trending-engine.js` polls GeckoTerminal trending pools and enriches with DexScreener. Evidence: `trending-engine.js:1-5`, `trending-engine.js:88-99`, `trending-engine.js:161+`.
+71: - **New pairs/adrenaline scanner**: `adrenaline-engine.js` fetches Solana new pools from GeckoTerminal (`adrenaline-engine.js:33-42`) and classifies new/migrating/migrated tokens using mcap, age, and DEX heuristics (`adrenaline-engine.js:1-17`, `adrenaline-engine.js:274-285`).
+72: - **Coin detail/trading page**: `Coinpage-Official.html` contains Jupiter swap UI logic and token metric panels. It reads mint from URL/localStorage/window globals (`Coinpage-Official.html:1041-1075`).
+73: - **Jupiter swaps**: two implementations exist:
+74:   - Browser-side V6 engine in `assets/jupiter-swap-engine.js` with quote/swap endpoints (`assets/jupiter-swap-engine.js:18-26`, `assets/jupiter-swap-engine.js:68-147`) and transaction signing/sending (`assets/jupiter-swap-engine.js:248-356`).
+75:   - Inline Jupiter V1-ish implementation in `Coinpage-Official.html:975-988`, including a hardcoded API key.
+76: - **Portfolio/watchlist/store/game panels**: local app pages and Supabase schema include watchlists, trades, orders, positions, PnL, games, leaderboards, store items, purchases, launchpad projects, LP locks, and vesting (`supabase/migrations/001_init.sql:58-145`, `146-210`, `212-240`).
+77: - **Mobile Phantom UX**: `assets/nx-wallet.js` includes mobile detection and Phantom universal/deep-link builders (`assets/nx-wallet.js:21-43`, `75-87`, `135-160`).
+78: 
+79: ## Architecture and Tech Stack
+80: 
+81: Current architecture is mostly static frontend:
+82: 
+83: - Plain HTML files with large inline CSS/JS sections.
+84: - Tailwind CDN on the login page (`index.html:10`) and external browser CDNs on pages such as Solana Web3 (`Adrenaline-official.html:13`).
+85: - Browser-global JavaScript modules under `assets/` and many page-specific inline scripts.
+86: - Vercel serverless function only for Jupiter proxying (`api/jupiter.js`).
+87: - Supabase schema exists, but the live app appears to rely heavily on `localStorage`/`sessionStorage`, not a wired backend database.
+88: - No package/build system: no root `package.json`, no dependency lock, no lint/test/build scripts.
+89: 
+90: Important architecture evidence:
+91: 
+92: - `vercel.json` is only 4 lines and declares version 2; it does not define routing, headers, rewrites, clean URLs, env requirements, or security headers (`repos/nebulax-test/vercel.json:1-4`).
+93: - `api/jupiter.js` is an ESM Vercel function importing Node `https` and proxying to `public.jupiter-ag.workers.dev` (`api/jupiter.js:1-4`, `23-37`).
+94: - Supabase schema is aspirational/comprehensive but not enough alone: `supabase/README.md:36-40` explicitly lists next steps such as adding granular migrations, RLS SQL, seed scripts, and a Supabase client.
+95: 
+96: ## Trading/Data Integrations
+97: 
+98: ### GeckoTerminal
+99: 
+100: - Trending engine fetches `https://api.geckoterminal.com/api/v2/networks/solana/trending_pools...` (`trending-engine.js:96-99`).
+101: - Adrenaline/new-pairs engine fetches `https://api.geckoterminal.com/api/v2/networks/solana/new_pools...` (`adrenaline-engine.js:41-42`).
+102: 
+103: ### DexScreener
+104: 
+105: - Adrenaline engine fetches `https://api.dexscreener.com/latest/dex/tokens/${mint}` (`adrenaline-engine.js:180`).
+106: - Trending engine docs/code describe DexScreener enrichment and scoring (`trending-engine.js:1-5`, `DEPLOYMENT_READY.md:11-17`).
+107: 
+108: ### Jupiter
+109: 
+110: - `assets/jupiter-swap-engine.js` uses public `quote-api.jup.ag/v6/quote` and `/swap` (`assets/jupiter-swap-engine.js:18-20`). It signs and sends transactions in-browser after Phantom signs (`assets/jupiter-swap-engine.js:282-309`).
+111: - `api/jupiter.js` proxies `/v6/:endpoint` to `public.jupiter-ag.workers.dev` and allows CORS from `*` (`api/jupiter.js:5-8`, `23-36`).
+112: - `Coinpage-Official.html` uses `https://api.jup.ag/swap/v1/quote` and `/swap` with a hardcoded `JUP_API_KEY` (`Coinpage-Official.html:982-988`).
+113: 
+114: ### Solana / Phantom / Helius
+115: 
+116: - Many pages set `window.NX_RPC` to a Helius URL with a visible key. Example: `NebulaX.html:141`, `Trending.html:15`, `Coinpage-Official.html:18`, `portfolio_official_v_2_fixed.html:18`.
+117: - `assets/nx-wallet.js` resolves RPC from `window.NX_RPC`, `localStorage.NX_RPC`, or Solana public RPC (`assets/nx-wallet.js:112-121`) and creates `solanaWeb3.Connection` instances (`assets/nx-wallet.js:124-130`).
+118: - Phantom connection and mobile deep linking are present (`assets/nx-wallet.js:63-87`, `135-160`).
+119: 
+120: ### Token/trade data flow
+121: 
+122: Observed flow:
+123: 
+124: 1. Token lists come from GeckoTerminal/DexScreener.
+125: 2. Selected token data is pushed into browser storage, e.g. `nebula_selected_coin` (`Adrenaline-official.html:1342`, `Coinpage-Official.html:1052-1065`).
+126: 3. Coin page reads mint from URL/localStorage/global (`Coinpage-Official.html:1041-1075`).
+127: 4. Jupiter quote/swap code prepares transaction in browser, asks Phantom to sign, and sends via RPC (`assets/jupiter-swap-engine.js:248-356`).
+128: 5. Trade history is saved to `localStorage` under `nebulax_trades` (`assets/jupiter-swap-engine.js:25`, `156-184`).
+129: 
+130: This is functional for a prototype but weak for production analytics/account history because localStorage is device-local, tamperable, and not recoverable.
+131: 
+132: ## Security and Secrets Findings
+133: 
+134: ### Critical: hardcoded public API/RPC keys
+135: 
+136: A secret-pattern scan found visible keys:
+137: 
+138: - Helius RPC key repeated across many HTML pages, e.g.:
+139:   - `Adrenaline-official.html:15`
+140:   - `Arcadegamepanel.html:13`
+141:   - `Coinpage-Official.html:18`
+142:   - `NebulaX.html:141`
+143:   - `Trending.html:15`
+144:   - `watchlist_official_v_2.html:13`
+145: - Jupiter API key exposed in browser code:
+146:   - `Coinpage-Official.html:988` — `const JUP_API_KEY = '233fe202-5da0-4296-903f-8ca65bd71b36';`
+147: 
+148: Action: rotate these keys before public launch. Even if some are “public-ish” provider keys, they can be abused for quota drain and attribution risk.
+149: 
+150: ### CORS/proxy risk
+151: 
+152: `api/jupiter.js` sets `Access-Control-Allow-Origin: *` and allows `GET, POST, OPTIONS` (`api/jupiter.js:5-8`). It does not restrict endpoint names, validate query/body shape, rate-limit, authenticate, or enforce origin. If deployed publicly, it can become an open Jupiter proxy.
+153: 
+154: ### Browser-side transaction risk
+155: 
+156: The swap engine signs and sends transactions directly from the browser (`assets/jupiter-swap-engine.js:282-309`). That can be acceptable for Web3 apps, but production launch needs rigorous UX and safety controls:
+157: 
+158: - clear quote expiration and slippage display,
+159: - transaction simulation/preflight feedback,
+160: - route/token warnings,
+161: - exact token decimals handling,
+162: - malicious token/image/social sanitization,
+163: - no hidden state from stale `localStorage`.
+164: 
+165: ### LocalStorage/sessionStorage trust boundary
+166: 
+167: Examples:
+168: 
+169: - Wallet persistence via `localStorage` in `assets/nx-wallet.js:60-110` and session wallet state in `index.html:74-84`.
+170: - Selected coin fallback from `localStorage` in `Coinpage-Official.html:1052-1065`.
+171: - Trade history saved to localStorage in `assets/jupiter-swap-engine.js:156-184`.
+172: 
+173: This is fine for local UX memory, but not for balances, positions, achievements, purchases, or PnL truth.
+174: 
+175: ### XSS/sanitization surface
+176: 
+177: There are many `innerHTML` uses that render dynamic token/game/store data. Examples:
+178: 
+179: - `Adrenaline-official.html:256`, `354`, `438`, `677`
+180: - `assets/js/nx-search.js:292`, `300`, `378`
+[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.
+[READ_TRUNCATED] Returned 180 of 385 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

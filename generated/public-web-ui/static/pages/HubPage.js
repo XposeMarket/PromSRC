@@ -35,6 +35,7 @@ let _hubSkillSearch = '';
 let _goals = [];
 let _curator = { suggestions: [], activity: [], pending: 0, quarantined: 0, appliedActivity: 0, observedActivity: 0, loading: false, actingId: '' };
 const _heatmap = { year: 0, month: 0, counts: {} };
+const _tokenActivity = { daily: [], stats: null };
 const _stats = { mode: 'overview', range: 'all', tools: null, models: null, loading: false };
 const _providers = { items: [], loading: false, loaded: false };
 try {
@@ -364,18 +365,13 @@ function renderHeatmap() {
   const grid = document.getElementById('hub-heatmap-grid');
   const label = document.getElementById('hub-heatmap-label');
   if (!grid || !label) return;
-  label.textContent = monthLabel(_heatmap.year, _heatmap.month);
-
-  const firstDay = new Date(_heatmap.year, _heatmap.month - 1, 1);
-  const daysInMonth = new Date(_heatmap.year, _heatmap.month, 0).getDate();
-  const startWeekday = firstDay.getDay();
-
-  const max = Math.max(1, ...Object.values(_heatmap.counts));
-
-  // Heatmap calendar grid: rows = day-of-week (Sun–Sat), cols = week of month.
-  const totalCells = startWeekday + daysInMonth;
-  const weeks = Math.ceil(totalCells / 7);
-
+  const stats = _tokenActivity.stats || {};
+  const daily = Array.isArray(_tokenActivity.daily) ? _tokenActivity.daily : [];
+  label.textContent = `${compactNumber(stats.totalTokens || sumCounts(Object.fromEntries(daily.map((d) => [d.date, d.tokens || d.count || 0]))))} tokens`;
+  if (!daily.length) {
+    grid.innerHTML = `<div class="hub-empty">No token activity recorded yet.</div>`;
+    return;
+  }
   const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   let labelsHtml = '<div class="hub-heat-daylabels">';
   for (let i = 0; i < 7; i++) {
@@ -383,25 +379,33 @@ function renderHeatmap() {
   }
   labelsHtml += '</div>';
 
-  let cellsHtml = `<div class="hub-heatmap-cells">`;
-  for (let col = 0; col < weeks; col++) {
-    for (let row = 0; row < 7; row++) {
-      const cellIdx = col * 7 + row;
-      const dayNum = cellIdx - startWeekday + 1;
-      if (dayNum < 1 || dayNum > daysInMonth) {
-        cellsHtml += `<div class="hub-heat-cell hub-heat-empty"></div>`;
-        continue;
-      }
-      const ds = `${_heatmap.year}-${String(_heatmap.month).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-      const c = _heatmap.counts[ds] || 0;
-      const lvl = heatmapLevel(c, max);
-      const tip = `${ds} — ${c} tool call${c === 1 ? '' : 's'}`;
-      cellsHtml += `<div class="hub-heat-cell" data-level="${lvl}" title="${escHtml(tip)}"></div>`;
-    }
+  const first = new Date(`${daily[0].date}T00:00:00`);
+  const leading = Number.isFinite(first.getTime()) ? first.getDay() : 0;
+  const values = daily.map((row) => Math.max(0, Number(row.tokens || row.count || 0)));
+  const max = Math.max(1, ...values);
+  let cellsHtml = `<div class="hub-heatmap-cells hub-token-activity-cells">`;
+  for (let i = 0; i < leading; i++) {
+    cellsHtml += `<div class="hub-heat-cell hub-heat-empty"></div>`;
   }
+  daily.forEach((row) => {
+    const tokens = Math.max(0, Number(row.tokens || row.count || 0));
+    const lvl = heatmapLevel(tokens, max);
+    const tip = `${row.date} — ${compactNumber(tokens)} token${tokens === 1 ? '' : 's'}`;
+    cellsHtml += `<div class="hub-heat-cell" data-level="${lvl}" title="${escHtml(tip)}"></div>`;
+  });
   cellsHtml += '</div>';
 
-  grid.innerHTML = labelsHtml + cellsHtml;
+  const months = [];
+  const seen = new Set();
+  daily.forEach((row, index) => {
+    const [year, month] = String(row.date || '').split('-');
+    const key = `${year}-${month}`;
+    if (!year || !month || seen.has(key)) return;
+    seen.add(key);
+    const d = new Date(`${row.date}T00:00:00`);
+    months.push(`<span style="grid-column:${Math.floor((leading + index) / 7) + 1}">${escHtml(d.toLocaleDateString(undefined, { month: 'short' }))}</span>`);
+  });
+  grid.innerHTML = `<div class="hub-token-activity-wrap">${labelsHtml}<div><div class="hub-token-months">${months.join('')}</div>${cellsHtml}</div></div>`;
 }
 
 // Render the current-week bar chart + summary. Independent of heatmap navigation.
@@ -1207,10 +1211,12 @@ async function loadGoals() {
 
 async function loadHeatmap() {
   try {
-    const r = await api(`/api/hub/tools/heatmap?year=${_heatmap.year}&month=${_heatmap.month}`, { timeoutMs: 30000 });
-    _heatmap.counts = (r && r.counts) ? r.counts : {};
+    const r = await api('/api/hub/tokens/activity', { timeoutMs: 30000 });
+    _tokenActivity.daily = Array.isArray(r?.daily) ? r.daily : [];
+    _tokenActivity.stats = r?.stats || null;
   } catch {
-    _heatmap.counts = {};
+    _tokenActivity.daily = [];
+    _tokenActivity.stats = null;
   }
   renderHeatmap();
 }

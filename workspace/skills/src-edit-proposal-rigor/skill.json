@@ -2,9 +2,9 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "src-edit-proposal-rigor",
   "name": "src-edit-proposal-rigor",
-  "description": "Strict Codex-style workflow for Prometheus self-source edits, including evidence-first proposals and the dev-only request_dev_source_edit fast approval flow.",
+  "description": "Pragmatic workflow for Prometheus self-source edits, including scoped dev approvals and full proposals only when risk or scope requires them.",
   "emoji": "🧩",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "src edit",

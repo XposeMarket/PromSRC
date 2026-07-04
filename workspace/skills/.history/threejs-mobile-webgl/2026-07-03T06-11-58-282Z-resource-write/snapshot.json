@@ -1,0 +1,13 @@
+{
+  "skillId": "threejs-mobile-webgl",
+  "reason": "resource-write",
+  "createdAt": "2026-07-03T06:11:58.289Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\threejs-mobile-webgl",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/ios-mobile-textures.md"
+  ],
+  "hash": "6055a61b7db07d36"
+}

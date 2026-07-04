@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when searching Craigslist or similar local classifieds for cars, filtering listings, comparing vehicle deals, checking price/mileage/title risk, or building a shortlist of used cars.",
+  "triggers": [
+    "search Craigslist cars",
+    "find a used car",
+    "Craigslist car search",
+    "local car listings",
+    "compare used cars",
+    "cheap car near me",
+    "filter car listings",
+    "used truck Craigslist",
+    "inspect car deal",
+    "vehicle listing analysis",
+    "mileage price check",
+    "title status on listing",
+    "car shortlist",
+    "find cars under budget",
+    "marketplace car search"
+  ],
+  "categories": [
+    "shopping",
+    "cars",
+    "classifieds",
+    "research"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "web_search",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "id": "craigslist-car-search"
+}

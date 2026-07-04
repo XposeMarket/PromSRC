@@ -1,8 +1,9 @@
 ---
 name: database-query
-description: Use this skill for all SQL and database tasks — from simple lookups to complex analytical queries and schema design.
+description: Use this skill when the user asks for SQL queries, database lookups, schema design, Supabase/Postgres/SQLite work, analytical queries, joins, migrations, indexes, query optimization, or safe database writes. Triggers on phrases like write SQL, query the database, Supabase query, SQLite lookup, Postgres schema, join these tables, optimize this query, create an index, database migration, and update rows. Use it to produce safe, readable queries with output shape, performance notes, and explicit write safeguards.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: write SQL, query database, Supabase query, SQLite lookup, Postgres schema, join tables, analytical query, optimize query, create index, database migration, update rows, delete rows, schema design, explain analyze, database report
 ---
 
 # Database Query

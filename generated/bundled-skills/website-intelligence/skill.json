@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when analyzing a business website, landing page, SEO/content quality, conversion issues, technical trust signals, UX weaknesses, offer clarity, or lead-generation potential from a site.",
+  "triggers": [
+    "analyze this website",
+    "website audit",
+    "SEO audit",
+    "landing page review",
+    "conversion audit",
+    "business website analysis",
+    "check their site",
+    "improve this site",
+    "website trust signals",
+    "find website issues",
+    "local business website",
+    "lead qualification",
+    "site looks outdated",
+    "audit homepage",
+    "website intelligence",
+    "competitor website review",
+    "inspect website copy",
+    "UX audit"
+  ],
+  "categories": [
+    "website",
+    "seo",
+    "conversion",
+    "research"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "web_search",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "Website Intelligence",
+  "id": "website-intelligence"
+}

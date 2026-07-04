@@ -1,0 +1,82 @@
+self/16-mobile-app.md (509 lines) [window 1-80, truncated]:
+1: # 16) Prometheus Mobile App Maintenance Reference
+2: 
+3: Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, mobile subagent Home chat/Runs recovery surfaces, iOS Home Screen Web Push for chat/task/subagent/team/scheduled-job events, and package scripts on: 2026-06-30
+4: 
+5: Prometheus Mobile is a hash-routed PWA shell inside the existing web UI. It is not a separate native iOS/Android/Capacitor app in this repo. Treat `web-ui/src/mobile/*` as the canonical mobile app source and treat `generated/public-web-ui/static/mobile/*` as generated public-build output.
+6: 
+7: ## Source Layout
+8: 
+9: Canonical mobile source files:
+10: 
+11: - `web-ui/src/mobile/mobile-router.js` - activates mobile mode, owns hash routing, sticky mobile-mode behavior, pairing gate, and page dispatch.
+12: - `web-ui/src/mobile/mobile-shell.js` - mobile chrome, tab/drawer shell, session picker wiring.
+13: - `web-ui/src/mobile/mobile-pages.js` - most mobile screens and behavior: chat, voice, tasks, creative, schedules, teams, subagents, proposals, pairing, delivery notifications, live run UI, and mobile audio.
+14: - `web-ui/src/mobile/mobile-api.js` - thin API shim. Mobile fetches go through `mfetch`, which attaches `X-Pairing-Token`; media/WS URLs use query `pt`.
+15: - `web-ui/src/mobile/mobile-settings.js` - mobile settings surfaces, including model/voice settings.
+16: - `web-ui/src/mobile/mobile-data.js` - static first-pass/mock mobile nav/schedule/team data still used by parts of the shell.
+17: - `web-ui/src/styles/mobile.css` - isolated mobile styling. It only takes over when `body.pm-mobile-active` is present; mobile themes use `--pm-*` surface tokens and semantic `--pm-accent*` tokens, while legacy `--pm-orange*` variables are compatibility aliases.
+18: 
+19: 
+20: Mobile canvas/file viewer fullscreen mode: `initMobileCanvasSheet()` in `web-ui/src/mobile/mobile-shell.js` owns the canvas sheet chrome and fullscreen state. The toolbar includes `#pm-canvas-fullscreen`; when active, `.pm-canvas-sheet.is-fullscreen` hides the handle, file tabs/header, filename, Interact/Inspect, Preview, and Save chrome, leaving only `#pm-canvas-fullscreen-exit` as a top-right safe-area-aware X overlay. Styles live in `web-ui/src/styles/mobile.css`; keep source changes synced with `npm run sync:web-ui`. [2026-06-30]
+21: Mobile canvas live HTML asset linking: workspace HTML files opened in the mobile canvas must iframe through the path-shaped route `/api/canvas/workspace/<workspace-relative-path>` instead of query-style `/api/canvas/inline?path=...`. This preserves the browser URL directory so relative assets like `assets/zombie.png`, local CSS, JS, audio, and images resolve from the HTML file's own subdirectory on mobile. Keep `/api/canvas/inline` for direct media/file previews and downloads. [2026-07-01]
+22: Mobile background visual rule: `body.pm-mobile-active` and `.pm-app` must use flat theme background colors only. Do not add page-level radial/conic/linear background-image glow layers or pseudo-element glow overlays for any theme/skin; component-local shadows are okay, but the app backdrop itself should have no glow. [2026-06-29]
+23: 
+24: Root PWA/static entry files:
+25: 
+26: - `web-ui/index.html` - includes mobile CSS, PWA metadata, `#mobile-root`, boot screen, and `src/mobile/mobile-router.js`.
+27: - `web-ui/manifest.webmanifest` - PWA identity, start URL `/?source=pwa#mobile/chat`, shortcuts, icons, portrait display.
+28: - `web-ui/service-worker.js` - PWA cache strategy and cache version.
+29: - `web-ui/src/ws.js` - shared WebSocket event bus; mobile device token is added to `/ws` as `?pt=...`.
+30: - `web-ui/src/api.js` - shared API helper; it also attaches the paired-device token when present.
+31: 
+32: Generated public copies:
+33: 
+34: - `generated/public-web-ui/index.html`
+35: - `generated/public-web-ui/manifest.webmanifest`
+36: - `generated/public-web-ui/service-worker.js`
+37: - `generated/public-web-ui/static/mobile/*`
+38: - `generated/public-web-ui/static/styles/mobile.css`
+39: - `generated/public-web-ui/static/ws.js`
+40: 
+41: Never hand-edit generated mobile files except for emergency diagnosis. Make source changes under `web-ui/`, then sync generated output.
+42: 
+43: ## Generated Files and Sync
+44: 
+45: The canonical sync path is:
+46: 
+47: - `npm run sync:web-ui`
+48: - expands to `node scripts/prepare-public-build.js --web-only && npm run check:web-ui`
+49: - `npm run check:web-ui` runs `node scripts/check-public-web-ui-sync.js`
+50: 
+51: `scripts/prepare-public-build.js` copies `web-ui/src` to `generated/public-web-ui/static`, transforms `web-ui/index.html` references from `src/` to `static/`, copies root-level PWA files, and vendors browser assets/fonts.
+52: 
+53: `scripts/check-public-web-ui-sync.js` compares source files against generated public copies, including root-level `manifest.webmanifest` and `service-worker.js`. A stale generated mobile file means the source may be right but public runtime output is not.
+54: 
+55: Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump it on meaningful frontend/mobile changes or installed PWAs may keep old assets even after build/restart. The service worker intentionally never caches `/api/*`, `/ws`, or `/events`, so stale chat/auth/streaming data usually means app state or generated static files, not cached API responses. Current version: `pm-v69-2026-06-19-mobile-deep-links`. [2026-06-19]
+56: 
+57: Session cache: `web-ui/src/mobile/mobile-api.js` caches `loadMobileChatSession` results in-memory for 30s (max 20 entries). Use `invalidateMobileChatSessionCache(sessionId?)` to bust. Cache is automatically busted on `updateMobileChatSessionHistory` writes. This makes revisiting the same chat instant within the TTL window. [2026-06-17]
+58: 
+59: Recovery parallelism: `refreshMobileRunRecovery` in `mobile-pages.js` now fires `loadMobileChatRunStatus` + `loadMobileChatSession` in parallel (batch 1), then `loadMobileApprovals` + `loadMobileQuestions` in parallel (batch 2). Previously all were serial awaits — a 5-call waterfall on every reconnect. [2026-06-17]
+60: 
+61: ## Activation and Routing
+62: 
+63: Mobile activates when `web-ui/src/mobile/mobile-router.js` sees one of:
+64: 
+65: - hash route beginning `#mobile`
+66: - pathname `/mobile` or `/mobile/...`
+67: - query `?pair=...`
+68: - query `?source=pwa`
+69: - sticky localStorage flag `pm_force_mobile`
+70: - paired token in localStorage key `pm_device_token`
+71: 
+72: Once mobile mode is entered, the router writes `pm_force_mobile=1` so iOS/Android/PWA launches do not fall back to desktop UI if the hash/query is lost. If a paired token is missing and the current page is not `pair`, the router forces the pair page. `clearForceMobile()` removes only the sticky mobile flag, not the device token.
+73: 
+74: Primary routes currently dispatch from `mobile-router.js`:
+75: 
+76: - `#mobile/pair`
+77: - `#mobile/chat` and `#mobile/chat/:sessionId`
+78: - `#mobile/voice`
+79: - `#mobile/tasks`
+80: - `#mobile/creative`
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

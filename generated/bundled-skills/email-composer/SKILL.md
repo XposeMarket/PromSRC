@@ -1,8 +1,9 @@
 ---
 name: email-composer
-description: Use this skill for any email-writing task — from a single cold outreach to a full nurture sequence.
+description: Use this skill when the user asks to write, rewrite, polish, or sequence emails, including cold outreach, follow-ups, sales/demo emails, onboarding emails, transactional emails, nurture campaigns, and subject lines. Triggers on phrases like write an email, email draft, subject line, follow-up email, sales email, demo request, onboarding email, nurture sequence, reply to this email, and make this sound professional. Use it to produce ready-to-send email copy with clear CTA, tone calibration, and personalization notes.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: write an email, email draft, subject line, follow-up email, sales email, demo request, onboarding email, nurture sequence, reply to this email, make this sound professional, customer email, transactional email, email campaign, polish this email, rewrite email
 ---
 
 # Email Composer

@@ -1,6 +1,6 @@
 # Mobile Sideways FPS — CoD Zombies-Style Roadmap
 
-Status: implemented as a standalone mobile-capable raycast zombies game in `index.html`. First audio-HUD polish pass completed: mute toggle wired with localStorage persistence and desktop/mobile-safe HUD updates.
+Status: recreated after the broken Sparky pass. `index.html` is now a fresh standalone Pocket Zombies build with a working RAF loop, raycast-style FPS rendering, waves, zombies, points, wall buys, doors, perks, power-ups, mobile controls, desktop controls, audio feedback, pause/mute, restart, and `window.__pocketZombiesDebug` verification hooks. Browser smoke test confirmed START GAME runs, zombies spawn, debug state advances, no JS error is reported, and the player survives initial spawn pressure after balance fixes. Next follow-up: improve aim/combat feel, real sprite-sheet rendering, and automated control-test helpers.
 
 ## Phase 0 — Preserve Current Foundation
 

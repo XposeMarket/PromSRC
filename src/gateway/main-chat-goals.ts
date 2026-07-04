@@ -196,7 +196,14 @@ function compactTextArray(input: any, maxItems = 12, maxChars = 360): string[] {
   if (!Array.isArray(input)) return [];
   return input
     .map((item) => oneLine(String(item || ''), maxChars))
-    .filter(Boolean)
+    .filter((item) => {
+      if (!item) return false;
+      const normalized = item.replace(/[\s._-]+/g, ' ').trim().toLowerCase();
+      if (!normalized) return false;
+      if (/^(?:none|no|n\/a|na|null|undefined|\[\]|not applicable|no gaps|no issues|no blockers)$/.test(normalized)) return false;
+      if (/^no (?:known |remaining |unresolved )?(?:issues|gaps|verification gaps|missing acceptance criteria|unresolved issues|blockers|defects)\.?$/.test(normalized)) return false;
+      return true;
+    })
     .slice(0, maxItems);
 }
 
@@ -396,22 +403,33 @@ export function recordMainChatGoalTurnPlanProgress(
   });
 }
 
+function parseGoalJudgeJsonCandidate(candidate: string): any | null {
+  const text = String(candidate || '').trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') return parsed;
+    if (typeof parsed === 'string' && /^\s*\{[\s\S]*\}\s*$/.test(parsed)) {
+      try {
+        const nested = JSON.parse(parsed);
+        return nested && typeof nested === 'object' ? nested : null;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 function extractJsonObject(raw: string): any | null {
   const text = String(raw || '').trim();
   if (!text) return null;
   const unfenced = text.startsWith('```')
     ? text.replace(/^```[a-z]*\s*/i, '').replace(/```$/i, '').trim()
     : text;
-  try {
-    return JSON.parse(unfenced);
-  } catch {}
+  const direct = parseGoalJudgeJsonCandidate(unfenced);
+  if (direct) return direct;
   const match = unfenced.match(/\{[\s\S]*\}/);
   if (!match) return null;
-  try {
-    return JSON.parse(match[0]);
-  } catch {
-    return null;
-  }
+  return parseGoalJudgeJsonCandidate(match[0]);
 }
 
 function stripThink(text: string): string {
@@ -506,6 +524,44 @@ function findResumableGoalTurnPlan(goal: MainChatGoalState): MainChatGoalTurnPla
   return [...plans].reverse().find((plan) => isOpenGoalTurnPlan(plan)) || null;
 }
 
+function reopenPlanStepAfterContinue(plan: MainChatGoalTurnPlan, judge: MainChatGoalJudgeResult, now: number): MainChatGoalTurnPlan {
+  const steps = Array.isArray(plan.steps) ? plan.steps.map((step) => ({ ...step })) : [];
+  if (!steps.length) return plan;
+  const hasOpenStep = steps.some((step) => ['pending', 'in_progress', 'failed'].includes(String(step.status || '').toLowerCase()));
+  if (hasOpenStep) return { ...plan, steps };
+
+  const judgeText = [
+    judge.reason,
+    judge.directive,
+    ...(judge.missingAcceptanceCriteria || []),
+    ...(judge.verificationGaps || []),
+    ...(judge.unresolvedIssues || []),
+  ].join(' ').toLowerCase();
+  const mentionsMissingArtifact = /\b(missing|not exist|not found|undelivered|not delivered|not created|unreadable|no successful write|artifact|file|index|html|deliverable)\b/.test(judgeText);
+  const implementationIndex = steps.findIndex((step) => {
+    const text = String(step.text || '').toLowerCase();
+    return /\b(write|create|implement|build|edit|patch|add|update|fix|scaffold|generate|complete)\b/.test(text)
+      && /\b(file|html|index|app|game|page|component|code|script|feature|deliverable)\b/.test(text);
+  });
+  const skippedIndex = steps.findIndex((step) => String(step.status || '').toLowerCase() === 'skipped');
+  const index = mentionsMissingArtifact && implementationIndex >= 0
+    ? implementationIndex
+    : skippedIndex >= 0
+      ? skippedIndex
+      : Math.max(0, steps.length - 1);
+  steps[index] = {
+    ...steps[index],
+    status: 'in_progress',
+    note: undefined,
+    updatedAt: now,
+  };
+  return {
+    ...plan,
+    activeIndex: index,
+    steps,
+  };
+}
+
 export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: string): Promise<MainChatGoalJudgeResult> {
   const response = String(lastResponse || '').trim();
   if (!response) {
@@ -534,6 +590,8 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
     'Use continue for partial progress, insufficient verification, weak quality, unresolved defects, missing acceptance criteria, or unclear evidence.',
     'The directive field is the instruction that will be given to the next worker turn. Make it concrete, imperative, and focused on the next missing work. Do not ask the user unless status is blocked.',
     'quality_grade is A, B, C, D, or F. Only A/B with no unresolved issues, no missing acceptance criteria, and no verification gaps may be done.',
+    'If the goal is complete and verified, return status="done", quality_grade="B" or "A", and empty arrays for unresolved_issues, missing_acceptance_criteria, and verification_gaps. Do not carry forward stale gaps from earlier turns after the latest turn fixed or verified them.',
+    'If you choose continue, name exactly what still needs to be done or verified. Do not continue just because more polish is possible unless the original goal requires that polish.',
     'unresolved_issues, missing_acceptance_criteria, verification_gaps, and evidence must be arrays of short strings.',
     '',
     '[GOAL]',
@@ -602,11 +660,22 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
     const verificationGaps = compactTextArray(parsed.verification_gaps ?? parsed.verificationGaps);
     const evidence = compactTextArray(parsed.evidence);
     const hasBlockingGaps = unresolvedIssues.length > 0 || missingAcceptanceCriteria.length > 0 || verificationGaps.length > 0;
-    const strictStatus = status === 'done' && (hasBlockingGaps || !['A', 'B'].includes(qualityGrade))
+    const completionEvidenceText = [
+      reason,
+      directive,
+      ...evidence,
+      response.slice(0, 2000),
+      toolLog.slice(0, 2000),
+    ].join(' ').toLowerCase();
+    const hasCompletionEvidence = evidence.length > 0
+      || /\b(done|complete|completed|implemented|created|wrote|built|fixed|verified|tested|opened|ran|passed|working|artifact|file|screenshot|no errors|successful)\b/.test(completionEvidenceText);
+    const qualityAllowsDone = ['A', 'B'].includes(qualityGrade)
+      || (!qualityGrade && confidence >= 0.45 && hasCompletionEvidence);
+    const strictStatus = status === 'done' && (hasBlockingGaps || !qualityAllowsDone)
       ? 'continue'
       : status;
     const strictReason = strictStatus !== status
-      ? oneLine(`Judge requested done, but strict completion gate found remaining issues/gaps or low quality grade (${qualityGrade || 'unknown'}). ${reason}`, 700)
+      ? oneLine(`Judge requested done, but strict completion gate found ${hasBlockingGaps ? 'remaining issues/gaps' : `insufficient completion evidence or low quality grade (${qualityGrade || 'missing'})`}. ${reason}`, 700)
       : reason;
     return {
       status: strictStatus,
@@ -756,6 +825,9 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
     '',
     planInstruction,
     '',
+    'Tool routing:',
+    'This autonomous goal turn uses the normal main-chat tool route. Core tools such as request_tool_category, skill_list, skill_read, declare_plan, and complete_plan_step are available. If the current step needs tools that are not currently visible, call request_tool_category with the right category before describing tool use. For workspace files/directories/builds/games, use request_tool_category({"category":"workspace_write","scope":"turn"}) when workspace_read/workspace_edit/workspace_run tools are needed. Do not narrate or claim a tool call unless you actually call the tool.',
+    '',
     'Judge message:',
     goal.nextStepDirective || '(No judge message yet. Infer the next concrete step from the goal and chat context.)',
     '',
@@ -772,7 +844,6 @@ export function applyMainChatGoalJudgeResult(
   expectedGoalId: string,
   judge: MainChatGoalJudgeResult,
 ): MainChatGoalState | null {
-  const policy = resolveMainChatGoalPolicy();
   return updateMainChatGoal(sessionId, (goal) => {
     if (!goal || goal.id !== expectedGoalId || goal.status !== 'active') return goal;
     const now = Date.now();
@@ -784,7 +855,7 @@ export function applyMainChatGoalJudgeResult(
       const plans = Array.isArray(goal.turnPlans) ? [...goal.turnPlans] : [];
       const index = plans.findIndex((plan) => Number(plan.turnNumber) === turnNumber);
       if (index < 0) return plans;
-      plans[index] = {
+      const stamped = {
         ...plans[index],
         status,
         judgeReason: judge.reason,
@@ -792,6 +863,9 @@ export function applyMainChatGoalJudgeResult(
         updatedAt: now,
         completedAt: status === 'complete' || status === 'blocked' || status === 'failed' ? (plans[index].completedAt || now) : plans[index].completedAt,
       };
+      plans[index] = status === 'incomplete'
+        ? reopenPlanStepAfterContinue(stamped, judge, now)
+        : stamped;
       return plans.slice(-50);
     };
     const judgeDiagnostics = {
@@ -839,19 +913,16 @@ export function applyMainChatGoalJudgeResult(
         updatedAt: now,
       };
     }
-    const pauseForJudge = consecutiveJudgeFailures >= policy.maxConsecutiveJudgeFailures;
-    const pausedGoal = pauseForJudge ? startPause(goal, `Judge returned unparseable output ${consecutiveJudgeFailures} turns in a row.`, now) : goal;
     return {
       ...goal,
       ...judgeDiagnostics,
-      ...pausedGoal,
-      status: pauseForJudge ? 'paused' : 'active',
+      status: 'active',
       turnsUsed: nextTurnsUsed,
       lastTurnAt: now,
       lastVerdict: 'continue',
       lastReason: judge.reason,
       nextStepDirective: judge.directive || goal.nextStepDirective,
-      turnPlans: stampLatestPlan(pauseForJudge ? 'blocked' : 'incomplete'),
+      turnPlans: stampLatestPlan('incomplete'),
       consecutiveJudgeFailures,
       consecutiveRuntimeFailures: 0,
       updatedAt: now,
@@ -881,9 +952,21 @@ export function recordMainChatGoalRuntimeFailure(sessionId: string, expectedGoal
         };
       }
     }
+    if (!failed) {
+      return {
+        ...goal,
+        status: 'active',
+        lastVerdict: 'continue',
+        lastReason: reason,
+        nextStepDirective: `The previous autonomous turn hit a recoverable runtime/tool error: ${oneLine(reason, 220)}. Continue with the next concrete step, avoid repeating the exact failing call, and verify progress with available tools.`,
+        turnPlans: plans,
+        consecutiveRuntimeFailures: failures,
+        updatedAt: now,
+      };
+    }
     return {
-      ...(failed ? finalizePause(goal, now) : startPause(goal, reason, now)),
-      status: failed ? 'failed' : 'paused',
+      ...finalizePause(goal, now),
+      status: 'failed',
       lastVerdict: 'failed',
       lastReason: reason,
       failureReason: reason,

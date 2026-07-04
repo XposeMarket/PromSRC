@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when writing, reviewing, optimizing, or debugging SQL/database queries, schema inspection, migrations, joins, indexes, filters, aggregation, query performance, or database result interpretation.",
+  "triggers": [
+    "write SQL",
+    "database query",
+    "query the database",
+    "SQL join",
+    "optimize query",
+    "slow query",
+    "database schema",
+    "migration SQL",
+    "inspect table",
+    "aggregate records",
+    "filter rows",
+    "query error",
+    "index suggestion",
+    "SQLite query",
+    "Postgres query",
+    "MySQL query",
+    "count records",
+    "group by",
+    "database results"
+  ],
+  "categories": [
+    "database",
+    "sql",
+    "data",
+    "engineering"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "name": "Database Query",
+  "id": "database-query"
+}

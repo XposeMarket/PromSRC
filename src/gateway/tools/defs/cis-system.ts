@@ -754,10 +754,10 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'request_dev_source_edit',
         description:
-          'Request dev-only approval to edit listed Prometheus src/web-ui files in this chat. Use for immediate known-file fixes; approval unlocks only those files plus self docs.',
+          'Request dev-only scoped approval to edit listed Prometheus src/web-ui files in this chat. Only files and a short reason are required; include a concise plan/evidence only when it clarifies risk or scope.',
         parameters: {
           type: 'object',
-          required: ['files', 'reason', 'plan'],
+          required: ['files', 'reason'],
           properties: {
             files: {
               type: 'array',
@@ -767,7 +767,7 @@ export function getCisSystemTools(): any[] {
             reason: { type: 'string', description: 'Short user-facing reason for the edit request.' },
             plan: {
               type: 'object',
-              description: 'Approved dev-edit execution plan. Keep it concise and evidence-based.',
+              description: 'Optional concise dev-edit plan. Omit for straightforward scoped edits; Prometheus will use safe defaults.',
               properties: {
                 user_request: { type: 'string', description: 'What the user asked Prometheus to change.' },
                 reasoning: { type: 'string', description: 'Why these files and this approach are appropriate.' },
@@ -781,16 +781,16 @@ export function getCisSystemTools(): any[] {
                       finding: { type: 'string' },
                     },
                   },
-                  description: 'Observed file/line evidence that justifies the edit.',
+                  description: 'Optional observed file/line evidence for non-trivial edits.',
                 },
                 current_state: { type: 'string', description: 'What the code currently does.' },
                 fix: { type: 'string', description: 'What will be changed.' },
-                steps: { type: 'array', items: { type: 'string' }, description: '2-6 execution steps to declare and follow after approval.' },
+                steps: { type: 'array', items: { type: 'string' }, description: 'Optional 2-5 execution steps for non-trivial edits.' },
                 verification: { type: 'array', items: { type: 'string' }, description: 'Verification commands/checks to run.' },
                 expected_workflow: {
                   type: 'array',
                   items: { type: 'string' },
-                  description: 'What the user should expect after approval and after edits apply live: tool unlock scope, verification, restart/reload behavior, completion note, and final response shape.',
+                  description: 'Optional workflow notes. Omit for ordinary scoped edits.',
                 },
                 completion_note_tag: { type: 'string', description: 'Tag to write with write_note after apply/restart. Default dev_edit_complete.' },
               },
@@ -1198,14 +1198,15 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'skill_list',
-        description: 'Compact skill discovery. Returns skill IDs/names by default; use query to narrow before skill_read(id). Descriptions are omitted unless include_descriptions:true is explicitly needed.',
+        description: 'Compact skill discovery. Natural task-style queries are ranked across id/name/description/triggers/categories/requiredTools with weak candidates instead of brittle exact matching. Descriptions are omitted unless include_descriptions:true is explicitly needed.',
         parameters: {
           type: 'object',
           required: [],
           properties: {
-            query: { type: 'string', description: 'Optional filter across id/name/description/triggers/categories/requiredTools.' },
+            query: { type: 'string', description: 'Optional natural language task/query to rank against skill metadata.' },
             limit: { type: 'number', description: 'Maximum skills to return. Default 24, hard cap 80.' },
             include_descriptions: { type: 'boolean', description: 'Include short descriptions. Default false to keep prompt usage low.' },
+            include_match_details: { type: 'boolean', description: 'Include matched terms/fields for trigger debugging. Default false.' },
           },
         },
       },

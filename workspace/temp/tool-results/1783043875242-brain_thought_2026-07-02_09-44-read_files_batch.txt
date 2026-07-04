@@ -1,0 +1,87 @@
+audit/chats/compactions/mobile_mr2ors69_u35dij.md (86 lines) [window 1-86]:
+1: ### [ROLLING_COMPACTION] 2026-07-03T01:17:28.231Z
+2: - Base message count: 138
+3: - reason: projected_context_over_budget
+4: - projected_tokens: 84772
+5: - trigger_tokens: 80256
+6: - input_budget_tokens: 107008
+7: - context_window_tokens: 128000
+8: - provider: xai
+9: - model: grok-composer-2.5-fast
+10: - tool_result_count: 40
+11: - reasoning_trail_chars: 2425
+12: - summary_max_words: 1500
+13: - strategy: mid_workflow_token_budget
+14: - mode: llm
+15: 
+16: 1. Primary Request and Intent:
+17: - User asked (paraphrased from goal reminder): read `workspace/self`, unlock Prometheus `src`/`web-ui` files, and find why the mobile canvas is not loading some assets (context: Pocket Zombies game); user believes root cause is Prometheus source, not only the game HTML.
+18: - Investigation focus: mobile file canvas / WebView / workspace asset serving and how HTML games get iframes, sandbox, and asset URLs.
+19: 
+20: 2. Key Technical Concepts:
+21: - Mobile canvas UI: `pm-canvas-sheet` in `web-ui/src/mobile/mobile-shell.js` (tabs, zoom, interact/inspect modes, preview).
+22: - Backend canvas routes in `src/gateway/routes/canvas.router.ts`: `/api/canvas/file`, `/api/canvas/inline`, `/api/canvas/workspace/*`, `/api/canvas/preview-document`, `inlineStandaloneHtml` / `inlineCssUrls` / `toDataUri` for inlining local assets into exported HTML.
+23: - Text/code preview: `renderCanvasTextInto` fetches `/api/canvas/file?path=...` and uses `srcdoc` iframe with `sandbox="allow-same-origin"` only.
+24: - Live web canvas files: `isLiveWebCanvasFile(tab)` → `canvasWorkspaceUrl(tab)` → iframe with `sandbox="allow-scripts allow-same-origin allow-forms allow-popups"`.
+25: - Asset resolution server-side: `resolveProjectAssetPath`, `isExternalAssetRef` (skips http/data/etc.), relative vs absolute paths under project root.
+26: - `streamCanvasFile` + `Content-Disposition: inline` for raw byte serving.
+27: 
+28: 3. Files and Code Sections:
+29: - `src/gateway/routes/canvas.router.ts` (~7886 lines): core canvas gateway.
+30:   - ~970–1046: `inlineStandaloneHtml`, `inlineCssUrls`, `resolveProjectAssetPath`, `toDataUri` — inlines CSS url(), link stylesheets, script src, img/video src into data URIs for standalone HTML export.
+31:   - ~4635–4693: `/api/canvas/download`, `/api/canvas/inline`, `/api/canvas/workspace/*` — auth + `resolveCanvasPath` + `streamCanvasFile`.
+32:   - ~4695–4741: `/api/canvas/preview-document` — docx/spreadsheet/pptx/video shells; PDF redirects to inline.
+33:   - ~4353–4404: `/api/canvas/file` — JSON with `content` or image base64 or binary metadata.
+34:   - ~4406–4470: `/api/canvas/diff-ranges` — git diff hunks for code preview.
+35:   - ~4951 area (grep hit): `inlineStandaloneHtml(entryPath, projectRoot)` used when serving/previewing standalone HTML (exact route block not fully read).
+36: - `web-ui/src/mobile/mobile-shell.js` (~2774 lines): mobile canvas shell.
+37:   - ~1842–1859: DOM for `pm-canvas-sheet`, tabs, interaction toggle.
+38:   - ~1926–2001: `_render()` — image/video/audio vs `isLiveWebCanvasFile` (workspace iframe) vs diff code preview vs `renderCanvasTextInto`.
+39:   - ~1985–1987: live web: `canvasZoomHtml(<iframe src="${liveSrc}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups">)`.
+40:   - ~2516–2549: `renderCanvasTextInto` — `/api/canvas/file`, text iframe `sandbox="allow-same-origin"` only.
+41:   - ~2551+: `initCanvasZoom` / pinch-zoom on canvas body.
+42: - `workspace/self`: mentioned in user goal; **not yet read** in observed tool output.
+43: - Dev unlock: `request_dev_source_edit` / src-edit skill referenced in reasoning; **no confirmation of grant** in messages.
+44: 
+45: 4. Errors, Fixes, and Test Results:
+46: - Several `grep_webui_source` / `grep_source` calls returned **0 matches** for compound patterns (`canvas-preview-frame`, `tab\.src|openCanvas`, `canvas/file|canvas/preview` in src/) — likely literal/regex/path scope issues, not code absence (simpler patterns like `pm-canvas`, `inline`, `api/canvas` did match).
+47: - `read_source` / `read_webui_source` returned truncated windows with `[READ_TRUNCATED]` hints (next `start_line` provided).
+48: - No tests run; no user-facing fix deployed yet.
+49: 
+50: 5. Problem Solving and Decisions:
+51: - Hypothesis under exploration: HTML game assets fail on mobile because (a) HTML opened via wrong path (inline raw file vs workspace tree vs inlined export), (b) iframe sandbox too strict for some asset types, or (c) relative asset URLs not resolved when served through `/api/canvas/inline` or `/api/canvas/workspace/*` without `inlineStandaloneHtml`.
+52: - Ruled out (partially): `pm-canvas` and canvas API surface are concentrated in `mobile-shell.js` + `canvas.router.ts` (not scattered unknown module).
+53: - Next code to read (from assistant reasoning, not completed): `renderCanvasHtml` / how `tab.src` and `openCanvasTab` are set for `.html`; route that calls `inlineStandaloneHtml` (~4951); `canvasWorkspaceUrl`, `isLiveWebCanvasFile`, `defaultCanvasInteractionMode`; `self/16-mobile-app.md` or `self/index.md`.
+54: - `request_dev_source_edit` + `skill_read src-edit-proposal-rigor` planned before any src edit.
+55: 
+56: 6. Recent User Messages:
+57: - Goal reminder (only explicit user text in batch): *"Pls — Read the workspace/self — Unlock the prometheus src/web ui files and lets find that"* (mobile canvas / asset loading for Pocket Zombies; Prometheus src issue).
+58: 
+59: 7. Pending Tasks:
+60: - Read `workspace/self` (index + mobile doc, e.g. `16-mobile-app.md`).
+61: - Confirm dev source read/edit unlock if edits needed.
+62: - Finish tracing HTML game open path: tab creation → `src` URL → iframe branch vs text preview.
+63: - Read `canvas.router.ts` around `inlineStandaloneHtml` usage and `streamCanvasFile` / MIME for JS/CSS/images under workspace.
+64: - Correlate Pocket Zombies asset paths (relative `./assets/...`) with `resolveCanvasPath` and workspace root for session.
+65: - Propose/fix only after rigor skill + user approval if src change required.
+66: 
+67: 8. Current Work:
+68: - Mid-investigation after reading partial `canvas.router.ts` (inline/asset inlining, API routes) and `mobile-shell.js` (canvas `_render`, `renderCanvasTextInto`, live iframe sandbox).
+69: - Last tool burst: `read_source` on `canvas.router.ts` 4330–4470; prior greps for `pm-canvas`, `inline`, `api/canvas`; `read_webui_source` 1890–2069 and 2515–2694.
+70: - Assistant turn ended with empty content; work stopped before `renderCanvasHtml` / HTML tab `src` assignment.
+71: 
+72: 9. Recovery Artifacts:
+73: - Session JSON: `C:\Users\rafel\PromSRC\.prometheus\sessions\mobile_mr2ors69_u35dij.json`
+74: - Transcript Markdown: `C:\Users\rafel\PromSRC\workspace\audit\chats\transcripts\mobile_mr2ors69_u35dij.md`
+75: - Transcript JSONL: `C:\Users\rafel\PromSRC\workspace\audit\chats\transcripts\mobile_mr2ors69_u35dij.jsonl`
+76: - Compaction Markdown: `C:\Users\rafel\PromSRC\workspace\audit\chats\compactions\mobile_mr2ors69_u35dij.md`
+77: - Compaction JSONL: `C:\Users\rafel\PromSRC\workspace\audit\chats\compactions\mobile_mr2ors69_u35dij.jsonl`
+78: - Raw tool observations (examples): `toolobs_mr48ty6k_8d03aa8f.txt`, `toolobs_mr48ty6l_355560db.txt`, `toolobs_mr48ty6n_ba9d4a41.txt`, `toolobs_mr48ty6p_f9d148e5.txt`, `toolobs_mr48ty6q_19220622.txt`, `toolobs_mr48ty6s_4db97f44.txt` under `mobile_mr2ors69_u35dij/`
+79: 
+80: 10. Continue From Here:
+81: - Resume **directly** as the same assistant; **do not** recap this summary to the user unless they ask.
+82: - **Priority:** complete the mobile canvas asset-loading trace for HTML games (Pocket Zombies): read `workspace/self` first per user request, then `mobile-shell.js` for functions that set canvas tab `src`/`kind` for HTML (search `openCanvas`, `canvasWorkspaceUrl`, `isLiveWebCanvasFile`, `getCanvasFileExt`, html branch before/after line 1985), and `canvas.router.ts` ~4880–5000+ for standalone HTML serving and whether `inlineStandaloneHtml` runs on mobile preview paths.
+83: - Use `dev_source_read` / `read_webui_source` with suggested `start_line` from truncations; narrow `grep_webui_source` to single tokens (`canvasWorkspace`, `LiveWeb`, `.html`, `inline`) if compound greps fail.
+84: - Protect user-owned workspace/game files; change Prometheus `src`/`web-ui` only with unlock + rigor skill + explicit proposal.
+85: - Continue naturally from investigation state—next action is targeted reads, not a status lecture to the user.
+86: 

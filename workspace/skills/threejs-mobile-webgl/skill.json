@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "threejs-mobile-webgl",
+  "name": "Three.js Mobile WebGL",
+  "description": "Debug Three.js and WebGL scenes that work on desktop but fail on iPhone, iPad, mobile Safari, iOS PWA, WebView, or mobile file canvas, especially missing sprites, transparent PNG textures, billboards, pickups, enemies, or touch controls.",
+  "emoji": "📱",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "three.js mobile",
+    "threejs mobile",
+    "ios webgl",
+    "mobile safari webgl",
+    "iphone missing sprites",
+    "three.js missing textures",
+    "mobile canvas assets",
+    "webgl texture bug",
+    "transparent png sprites missing"
+  ],
+  "categories": [
+    "frontend",
+    "threejs",
+    "mobile",
+    "debugging"
+  ],
+  "requiredTools": [],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/ios-mobile-textures.md",
+      "type": "doc",
+      "description": "Checklist and code pattern for iOS/mobile Safari Three.js texture upload bugs."
+    },
+    {
+      "path": "references/yaw-movement-fire-alignment.md",
+      "type": "doc",
+      "description": "Yaw/movement/shoot alignment guardrail for Three.js mobile FPS"
+    },
+    {
+      "path": "references/mobile-canvas-iframe-game-checklist.md",
+      "type": "doc"
+    }
+  ]
+}

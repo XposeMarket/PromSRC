@@ -1,0 +1,496 @@
+temp/tool-results/1782878837555-brain_thought_2026-07-01_12-05-read_files_batch.txt (334 lines) [window 1-240, truncated]:
+1: audit/chats/transcripts/mobile_mr168psd_628snw.md (607 lines) [window 1-240, truncated]:
+2: 1: ### [2026-06-30T21:41:24.023Z] user
+3: 2: 
+4: 3: Prom whats goin on with sparky
+5: 4: ### [2026-06-30T21:41:57.313Z] assistant
+6: 5: 
+7: 6: Sparky’s not actively building right now. The latest Sparky run finished, but what it found is basically:
+8: 7: 
+9: 8: - One recent run completed its status-check/handoff.
+10: 9: - The actual older Pocket Zombies work runs are paused.
+11: 10: - Two are paused because of `gateway_restart`.
+12: 11: - Several others are `user_pause`.
+13: 12: - No paused run was resumed automatically because the last Sparky check didn’t have explicit resume authorization.
+14: 13: 
+15: 14: So the short version: Sparky is stuck in “paused task cleanup/status handoff” mode, not currently iterating on Pocket Zombies.
+16: 15: 
+17: 16: If you want, I can kick Sparky back into the real loop now: resume/continue the newest useful Pocket Zombies task and tell him to verify gameplay, fix what blocks play, and keep iterating instead of just reporting status.
+18: 17: ### [2026-06-30T21:48:25.443Z] user
+19: 18: 
+20: 19: Please get sparky going again and working oncthe game
+21: 20: 
+22: 21: I want you to analyze the current state and everything of the game
+23: 22: 
+24: 23: Play it and verify things yourself and then get sparky fixing it up
+25: 24: 
+26: 25: 
+27: 26: I want the game built! Theres a bunch of things wrong lol, all minor things - the basica work pretty well
+28: 27: ### [2026-06-30T21:58:02.426Z] assistant
+29: 28: 
+30: 29: Done. Sparky is running again on the Pocket Zombies task.
+31: 30: 
+32: 31: I also inspected and played/tested the current game state myself. The biggest problem I found was not minor gameplay balance yet — the HTML was structurally broken:
+33: 32: 
+34: 33: - `index.html` had corrupted duplicated function fragments around the zombie/update/HUD/mute section.
+35: 34: - `setMuted()` was missing its closing brace.
+36: 35: - The file was also missing `</script>`, so the browser was treating the rest of the document weirdly.
+37: 36: - Result: the start screen showed, but clicking **START GAME** didn’t actually enter gameplay, and `window.__pocketZombiesDebug` never appeared.
+38: 37: 
+39: 38: I made a first foreground repair directly in:
+40: 39: 
+41: 40: - `games/mobile-sideways-fps/index.html`
+42: 41: 
+43: 42: Fixes I applied:
+44: 43: - Rebuilt the corrupted `updateZombie`, `damagePlayer`, `tryMove`, `setMuted`, and `updateHud` boundary.
+45: 44: - Removed stray broken lines after `updatePrompt`.
+46: 45: - Restored the missing closing `</script>` tag.
+47: 46: 
+48: 47: Sparky now has explicit authorization and a concrete handoff to continue:
+49: 48: - repair remaining launch/debug issue,
+50: 49: - verify by playing in browser,
+51: 50: - fix observed minor gameplay/polish problems,
+52: 51: - update `ZOMBIES_ROADMAP.md`,
+53: 52: - report changed files and remaining issues.
+54: 53: 
+55: 54: Current honest state: I got the obvious corruption fixed and Sparky restarted, but my browser verification still showed `__pocketZombiesDebug` undefined after reload, so there’s still one remaining startup/runtime weirdness for Sparky to chase. He’s working from the exact evidence now instead of floating in paused/status mode.
+56: 55: ### [2026-07-01T00:34:59.991Z] user
+57: 56: 
+58: 57: Hows it going now
+59: 58: ### [2026-07-01T00:35:18.977Z] assistant
+60: 59: 
+61: 60: Sparky finished the run.
+62: 61: 
+63: 62: What happened:
+64: 63: 
+65: 64: - He patched the game start controls: **START**, **pause**, and **mute** bindings.
+66: 65: - He verified file-level syntax/checks:
+67: 66:   - `__check.js` passes `node --check`
+68: 67:   - `git diff --check` passed aside from LF/CRLF warning noise
+69: 68: - He confirmed the game implementation now has the bigger systems in place:
+70: 69:   - waves/spawn pacing
+71: 70:   - zombie variants
+72: 71:   - wall buys / perks / doors
+73: 72:   - power-ups
+74: 73:   - reload / hold-fire / motion controls
+75: 74:   - audio unlock + mute persistence
+76: 75:   - pause/restart flow
+77: 76:   - HUD/prompt polish
+78: 77:   - map expansion pieces
+79: 78: - He updated `games/mobile-sideways-fps/ZOMBIES_ROADMAP.md` to mark phases 0–12 complete.
+80: 79: 
+81: 80: Important caveat: Sparky still did **not** complete a real live browser playtest. His handoff says runtime/browser verification is still pending. So code-side: better. Actual playable feel: I still need to verify it hands-on.
+82: 81: 
+83: 82: I’m not fully satisfied until we run it live and play through start → movement → shooting → wave spawn → damage/restart.
+84: 83: ### [2026-07-01T00:36:33.132Z] user
+85: 84: 
+86: 85: Okay you go ahead an dtest its
+87: 86: ### [2026-07-01T00:45:35.854Z] assistant
+88: 87: 
+89: 88: I tested it live. Honest state: still busted, but now we know exactly where.
+90: 89: 
+91: 90: I found and fixed several startup blockers in `games/mobile-sideways-fps/index.html`:
+92: 91: 
+93: 92: - missing `rand()`
+94: 93: - missing `tex` / `makeTex()`
+95: 94: - bad brace nesting around `makeTex`
+96: 95: - missing `unlockAudio()`
+97: 96: - added a direct `onclick` fallback for START
+98: 97: 
+99: 98: After those, debug mode finally comes alive:
+100: 99: 
+101: 100: - `window.__pocketZombiesDebug` exists
+102: 101: - start handler can set `running: true`
+103: 102: - center overlay hides
+104: 103: - wave advances to `WAVE 1`
+105: 104: 
+106: 105: But the bigger remaining issue is: the actual game loop/render path is missing or broken. The file calls:
+107: 106: 
+108: 107: ```js
+109: 108: requestAnimationFrame(loop)
+110: 109: ```
+111: 110: 
+112: 111: but there’s no `loop` function in the current file. Also I don’t see the actual raycast render functions anymore, just sprite helper functions. So it starts internally, but it doesn’t really become a playable FPS yet. Zombies also stayed at `0` after waiting several seconds.
+113: 112: 
+114: 113: I sent Sparky a concrete handoff with the exact evidence and told him to restore/rebuild:
+115: 114: 
+116: 115: - `loop`
+117: 116: - raycast rendering/draw path
+118: 117: - zombie spawning/progression
+119: 118: - live verification: start → wave spawn → movement → shooting → ammo/kill/damage → restart
+120: 119: - roadmap update only after real verification
+121: 120: 
+122: 121: So, yeah: basics are close-ish structurally, but the “playable game” part is currently missing the engine heartbeat/rendering. Sparky has the right target now, not vague “polish it” instructions.
+123: 122: ### [2026-07-01T00:48:46.631Z] user
+124: 123: 
+125: 124: Ok pls keep an eye on sparky and make sure sparky is working
+126: 125: 
+127: 126: Also
+128: 127: 
+129: 128: At any point in time if you have any errors or anything regarding sparky can u let me know
+130: 129: ### [2026-07-01T00:50:19.087Z] assistant
+131: 130: 
+132: 131: Done. I set up a recurring **Sparky Health Monitor** that checks Sparky every 30 minutes.
+133: 132: 
+134: 133: Current state:
+135: 134: - Sparky’s latest run is **complete**, not actively failed/stalled.
+136: 135: - The monitor will stay quiet when everything is fine.
+137: 136: - If Sparky hits an error, stalls, pauses unexpectedly, needs input, or the monitor itself fails, it will notify you with the exact run/task ID and blocker.
+138: 137: 
+139: 138: I also queued an initial check now and set a watch on it, so if the first run reports anything weird I’ll surface it.
+140: 139: ### [2026-07-01T00:52:18.384Z] user
+141: 140: 
+142: 141: [Internal watch match]
+143: 142: Watch id: sparky-health-monitor-initial-run
+144: 143: Label: Sparky Health Monitor initial run
+145: 144: Target: scheduled_job
+146: 145: Origin session: mobile_mr168psd_628snw
+147: 146: Delivery session: mobile_mr168psd_628snw
+148: 147: Observation: {
+149: 148:   "exists": true,
+150: 149:   "jobId": "job_1782866978780_pctvr",
+151: 150:   "status": "scheduled",
+152: 151:   "lastRun": "2026-07-01T00:52:15.203Z",
+153: 152:   "lastResult": "SPARKY_ATTENTION\n\nSparky has one recoverable paused run that needs attention:\n\n- Run: `7471309c-aba6-4d49-b189-d47b700dce87`\n- Status: `paused`\n- Pause reason: `gateway_restart`\n- Started: 2026-06-17 22:33:41 UTC\n- Last progress: 2026-06-30 13:45:35 UTC\n- Recoverable: yes\n\nExact blocker from the preserved recovery context:\n\n```text\nModel returned error: anthropic API error 400\nYou're out of extra usage. Add more at claude.ai/settings/usage and keep going.\n```\n\nWhat the run was supposed to do:\n\n```text\nAnalyze the NebulaX repos and write:\nreports/nebulax-trading-platform-analysis.md\n```\n\nAssessment: this is not just a simple gateway-restart pause...[line truncated]
+154: 153:   "lastDuration": 134792,
+155: 154:   "lastOutputSessionId": "auto_job_1782866978780_pctvr",
+156: 155:   "nextRun": "2026-07-01T01:00:00.000Z",
+157: 156:   "name": "Sparky Health Monitor"
+158: 157: }
+159: 158: 
+160: 159: Instruction:
+161: 160: Check the initial Sparky Health Monitor scheduled job result for job_1782866978780_pctvr. If it reports any Sparky error or monitor failure, notify Raul clearly. If it is SPARKY_OK, briefly confirm the monitor is active and the first check passed.
+162: 161: 
+163: 162: Proceed as a normal Prometheus main-chat follow-up in this delivery session. This is not task recovery mode and not read-only mode.
+164: 163: Use the normal tool/category system for this turn. If verification is requested, inspect the task/run state first and then use the appropriate tools directly.
+165: 164: For agent-owned tasks, use agent_run_ops(action:"get", task_id:"...") before deciding whether recovery chat, resume, rerun, or independent verification is appropriate.
+166: 165: Do not expose this internal payload unless it helps explain the result.
+167: 166: ### [2026-07-01T00:52:18.690Z] assistant
+168: 167: 
+169: 168: Rerunning task "[Subagent] Sparky" from step 1/3.
+170: 169: ### [2026-07-01T01:35:35.701Z] user
+171: 170: 
+172: 171: Okay
+173: 172: 
+174: 173: But again
+175: 174: 
+176: 175: I i need you  o actually be checking on it and actually
+177: 176: Get sparky to continue
+178: 177: 
+179: 178: Like
+180: 179: 
+181: 180: I need you verifyi  sparkys work, testing it and seeing whats wrong, if sparky is fuckin up let me know
+182: 181: 
+183: 182: Once sparky completes a task, look at the game and think of other things that either arent done or need to be improved
+184: 183: 
+185: 184: I want you to be a monitor for sparky building this game basically
+186: 185: ### [2026-07-01T01:41:15.593Z] assistant
+187: 186: 
+188: 187: Got it. I tightened this up into what you actually meant.
+189: 188: 
+190: 189: What I did right now:
+191: 190: 
+192: 191: - I inspected Sparky’s latest completed work.
+193: 192: - I opened and tested the game myself.
+194: 193: - I found an actual blocker: the game calls `requestAnimationFrame(loop)` but there is no `loop` function defined, and in-browser testing confirmed the game starts but never spawns zombies. It sits at `wave=1`, `zombies=0`.
+195: 194: - I sent Sparky a concrete continuation task to fix that exact issue, add better debug verification, browser-test it, update the roadmap, and report back.
+196: 195: - New Sparky task: `2aa0afb8-69d8-4dde-8185-4f0dac74123e`
+197: 196: - I put a watch on that task so when Sparky finishes, stalls, pauses, or fails, I’ll inspect it.
+198: 197: - I upgraded the recurring monitor from passive “is Sparky okay?” to active build supervision every 15 minutes:
+199: 198:   - inspect Sparky runs
+200: 199:   - recover/continue Sparky if stuck
+201: 200:   - test the actual game in browser after completions
+202: 201:   - notify you if Sparky fucks up
+203: 202:   - if the work is good, pick the next improvement and send Sparky forward again
+204: 203: 
+205: 204: So yes: I’m not just checking if Sparky is “alive” anymore. I’m supervising Sparky building the game.
+206: 205: ### [2026-07-01T01:45:03.659Z] user
+207: 206: 
+208: 207: [Internal watch match]
+209: 208: Watch id: sparky-pocket-zombies-fix-monitor-2aa0afb8
+210: 209: Label: Monitor Sparky Pocket Zombies fix
+211: 210: Target: task
+212: 211: Origin session: mobile_mr168psd_628snw
+213: 212: Delivery session: mobile_mr168psd_628snw
+214: 213: Observation: {
+215: 214:   "exists": true,
+216: 215:   "taskId": "2aa0afb8-69d8-4dde-8185-4f0dac74123e",
+217: 216:   "status": "paused",
+218: 217:   "finalSummary": "",
+219: 218:   "title": "[Subagent] Sparky",
+220: 219:   "sessionId": "subagent_sparky_v1_1782870000499",
+221: 220:   "originatingSessionId": "mobile_mr168psd_628snw",
+222: 221:   "subagentProfile": "sparky_v1",
+223: 222:   "teamSubagent": null,
+224: 223:   "currentStepIndex": 0,
+225: 224:   "currentStep": {
+226: 225:     "index": 0,
+227: 226:     "status": "running",
+228: 227:     "description": "Execute Sparky"
+229: 228:   },
+230: 229:   "totalSteps": 3,
+231: 230:   "completedSteps": 0,
+232: 231:   "unfinishedSteps": [
+233: 232:     {
+234: 233:       "index": 0,
+235: 234:       "status": "running",
+236: 235:       "description": "Execute Sparky"
+237: 236:     },
+238: 237:     {
+239: 238:       "index": 1,
+240: 239:       "status": "pending",
+[READ_TRUNCATED] Use start_line:241, num_lines:240 for the next chunk, or full:true only when needed.
+
+games/mobile-sideways-fps/ZOMBIES_ROADMAP.md (165 lines) [window 1-165]:
+1: # Mobile Sideways FPS — CoD Zombies-Style Roadmap
+2: 
+3: Status: recreated after the broken Sparky pass. `index.html` is now a fresh standalone Pocket Zombies build with a working RAF loop, raycast-style FPS rendering, waves, zombies, points, wall buys, doors, perks, power-ups, mobile controls, desktop controls, audio feedback, pause/mute, restart, and `window.__pocketZombiesDebug` verification hooks. Browser smoke test confirmed START GAME runs, zombies spawn, debug state advances, no JS error is reported, and the player survives initial spawn pressure after balance fixes. Next follow-up: improve aim/combat feel, real sprite-sheet rendering, and automated control-test helpers.
+4: 
+5: ## Phase 0 — Preserve Current Foundation
+6: 
+7: - [x] Keep the existing `index.html` game as the playable base.
+8: - [x] Preserve current mobile touch controls: left thumb movement, right thumb look, fire button.
+9: - [x] Preserve vertical-first loading with rotate-sideways hint.
+10: - [x] Preserve desktop fallback controls for testing.
+11: - [x] Preserve the raycast FPS rendering loop and wall collision basics.
+12: - [x] Add new systems incrementally without breaking the current start/play/restart loop.
+13: 
+14: ## Phase 1 — Zombies Core Loop
+15: 
+16: - [x] Replace generic enemies with zombie-specific enemy data and behavior.
+17: - [x] Add zombie health scaling by wave.
+18: - [x] Add zombie movement speed scaling by wave.
+19: - [x] Add zombie melee attack timing and damage balancing.
+20: - [x] Add zombie spawn pacing instead of spawning the whole wave instantly.
+21: - [x] Add round transition downtime between waves.
+22: - [x] Add clear “Wave Complete” feedback.
+23: - [x] Add game-over summary with wave reached, kills, points earned, and time survived-style stats.
+24: 
+25: ## Phase 2 — Points Economy
+26: 
+27: - [x] Add player points/cash state.
+28: - [x] Award points for zombie hits.
+29: - [x] Award bonus points for zombie kills.
+30: - [x] Award points for wave completion.
+31: - [x] Show points in the HUD.
+32: - [x] Spend points on wall guns.
+33: - [x] Spend points on doors.
+34: - [x] Spend points on perks.
+35: - [x] Prevent purchases when points are insufficient.
+36: - [x] Add purchase feedback text/sound/flash.
+37: 
+38: ## Phase 3 — Multiple Buyable Wall Guns
+39: 
+40: - [x] Define weapon data: name, price, damage, fire rate, range, spread, magazine size, reserve ammo, reload time.
+41: - [x] Add at least three wall-buy guns.
+42: - [x] Add wall-buy locations to the map.
+43: - [x] Render wall-buy prompts when the player looks at or stands near a gun location.
+44: - [x] Add purchase input compatible with mobile and desktop.
+45: - [x] Add weapon switching if multiple owned weapons are supported.
+46: - [x] Add ammo counts for limited-ammo guns.
+47: - [x] Add reload behavior.
+48: - [x] Add out-of-ammo behavior.
+49: - [x] Balance starter weapon vs. purchased weapons.
+50: 
+51: ## Phase 4 — Perks System
+52: 
+53: - [x] Define perk data: name, price, effect, icon/color, purchase location.
+54: - [x] Add Juggernog-style health increase perk.
+55: - [x] Add Speed Cola-style reload/fire handling perk.
+56: - [x] Add Stamin-Up-style movement speed perk.
+57: - [x] Add Double Tap-style damage/fire-rate perk.
+58: - [x] Add perk machine locations to the map.
+59: - [x] Render perk purchase prompts.
+60: - [x] Apply perk effects immediately after purchase.
+61: - [x] Show active perks in the HUD.
+62: 
+63: ## Phase 5 — Unlockable Doors
+64: 
+65: - [x] Add door tiles/entities to the map.
+66: - [x] Give each door a points cost.
+67: - [x] Block movement and line-of-sight through locked doors.
+68: - [x] Render locked-door prompts when nearby.
+69: - [x] Add mobile-friendly purchase interaction.
+70: - [x] Remove/open door after purchase.
+71: - [x] Persist opened doors for the run.
+72: - [x] Connect doors to map expansion sections.
+73: 
+74: ## Phase 6 — Map Expansions
+75: 
+76: - [x] Expand the current small map into distinct rooms/lanes.
+77: - [x] Add a starting room.
+78: - [x] Add at least one unlockable side room.
+79: - [x] Add at least one larger training area.
+80: - [x] Add wall-gun placement in useful but not overpowered spots.
+81: - [x] Add perk-machine placement behind progression gates.
+82: - [x] Add zombie spawn windows/entry points.
+83: - [x] Update minimap to show expanded areas clearly.
+84: - [x] Keep performance safe for mobile screens.
+85: 
+86: ## Phase 7 — Real 3D-Feeling Zombies
+87: 
+88: - [x] Improve zombie sprites from simple shapes into generated asset-backed billboard bodies.
+89: - [x] Add zombie animation states: walking, hurt, attacking, dying, with billboard motion/bob and hit flash.
+90: - [x] Add distance scaling and occlusion that feels more 3D.
+91: - [x] Add simple zombie variants by color/shape/speed.
+92: - [x] Add hit flashes and death effects.
+93: - [x] Add attack windup visual feedback.
+94: - [x] Add generated local sprite sheet assets for zombies, first-person guns, perks, and power-ups.
+95: 
+96: ## Phase 8 — Power-Ups
+97: 
+98: - [x] Define power-up data: name, duration/effect, color/icon, drop chance.
+99: - [x] Add Max Ammo.
+100: - [x] Add Insta-Kill.
+101: - [x] Add Double Points.
+102: - [x] Add Nuke / screen-clear effect.
+103: - [x] Add pickup radius and feedback.
+104: - [x] Show active timed power-ups in the HUD.
+105: 
+106: ## Phase 9 — UI / HUD Updates
+107: 
+108: - [x] Add points display.
+109: - [x] Add current weapon display.
+110: - [x] Add ammo and reload display.
+111: - [x] Add active perk icons.
+112: - [x] Add active power-up timers.
+113: - [x] Add contextual purchase prompt panel.
+114: - [x] Add wave transition text.
+115: - [x] Add low-health feedback.
+116: - [x] Add mobile-safe layout for portrait and landscape.
+117: - [x] Keep HUD readable without blocking touch controls.
+118: 
+119: ## Phase 10 — Interaction Controls
+120: 
+121: - [x] Add a mobile interaction button for buying guns, perks, and doors.
+122: - [x] Add desktop keyboard interaction key.
+123: - [x] Prevent interaction button from interfering with fire/look controls.
+124: - [x] Prioritize nearest/most relevant interactable when multiple prompts overlap.
+125: - [x] Add clear affordance for “hold to buy” vs. tap to buy if needed.
+126: 
+127: ## Phase 11 — Audio / Feedback
+128: 
+129: - [x] Add optional gunshot sound effects.
+130: - [x] Add zombie hit/death sounds.
+131: - [x] Add purchase success/fail sounds.
+132: - [x] Add power-up pickup sounds.
+133: - [x] Add round-start/round-end stingers.
+134: - [x] Ensure mobile browsers unlock audio only after user gesture.
+135: - [x] Add mute toggle if audio becomes annoying during testing.
+136: - [x] Add pause/resume control for testing and survivability.
+137: 
+138: ## Phase 12 — Balancing and Polish
+139: 
+140: - [x] Tune wave difficulty curve.
+141: - [x] Tune zombie count, speed, health, and damage.
+142: - [x] Tune weapon prices and damage.
+143: - [x] Tune perk prices.
+144: - [x] Tune door prices and progression pacing.
+145: - [x] Add pause/restart controls.
+146: - [x] Add save-free replayability with fast restarts.
+147: - [x] Test on mobile-style portrait/launch layout in desktop browser.
+148: - [x] Test sideways/landscape play in desktop browser.
+149: - [x] Test in desktop browser with console open.
+150: 
+151: ## Phase 13 — Future Co-Op Possibilities
+152: 
+153: - [ ] Decide whether co-op is local split-screen, same-network multiplayer, or online multiplayer.
+154: - [ ] Separate game state from rendering so networking could be added later.
+155: - [ ] Define player entities rather than a single hardcoded player only.
+156: - [ ] Add teammate HUD slots if co-op becomes real.
+157: - [ ] Add revive/downed-state mechanics if co-op becomes real.
+158: - [ ] Keep this phase deferred until the single-player zombies loop is fun.
+159: 
+160: ## Implementation Notes
+161: 
+162: - `index.html` remains standalone and portable.
+163: - Procedural canvas textures/sprites are used so the game works without network or extra asset paths.
+164: - Asset research notes are saved in `ASSET_NOTES.md`.
+165: 
+
+reports/nebulax-trading-platform-analysis.md (385 lines) [window 1-80, truncated]:
+1: # NebulaX Trading Platform Analysis
+2: 
+3: _Date: 2026-07-01_  
+4: _Analyst: Sparky (`sparky_v1`)_
+5: 
+6: ## Executive Summary
+7: 
+8: NebulaX is a static, browser-first Solana trading/arcade platform prototype. The main repo (`repos/nebulax-test/`) contains a multi-page HTML/CSS/JS app with Phantom wallet connection, Jupiter swap attempts, token discovery pages, portfolio/watchlist/store/game surfaces, Supabase schema planning, and Vercel deployment scaffolding. The companion repo (`repos/nebulax-exchange/`) is a small landing/custom-domain site pointing at `www.nebulax.exchange`.
+9: 
+10: The strongest parts already built are the UI breadth, Solana/Phantom connection work, GeckoTerminal/DexScreener data feeds, Jupiter quote/swap code, game/store prototypes, and an initial Supabase database schema. The biggest launch blockers are security and production architecture: exposed API/RPC keys, direct browser-side trading calls, no real backend/session/auth layer, many features stored only in `localStorage`, no package/build/test system, fragmented duplicated scripts, and a failing included integration check.
+11: 
+12: Bottom line: this is a promising visual/product prototype, not production-ready trading infrastructure yet. P0 work should focus on key rotation, backend proxy hardening, wallet/trade safety, deployment sanity, and consolidating duplicated code before any public relaunch.
+13: 
+14: ## Repo Inventory
+15: 
+16: ### `repos/nebulax-test/` — main platform
+17: 
+18: Observed structure:
+19: 
+20: - Static entry/login page: `repos/nebulax-test/index.html`.
+21: - Main app shell/dashboard: `repos/nebulax-test/NebulaX.html`.
+22: - Trading/token pages:
+23:   - `repos/nebulax-test/Trending.html`
+24:   - `repos/nebulax-test/NewPairs-official.html`
+25:   - `repos/nebulax-test/Coinpage-Official.html`
+26:   - `repos/nebulax-test/Adrenaline-official.html`
+27:   - `repos/nebulax-test/portfolio_official_v_2_fixed.html`
+28:   - `repos/nebulax-test/watchlist_official_v_2.html`
+29: - Store/arcade surfaces:
+30:   - `repos/nebulax-test/nebula_x_store_official.html`
+31:   - `repos/nebulax-test/Arcadegamepanel.html`
+32:   - `repos/nebulax-test/NEBX-Arcade.html`
+33:   - `repos/nebulax-test/games/` with several standalone games.
+34: - Shared scripts:
+35:   - `repos/nebulax-test/assets/nx-wallet.js`
+36:   - `repos/nebulax-test/assets/jupiter-swap-engine.js`
+37:   - `repos/nebulax-test/assets/js/nx-jupiter.js`
+38:   - `repos/nebulax-test/assets/js/nx-search.js`
+39:   - `repos/nebulax-test/trending-engine.js`
+40:   - `repos/nebulax-test/adrenaline-engine.js`
+41: - Serverless API:
+42:   - `repos/nebulax-test/api/jupiter.js`
+43: - Database plan:
+44:   - `repos/nebulax-test/supabase/migrations/001_init.sql`
+45:   - `repos/nebulax-test/supabase/README.md`
+46: - Vercel config:
+47:   - `repos/nebulax-test/vercel.json` contains only `{ "version": 2 }`.
+48: - Docs/status files:
+49:   - `COMPREHENSIVE_ANALYSIS.md`, `DEPLOYMENT_READY.md`, `NEBULAX_CURRENT_SPECS.md`, `JUPITER_*`, `MOBILE_PHANTOM_UX.md`, etc.
+50: 
+51: No `package.json` exists in `repos/nebulax-test/`; a safe check returned `NO_PACKAGE_JSON`. That means there are no npm scripts, dependency locking, lint/build pipeline, or standard test runner in the repo root.
+52: 
+53: ### `repos/nebulax-exchange/` — landing/custom-domain repo
+54: 
+55: Observed files:
+56: 
+57: - `repos/nebulax-exchange/index.html`
+58: - `repos/nebulax-exchange/Shortdocs.html`
+59: - `repos/nebulax-exchange/NebulaX-logo.png`
+60: - `repos/nebulax-exchange/CNAME`
+61: 
+62: `repos/nebulax-exchange/CNAME:1` points to `www.nebulax.exchange`. This appears to be a lightweight static landing/custom-domain repo rather than the core app.
+63: 
+64: ## Product/Feature Map
+65: 
+66: Built/prototyped features found in code and docs:
+67: 
+68: - **Wallet gate/login**: `index.html` is a “Connect Phantom” page. It uses `sessionStorage` key `nebula:wallet:session` at `index.html:74-84`, connects Phantom via `window.phantom?.solana` / `window.solana` at `index.html:101+`, and redirects into the app after connection.
+69: - **Main trading dashboard/app shell**: `NebulaX.html` is the primary app surface and defines global RPC config (`NebulaX.html:141`).
+70: - **Token discovery/trending**: `trending-engine.js` polls GeckoTerminal trending pools and enriches with DexScreener. Evidence: `trending-engine.js:1-5`, `trending-engine.js:88-99`, `trending-engine.js:161+`.
+71: - **New pairs/adrenaline scanner**: `adrenaline-engine.js` fetches Solana new pools from GeckoTerminal (`adrenaline-engine.js:33-42`) and classifies new/migrating/migrated tokens using mcap, age, and DEX heuristics (`adrenaline-engine.js:1-17`, `adrenaline-engine.js:274-285`).
+72: - **Coin detail/trading page**: `Coinpage-Official.html` contains Jupiter swap UI logic and token metric panels. It reads mint from URL/localStorage/window globals (`Coinpage-Official.html:1041-1075`).
+73: - **Jupiter swaps**: two implementations exist:
+74:   - Browser-side V6 engine in `assets/jupiter-swap-engine.js` with quote/swap endpoints (`assets/jupiter-swap-engine.js:18-26`, `assets/jupiter-swap-engine.js:68-147`) and transaction signing/sending (`assets/jupiter-swap-engine.js:248-356`).
+75:   - Inline Jupiter V1-ish implementation in `Coinpage-Official.html:975-988`, including a hardcoded API key.
+76: - **Portfolio/watchlist/store/game panels**: local app pages and Supabase schema include watchlists, trades, orders, positions, PnL, games, leaderboards, store items, purchases, launchpad projects, LP locks, and vesting (`supabase/migrations/001_init.sql:58-145`, `146-210`, `212-240`).
+77: - **Mobile Phantom UX**: `assets/nx-wallet.js` includes mobile detection and Phantom universal/deep-link builders (`assets/nx-wallet.js:21-43`, `75-87`, `135-160`).
+78: 
+79: ## Architecture and Tech Stack
+80: 
+[READ_TRUNCATED] Use start_line:81, num_lines:240 for the next chunk, or full:true only when needed.
+
+--- web-ui/src/mobile/mobile-shell.js ---
+web-ui/src/mobile/mobile-shell.js (2682 lines) read result exceeded inline budget. Requested window 1-220.
+[TOOL_RESULT_ARTIFACT] Full output saved to temp/tool-results/1782878851748-brain_thought_2026-07-01_12-05-read_webui_source.txt. Read targeted ranges from that artifact only if needed.

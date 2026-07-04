@@ -1,8 +1,9 @@
 ---
 name: data-pipeline
-description: Read, transform, and write data correctly. Use this before writing any data processing code.
+description: Use this skill when the user asks to process, clean, transform, merge, validate, deduplicate, aggregate, convert, or export data files such as CSV, JSON, JSONL, Excel, spreadsheets, logs, or datasets. Triggers on phrases like clean this CSV, transform data, merge spreadsheets, dedupe rows, convert JSONL, build a data pipeline, validate records, aggregate this dataset, export to CSV, and process a large file. Use it before writing data-processing code or designing repeatable ETL-style workflows.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: clean this CSV, transform data, merge spreadsheets, dedupe rows, convert JSONL, build a data pipeline, validate records, aggregate dataset, export to CSV, process large file, parse JSON, normalize spreadsheet, ETL workflow, data cleanup, convert data file
 ---
 
 # Data Pipeline

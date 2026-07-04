@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "three.js mobile",
+    "threejs mobile",
+    "ios webgl",
+    "mobile safari webgl",
+    "iphone missing sprites",
+    "three.js missing textures",
+    "mobile canvas assets",
+    "webgl texture bug",
+    "transparent png sprites missing",
+    "yaw mismatch",
+    "shooting direction wrong",
+    "movement and fire misaligned",
+    "camera yaw convention"
+  ],
+  "id": "threejs-mobile-webgl"
+}

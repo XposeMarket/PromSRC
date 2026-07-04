@@ -1,54 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "Mermaid Diagrams",
-  "description": "Render flowcharts, sequence diagrams, ERDs, Gantt charts, state machines, class diagrams, timelines, workflows, and process diagrams directly in chat using fenced Mermaid blocks.",
-  "version": "1.0.0",
+  "description": "Use this skill when creating or editing Mermaid diagrams such as flowcharts, sequence diagrams, ERDs, state diagrams, architecture diagrams, journey maps, or markdown-embedded diagrams.",
   "triggers": [
-    "mermaid",
-    "mermaid diagram",
+    "Mermaid diagram",
     "flowchart",
-    "workflow diagram",
-    "process diagram",
     "sequence diagram",
-    "erd",
-    "er diagram",
-    "database schema diagram",
-    "gantt chart",
+    "ERD",
     "state diagram",
-    "state machine",
+    "architecture diagram",
+    "draw the workflow",
+    "diagram this process",
+    "markdown diagram",
+    "journey map",
+    "graph TD",
+    "visualize architecture",
     "class diagram",
-    "timeline diagram",
-    "approval flow",
-    "onboarding flow",
-    "api flow",
-    "lifecycle diagram"
+    "dependency diagram",
+    "process map",
+    "render Mermaid"
   ],
   "categories": [
     "visualization",
     "diagrams",
-    "workflows",
-    "technical-writing",
-    "interactive-output"
+    "documentation"
   ],
   "requiredTools": [
-    "skill_read"
+    "creative_basic",
+    "workspace_write"
   ],
-  "toolBinding": {
-    "requiredTools": [
-      "skill_read"
-    ],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [
-      "Read mermaid-diagrams.",
-      "Choose the correct Mermaid diagram type for the relationship or flow.",
-      "Output one fenced mermaid block only."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceWrite": false,
-    "externalSideEffects": false
-  },
+  "lifecycle": "active",
+  "name": "Mermaid Diagrams",
   "id": "mermaid-diagrams"
 }

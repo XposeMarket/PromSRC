@@ -76,7 +76,7 @@ function evaluateCommandDeny(rawCommand: string): HardToolDenyDecision {
   if (!cmd) return { denied: false };
 
   if (commandMatches(cmd, [
-    /\bformat\b/,
+    /(?:^|[;&|]\s*)format(?:\.com|\.exe)?\s+[a-z]:/i,
     /\bdiskpart\b/,
     /\bmkfs(?:\.[a-z0-9]+)?\b/,
     /\bdd\s+if=/,

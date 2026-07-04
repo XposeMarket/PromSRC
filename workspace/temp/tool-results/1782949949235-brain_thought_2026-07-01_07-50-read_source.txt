@@ -1,0 +1,242 @@
+src/gateway/routes/canvas.router.ts (7801 lines) [window 1-240, truncated]:
+1: /**
+2:  * canvas.router.ts — B2 Refactor
+3:  *
+4:  * Canvas File API + Preview + Utility routes.
+5:  * Extracted verbatim from server-v2.ts (was L5279-L5558).
+6:  *
+7:  * GET  /api/canvas/file           — read a workspace file for the canvas
+8:  * POST /api/canvas/file           — write canvas edits back to workspace
+9:  * POST /api/canvas/upload         — copy an uploaded file into workspace/uploads/
+10:  * GET  /api/canvas/files          — list workspace files for the file browser
+11:  * POST /api/canvas/open           — register a file as open in canvas
+12:  * POST /api/canvas/close          — remove a file from canvas tracking
+13:  * GET  /preview                   — serve a workspace file as renderable HTML
+14:  * GET  /api/preview/screenshot    — take a screenshot of the preview route
+15:  * GET  /api/open-path             — open a path in the OS file manager
+16:  * POST /api/clear-history         — clear chat history for a session
+17:  */
+18: 
+19: import { Router } from 'express';
+20: import path from 'path';
+21: import fs from 'fs';
+22: import { execFile } from 'child_process';
+23: import { promisify } from 'util';
+24: import { getConfig } from '../../config/config';
+25: import { getSession, clearHistory, getWorkspace, getCreativeMode, normalizeCreativeMode, setCreativeMode, getCanvasProjectRoot, getCanvasProjectLabel, setCanvasProject, getCanvasProjectLink, setCanvasProjectLink, type CanvasProjectLink } from '../session';
+26: import { hookBus } from '../hooks';
+27: import { browserPreviewScreenshot } from '../browser-tools';
+28: import { sessionCanvasFiles, addCanvasFile, removeCanvasFile } from './canvas-state';
+29: import { getVault } from '../../security/vault';
+30: import { evaluateGatewayRequest, resolveGatewayAuthToken } from '../gateway-auth';
+31: import { resolvePrometheusRoot, isPublicDistributionBuild } from '../../runtime/distribution';
+32: import {
+33:   type CreativeRenderJobRecord as NormalizedCreativeRenderJobRecord,
+34:   appendCreativeRenderJobError,
+35:   buildCreativeRenderManifest,
+36:   buildCreativeRenderWorkerInput,
+37:   bumpCreativeRenderJobAttempt,
+38:   cloneData as creativeCloneData,
+39:   clampNumber as creativeClampNumber,
+40:   isCreativeRenderJobTerminal as isNormalizedCreativeRenderJobTerminal,
+41:   isPlainObject as isCreativePlainObject,
+42:   normalizeCreativeRenderExportOptions,
+43:   normalizeCreativeRenderFormat,
+44:   normalizeCreativeRenderJobRecord,
+45:   normalizeCreativeRenderJobStatus as normalizeCreativeRenderJobStatusValue,
+46:   normalizeCreativeSceneDoc,
+47:   normalizeCreativeSceneEnvelope,
+48:   summarizeCreativeSceneDoc as summarizeNormalizedCreativeSceneDoc,
+49: } from '../creative/contracts';
+50: import type { HyperframesPatchOp } from '../creative/hyperframes-bridge';
+51: import {
+52:   buildHtmlMotionCompositionMetadata,
+53:   lintHtmlMotionComposition,
+54: } from '../creative/html-motion-spec';
+55: import {
+56:   listHtmlMotionAdapterSnippets,
+57: } from '../creative/html-motion-adapters';
+58: import {
+59:   listHtmlMotionBlocks,
+60:   renderHtmlMotionBlock,
+61: } from '../creative/html-motion-blocks';
+62: import {
+63:   applyHtmlMotionTemplate,
+64:   summarizeHtmlMotionTemplates,
+65: } from '../creative/html-motion-templates';
+66: import { resolveBundledPlaywrightChromium, resolveRuntimeBinary } from '../../runtime/dependencies';
+67: 
+68: export const router = Router();
+69: 
+70: const execFileAsync = promisify(execFile);
+71: 
+72: const getCreativeAudio = () => require('../creative/audio') as typeof import('../creative/audio');
+73: const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
+74: const getCreativeAssets = () => require('../creative/assets') as typeof import('../creative/assets');
+75: const getCreativeLayerExtraction = () => require('../creative/layer-extraction') as typeof import('../creative/layer-extraction');
+76: const getCreativeModelPaths = () => require('../creative/onnx/model-paths') as typeof import('../creative/onnx/model-paths');
+77: const getHyperframesBridge = () => require('../creative/hyperframes-bridge') as typeof import('../creative/hyperframes-bridge');
+78: const getHyperframesQa = () => require('../creative/hyperframes-qa') as typeof import('../creative/hyperframes-qa');
+79: const getHyperframesExportAdapter = () => require('../creative/hyperframes-export-adapter') as typeof import('../creative/hyperframes-export-adapter');
+80: const getHyperframesCatalog = () => require('../creative/hyperframes-catalog') as typeof import('../creative/hyperframes-catalog');
+81: const getHyperframesProducer = () => require('../creative/hyperframes-producer') as typeof import('../creative/hyperframes-producer');
+82: 
+83: let _requireGatewayAuth: any;
+84: let _broadcastWS: (msg: any) => void = () => {};
+85: 
+86: export function initCanvasRouter(deps: {
+87:   requireGatewayAuth: any;
+88:   broadcastWS: (msg: any) => void;
+89: }): void {
+90:   _requireGatewayAuth = deps.requireGatewayAuth;
+91:   _broadcastWS = deps.broadcastWS;
+92: }
+93: 
+94: function getWorkspaceRoot(): string {
+95:   return getConfig().getWorkspacePath();
+96: }
+97: 
+98: function isPathInside(basePath: string, targetPath: string): boolean {
+99:   const base = path.resolve(String(basePath || ''));
+100:   const target = path.resolve(String(targetPath || ''));
+101:   if (!base || !target) return false;
+102:   const rel = path.relative(base, target);
+103:   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+104: }
+105: 
+106: function requireGatewayAuthAllowQueryToken(req: any, res: any, next: any): void {
+107:   const evaluation = evaluateGatewayRequest(req, { allowQueryToken: true });
+108:   if (!evaluation.ok) {
+109:     res.status(evaluation.status).json({ error: evaluation.message });
+110:     return;
+111:   }
+112:   next();
+113: }
+114: 
+115: // Dev-only: in non-public builds, the canvas (e.g. end-of-turn diffs) may open
+116: // Prometheus's own source files, which live in the project root outside the
+117: // workspace. Mirror the prom-root read allowlist so src/web-ui/etc. are
+118: // viewable while .git/node_modules/.env/secrets stay blocked. Public builds
+119: // keep strict workspace-only behavior.
+120: const CANVAS_DEV_ROOT_ALLOWED_DIRS = new Set([
+121:   '.prometheus', 'scripts', 'electron', 'build', 'dist', 'src', 'web-ui', 'generated',
+122: ]);
+123: const CANVAS_DEV_ROOT_DENIED_DIRS = new Set([
+124:   '.git', 'node_modules', '.env', '.env.local', '.env.development',
+125:   '.env.production', '.env.test', '.npm', '.cache', '.turbo', '.next', '.pnpm-store',
+126: ]);
+127: function isCanvasDevRootAllowed(absPath: string): boolean {
+128:   if (isPublicDistributionBuild()) return false;
+129:   let projectRoot = '';
+130:   try { projectRoot = resolvePrometheusRoot(); } catch { return false; }
+131:   if (!projectRoot || !isPathInside(projectRoot, absPath)) return false;
+132:   const rel = path.relative(projectRoot, absPath).replace(/\\/g, '/');
+133:   if (!rel || rel.startsWith('..')) return false;
+134:   const topLevel = (rel.split('/')[0] || '').toLowerCase();
+135:   if (!topLevel) return false;
+136:   if (CANVAS_DEV_ROOT_DENIED_DIRS.has(topLevel)) return false;
+137:   if (topLevel.includes('secret') || topLevel.includes('credential')) return false;
+138:   return CANVAS_DEV_ROOT_ALLOWED_DIRS.has(topLevel);
+139: }
+140: 
+141: function resolveCanvasPath(rawPath: string): { workspacePath: string; absPath: string; relPath: string; inWorkspace: boolean } {
+142:   const workspacePath = getWorkspaceRoot();
+143:   const candidatePath = path.isAbsolute(rawPath) ? rawPath : path.join(workspacePath, rawPath);
+144:   const absPath = path.resolve(candidatePath);
+145:   const relPath = path.relative(workspacePath, absPath).replace(/\\/g, '/');
+146:   const inWorkspace = !(relPath.startsWith('..') || path.isAbsolute(relPath));
+147:   const cfg = getConfig().getConfig() as any;
+148:   const allowedPaths = Array.isArray(cfg?.tools?.permissions?.files?.allowed_paths)
+149:     ? cfg.tools.permissions.files.allowed_paths
+150:         .map((allowed: any) => String(allowed || '').trim())
+151:         .filter(Boolean)
+152:         .map((allowed: string) => path.resolve(allowed))
+153:     : [];
+154:   const isAllowed = allowedPaths.some((allowed: string) => isPathInside(allowed, absPath));
+155:   if (!inWorkspace && !isAllowed && !isCanvasDevRootAllowed(absPath)) {
+156:     throw new Error('Path outside workspace or allowed directories');
+157:   }
+158:   return { workspacePath, absPath, relPath, inWorkspace };
+159: }
+160: 
+161: function streamCanvasFile(absPath: string, res: any, rangeHeader = ''): void {
+162:   if (!fs.existsSync(absPath)) {
+163:     res.status(404).json({ success: false, error: 'File not found' });
+164:     return;
+165:   }
+166:   const stat = fs.statSync(absPath);
+167:   if (stat.isDirectory()) {
+168:     res.status(400).json({ success: false, error: 'Path is a directory' });
+169:     return;
+170:   }
+171:   const contentType = String(guessContentType(absPath) || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
+172:   const filename = path.basename(absPath).replace(/"/g, '');
+173:   res.setHeader('Cache-Control', 'no-store');
+174:   res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+175:   res.type(contentType);
+176:   if (/^(video|audio)\//i.test(contentType)) {
+177:     const range = String(rangeHeader || '').trim();
+178:     res.setHeader('Accept-Ranges', 'bytes');
+179:     if (range) {
+180:       const match = range.match(/^bytes=(\d*)-(\d*)$/);
+181:       if (match) {
+182:         const startRaw = match[1];
+183:         const endRaw = match[2];
+184:         let start = startRaw ? Number(startRaw) : 0;
+185:         let end = endRaw ? Number(endRaw) : stat.size - 1;
+186:         if (!startRaw && endRaw) {
+187:           const suffixLength = Number(endRaw);
+188:           start = Math.max(0, stat.size - suffixLength);
+189:         }
+190:         if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && start < stat.size) {
+191:           end = Math.min(end, stat.size - 1);
+192:           res.status(206);
+193:           res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+194:           res.setHeader('Content-Length', String(end - start + 1));
+195:           fs.createReadStream(absPath, { start, end }).pipe(res);
+196:           return;
+197:         }
+198:       }
+199:       res.status(416);
+200:       res.setHeader('Content-Range', `bytes */${stat.size}`);
+201:       res.end();
+202:       return;
+203:     }
+204:     res.setHeader('Content-Length', String(stat.size));
+205:   }
+206:   res.sendFile(absPath);
+207: }
+208: 
+209: function sanitizeRelativeUploadPath(rawPath: string): string {
+210:   const segments = String(rawPath || '')
+211:     .replace(/\\/g, '/')
+212:     .split('/')
+213:     .map((segment) => String(segment || '').trim())
+214:     .filter(Boolean)
+215:     .map((segment) => segment.replace(/[^a-zA-Z0-9._\-() ]/g, '_'))
+216:     .filter((segment) => segment !== '.' && segment !== '..');
+217:   return segments.join('/');
+218: }
+219: 
+220: function ensureInsideRoot(rootPath: string, targetPath: string): boolean {
+221:   const relative = path.relative(rootPath, targetPath);
+222:   return !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+223: }
+224: 
+225: function guessContentType(filePath: string): string {
+226:   const ext = path.extname(filePath).toLowerCase();
+227:   switch (ext) {
+228:     case '.pdf':
+229:       return 'application/pdf';
+230:     case '.docx':
+231:       return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+232:     case '.doc':
+233:       return 'application/msword';
+234:     case '.xlsx':
+235:       return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+236:     case '.xls':
+237:       return 'application/vnd.ms-excel';
+238:     case '.pptx':
+239:       return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+240:     case '.ppt':
+[READ_TRUNCATED] Returned 240 of 7801 lines. Use start_line:241, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

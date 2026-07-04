@@ -1,8 +1,9 @@
 ---
 name: operations-manager
-description: # Operations Manager Skill
+description: Use this skill when the user asks to design operations, SOPs, process audits, bottleneck fixes, meeting structure, OKRs, RACI matrices, vendor evaluations, org design, scaling systems, or workflow documentation. Triggers on phrases like write an SOP, document this process, operations plan, process audit, fix bottlenecks, meeting agenda, OKRs, RACI, vendor matrix, org design, scaling playbook, and make this process repeatable. Use it to create durable operating systems with owners, triggers, quality checks, and escalation paths.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: write SOP, document process, operations plan, process audit, fix bottlenecks, meeting agenda, OKRs, RACI, vendor matrix, org design, scaling playbook, make process repeatable, workflow documentation, standard operating procedure, ops system
 ---
 
 # Operations Manager Skill

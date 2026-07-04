@@ -1,8 +1,9 @@
 ---
 name: Cold Outreach Writer
-description: Cold Outreach Writer
+description: Use this skill when the user asks for cold outreach, cold email, LinkedIn DMs, prospecting messages, follow-up sequences, outbound campaigns, sales emails, or reply-rate improvements. Triggers on phrases like cold email, cold outreach, sales email, outreach sequence, LinkedIn DM, prospecting, follow-up email, outbound, drip sequence, reach out to leads, and write a cold message. Use it to write concise, personalized, human outbound copy with a small ask and clear follow-up cadence.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: cold email, cold outreach, sales email, outreach sequence, linkedin dm, prospecting, email sequence, intro email, reach out to leads, outreach template, follow-up email, sales sequence, multi-touch, email campaign, reply rate, outbound, cold message, drip sequence
 triggers: cold email, cold outreach, sales email, outreach sequence, linkedin dm, prospecting, email sequence, intro email, reach out to leads, outreach template, follow-up email, sales sequence, multi-touch, email campaign, reply rate, outbound, cold message, drip sequence
 ---
 

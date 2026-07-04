@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "context-pack-builder",
+  "name": "Context Pack Builder",
+  "description": "Build reusable Prometheus context packs from memory, project context, team context references, sessions, files, and extension context providers.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "context pack",
+    "build context",
+    "reuse project context",
+    "agent briefing",
+    "context bundle"
+  ],
+  "categories": [
+    "prometheus",
+    "memory",
+    "agents",
+    "context"
+  ],
+  "requiredTools": [
+    "advanced_memory",
+    "agents_and_teams",
+    "workspace_write"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  },
+  "resources": [
+    {
+      "path": "references/workflows/context-pack-builder-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to context-pack-builder"
+    }
+  ]
+}

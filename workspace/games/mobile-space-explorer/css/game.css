@@ -1,0 +1,71 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #app { width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; font-family: system-ui, sans-serif; }
+#game { display: block; width: 100%; height: 100%; }
+.fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 50; transition: opacity 0.05s linear; }
+.fade.active { opacity: 1; pointer-events: auto; }
+.fade.hidden { display: none; }
+.fade.show { display: block; }
+.hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; color: #e8f4ff; text-shadow: 0 0 8px #000; }
+.hud-top { position: absolute; top: env(safe-area-inset-top, 8px); left: 12px; right: 12px; display: flex; justify-content: space-between; font-size: 12px; letter-spacing: 0.12em; }
+.hud-bars { position: absolute; top: 36px; left: 12px; width: min(220px, 45vw); font-size: 10px; }
+.bar-wrap { margin-bottom: 6px; }
+.bar { height: 8px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; overflow: hidden; }
+.bar .fill { height: 100%; width: 100%; transition: width 0.15s; }
+.bar .fill.hull { background: linear-gradient(90deg, #2ecc71, #27ae60); }
+.bar .fill.boost { background: linear-gradient(90deg, #3498db, #9b59b6); }
+.damage-flash { position: fixed; inset: 0; background: rgba(255,40,40,0.35); pointer-events: none; z-index: 12; opacity: 0; transition: opacity 0.08s; }
+.damage-flash.hit { opacity: 1; }
+.touch-layer { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
+.touch-layer.active { pointer-events: auto; }
+.stick-zone { position: absolute; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; width: 130px; height: 130px; pointer-events: auto; touch-action: none; }
+.stick-base { width: 100%; height: 100%; border-radius: 50%; background: rgba(20,40,80,0.45); border: 2px solid rgba(120,180,255,0.35); position: relative; }
+.stick-knob { width: 52px; height: 52px; border-radius: 50%; background: rgba(100,180,255,0.85); position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.stick-label { position: absolute; bottom: -18px; left: 0; right: 0; text-align: center; font-size: 10px; color: rgba(200,220,255,0.7); }
+.look-pad { position: absolute; right: 0; top: 0; bottom: 0; width: 42%; pointer-events: auto; touch-action: none; z-index: 19; }
+.action-btn { position: absolute; pointer-events: auto; touch-action: none; border: none; border-radius: 12px; font-weight: 700; font-size: 11px; color: #fff; padding: 12px 14px; z-index: 21;
+  background: rgba(30,60,120,0.75); border: 1px solid rgba(150,200,255,0.4); }
+.boost-btn { right: 12px; bottom: max(100px, calc(env(safe-area-inset-bottom) + 88px)); }
+.jump-btn { right: 12px; bottom: max(24px, env(safe-area-inset-bottom)); }
+.fire-btn { right: 100px; bottom: max(24px, env(safe-area-inset-bottom)); }
+.talk-btn { right: 100px; bottom: max(100px, calc(env(safe-area-inset-bottom) + 88px)); }
+.start-overlay { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, #0a1628 0%, #000 70%); color: #cfe9ff; text-align: center; padding: 24px; }
+.start-overlay.hidden { display: none; }
+.start-overlay h1 { font-size: clamp(1.6rem, 6vw, 2.4rem); margin-bottom: 8px; }
+.start-overlay p { opacity: 0.8; margin-bottom: 20px; max-width: 320px; font-size: 14px; }
+#btnStart { pointer-events: auto; touch-action: manipulation; padding: 14px 28px; font-size: 16px; border-radius: 999px; border: none; background: linear-gradient(135deg, #3d7eff, #7b5cff); color: #fff; font-weight: 700; cursor: pointer; }
+.chat-backdrop { position: fixed; inset: 0; z-index: 28; background: rgba(0, 0, 0, 0.55); pointer-events: auto; touch-action: manipulation; }
+.chat-backdrop.hidden { display: none; }
+.chat-panel { position: fixed; left: 12px; right: 12px; bottom: max(140px, env(safe-area-inset-bottom, 0px) + 120px); max-height: 40vh; background: rgba(5,15,30,0.96); border: 1px solid rgba(100,180,255,0.3); border-radius: 12px; padding: 12px; pointer-events: auto; z-index: 30; font-size: 13px; overflow-y: auto; }
+.chat-panel.hidden { display: none; }
+#chatClose { margin-top: 8px; width: 100%; padding: 12px; border-radius: 8px; border: none; background: #2a5080; color: #fff; font-weight: 700; touch-action: manipulation; pointer-events: auto; cursor: pointer; }
+body.chat-open .touch-layer { pointer-events: none; }
+body.chat-open #chatPanel,
+body.chat-open #chatBackdrop,
+body.chat-open #chatClose { pointer-events: auto; }
+.desktop-help { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); font-size: 10px; opacity: 0.55; white-space: nowrap; display: none; }
+@media (min-width: 900px) and (pointer: fine) {
+  .touch-layer { display: none; }
+  .desktop-help { display: block; }
+}
+
+/* Landscape-first mobile (sideways) */
+@media (orientation: portrait) and (max-width: 820px) {
+  body::before {
+    content: 'Rotate device — Galaxy Drift plays sideways';
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    color: #8cf;
+    font-size: 14px;
+    text-align: center;
+    padding: 24px;
+  }
+}
+@media (orientation: landscape) and (max-width: 920px) {
+  .stick-zone { width: 110px; height: 110px; }
+  .look-pad { width: 48%; }
+}

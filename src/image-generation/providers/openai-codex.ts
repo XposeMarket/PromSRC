@@ -14,20 +14,34 @@ import {
   buildImageGenerationSuccess,
   getImageGenerationConfig,
   IMAGE_SIZE_BY_ASPECT_RATIO,
+  mimeTypeForImageOutputFormat,
   persistGeneratedImage,
   resolveReferenceImages,
 } from '../utils.js';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 const CODEX_CHAT_MODEL = 'gpt-5.4';
-const API_MODEL = 'gpt-image-2';
 const DEFAULT_MODEL = 'gpt-image-2-medium';
-const MODEL_IDS = ['gpt-image-2-low', 'gpt-image-2-medium', 'gpt-image-2-high'] as const;
+const DEFAULT_API_MODEL = 'gpt-image-2';
+const TRANSPARENT_API_MODEL = 'gpt-image-1.5';
+const MODEL_IDS = [
+  'gpt-image-2-low',
+  'gpt-image-2-medium',
+  'gpt-image-2-high',
+  'gpt-image-2',
+  'gpt-image-1.5',
+  'gpt-image-1',
+  'gpt-image-1-mini',
+] as const;
 
-const MODEL_METADATA: Record<string, { quality: 'low' | 'medium' | 'high' }> = {
-  'gpt-image-2-low': { quality: 'low' },
-  'gpt-image-2-medium': { quality: 'medium' },
-  'gpt-image-2-high': { quality: 'high' },
+const MODEL_METADATA: Record<string, { apiModel: string; quality?: 'low' | 'medium' | 'high' }> = {
+  'gpt-image-2-low': { apiModel: DEFAULT_API_MODEL, quality: 'low' },
+  'gpt-image-2-medium': { apiModel: DEFAULT_API_MODEL, quality: 'medium' },
+  'gpt-image-2-high': { apiModel: DEFAULT_API_MODEL, quality: 'high' },
+  'gpt-image-2': { apiModel: DEFAULT_API_MODEL },
+  'gpt-image-1.5': { apiModel: 'gpt-image-1.5' },
+  'gpt-image-1': { apiModel: 'gpt-image-1' },
+  'gpt-image-1-mini': { apiModel: 'gpt-image-1-mini' },
 };
 
 const CODEX_INSTRUCTIONS = 'You are an assistant that must fulfill image generation requests by using the image_generation tool when provided.';
@@ -46,8 +60,19 @@ function appendSeparateOutputGuardrail(prompt: string, count: number): string {
 function coerceModelId(value?: string): string | undefined {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return undefined;
-  if (raw === 'gpt-image-2') return DEFAULT_MODEL;
   return MODEL_METADATA[raw] ? raw : undefined;
+}
+
+function resolveApiModelForRequest(model: string, requestedModel: string | undefined, background: string): { model: string; apiModel: string; explicitUnsupportedTransparent: boolean } {
+  const meta = MODEL_METADATA[model] || MODEL_METADATA[DEFAULT_MODEL];
+  const explicitRequested = Boolean(String(requestedModel || '').trim());
+  if (background === 'transparent' && String(meta.apiModel).startsWith('gpt-image-2')) {
+    if (explicitRequested) {
+      return { model, apiModel: meta.apiModel, explicitUnsupportedTransparent: true };
+    }
+    return { model: TRANSPARENT_API_MODEL, apiModel: TRANSPARENT_API_MODEL, explicitUnsupportedTransparent: false };
+  }
+  return { model, apiModel: meta.apiModel, explicitUnsupportedTransparent: false };
 }
 
 function resolveDefaultModel(): string {
@@ -233,9 +258,13 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
 
   async generate(request: ImageGenerationResolvedRequest): Promise<ImageGenerationResult> {
     const prompt = String(request.prompt || '').trim();
-    const model = this.resolveModel(request.model);
+    let model = this.resolveModel(request.model);
     const size = IMAGE_SIZE_BY_ASPECT_RATIO[request.aspect_ratio];
-    const meta = MODEL_METADATA[model] || MODEL_METADATA[DEFAULT_MODEL];
+    const resolved = resolveApiModelForRequest(model, request.model, request.background);
+    model = resolved.model;
+    const meta = MODEL_METADATA[model] || { apiModel: resolved.apiModel };
+    const quality = request.quality || meta.quality || 'medium';
+    const mimeType = mimeTypeForImageOutputFormat(request.output_format);
     const configDir = getConfigDir();
 
     if (!prompt) {
@@ -244,8 +273,23 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        background: request.background,
+        outputFormat: request.output_format,
         error: 'Prompt is required and must be a non-empty string.',
         errorType: 'invalid_argument',
+      });
+    }
+
+    if (resolved.explicitUnsupportedTransparent) {
+      return buildImageGenerationError({
+        provider: this.id,
+        model,
+        prompt,
+        aspectRatio: request.aspect_ratio,
+        background: request.background,
+        outputFormat: request.output_format,
+        error: `${resolved.apiModel} does not support transparent backgrounds. Use background="opaque"/"auto" with ${resolved.apiModel}, or omit the model so Prometheus can use ${TRANSPARENT_API_MODEL} for true alpha output.`,
+        errorType: 'unsupported_background',
       });
     }
 
@@ -274,7 +318,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
           if (images.length >= request.count) break;
           const persisted = await persistGeneratedImage({
             bytes: Buffer.from(generated.imageB64, 'base64'),
-            mimeType: 'image/png',
+            mimeType,
             provider: this.id,
             prompt,
             outputDir: request.output_dir,
@@ -296,11 +340,11 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
 
         const imageTool: Record<string, unknown> = {
           type: 'image_generation',
-          model: API_MODEL,
+          model: resolved.apiModel,
           size,
-          quality: meta.quality,
-          output_format: 'png',
-          background: 'opaque',
+          quality,
+          output_format: request.output_format,
+          background: request.background,
           action: referenceImages.length ? 'edit' : 'generate',
           partial_images: 1,
         };
@@ -347,6 +391,8 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
             model,
             prompt,
             aspectRatio: request.aspect_ratio,
+            background: request.background,
+            outputFormat: request.output_format,
             error: `OpenAI image generation via Codex auth failed: ${String(batch.rawText || batch.response.statusText || batch.response.status).slice(0, 400)}`,
             errorType: 'auth_required',
           });
@@ -362,6 +408,8 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
             model,
             prompt,
             aspectRatio: request.aspect_ratio,
+            background: request.background,
+            outputFormat: request.output_format,
             error: `OpenAI image generation via Codex auth failed: ${String(single.rawText || single.response.statusText || single.response.status).slice(0, 400)}`,
             errorType: single.response.status === 401 ? 'auth_required' : 'api_error',
           });
@@ -374,6 +422,8 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
             model,
             prompt,
             aspectRatio: request.aspect_ratio,
+            background: request.background,
+            outputFormat: request.output_format,
             error: 'Codex response contained no image_generation_call result.',
             errorType: 'empty_response',
           });
@@ -388,6 +438,8 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
           model,
           prompt,
           aspectRatio: request.aspect_ratio,
+          background: request.background,
+          outputFormat: request.output_format,
           error: 'Codex response contained no image_generation_call result.',
           errorType: 'empty_response',
         });
@@ -401,8 +453,10 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         image: images[0],
         images,
         revisedPrompt,
-        quality: meta.quality,
+        quality,
         size,
+        background: request.background,
+        outputFormat: request.output_format,
       });
     } catch (error: any) {
       const message = String(error?.message || error);
@@ -411,6 +465,8 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        background: request.background,
+        outputFormat: request.output_format,
         error: `OpenAI image generation via Codex auth failed: ${message}`,
         errorType: /not connected to openai/i.test(message) ? 'auth_required' : 'api_error',
       });

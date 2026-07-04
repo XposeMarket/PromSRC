@@ -1,0 +1,504 @@
+games/mobile-sideways-fps/index.html (100 lines) [window 1-100]:
+1: <!doctype html>
+2: <html lang="en">
+3: <head>
+4: <meta charset="utf-8" />
+5: <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+6: <title>Pocket Zombies FPS</title>
+7: <style>
+8:   html,body{margin:0;height:100%;overflow:hidden;background:#070807;color:#f2ead8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;touch-action:none;user-select:none}
+9:   #game{display:block;width:100vw;height:100vh;background:#111;image-rendering:auto}
+10:   .hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 6px #000;font-weight:800;letter-spacing:.04em}
+11:   .top{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;justify-content:space-between;align-items:flex-start;font-size:13px}
+12:   .pill{background:rgba(0,0,0,.52);border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:7px 10px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+13:   #center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:44px;color:rgba(255,245,220,.75)}
+14:   #msg{position:absolute;left:50%;top:18%;transform:translateX(-50%);text-align:center;font-size:28px;line-height:1.1;color:#ffd36a;max-width:90vw}
+15:   #prompt{position:absolute;left:50%;bottom:25%;transform:translateX(-50%);font-size:16px;background:rgba(0,0,0,.55);padding:10px 14px;border:1px solid rgba(255,211,106,.5);border-radius:12px;display:none}
+16:   .controls{position:fixed;inset:0;pointer-events:none}.btn{pointer-events:auto;position:absolute;border:1px solid rgba(255,255,255,.18);background:rgba(20,20,20,.55);color:#fff;border-radius:999px;font-weight:900;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+17:   #stick{left:22px;bottom:22px;width:112px;height:112px;background:rgba(255,255,255,.07)}#knob{width:48px;height:48px;background:rgba(255,255,255,.22);border-radius:50%;transform:translate(0,0)}
+18:   #fire{right:24px;bottom:32px;width:112px;height:112px;background:rgba(140,18,18,.72);font-size:17px}#reload{right:154px;bottom:42px;width:70px;height:70px}#use{right:34px;bottom:158px;width:76px;height:76px}#pause{right:12px;top:58px;width:50px;height:38px;border-radius:12px}#mute{right:70px;top:58px;width:50px;height:38px;border-radius:12px}
+19:   #start{pointer-events:auto;position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 42%,rgba(90,16,16,.9),rgba(0,0,0,.96));z-index:5;text-align:center;padding:22px}.card{max-width:560px;border:1px solid rgba(255,255,255,.18);border-radius:22px;background:rgba(0,0,0,.45);padding:24px;box-shadow:0 20px 80px rgba(0,0,0,.5)}h1{font-size:44px;margin:0 0 8px;color:#ffcc63}.card p{color:#d6c7a8}.startbtn{display:inline-block;margin-top:12px;background:#e43b28;color:white;border:0;border-radius:14px;padding:14px 22px;font-weight:1000;font-size:18px}
+20: </style>
+21: </head>
+22: <body>
+23: <canvas id="game"></canvas>
+24: <div class="hud">
+25:   <div class="top"><div class="pill" id="leftHud">WAVE 1 · ZOMBIES 0</div><div class="pill" id="midHud">M1911 · 8/48 · $500</div><div class="pill" id="rightHud">HP 100</div></div>
+26:   <div id="msg"></div><div id="center">+</div><div id="prompt"></div>
+27: </div>
+28: <div class="controls"><div class="btn" id="stick"><div id="knob"></div></div><div class="btn" id="fire">FIRE</div><div class="btn" id="reload">R</div><div class="btn" id="use">BUY</div><div class="btn" id="pause">Ⅱ</div><div class="btn" id="mute">♪</div></div>
+29: <div id="start"><div class="card"><h1>POCKET ZOMBIES</h1><p>Mobile sideways FPS. Survive waves, earn points, buy guns, open doors, grab perks and power-ups.</p><p>Desktop: WASD move, mouse/arrow look, Space or FIRE button to shoot, R reload, E buy, P pause.</p><button class="startbtn">START GAME</button></div></div>
+30: <script>
+31: (()=>{
+32: 'use strict';
+33: const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+34: const ui={start:document.getElementById('start'),left:document.getElementById('leftHud'),mid:document.getElementById('midHud'),right:document.getElementById('rightHud'),msg:document.getElementById('msg'),prompt:document.getElementById('prompt'),knob:document.getElementById('knob')};
+35: let W=1,H=1,last=0,raf=0,startClockId=null,audio=false,muted=false;
+36: const TAU=Math.PI*2,FOV=Math.PI/3,keys={},touch={mx:0,my:0,look:0,fire:false};
+37: const weapons={M1911:{name:'M1911',price:0,dmg:34,rate:.32,mag:8,reserve:48,reload:1.05,spread:.018},SMG:{name:'SMG',price:950,dmg:22,rate:.09,mag:28,reserve:140,reload:1.25,spread:.04},SHOTGUN:{name:'SHOTGUN',price:1250,dmg:92,rate:.72,mag:6,reserve:36,reload:1.45,spread:.085},RIFLE:{name:'RIFLE',price:1800,dmg:58,rate:.18,mag:20,reserve:100,reload:1.35,spread:.012}};
+38: const map0=[
+39: '111111111111111',
+40: '100000010000001',
+41: '100000010000001',
+42: '1000000D0000001',
+43: '100000010000001',
+44: '100000010000001',
+45: '100001000100001',
+46: '100000000000001',
+47: '100000000000001',
+48: '100011101110001',
+49: '100000000000001',
+50: '100000000000001',
+51: '111111111111111'];
+52: let map=[];
+53: const doors=[{x:7,y:3,cost:900,open:false,name:'Courtyard Door'}];
+54: const buys=[{x:2.5,y:2.5,type:'gun',id:'SMG'},{x:12.5,y:2.5,type:'gun',id:'SHOTGUN'},{x:12.5,y:10.5,type:'gun',id:'RIFLE'},{x:2.5,y:10.5,type:'perk',id:'JUG',name:'Juggernog',cost:1500},{x:7.5,y:8.5,type:'perk',id:'SPEED',name:'Speed Cola',cost:1200}];
+55: const spawns=[{x:1.5,y:1.5},{x:13.5,y:1.5},{x:1.5,y:11.5},{x:13.5,y:11.5},{x:7.5,y:11.5}];
+56: const state={running:false,paused:false,gameOver:false,wave:1,waveState:'ready',zombies:[],zombiesToSpawn:0,spawnTimer:0,betweenTimer:0,kills:0,points:500,notice:'',noticeTimer:0,powerups:[],active:{insta:0,double:0},player:{x:3.5,y:3.5,a:0,hp:100,maxHp:100,speed:2.35},owned:['M1911'],weapon:'M1911',ammo:{},reloadTimer:0,fireCooldown:0,shots:0,startTime:0,grace:0};
+57: Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});
+58: function resize(){W=canvas.width=Math.max(320,innerWidth*devicePixelRatio);H=canvas.height=Math.max(240,innerHeight*devicePixelRatio);ctx.setTransform(1,0,0,1,0,0)} addEventListener('resize',resize);resize();
+59: function rebuildMap(){map=map0.map(r=>r.split(''));doors.forEach(d=>{map[d.y][d.x]=d.open?'0':'D'})}
+60: function reset(){rebuildMap();Object.assign(state,{running:true,paused:false,gameOver:false,wave:1,waveState:'spawning',zombies:[],zombiesToSpawn:4,spawnTimer:.75,betweenTimer:0,kills:0,points:500,notice:'WAVE 1',noticeTimer:2,powerups:[],active:{insta:0,double:0},weapon:'M1911',reloadTimer:0,fireCooldown:0,shots:0,startTime:performance.now()/1000,grace:8});state.player={x:7.5,y:7.5,a:-1.57,hp:220,maxHp:220,speed:3.05};state.owned=['M1911'];Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});doors.forEach(d=>d.open=false);rebuildMap();ui.start.style.display='none'}
+61: function tile(x,y){x=Math.floor(x);y=Math.floor(y);return map[y]?.[x]||'1'} function solid(x,y){return tile(x,y)!=='0'}
+62: function moveEnt(e,dx,dy){if(!solid(e.x+dx,e.y))e.x+=dx;if(!solid(e.x,e.y+dy))e.y+=dy}
+63: function msg(t,d=1.5){state.notice=t;state.noticeTimer=d}
+64: function spawnZombie(){const s=spawns[Math.floor(Math.random()*spawns.length)],v=Math.random();state.zombies.push({x:s.x,y:s.y,hp:(58+state.wave*14)*(v>.86?1.75:1),maxHp:58+state.wave*14,speed:(.38+state.wave*.025)*(v>.86?.72:v<.18?1.18:1),r:.24,atk:.9,hurt:0,dead:false,variant:v>.86?'brute':v<.18?'runner':'walker'});state.zombiesToSpawn--}
+65: function update(dt){if(!state.running||state.paused)return;const p=state.player;if(state.noticeTimer>0)state.noticeTimer-=dt;state.active.insta=Math.max(0,state.active.insta-dt);state.active.double=Math.max(0,state.active.double-dt);state.fireCooldown=Math.max(0,state.fireCooldown-dt);state.grace=Math.max(0,state.grace-dt);if(state.reloadTimer>0){state.reloadTimer-=dt;if(state.reloadTimer<=0)finishReload()}
+66:  let turn=(keys.ArrowLeft?-1:0)+(keys.ArrowRight?1:0)+touch.look;p.a+=turn*2.6*dt;let f=(keys.w||keys.W||keys.ArrowUp?1:0)+(keys.s||keys.S||keys.ArrowDown?-1:0)+touch.my;let st=(keys.d||keys.D?1:0)+(keys.a||keys.A?-1:0)+touch.mx;let sp=p.speed*(state.active.insta?1.03:1);let dx=(Math.cos(p.a)*f+Math.cos(p.a+Math.PI/2)*st)*sp*dt,dy=(Math.sin(p.a)*f+Math.sin(p.a+Math.PI/2)*st)*sp*dt;moveEnt(p,dx,dy);
+67:  if((touch.fire||keys[' ']||keys.Mouse)&&state.fireCooldown<=0)shoot();
+68:  if(state.waveState==='spawning'){state.spawnTimer-=dt;if(state.zombiesToSpawn>0&&state.spawnTimer<=0){spawnZombie();state.spawnTimer=Math.max(1.05,2.15-state.wave*.07)}if(state.zombiesToSpawn<=0)state.waveState='fighting'}
+69:  for(const z of state.zombies){z.hurt=Math.max(0,z.hurt-dt);const ang=Math.atan2(p.y-z.y,p.x-z.x),dist=Math.hypot(p.x-z.x,p.y-z.y);if(dist>.55){moveEnt(z,Math.cos(ang)*z.speed*dt,Math.sin(ang)*z.speed*dt)}else{z.atk-=dt;if(z.atk<=0){z.atk=1.15;if(state.grace<=0){p.hp-=state.owned.includes('JUG')?5:9;msg('BITTEN!',.45);beep(90,.04);if(p.hp<=0)endGame()}}}}
+70:  state.zombies=state.zombies.filter(z=>!z.dead);
+71:  if(state.waveState==='fighting'&&state.zombies.length===0&&state.zombiesToSpawn<=0){state.waveState='between';state.betweenTimer=4;state.points+=300;msg('WAVE COMPLETE +$300',2);beep(520,.08)}
+72:  if(state.waveState==='between'){state.betweenTimer-=dt;if(state.betweenTimer<=0){state.wave++;state.waveState='spawning';state.zombiesToSpawn=5+state.wave*2;state.spawnTimer=.5;msg('WAVE '+state.wave,2)}}
+73:  for(const pu of state.powerups){if(Math.hypot(p.x-pu.x,p.y-pu.y)<.7){pickup(pu);pu.dead=true}}state.powerups=state.powerups.filter(p=>!p.dead);
+74: }
+75: function shoot(){const w=weapons[state.weapon],am=state.ammo[state.weapon];if(state.reloadTimer>0)return;if(am.mag<=0){reload();return}am.mag--;state.shots++;state.fireCooldown=w.rate*(state.owned.includes('SPEED')?.78:1);beep(180+Math.random()*90,.025);let best=null,bang=999;for(const z of state.zombies){const dx=z.x-state.player.x,dy=z.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));let allowance=w.spread+Math.atan2(.36,dist);if(Math.abs(da)<allowance&&dist<9&&Math.abs(da)<bang&&!blocked(state.player.x,state.player.y,z.x,z.y)){best=z;bang=Math.abs(da)}}if(best){let dmg=state.active.insta?999:w.dmg*(s...[line truncated]
+76: function kill(z){z.dead=true;state.kills++;state.points+=state.active.double?140:70;if(Math.random()<.16)drop(z.x,z.y);beep(360,.035)}
+77: function reload(){const w=weapons[state.weapon],am=state.ammo[state.weapon];if(am.mag>=w.mag||am.reserve<=0||state.reloadTimer>0)return;state.reloadTimer=w.reload*(state.owned.includes('SPEED')?.55:1);msg('RELOADING',.5)}function finishReload(){const w=weapons[state.weapon],am=state.ammo[state.weapon],need=w.mag-am.mag,take=Math.min(need,am.reserve);am.mag+=take;am.reserve-=take}
+78: function drop(x,y){const types=['MAX AMMO','INSTA KILL','DOUBLE POINTS','NUKE'];state.powerups.push({x,y,type:types[Math.floor(Math.random()*types.length)],t:9})}function pickup(p){msg(p.type,1.3);beep(650,.08);if(p.type==='MAX AMMO')Object.keys(weapons).forEach(k=>state.ammo[k].reserve=Math.max(state.ammo[k].reserve,weapons[k].reserve));if(p.type==='INSTA KILL')state.active.insta=15;if(p.type==='DOUBLE POINTS')state.active.double=15;if(p.type==='NUKE'){state.zombies.forEach(z=>kill(z));state.points+=400}}
+79: function blocked(x1,y1,x2,y2){const n=24;for(let i=1;i<n;i++){let t=i/n;if(solid(x1+(x2-x1)*t,y1+(y2-y1)*t))return true}return false}
+80: function interactable(){let best=null,bd=1.25;for(const b of buys){let d=Math.hypot(state.player.x-b.x,state.player.y-b.y);if(d<bd){best=b;bd=d}}for(const d of doors){let q=Math.hypot(state.player.x-(d.x+.5),state.player.y-(d.y+.5));if(!d.open&&q<bd){best={type:'door',door:d};bd=q}}return best}function use(){const it=interactable();if(!it)return;if(it.type==='gun'){const w=weapons[it.id];if(state.points<w.price)return msg('NEED $'+w.price);state.points-=w.price;if(!state.owned.includes(it.id))state.owned.push(it.id);state.weapon=it.id;state.ammo[it.id].mag=w.mag;state.ammo[it.id].reserve=w.reserve;msg('BOUGHT '+w.name)}else if(it.type==='perk'){if(state.owned.includes(it.id))return msg('ALRE...[line truncated]
+81: function endGame(){state.gameOver=true;state.running=false;msg('GAME OVER - WAVE '+state.wave+' · KILLS '+state.kills,99);ui.start.style.display='flex';ui.start.querySelector('h1').textContent='GAME OVER';ui.start.querySelector('p').textContent='Wave '+state.wave+' · '+state.kills+' kills · $'+state.points+'. Tap to restart.'}
+82: function cast(a){let x=state.player.x,y=state.player.y,step=.035,dist=0;while(dist<18){x+=Math.cos(a)*step;y+=Math.sin(a)*step;dist+=step;if(solid(x,y))return{dist,x,y,t:tile(x,y)}}return{dist:18,x,y,t:'0'}}
+83: function render(){ctx.fillStyle='#0a0908';ctx.fillRect(0,0,W,H);let sky=ctx.createLinearGradient(0,0,0,H*.5);sky.addColorStop(0,'#151819');sky.addColorStop(1,'#312014');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H/2);let floor=ctx.createLinearGradient(0,H/2,0,H);floor.addColorStop(0,'#1b1a16');floor.addColorStop(1,'#070706');ctx.fillStyle=floor;ctx.fillRect(0,H/2,W,H/2);const cols=Math.min(320,Math.floor(W/4)),cw=W/cols,zbuf=[];for(let i=0;i<cols;i++){let a=state.player.a-FOV/2+FOV*i/cols,r=cast(a),d=r.dist*Math.cos(a-state.player.a);zbuf[i]=d;let h=Math.min(H,H/(d+.08)*.82),shade=Math.max(35,210-d*18),x=i*cw;ctx.fillStyle=r.t==='D'?`rgb(${shade*.7},${shade*.35},20)`: `rgb(${shade*.45},${shade*.42...[line truncated]
+84:  const sprites=[];for(const z of state.zombies)sprites.push({...z,kind:'z'});for(const p of state.powerups)sprites.push({...p,kind:'p'});for(const b of buys)sprites.push({...b,kind:'b'});sprites.sort((a,b)=>Math.hypot(b.x-state.player.x,b.y-state.player.y)-Math.hypot(a.x-state.player.x,a.y-state.player.y));for(const s of sprites)drawSprite(s,zbuf,cols,cw);
+85:  drawGun();drawMini();if(state.noticeTimer>0||state.gameOver)ui.msg.textContent=state.notice;else ui.msg.textContent='';const it=interactable();ui.prompt.style.display=it?'block':'none';ui.prompt.textContent=it?(it.type==='gun'?'BUY '+weapons[it.id].name+' $'+weapons[it.id].price:it.type==='perk'?'BUY '+it.name+' $'+it.cost:'OPEN '+it.door.name+' $'+it.door.cost):'';const am=state.ammo[state.weapon];ui.left.textContent=`WAVE ${state.wave} · ZOMBIES ${state.zombies.length}${state.zombiesToSpawn?` +${state.zombiesToSpawn}`:''}`;ui.mid.textContent=`${weapons[state.weapon].name} · ${am.mag}/${am.reserve} · $${state.points}${state.reloadTimer>0?' · RELOAD':''}`;ui.right.textContent=`HP ${Math.max...[line truncated]
+86: function drawSprite(s,zbuf,cols,cw){let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx),da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));if(Math.abs(da)>FOV*.72||dist<.15)return;let sx=(da/FOV+.5)*W,sz=H/(dist+.05)*(s.kind==='z'?1.05:.42),sy=H/2-sz*.55;if(zbuf[Math.max(0,Math.min(cols-1,Math.floor(sx/W*cols)))]<dist-.2)return;ctx.save();ctx.translate(sx,sy+sz/2);if(s.kind==='z'){ctx.fillStyle=s.hurt?'#fff':s.variant==='brute'?'#6b4232':s.variant==='runner'?'#75804a':'#587044';ctx.fillRect(-sz*.23,-sz*.48,sz*.46,sz*.82);ctx.fillStyle='#2f3f2c';ctx.beginPath();ctx.arc(0,-sz*.58,sz*.18,0,TAU);ctx.fill();ctx.fillStyle='#ffcf61';ctx...[line truncated]
+87: function drawGun(){let bob=Math.sin(performance.now()/120)*6*devicePixelRatio,s=W*.22;ctx.fillStyle='#1b1a19';ctx.fillRect(W/2-s*.32,H-s*.42+bob,s*.64,s*.36);ctx.fillStyle=state.weapon==='SHOTGUN'?'#8d5833':state.weapon==='SMG'?'#30343b':'#444';ctx.fillRect(W/2-s*.15,H-s*.8+bob,s*.3,s*.55);ctx.fillStyle='rgba(255,210,80,.9)';if(state.fireCooldown>weapons[state.weapon].rate*.65)ctx.beginPath(),ctx.arc(W/2,H-s*.88,18*devicePixelRatio,0,TAU),ctx.fill()}
+88: function drawMini(){let scale=7*devicePixelRatio,x=10*devicePixelRatio,y=46*devicePixelRatio;ctx.save();ctx.globalAlpha=.8;for(let yy=0;yy<map.length;yy++)for(let xx=0;xx<map[0].length;xx++){ctx.fillStyle=map[yy][xx]==='0'?'rgba(255,255,255,.08)':map[yy][xx]==='D'?'#8d4a1d':'#555';ctx.fillRect(x+xx*scale,y+yy*scale,scale-1,scale-1)}ctx.fillStyle='#66d9ff';ctx.fillRect(x+state.player.x*scale-2,y+state.player.y*scale-2,4,4);ctx.fillStyle='#d53';state.zombies.forEach(z=>ctx.fillRect(x+z.x*scale-1,y+z.y*scale-1,3,3));ctx.restore()}
+89: function loop(t){let now=t/1000,dt=Math.min(.05,now-(last||now));last=now;update(dt);render();publishDebug();raf=requestAnimationFrame(loop)}
+90: function publishDebug(){window.__pocketZombiesDebug={running:state.running,paused:state.paused,gameOver:state.gameOver,wave:state.wave,waveState:state.waveState,zombies:state.zombies.length,zombiesToSpawn:state.zombiesToSpawn,spawnTimer:+state.spawnTimer.toFixed(2),player:{x:+state.player.x.toFixed(2),y:+state.player.y.toFixed(2),health:Math.ceil(state.player.hp),ammo:state.ammo[state.weapon].mag,reserve:state.ammo[state.weapon].reserve},weapon:state.weapon,points:state.points,kills:state.kills,errors:0}}
+91: function beep(f,d){if(muted)return;try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.value=.025;o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+92: ui.start.addEventListener('click',()=>{ui.start.querySelector('h1').textContent='POCKET ZOMBIES';reset();if(audio&&audio.state==='suspended')audio.resume()});document.getElementById('fire').onpointerdown=e=>{touch.fire=true;e.preventDefault()};document.getElementById('fire').onpointerup=()=>touch.fire=false;document.getElementById('reload').onclick=reload;document.getElementById('use').onclick=use;document.getElementById('pause').onclick=()=>{state.paused=!state.paused;msg(state.paused?'PAUSED':'RESUME',.7)};document.getElementById('mute').onclick=()=>{muted=!muted;msg(muted?'MUTED':'SOUND ON')};
+93: let stickId=null;document.getElementById('stick').addEventListener('pointerdown',e=>{stickId=e.pointerId;e.currentTarget.setPointerCapture(stickId)});document.getElementById('stick').addEventListener('pointermove',e=>{if(e.pointerId!==stickId)return;let r=e.currentTarget.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=(e.clientX-cx)/(r.width/2),dy=(e.clientY-cy)/(r.height/2),m=Math.max(1,Math.hypot(dx,dy));touch.mx=dx/m;touch.my=-dy/m;ui.knob.style.transform=`translate(${touch.mx*31}px,${-touch.my*31}px)`});document.getElementById('stick').addEventListener('pointerup',()=>{touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)'});
+94: canvas.addEventListener('pointermove',e=>{if(e.buttons)state.player.a+=e.movementX*.004});addEventListener('keydown',e=>{keys[e.key]=true;if(e.key==='r'||e.key==='R')reload();if(e.key==='e'||e.key==='E')use();if(e.key==='p'||e.key==='P')state.paused=!state.paused;if(e.key==='1')state.weapon=state.owned[0]||state.weapon;if(e.key==='2'&&state.owned[1])state.weapon=state.owned[1];if(e.key==='3'&&state.owned[2])state.weapon=state.owned[2]});addEventListener('keyup',e=>keys[e.key]=false);
+95: window.addEventListener('error',e=>{window.__pocketZombiesLastError=String(e.message||e.error)});rebuildMap();publishDebug();raf=requestAnimationFrame(loop);startClockId=raf;
+96: })();
+97: </script>
+98: </body>
+99: </html>
+100: 
+
+--- web-ui/src/mobile/mobile-shell.js ---
+web-ui/src/mobile/mobile-shell.js (2682 lines) read result exceeded inline budget. Requested window 1-240.
+[TOOL_RESULT_ARTIFACT] Full output saved to temp/tool-results/1782918844918-brain_thought_2026-07-01_23-13-read_webui_source.txt. Read targeted ranges from that artifact only if needed.
+
+--- workspace/self/mobile.md ---
+ERROR: File "workspace/self/mobile.md" not found
+
+audit/chats/transcripts/mobile_mr168psd_628snw.md (607 lines) [window 1-220, truncated]:
+1: ### [2026-06-30T21:41:24.023Z] user
+2: 
+3: Prom whats goin on with sparky
+4: ### [2026-06-30T21:41:57.313Z] assistant
+5: 
+6: Sparky’s not actively building right now. The latest Sparky run finished, but what it found is basically:
+7: 
+8: - One recent run completed its status-check/handoff.
+9: - The actual older Pocket Zombies work runs are paused.
+10: - Two are paused because of `gateway_restart`.
+11: - Several others are `user_pause`.
+12: - No paused run was resumed automatically because the last Sparky check didn’t have explicit resume authorization.
+13: 
+14: So the short version: Sparky is stuck in “paused task cleanup/status handoff” mode, not currently iterating on Pocket Zombies.
+15: 
+16: If you want, I can kick Sparky back into the real loop now: resume/continue the newest useful Pocket Zombies task and tell him to verify gameplay, fix what blocks play, and keep iterating instead of just reporting status.
+17: ### [2026-06-30T21:48:25.443Z] user
+18: 
+19: Please get sparky going again and working oncthe game
+20: 
+21: I want you to analyze the current state and everything of the game
+22: 
+23: Play it and verify things yourself and then get sparky fixing it up
+24: 
+25: 
+26: I want the game built! Theres a bunch of things wrong lol, all minor things - the basica work pretty well
+27: ### [2026-06-30T21:58:02.426Z] assistant
+28: 
+29: Done. Sparky is running again on the Pocket Zombies task.
+30: 
+31: I also inspected and played/tested the current game state myself. The biggest problem I found was not minor gameplay balance yet — the HTML was structurally broken:
+32: 
+33: - `index.html` had corrupted duplicated function fragments around the zombie/update/HUD/mute section.
+34: - `setMuted()` was missing its closing brace.
+35: - The file was also missing `</script>`, so the browser was treating the rest of the document weirdly.
+36: - Result: the start screen showed, but clicking **START GAME** didn’t actually enter gameplay, and `window.__pocketZombiesDebug` never appeared.
+37: 
+38: I made a first foreground repair directly in:
+39: 
+40: - `games/mobile-sideways-fps/index.html`
+41: 
+42: Fixes I applied:
+43: - Rebuilt the corrupted `updateZombie`, `damagePlayer`, `tryMove`, `setMuted`, and `updateHud` boundary.
+44: - Removed stray broken lines after `updatePrompt`.
+45: - Restored the missing closing `</script>` tag.
+46: 
+47: Sparky now has explicit authorization and a concrete handoff to continue:
+48: - repair remaining launch/debug issue,
+49: - verify by playing in browser,
+50: - fix observed minor gameplay/polish problems,
+51: - update `ZOMBIES_ROADMAP.md`,
+52: - report changed files and remaining issues.
+53: 
+54: Current honest state: I got the obvious corruption fixed and Sparky restarted, but my browser verification still showed `__pocketZombiesDebug` undefined after reload, so there’s still one remaining startup/runtime weirdness for Sparky to chase. He’s working from the exact evidence now instead of floating in paused/status mode.
+55: ### [2026-07-01T00:34:59.991Z] user
+56: 
+57: Hows it going now
+58: ### [2026-07-01T00:35:18.977Z] assistant
+59: 
+60: Sparky finished the run.
+61: 
+62: What happened:
+63: 
+64: - He patched the game start controls: **START**, **pause**, and **mute** bindings.
+65: - He verified file-level syntax/checks:
+66:   - `__check.js` passes `node --check`
+67:   - `git diff --check` passed aside from LF/CRLF warning noise
+68: - He confirmed the game implementation now has the bigger systems in place:
+69:   - waves/spawn pacing
+70:   - zombie variants
+71:   - wall buys / perks / doors
+72:   - power-ups
+73:   - reload / hold-fire / motion controls
+74:   - audio unlock + mute persistence
+75:   - pause/restart flow
+76:   - HUD/prompt polish
+77:   - map expansion pieces
+78: - He updated `games/mobile-sideways-fps/ZOMBIES_ROADMAP.md` to mark phases 0–12 complete.
+79: 
+80: Important caveat: Sparky still did **not** complete a real live browser playtest. His handoff says runtime/browser verification is still pending. So code-side: better. Actual playable feel: I still need to verify it hands-on.
+81: 
+82: I’m not fully satisfied until we run it live and play through start → movement → shooting → wave spawn → damage/restart.
+83: ### [2026-07-01T00:36:33.132Z] user
+84: 
+85: Okay you go ahead an dtest its
+86: ### [2026-07-01T00:45:35.854Z] assistant
+87: 
+88: I tested it live. Honest state: still busted, but now we know exactly where.
+89: 
+90: I found and fixed several startup blockers in `games/mobile-sideways-fps/index.html`:
+91: 
+92: - missing `rand()`
+93: - missing `tex` / `makeTex()`
+94: - bad brace nesting around `makeTex`
+95: - missing `unlockAudio()`
+96: - added a direct `onclick` fallback for START
+97: 
+98: After those, debug mode finally comes alive:
+99: 
+100: - `window.__pocketZombiesDebug` exists
+101: - start handler can set `running: true`
+102: - center overlay hides
+103: - wave advances to `WAVE 1`
+104: 
+105: But the bigger remaining issue is: the actual game loop/render path is missing or broken. The file calls:
+106: 
+107: ```js
+108: requestAnimationFrame(loop)
+109: ```
+110: 
+111: but there’s no `loop` function in the current file. Also I don’t see the actual raycast render functions anymore, just sprite helper functions. So it starts internally, but it doesn’t really become a playable FPS yet. Zombies also stayed at `0` after waiting several seconds.
+112: 
+113: I sent Sparky a concrete handoff with the exact evidence and told him to restore/rebuild:
+114: 
+115: - `loop`
+116: - raycast rendering/draw path
+117: - zombie spawning/progression
+118: - live verification: start → wave spawn → movement → shooting → ammo/kill/damage → restart
+119: - roadmap update only after real verification
+120: 
+121: So, yeah: basics are close-ish structurally, but the “playable game” part is currently missing the engine heartbeat/rendering. Sparky has the right target now, not vague “polish it” instructions.
+122: ### [2026-07-01T00:48:46.631Z] user
+123: 
+124: Ok pls keep an eye on sparky and make sure sparky is working
+125: 
+126: Also
+127: 
+128: At any point in time if you have any errors or anything regarding sparky can u let me know
+129: ### [2026-07-01T00:50:19.087Z] assistant
+130: 
+131: Done. I set up a recurring **Sparky Health Monitor** that checks Sparky every 30 minutes.
+132: 
+133: Current state:
+134: - Sparky’s latest run is **complete**, not actively failed/stalled.
+135: - The monitor will stay quiet when everything is fine.
+136: - If Sparky hits an error, stalls, pauses unexpectedly, needs input, or the monitor itself fails, it will notify you with the exact run/task ID and blocker.
+137: 
+138: I also queued an initial check now and set a watch on it, so if the first run reports anything weird I’ll surface it.
+139: ### [2026-07-01T00:52:18.384Z] user
+140: 
+141: [Internal watch match]
+142: Watch id: sparky-health-monitor-initial-run
+143: Label: Sparky Health Monitor initial run
+144: Target: scheduled_job
+145: Origin session: mobile_mr168psd_628snw
+146: Delivery session: mobile_mr168psd_628snw
+147: Observation: {
+148:   "exists": true,
+149:   "jobId": "job_1782866978780_pctvr",
+150:   "status": "scheduled",
+151:   "lastRun": "2026-07-01T00:52:15.203Z",
+152:   "lastResult": "SPARKY_ATTENTION\n\nSparky has one recoverable paused run that needs attention:\n\n- Run: `7471309c-aba6-4d49-b189-d47b700dce87`\n- Status: `paused`\n- Pause reason: `gateway_restart`\n- Started: 2026-06-17 22:33:41 UTC\n- Last progress: 2026-06-30 13:45:35 UTC\n- Recoverable: yes\n\nExact blocker from the preserved recovery context:\n\n```text\nModel returned error: anthropic API error 400\nYou're out of extra usage. Add more at claude.ai/settings/usage and keep going.\n```\n\nWhat the run was supposed to do:\n\n```text\nAnalyze the NebulaX repos and write:\nreports/nebulax-trading-platform-analysis.md\n```\n\nAssessment: this is not just a simple gateway-restart pause. The...[line truncated]
+153:   "lastDuration": 134792,
+154:   "lastOutputSessionId": "auto_job_1782866978780_pctvr",
+155:   "nextRun": "2026-07-01T01:00:00.000Z",
+156:   "name": "Sparky Health Monitor"
+157: }
+158: 
+159: Instruction:
+160: Check the initial Sparky Health Monitor scheduled job result for job_1782866978780_pctvr. If it reports any Sparky error or monitor failure, notify Raul clearly. If it is SPARKY_OK, briefly confirm the monitor is active and the first check passed.
+161: 
+162: Proceed as a normal Prometheus main-chat follow-up in this delivery session. This is not task recovery mode and not read-only mode.
+163: Use the normal tool/category system for this turn. If verification is requested, inspect the task/run state first and then use the appropriate tools directly.
+164: For agent-owned tasks, use agent_run_ops(action:"get", task_id:"...") before deciding whether recovery chat, resume, rerun, or independent verification is appropriate.
+165: Do not expose this internal payload unless it helps explain the result.
+166: ### [2026-07-01T00:52:18.690Z] assistant
+167: 
+168: Rerunning task "[Subagent] Sparky" from step 1/3.
+169: ### [2026-07-01T01:35:35.701Z] user
+170: 
+171: Okay
+172: 
+173: But again
+174: 
+175: I i need you  o actually be checking on it and actually
+176: Get sparky to continue
+177: 
+178: Like
+179: 
+180: I need you verifyi  sparkys work, testing it and seeing whats wrong, if sparky is fuckin up let me know
+181: 
+182: Once sparky completes a task, look at the game and think of other things that either arent done or need to be improved
+183: 
+184: I want you to be a monitor for sparky building this game basically
+185: ### [2026-07-01T01:41:15.593Z] assistant
+186: 
+187: Got it. I tightened this up into what you actually meant.
+188: 
+189: What I did right now:
+190: 
+191: - I inspected Sparky’s latest completed work.
+192: - I opened and tested the game myself.
+193: - I found an actual blocker: the game calls `requestAnimationFrame(loop)` but there is no `loop` function defined, and in-browser testing confirmed the game starts but never spawns zombies. It sits at `wave=1`, `zombies=0`.
+194: - I sent Sparky a concrete continuation task to fix that exact issue, add better debug verification, browser-test it, update the roadmap, and report back.
+195: - New Sparky task: `2aa0afb8-69d8-4dde-8185-4f0dac74123e`
+196: - I put a watch on that task so when Sparky finishes, stalls, pauses, or fails, I’ll inspect it.
+197: - I upgraded the recurring monitor from passive “is Sparky okay?” to active build supervision every 15 minutes:
+198:   - inspect Sparky runs
+199:   - recover/continue Sparky if stuck
+200:   - test the actual game in browser after completions
+201:   - notify you if Sparky fucks up
+202:   - if the work is good, pick the next improvement and send Sparky forward again
+203: 
+204: So yes: I’m not just checking if Sparky is “alive” anymore. I’m supervising Sparky building the game.
+205: ### [2026-07-01T01:45:03.659Z] user
+206: 
+207: [Internal watch match]
+208: Watch id: sparky-pocket-zombies-fix-monitor-2aa0afb8
+209: Label: Monitor Sparky Pocket Zombies fix
+210: Target: task
+211: Origin session: mobile_mr168psd_628snw
+212: Delivery session: mobile_mr168psd_628snw
+213: Observation: {
+214:   "exists": true,
+215:   "taskId": "2aa0afb8-69d8-4dde-8185-4f0dac74123e",
+216:   "status": "paused",
+217:   "finalSummary": "",
+218:   "title": "[Subagent] Sparky",
+219:   "sessionId": "subagent_sparky_v1_1782870000499",
+220:   "originatingSessionId": "mobile_mr168psd_628snw",
+[READ_TRUNCATED] Use start_line:221, num_lines:240 for the next chunk, or full:true only when needed.
+
+audit/chats/transcripts/mobile_mr1jhhcq_44pnn0.md (29 lines) [window 1-29]:
+1: ### [2026-07-01T03:52:09.552Z] user
+2: 
+3: Can we update the mobile app canvas so it theres a fullscreen button, in that mode there shouldnt be any of the file tabs of inspect button header etc, just sn X imto exit button on the top right
+4: 
+5: That way i can see things full screen
+6: 
+7: [UPLOADED FILES]
+8:   - "IMG_6334.png" -> saved to: C:\Users\rafel\PromSRC\workspace\uploads\IMG_6334.png
+9: Images are attached directly for vision analysis.
+10: Use the exact workspace paths above to read, edit, present, or process the attached files.
+11: ### [2026-07-01T03:58:46.922Z] assistant
+12: 
+13: Done.
+14: 
+15: I added a **Fullscreen** button to the mobile canvas/file viewer. In fullscreen mode it now hides:
+16: 
+17: - file tabs/header
+18: - filename toolbar
+19: - Interact / Inspect toggle
+20: - Preview
+21: - Save
+22: - drag handle
+23: 
+24: …and leaves only a **top-right X** overlay to exit fullscreen.
+25: 
+26: Also synced the web UI output successfully with `npm run sync:web-ui`, and updated the mobile self-docs.
+27: 
+28: One tool/workflow note from the edit: the dev edit guardrail caught a bad insertion attempt before it could write invalid JS. That’s good. The improvement I’d make next is a small **mobile canvas visual smoke-check harness** so after changes like this, Prometheus can automatically open a canvas state and verify “normal vs fullscreen” visually instead of relying mostly on code/sync checks.
+29: 
+
+audit/chats/transcripts/mobile_mr1k0cei_ghsujf.md (140 lines) [window 1-140]:
+1: ### [2026-07-01T04:06:48.609Z] user
+2: 
+3: Pls test the skill list tool
+4: 
+5: Run some queries and see what comes up etc and then lets talk abt how we can makenit better, i feel like s lot of times you search things up wnd no matching skills come up
+6: ### [2026-07-01T04:08:08.186Z] assistant
+7: 
+8: Yeah, you’re right. I tested it and the failure mode is pretty clear:
+9: 
+10: The tool works for **short exact keywords**, but falls over on **natural task-style queries**.
+11: 
+12: Examples:
+13: 
+14: - `browser automation desktop click screenshot` → **0 results**
+15:   - But `browser` returns `browser-automation-playbook`
+16:   - And `desktop` returns `desktop-automation-playbook`
+17: 
+18: - `Prometheus source edit mobile bug fix` → **0 results**
+19:   - But `mobile` returns `codex-frontend-engineer` and `src-edit-proposal-rigor`
+20:   - `source edit` returns `src-edit-proposal-rigor`
+21:   - `bug fix` returns **0**
+22: 
+23: - `shopping product research best gaming laptop under 1500` → **0 results**
+24:   - But `shopping` returns `product-carousel-builder`, `deal-analyzer`, etc.
+25: 
+26: - `Xpose Market lead generation Google Maps website analysis` → **0 results**
+27:   - But `google maps` returns `local-lead-hunting`
+28:   - `website analysis` returns `website-intelligence`
+29:   - `lead generation` returns **0**, even though relevant skills have `lead-generation` category
+30: 
+31: - `create promo video HyperFrames landscape social post` → **0 results**
+32:   - But `hyperframes` returns the right HyperFrames skills
+33:   - `video` also returns the right creative/video skills
+34: 
+35: So my read: the current search behaves too much like brittle lexical matching, probably closer to exact substring / all-token matching than “find the skills relevant to this request.” That means the more descriptive the query is, the *worse* it gets, which is backwards for an agent-facing retrieval tool.
+36: 
+37: What would make it better:
+38: 
+39: 1. **Tokenize + OR-match instead of all-term strict matching**
+40:    - A query with 8 words should not require all 8 words to appear.
+41:    - Score each skill by overlap across `id`, `name`, `description`, `categories`, `triggers`, `requiredTools`.
+42: 
+43: 2. **Normalize obvious forms**
+44:    - `lead generation` should match `lead-generation`.
+45:    - `bug fix`, `fix bug`, `debug`, `repair`, `issue`, `broken` should cluster.
+46:    - `HyperFrames`, `hyperframes`, `hyper frames` should all match.
+47: 
+48: 3. **Add semantic/vector fallback**
+49:    - If lexical returns 0, run semantic search over skill metadata and return top 5 with confidence.
+50:    - This is the big one. Natural queries should still surface plausible skills.
+51: 
+52: 4. **Return “weak matches” instead of nothing**
+53:    - If exact confidence is low, return:
+54:      > “No strong matches. Weak candidates: …”
+55:    - Empty results are usually worse than imperfect candidates for this workflow.
+56: 
+57: 5. **Use skill categories/triggers more aggressively**
+58:    - `lead generation` should match category `lead-generation`.
+59:    - `source edit mobile bug fix` should hit `src-edit-proposal-rigor` because the description literally says “change its own src, web-ui, mobile UI…”
+60: 
+61: 6. **Auto-suggest trigger improvements**
+62:    - When a query returns 0 but a follow-up shorter query finds a skill, the system should be able to say:
+63:      > Query X failed, but skill Y matched via query Z. Add X-ish trigger terms to Y?
+64: 
+65: My honest take: the biggest improvement is not manually adding 10,000 triggers. It’s making `skill_list` retrieval more forgiving and semantic. Triggers still matter, but the tool should not depend on the user/my query wording being perfect.
+66: ### [2026-07-01T04:28:44.718Z] user
+67: 
+68: Try again now and see
+69: ### [2026-07-01T04:29:39.376Z] assistant
+70: 
+71: Much better. The exact queries that returned **0 before** now all return strong matches.
+72: 
+73: What changed in behavior:
+74: 
+75: - `browser automation desktop click screenshot`
+76:   - Now returns `desktop-automation-playbook`, `browser-automation-playbook`, `voice-browser-desktop-smoke-test`, `local-file-browser-verification`, etc.
+77:   - Good.
+78: 
+79: - `Prometheus source edit mobile bug fix`
+80:   - Now returns `src-edit-proposal-rigor` first, then `codex-frontend-engineer`, `dev-debugging`, etc.
+81:   - Good. This is exactly the kind of query that was failing before.
+82: 
+83: - `shopping product research best gaming laptop under 1500`
+84:   - Now returns `product-carousel-builder` first.
+85:   - Also returns some weaker generic research skills, but the top result is right.
+86: 
+87: - `Xpose Market lead generation Google Maps website analysis`
+88:   - Now returns `xpose-lead-outreach-packet`, `local-lead-hunting`, `website-intelligence`.
+89:   - Very good. This was one of the biggest failures before.
+90: 
+91: - `create promo video HyperFrames landscape social post`
+92:   - Now returns `hyperframes`, `website-to-hyperframes`, `hyperframes-cli`, `hyperframes-media`, etc.
+93:   - Good.
+94: 
+95: I also tried some more natural “Raul actually typed this” style queries:
+96: 
+97: - `fix mobile fullscreen button in Prometheus chat UI`
+98:   - Top results: `codex-frontend-engineer`, `src-edit-proposal-rigor`.
+99:   - Good.
+100: 
+101: - `find local dentists from google maps and screen their websites for Xpose leads`
+102:   - Top results: `local-lead-hunting`, `xpose-lead-outreach-packet`, `website-intelligence`.
+103:   - Excellent.
+104: 
+105: - `where did that generated video file save`
+106:   - Mixed. It found video/HyperFrames/file skills, but **did not put `artifact-registry` near the top**, even though that’s probably the best conceptual match.
+107:   - This is a remaining weakness.
+108: 
+109: - `write an SOP for recurring lead follow up`
+110:   - It found sales/outreach skills first and `operations-manager` lower down.
+111:   - Not terrible, but for “SOP” I’d want `operations-manager` higher.
+112: 
+113: My read: the big bug is fixed. It no longer collapses to 0 on natural language. The new retrieval says it’s doing:
+114: 
+115: > weighted token/alias OR match with weak candidates instead of exact full-query substring matching
+116: 
+117: That’s a big improvement.
+118: 
+119: Remaining tuning needed:
+120: 
+121: 1. **Ranking still needs intent weighting**
+122:    - If query contains `SOP`, `operations-manager` should jump.
+123:    - If query says `where did that file save`, `artifact-registry` should jump.
+124: 
+125: 2. **Generic broad skills can over-rank**
+126:    - Some Prometheus/creative/video skills show up just because they match common words.
+127:    - Useful as fallbacks, but they shouldn’t beat purpose-built skills.
+128: 
+129: 3. **Quarantined skills should probably be demoted harder**
+130:    - They still show up as strong matches in some cases.
+131:    - Maybe only include quarantined results if no non-quarantined result is good.
+132: 
+133: 4. **Exact trigger phrase / category hits should be boosted**
+134:    - `artifact registry`, `generated outputs`, `where did that file go`
+135:    - `write SOP`, `document process`
+136:    - `lead-generation`
+137:    - These should outweigh random description overlap.
+138: 
+139: Overall: it’s now usable. Before, it was brittle enough that I’d miss obvious skills. Now the correct skill is usually in the top 1-3. Next improvement is ranking quality, not recall.
+140: 

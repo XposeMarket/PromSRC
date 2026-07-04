@@ -1,0 +1,73 @@
+games/figure-8-drift/index.html (148 lines) [window 46-116, truncated]:
+46:   body.drive-mode .build-hint{display:none}
+47: </style>
+48: </head>
+49: <body>
+50: <canvas id="game"></canvas>
+51: <div class="hud"><div class="top"><div class="pill" id="speed">0 MPH</div><div class="pill center" id="score">DRIFT 0</div><div class="pill" id="lap">LAP 0/3</div></div><div class="build-hint" id="buildHint">1 finger: spin view · 2 fingers: move center · scroll: zoom</div><div class="mini"><canvas id="map" width="236" height="164"></canvas></div><div id="message">FIGURE 8 DRIFT<span class="sub">Endless drive — drift for score. Stay on the road.</span></div></div>
+52: <div id="editor" class="on"><div class="row"><span class="lbl">MODE</span><button type="button" id="modeBuild" class="on">BUILD</button><button type="button" id="modeDrive">DRIVE</button><button type="button" id="presetF8">FIGURE 8</button><button type="button" id="menuBtn">MENU</button></div><div class="row"><span class="lbl">STRAIGHT</span><select id="straightLen"><option value="12">12m</option><option value="20" selected>20m</option><option value="32">32m</option><option value="48">48m</option></select><button type="button" id="addStraight">+ STRAIGHT</button></div><div class="row"><span class="lbl">TURN</span><select id="turnDeg"><option value="30">30°</option><option value="45">45°</opt...[line truncated]
+53: <div id="start"><div class="card"><h1>FIGURE <span>8</span><br>DRIFT</h1><p>Build your own track with straights and turns, or rip the figure-8 preset. Touch steering, gas, brake, handbrake, drift score, smoke and skids.</p><p>BUILD: pick length, tap + STRAIGHT (continues from the last piece), add turns, DONE → DRIVE. Drag the track to orbit the camera in build mode. MENU returns here anytime.</p><button id="startBtn" class="startbtn" type="button">START DRIFTING</button></div></div>
+54: <script type="module">
+55: import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.181.2/+esm';
+56: (()=>{'use strict';
+57: const canvas=document.getElementById('game'),mapCanvas=document.getElementById('map'),mctx=mapCanvas.getContext('2d');
+58: const ui={speed:document.getElementById('speed'),score:document.getElementById('score'),lap:document.getElementById('lap'),msg:document.getElementById('message'),start:document.getElementById('start'),knob:document.getElementById('steerKnob')};
+59: const keys={},touch={steer:0,gas:0,brake:0,hand:0};let W=innerWidth,H=innerHeight,last=0,started=false,paused=false,camMode=0;
+60: const buildCam={yaw:.55,pitch:.42,dist:72,px:0,pz:0,drag:false,pan:false,ptr:null,lx:0,ly:0,pinchDist:0};
+61: const scene=new THREE.Scene();scene.background=new THREE.Color(0x0a0d0b);scene.fog=new THREE.Fog(0x0a0d0b,55,145);
+62: const camera=new THREE.PerspectiveCamera(48,W/H,.1,260);const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(W,H,false);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+63: const sun=new THREE.DirectionalLight(0xfff2d0,3.1);sun.position.set(-35,48,28);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.near=1;sun.shadow.camera.far=120;sun.shadow.camera.left=-70;sun.shadow.camera.right=70;sun.shadow.camera.top=70;sun.shadow.camera.bottom=-70;scene.add(sun,new THREE.HemisphereLight(0xaecbff,0x182010,1.7));
+64: function tex(size,draw){const c=document.createElement('canvas');c.width=c.height=size;const x=c.getContext('2d');draw(x,size);const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;return t}
+65: const grassTex=tex(512,(x,s)=>{x.fillStyle='#182115';x.fillRect(0,0,s,s);for(let i=0;i<900;i++){const g=18+Math.random()*34;x.fillStyle=`rgba(${g},${55+Math.random()*45},${22+Math.random()*20},${.15+Math.random()*.22})`;x.fillRect(Math.random()*s,Math.random()*s,1+Math.random()*3,1+Math.random()*6)}});grassTex.repeat.set(32,32);
+66: const asphaltTex=tex(512,(x,s)=>{x.fillStyle='#23262a';x.fillRect(0,0,s,s);for(let i=0;i<3300;i++){const v=40+Math.random()*42;x.fillStyle=`rgba(${v},${v},${v+3},${.08+Math.random()*.18})`;x.fillRect(Math.random()*s,Math.random()*s,1+Math.random()*3,1+Math.random()*3)}});asphaltTex.repeat.set(1.6,1.6);
+67: scene.add(new THREE.Mesh(new THREE.PlaneGeometry(260,260),new THREE.MeshStandardMaterial({map:grassTex,roughness:.95})).rotateX(-Math.PI/2));
+68: const ROAD=12,HALF=ROAD/2,OUT=HALF+1.15;
+69: const PRESET_F8={type:'preset'};
+70: const TRACK_LS_KEY='figure8drift_tracks_v1';
+71: let segments=[{...PRESET_F8}],trackClosed=true,buildMode=true;
+72: let curve,N=420,center=[],gates=[.005,.255,.505,.755],lapsTotal=3,trackParts=[];
+73: function presetFigure8Points(){const pts=[];for(let i=0;i<360;i++){const t=i/360*Math.PI*2;pts.push(new THREE.Vector3(Math.sin(t)*42,0,Math.sin(t)*Math.cos(t)*34))}return pts}
+74: function isPreset(){return segments.length===1&&segments[0].type==='preset'}
+75: function sampleCustomPath(segs){const pts=[],step=.42;let x=0,z=0,h=Math.PI/2;const push=()=>pts.push(new THREE.Vector3(x,0,z));push();for(const s of segs){if(s.type==='straight'){const len=+s.len||20,n=Math.max(2,Math.ceil(len/step));for(let i=0;i<n;i++){x+=Math.sin(h)*step;z+=Math.cos(h)*step;push()}}else if(s.type==='turnL'||s.type==='turnR'){const sign=s.type==='turnL'?1:-1,rad=(+s.deg||90)*Math.PI/180,r=+s.r||16,n=Math.max(4,Math.ceil(r*rad/step)),dh=sign*rad/n;for(let i=0;i<n;i++){h+=dh;x+=Math.sin(h)*step;z+=Math.cos(h)*step;push()}}}return pts}
+76: function setGatesForTrack(){if(isPreset()){trackClosed=true;gates=[.005,.255,.505,.755]}else{trackClosed=false;gates=[.2,.45,.7,.92]}lapsTotal=9999}
+77: function disposeTrackParts(){for(const o of trackParts){scene.remove(o);o.geometry?.dispose?.()}trackParts=[]}
+78: function rebuildTrack(){disposeTrackParts();setGatesForTrack();let points;if(isPreset())points=presetFigure8Points();else if(!segments.length)points=[new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,24)];else points=sampleCustomPath(segments);curve=new THREE.CatmullRomCurve3(points,trackClosed,'catmullrom',trackClosed?.55:.35);const trackGeo=new THREE.BufferGeometry(),verts=[],uvs=[],idx=[];center=[];N=Math.max(80,Math.min(520,Math.floor(curve.getLength()*2.2)));const bankAmp=isPreset()?.32:.08;for(let i=0;i<N;i++){const u=i/(trackClosed?N:N-1||1),p=curve.getPointAt(Math.min(u,1)),tan=curve.getTangentAt(Math.min(u,.999)).normalize(),n=new THREE.Vector3(-tan.z,0,tan.x);center.push(p.clone());co...[line truncated]
+79: 
+80: const car=new THREE.Group();const bodyMat=new THREE.MeshStandardMaterial({color:0xff5138,roughness:.42,metalness:.28}),darkMat=new THREE.MeshStandardMaterial({color:0x101318,roughness:.5}),glassMat=new THREE.MeshStandardMaterial({color:0x8fd7ff,roughness:.18,metalness:.05,transparent:true,opacity:.74});
+81: const body=new THREE.Mesh(new THREE.BoxGeometry(2.35,.58,4.2),bodyMat);body.position.y=.55;body.castShadow=true;car.add(body);const cab=new THREE.Mesh(new THREE.BoxGeometry(1.65,.55,1.75),glassMat);cab.position.set(0,1.05,-.35);cab.castShadow=true;car.add(cab);for(const x of[-1.25,1.25])for(const z of[-1.35,1.35]){const w=new THREE.Mesh(new THREE.CylinderGeometry(.38,.38,.32,16),darkMat);w.rotation.z=Math.PI/2;w.position.set(x,.34,z);w.castShadow=true;car.add(w)}scene.add(car);
+82: const skidMat=new THREE.MeshBasicMaterial({color:0x050505,transparent:true,opacity:.42,depthWrite:false}),skids=[];function addSkid(x,z,yaw){const m=new THREE.Mesh(new THREE.PlaneGeometry(.34,2.1),skidMat);m.position.set(x,.085,z);m.rotation.set(-Math.PI/2,0,yaw);scene.add(m);skids.push({m,life:7});if(skids.length>140){scene.remove(skids.shift().m)}}
+83: const smoke=[];function smokeTex(){return tex(128,(x,s)=>{const g=x.createRadialGradient(s/2,s/2,4,s/2,s/2,s/2);g.addColorStop(0,'rgba(220,220,210,.42)');g.addColorStop(1,'rgba(220,220,210,0)');x.fillStyle=g;x.fillRect(0,0,s,s)})}const sTex=smokeTex(),sMat=new THREE.SpriteMaterial({map:sTex,transparent:true,depthWrite:false,color:0xd9d4c7});function spawnSmoke(x,z){const sp=new THREE.Sprite(sMat.clone());sp.position.set(x,.55,z);sp.scale.set(1.2,1.2,1);scene.add(sp);smoke.push({sp,life:.75})}
+84: let passed=0,carX=0,carZ=1,yaw=Math.PI/2,velX=0,velZ=0,laps=0,score=0,combo=1,bestDrift=0,offroad=0,finished=false;
+85: function syncCarToStart(){if(!center.length)return;const p=center[0],tan=curve.getTangentAt(0).normalize();carX=p.x;carZ=p.z+1;yaw=Math.atan2(tan.x,tan.z)}
+86: function updateSegUI(){const el=document.getElementById('segCount');if(el)el.textContent=isPreset()?'Figure-8 preset':segments.length+' pieces'}
+87: function readTrackLibrary(){try{const raw=localStorage.getItem(TRACK_LS_KEY);const j=raw?JSON.parse(raw):null;return Array.isArray(j)?j:[]}catch(_){return[]}}
+88: function writeTrackLibrary(list){try{localStorage.setItem(TRACK_LS_KEY,JSON.stringify(list.slice(0,24)))}catch(_){}}
+89: function trackSnapshot(){return{segments:segments.map(s=>({...s})),trackClosed,isPreset:isPreset(),savedAt:Date.now()}}
+90: function applyTrackSnapshot(snap){if(!snap||!Array.isArray(snap.segments))return false;if(snap.isPreset&&snap.segments.length===1&&snap.segments[0].type==='preset'){segments=[{...PRESET_F8}];trackClosed=true}else{segments=snap.segments.map(x=>({...x}));trackClosed=!!snap.trackClosed}rebuildTrack();reset();updateSegUI();return true}
+91: function saveTrackToSlot(){if(isPreset()){ui.msg.innerHTML='SAVE TRACK<span class="sub">Add straights/turns first — figure-8 can’t be saved as custom.</span>';return}const name=prompt('Track name','My track');if(name==null)return;const list=readTrackLibrary();const entry={name:(name.trim()||'My track').slice(0,40),...trackSnapshot()};const ix=list.findIndex(t=>t.name===entry.name);if(ix>=0)list[ix]=entry;else list.unshift(entry);writeTrackLibrary(list);refreshTrackLoadSelect();ui.msg.innerHTML='SAVED<span class="sub">“'+entry.name+'” stored on this device.</span>'}
+92: function loadTrackFromSlot(){const sel=document.getElementById('trackLoadSel');if(!sel||!sel.value)return;const list=readTrackLibrary();const t=list.find(x=>String(x.savedAt)===sel.value);if(!t)return;applyTrackSnapshot(t);ui.msg.innerHTML='LOADED<span class="sub">'+t.name+'</span>'}
+93: function deleteTrackSlot(){const sel=document.getElementById('trackLoadSel');if(!sel||!sel.value)return;if(!confirm('Delete this saved track?'))return;writeTrackLibrary(readTrackLibrary().filter(x=>String(x.savedAt)!==sel.value));refreshTrackLoadSelect()}
+94: function refreshTrackLoadSelect(){const sel=document.getElementById('trackLoadSel');if(!sel)return;const list=readTrackLibrary(),v=sel.value;sel.innerHTML='<option value="">— saved —</option>'+list.map(t=>'<option value="'+t.savedAt+'">'+t.name.replace(/</g,'')+'</option>').join('');if([...sel.options].some(o=>o.value===v))sel.value=v}
+95: function setBuildMode(on){buildMode=on;document.body.classList.toggle('build-mode',on);document.body.classList.toggle('drive-mode',!on);document.getElementById('modeBuild')?.classList.toggle('on',on);document.getElementById('modeDrive')?.classList.toggle('on',!on);car.visible=!on;if(on&&center.length){const p=center[Math.floor(center.length/2)];buildCam.px=p.x;buildCam.pz=p.z}}
+96: function ensureCustom(){if(isPreset()){segments=[];trackClosed=false}}
+97: function addStraightPiece(){ensureCustom();segments.push({type:'straight',len:+document.getElementById('straightLen').value});rebuildTrack();reset()}
+98: function addTurnPiece(turn){ensureCustom();segments.push({type:turn,deg:+document.getElementById('turnDeg').value,r:+document.getElementById('turnRad').value});rebuildTrack();reset()}
+99: function loadPresetF8(){segments=[{...PRESET_F8}];rebuildTrack();reset();ui.msg.innerHTML='FIGURE 8 DRIFT<span class="sub">Endless laps — drift for score.</span>'}
+100: function openMenu(){ui.start.style.display='flex';started=false;paused=false;finished=false;touch.steer=touch.gas=touch.brake=touch.hand=0;velX=velZ=0}
+101: document.getElementById('modeBuild')?.addEventListener('click',()=>setBuildMode(true));
+102: document.getElementById('modeDrive')?.addEventListener('click',()=>{setBuildMode(false);reset()});
+103: document.getElementById('presetF8')?.addEventListener('click',loadPresetF8);
+104: document.getElementById('menuBtn')?.addEventListener('click',openMenu);
+105: document.getElementById('menuBtnDrive')?.addEventListener('click',openMenu);
+106: document.getElementById('addStraight')?.addEventListener('click',addStraightPiece);
+107: document.getElementById('addTurnL')?.addEventListener('click',()=>addTurnPiece('turnL'));
+108: document.getElementById('addTurnR')?.addEventListener('click',()=>addTurnPiece('turnR'));
+109: document.getElementById('undoSeg')?.addEventListener('click',()=>{if(isPreset())return;segments.pop();rebuildTrack();reset()});
+110: document.getElementById('clearSeg')?.addEventListener('click',()=>{segments=[];trackClosed=false;rebuildTrack();reset()});
+111: document.getElementById('doneTrack')?.addEventListener('click',()=>{if(!isPreset()&&!segments.length)segments.push({type:'straight',len:32});rebuildTrack();setBuildMode(false);reset()});
+112: document.getElementById('saveTrackBtn')?.addEventListener('click',saveTrackToSlot);
+113: document.getElementById('loadTrackBtn')?.addEventListener('click',loadTrackFromSlot);
+114: document.getElementById('delTrackBtn')?.addEventListener('click',deleteTrackSlot);
+115: function nearestProgress(x,z){let best=1e9,bi=0;for(let i=0;i<N;i+=2){const p=center[i],d=(p.x-x)*(p.x-x)+(p.z-z)*(p.z-z);if(d<best){best=d;bi=i}}return{u:bi/N,dist:Math.sqrt(best),i:bi}}
+116: function reset(){syncCarToStart();velX=velZ=0;laps=0;passed=0;score=0;combo=1;bestDrift=0;offroad=0;finished=false;if(isPreset())ui.msg.innerHTML='FIGURE 8 DRIFT<span class="sub">Gas into the corner, tap DRIFT, countersteer. Endless laps.</span>';else ui.msg.innerHTML='CUSTOM TRACK<span class="sub">Build in BUILD mode, then DRIVE. Drift for score — drive forever.</span>'}
+[READ_TRUNCATED] Returned 71 of 148 lines. Use start_line:117, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

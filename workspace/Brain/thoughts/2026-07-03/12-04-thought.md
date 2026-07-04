@@ -1,0 +1,54 @@
+---
+# Thought 1 — 2026-07-03 | Window: 2026-07-02 16:04 UTC–2026-07-03 04:04 UTC
+_Generated: 2026-07-03 12:04 local (session `brain_thought_2026-07-03_12-04`)_
+
+## A. Activity Summary
+- **Dominant thread:** `mobile_mr2ors69_u35dij` — Pocket Zombies / `games/mobile-sideways-fps/index.html`: control/yaw math fix (00:50 UTC), PlaneGeometry billboard + PNG texture fix (00:58 UTC), screenshots to mobile. evidence: `memory/2026-07-03-intraday-notes.md:2-8` (confidence: high)
+- **Platform fix landed in-window:** dev edit `dev_edit_mr4b73nv_03640271` (~02:27 UTC) — tokenized `?pt=` auth on canvas **inline / download / workspace/** routes; mobile `buildWorkspaceCanvasUrl` + shell iframe `canvasWorkspaceUrl`. evidence: `memory/2026-07-03-intraday-notes.md:14-16`; live `src/gateway/routes/canvas.router.ts:4722-4779`; `web-ui/src/mobile/mobile-api.js:1524-1529`; `web-ui/src/mobile/mobile-shell.js:1987-1990` (confidence: high)
+- **Brain meta:** `brain_dream_2026-07-02` synthesized 2026-07-02 from intraday + 110 skill episodes (03:46 UTC); prior Thought runs (`08-53`, `09-44`) often **failed to persist** `Brain/thoughts/*.md` / ledger appends (write_note or tool-only). evidence: `audit/chats/transcripts/brain_thought_2026-07-02_09-44.md:6-7`; `Brain/dreams/2026-07-02/03-42-dream.md:5-6` (confidence: high)
+- **Open verification gap:** Raul-facing mobile canvas E2E for HTML games (relative assets, subresource auth) is **claimed fixed in note** but not re-verified on a paired phone in this Thought run. evidence: intraday DEV_EDIT note vs absence of post-deploy mobile smoke in window artifacts (confidence: medium)
+
+## B. Behavior Quality
+**Went well:**
+- Game fixes paired with syntax validation and browser smoke; movement/look math aligned to Three.js yaw convention. evidence: `memory/2026-07-03-intraday-notes.md:4-8` (confidence: high)
+- Canvas serving path is now explicit in source: live HTML iframe uses `/api/canvas/workspace/<segments>?pt=…`, not `buildInlineMediaUrl` for the document URL. evidence: `mobile-shell.js:1987-1990`, `mobile-api.js:1524-1538` (confidence: high)
+
+**Stalled or struggled:**
+- Thought pipeline debt: multiple 2026-07-02/03 Thought sessions ended without on-disk thought files or ledger rows (`mobile-html-canvas-workspace-asset-loading` still missing before this run). evidence: `brain_thought_2026-07-02_09-44.md:22-37` (confidence: high)
+- Brain Thought cron hit **context compaction** mid-run (`brain_thought_2026-07-03_12-04`); reconstruction relied on intraday notes + grep, not full transcript replay. evidence: compaction summary + sparse `audit/chats/transcripts/brain_thought_2026-07-03_12-04.jsonl` (confidence: medium)
+
+**Tool usage patterns:**
+- **Good:** `grep_source` / `read_webui_source` with line windows after failed compound `search_files` patterns.
+- **Friction:** `search_files` with `|` alternation often returns 0 in literal mode; searching a **file path** as `directory` fails; full `active-work.jsonl` read overflows → temp artifacts. evidence: prior Thought transcript + this run (confidence: high)
+- **False negative:** `grep_webui_source` for `buildWorkspaceCanvasUrl|_mobileMediaUrl` returned 0 while single-token `buildWorkspaceCanvasUrl` matched 5 files — prefer single-token greps. (confidence: high)
+
+**User corrections:**
+- none new in this window (ongoing preference: report tool errors; filter skill reads by relevance — already in USER.md)
+
+## C. Memory Candidates
+| Item | Target | Confidence | Evidence |
+|------|--------|-----------|---------|
+| Mobile live HTML canvas games load via `buildWorkspaceCanvasUrl` → `/api/canvas/workspace/...?pt=`; sub-assets need same auth/route family as of 2026-07-03 dev edit. | MEMORY.md | medium | `memory/2026-07-03-intraday-notes.md:14-16`; `canvas.router.ts:4766-4774` |
+| Pocket Zombies 2026-07-02/03 work is **in_progress** on disk (`Three.js` monolith), not stalled at 2026-06-28. | MEMORY.md | high | `Brain/dreams/2026-07-02/03-42-dream.md:38-39`; ledger line 57 refresh |
+
+_(No memory writes this run per schedule constraints.)_
+
+## D. Improvement Candidates
+| Issue | Proposal Type | Confidence | Evidence |
+|-------|--------------|-----------|---------|
+| Brain Thought jobs should require `file_ops` / expected outputs so `Brain/thoughts/...` and `active-work.jsonl` cannot be skipped when only `write_note` runs. | general | high | `brain_thought_2026-07-02_09-44.md:6-7` |
+| Post–canvas-auth mobile E2E checklist for workspace HTML games (open game tab, network 404/401 on PNG/JS relatives). | skill_evolution | medium | open verification gap above |
+| `local-file-browser-verification` should distinguish desktop `http.server` cwd from Prometheus mobile canvas URL base. | skill_evolution | high | Pocket Zombies loop in dream + intraday |
+
+## E. Active Work Ledger (this run)
+- **Refreshed** `pocket-zombies-mobile-fps-build-2026-06-28` → `lastVerified: 2026-07-03`; note platform auth fix + remaining mobile E2E.
+- **Added** `mobile-html-canvas-workspace-asset-loading` — in_progress, diskPath canvas.router + mobile-api/shell + `workspace/self`.
+- **Added** `pocket-zombies-mobile-canvas-e2e` — in_progress, game file + paired mobile smoke.
+- **Refreshed** `mobile-realtime-voice-photo-attachments-doc-gap` → `lastVerified: 2026-07-03` (canvas/HTML serving extends mobile doc debt).
+
+## F. Window Verdict
+**Active:** yes  
+**Signal quality:** high (concentrated mobile game + gateway/mobile canvas auth)  
+**Summary:** The window closed the loop from “assets missing on mobile canvas” investigation to a **shipped** workspace URL + `?pt=` auth path, while game-side Pocket Zombies fixes continued. Residual risk is **verification on real mobile iframe**, not missing routes in source. Thought/dream artifact hygiene remains a meta liability.
+
+---

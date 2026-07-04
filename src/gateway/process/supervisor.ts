@@ -460,7 +460,21 @@ export class ProcessSupervisor {
 
   async wait(runId: string): Promise<ProcessRunExit | null> {
     const run = this.active.get(runId);
-    if (!run) return null;
+    if (!run) {
+      const record = this.store.loadRecord(runId);
+      if (!record || record.state !== 'exited') return null;
+      const logs = this.log(runId);
+      return {
+        runId,
+        reason: record.terminationReason || 'exit',
+        exitCode: record.exitCode ?? null,
+        exitSignal: record.exitSignal ?? null,
+        stdout: logs.stdout.trim(),
+        stderr: logs.stderr.trim(),
+        timedOut: record.timedOut === true,
+        noOutputTimedOut: record.noOutputTimedOut === true,
+      };
+    }
     return run.wait();
   }
 

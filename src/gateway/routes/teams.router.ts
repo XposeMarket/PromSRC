@@ -6,7 +6,7 @@ import { getBrainDir } from '../brain/brain-state';
 import { getConfig, getAgentById } from '../../config/config';
 import { broadcastTeamEvent, addTeamSseClient, removeTeamSseClient } from '../comms/broadcaster';
 import {
-  listManagedTeams, getManagedTeam, saveManagedTeam, deleteManagedTeam, createManagedTeam,
+  listManagedTeams, getManagedTeam, saveManagedTeam, createManagedTeam,
   appendTeamChat, applyTeamChange, rejectTeamChange, addTeamNotificationTarget, enqueueTeamDirectThreadUserMessage, getOrCreateTeamDirectThread, queueAgentMessage,
   listTeamContextReferences, addTeamContextReference, updateTeamContextReference,
   deleteTeamContextReference, buildTeamContextRuntimeBlock,
@@ -32,6 +32,7 @@ import * as path from 'path';
 import { appendManagerNote, getTeamMemberAgentIds } from '../teams/managed-teams';
 import { type TaskStatus } from '../tasks/task-store';
 import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
+import { deleteTeamCompletely } from '../agents-runtime/entity-delete';
 
 export const router = Router();
 
@@ -796,93 +797,14 @@ router.delete('/api/teams/:id/context-references/:refId', (req, res) => {
 
 router.delete('/api/teams/:id', (req, res) => {
   try {
-    const team = getManagedTeam(req.params.id);
-    if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
-
-    const subagentIds = [...(team.subagentIds || [])];
-
-    // --- Delete all subagents: config entries, cron jobs, workspace dirs ---
-    const cm = getConfig();
-    const current = cm.getConfig() as any;
-    let explicitAgents: any[] = Array.isArray(current.agents) ? [...current.agents] : [];
-    const cfgWorkspace = getConfig().getWorkspacePath() || process.cwd();
-    const removedAgentPaths: string[] = [];
-    let deletedScheduledJobs = 0;
-
-    for (const agentId of subagentIds) {
-      const sanitized = _sanitizeAgentId(agentId);
-      const agentEntry = explicitAgents.find((a: any) => _sanitizeAgentId(a.id) === sanitized);
-
-      explicitAgents = explicitAgents.filter((a: any) => _sanitizeAgentId(a.id) !== sanitized);
-
-      for (const job of _cronScheduler.getJobs()) {
-        if (_sanitizeAgentId((job as any).subagent_id || '') !== sanitized) continue;
-        if (_cronScheduler.deleteJob(job.id)) deletedScheduledJobs++;
-      }
-
-      const candidateDirs = new Set<string>([
-        path.join(cfgWorkspace, '.prometheus', 'subagents', sanitized),
-        path.join(process.cwd(), '.prometheus', 'subagents', sanitized),
-      ]);
-      if (agentEntry?.workspace) candidateDirs.add(String(agentEntry.workspace));
-
-      const safeSuffixes = [
-        `/.prometheus/subagents/${sanitized}`.toLowerCase(),
-        `/subagents/${sanitized}`.toLowerCase(),
-      ];
-
-      for (const dir of candidateDirs) {
-        try {
-          const resolved = path.resolve(dir);
-          const normalized = resolved.replace(/\\/g, '/').toLowerCase();
-          const underWorkspace = normalized.startsWith(path.resolve(cfgWorkspace).replace(/\\/g, '/').toLowerCase() + '/');
-          if (!underWorkspace || !safeSuffixes.some(suffix => normalized.endsWith(suffix))) continue;
-          if (!fs.existsSync(resolved)) continue;
-          fs.rmSync(resolved, { recursive: true, force: true });
-          removedAgentPaths.push(resolved);
-        } catch {}
-      }
-    }
-
-    if (subagentIds.length > 0) {
-      cm.updateConfig({ agents: _normalizeAgentsForSave(explicitAgents) } as any);
-      reloadAgentSchedules();
-    }
-
-    // --- Delete team workspace directory ---
-    const removedWorkspacePaths: string[] = [];
-    try {
-      const { getTeamWorkspacePath: getWsPath } = require('../teams/team-workspace') as typeof import('../teams/team-workspace');
-      // getTeamWorkspacePath returns {root}/teams/{teamId}/workspace — parent is the team dir
-      const teamDir = path.dirname(getWsPath(req.params.id));
-      const teamsRoot = path.dirname(teamDir);
-      const resolvedTeamDir = path.resolve(teamDir);
-      const resolvedTeamsRoot = path.resolve(teamsRoot);
-      // Safety: only delete if directly inside the teams root
-      if (
-        resolvedTeamDir.startsWith(resolvedTeamsRoot + path.sep) &&
-        resolvedTeamDir !== resolvedTeamsRoot &&
-        fs.existsSync(resolvedTeamDir)
-      ) {
-        fs.rmSync(resolvedTeamDir, { recursive: true, force: true });
-        removedWorkspacePaths.push(resolvedTeamDir);
-      }
-    } catch {}
-
-    // --- Delete the team record ---
-    const ok = deleteManagedTeam(req.params.id);
-    if (ok) {
-      broadcastTeamEvent({ type: 'team_deleted', teamId: req.params.id });
-    }
-
-    res.json({
-      success: ok,
-      error: ok ? undefined : 'Team not found',
-      deletedAgents: subagentIds,
-      removedAgentPaths,
-      removedWorkspacePaths,
-      deletedScheduledJobs,
+    const result = deleteTeamCompletely({
+      teamId: req.params.id,
+      cronScheduler: _cronScheduler,
+      broadcastTeamEvent,
+      deleteAgents: true,
     });
+    if (!result.success) return res.status(404).json(result);
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "scrape this site",
+    "scrape this website",
+    "crawl these pages",
+    "extract from website",
+    "extract data from this site",
+    "get data from site",
+    "parse html",
+    "web extraction",
+    "harvest data",
+    "fetch page content",
+    "collect listings from this page",
+    "build a web scraper",
+    "intercept api responses"
+  ],
+  "id": "web-scraper"
+}

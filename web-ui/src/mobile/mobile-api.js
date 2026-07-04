@@ -1074,12 +1074,13 @@ export async function loadMobileMoreSummary() {
 }
 
 export async function loadMobileHubOverview() {
-  const [models, tools, goals, skills, curator] = await Promise.all([
+  const [models, tools, goals, skills, curator, tokenActivity] = await Promise.all([
     _withTimeout(api('/api/hub/models/overview?range=all', { timeoutMs: 7000 }), null, 7300),
     _withTimeout(api('/api/hub/tools/overview?range=30d', { timeoutMs: 7000 }), null, 7300),
     _withTimeout(api('/api/hub/goals', { timeoutMs: 4500 }), null, 4800),
     _withTimeout(api('/api/hub/skills/usage?range=month', { timeoutMs: 7000 }), null, 7300),
     _withTimeout(api('/api/hub/skills/review', { timeoutMs: 7000 }), null, 7300),
+    _withTimeout(api('/api/hub/tokens/activity', { timeoutMs: 7000 }), null, 7300),
   ]);
   const goalList = Array.isArray(goals?.goals) ? goals.goals.slice() : [];
   goalList.sort((a, b) => Date.parse(b?.updatedAt || b?.completedAt || b?.createdAt || 0) - Date.parse(a?.updatedAt || a?.completedAt || a?.createdAt || 0));
@@ -1090,6 +1091,10 @@ export async function loadMobileHubOverview() {
     tools: tools?.stats || {},
     toolDaily: Array.isArray(tools?.daily) ? tools.daily : [],
     topTools: Array.isArray(tools?.topTools) ? tools.topTools : [],
+    tokenActivity: {
+      daily: Array.isArray(tokenActivity?.daily) ? tokenActivity.daily : [],
+      stats: tokenActivity?.stats || {},
+    },
     goals: goalList,
     goalCounts: goals?.counts || {},
     skills: Array.isArray(skills?.skills) ? skills.skills : [],
@@ -1446,6 +1451,12 @@ export async function updateMobileChatSessionHistory(sessionId, history = [], op
     body: JSON.stringify({
       history: Array.isArray(history) ? history : [],
       resetCompaction: options.resetCompaction === true,
+      origin: {
+        channel: 'mobile',
+        surface: 'mobile_app',
+        device: 'phone',
+        source: 'mobile_history_sync',
+      },
     }),
   });
 }
@@ -1476,8 +1487,9 @@ export async function loadMobileBackgroundStatus(backgroundId) {
   return mfetch(`/api/background/${encodeURIComponent(id)}/status`);
 }
 
-export async function loadGatewayStatus() {
-  return mfetch('/api/status', { method: 'GET' });
+export async function loadGatewayStatus(opts = {}) {
+  const timeoutMs = Math.max(5000, Math.floor(Number(opts.timeoutMs || 30000) || 30000));
+  return mfetch('/api/status', { method: 'GET', timeoutMs });
 }
 
 export async function loadMobileCommandModels() {
@@ -1502,16 +1514,38 @@ export async function loadCanvasFile(relPath) {
   return mfetch(`/api/canvas/file?path=${encodeURIComponent(relPath)}`);
 }
 
+function appendPairingQuery(url) {
+  const token = getDeviceToken();
+  if (!token) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}pt=${encodeURIComponent(token)}`;
+}
+
+// Live HTML/JS/CSS assets under a workspace project (correct base URL for relative paths).
+export function buildWorkspaceCanvasUrl(relPath) {
+  const path = String(relPath || '').trim().replace(/^\/+/, '');
+  if (!path) return '';
+  const base = String(API || '').replace(/\/+$/, '');
+  const segments = path.split('/').map(encodeURIComponent).join('/');
+  const url = appendPairingQuery(`${base}/api/canvas/workspace/${segments}`);
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}pmcv=${Date.now().toString(36)}`;
+}
+
 // Build an authenticated streaming URL for <video src> / <img src>.
-// `/api/canvas/inline` supports HTTP Range requests and accepts the paired-device
-// token via `?pt=<token>` (browsers can't set headers on media element requests).
+// Canvas routes accept the paired-device token via `?pt=<token>` (iframes/media cannot set headers).
 export function buildInlineMediaUrl(relPath) {
   if (!relPath) return '';
   const base = String(API || '').replace(/\/+$/, '');
-  const token = getDeviceToken();
   const qs = new URLSearchParams({ path: relPath });
-  if (token) qs.set('pt', token);
-  return `${base}/api/canvas/inline?${qs.toString()}`;
+  return appendPairingQuery(`${base}/api/canvas/inline?${qs.toString()}`);
+}
+
+export function buildDownloadMediaUrl(relPath) {
+  if (!relPath) return '';
+  const base = String(API || '').replace(/\/+$/, '');
+  const qs = new URLSearchParams({ path: relPath });
+  return appendPairingQuery(`${base}/api/canvas/download?${qs.toString()}`);
 }
 
 // Resolve a workspace-relative path to a base64 data URL for <img src>.
@@ -1528,7 +1562,7 @@ export async function loadCanvasImageDataUrl(relPath) {
 // Kick off the multi-stage extract-layers pipeline. Server streams progress via
 // the `creative_extract_layers_progress` WebSocket event (subscribe through
 // window.wsEventBus); this promise resolves with the final scene.
-export async function creativeExtractLayers({ sessionId, source, mode = 'balanced', prompt = '', requestId = '' } = {}) {
+export async function creativeExtractLayers({ sessionId, source, mode = 'balanced', prompt = '', requestId = '', saveLayerAssets = false, layerAssetBatchName = '' } = {}) {
   return mfetch('/api/canvas/creative-extract-layers', {
     method: 'POST',
     body: JSON.stringify({
@@ -1537,6 +1571,9 @@ export async function creativeExtractLayers({ sessionId, source, mode = 'balance
       mode,
       prompt: prompt || undefined,
       requestId: requestId || undefined,
+      saveLayerAssets: saveLayerAssets === true,
+      autoSaveLayerAssets: saveLayerAssets === true,
+      layerAssetBatchName: layerAssetBatchName || undefined,
       textEditable: true,
       extractObjects: true,
       preserveOriginal: true,

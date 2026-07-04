@@ -10,26 +10,51 @@ import {
   fetchBinaryAsset,
   getImageGenerationConfig,
   IMAGE_SIZE_BY_ASPECT_RATIO,
+  mimeTypeForImageOutputFormat,
   persistGeneratedImage,
   resolveReferenceImages,
   resolveSecretReference,
 } from '../utils.js';
 
-const API_MODEL = 'gpt-image-2';
 const DEFAULT_MODEL = 'gpt-image-2-medium';
-const MODEL_IDS = ['gpt-image-2-low', 'gpt-image-2-medium', 'gpt-image-2-high'] as const;
+const DEFAULT_API_MODEL = 'gpt-image-2';
+const TRANSPARENT_API_MODEL = 'gpt-image-1.5';
+const MODEL_IDS = [
+  'gpt-image-2-low',
+  'gpt-image-2-medium',
+  'gpt-image-2-high',
+  'gpt-image-2',
+  'gpt-image-1.5',
+  'gpt-image-1',
+  'gpt-image-1-mini',
+] as const;
 
-const MODEL_METADATA: Record<string, { quality: 'low' | 'medium' | 'high' }> = {
-  'gpt-image-2-low': { quality: 'low' },
-  'gpt-image-2-medium': { quality: 'medium' },
-  'gpt-image-2-high': { quality: 'high' },
+const MODEL_METADATA: Record<string, { apiModel: string; quality?: 'low' | 'medium' | 'high' }> = {
+  'gpt-image-2-low': { apiModel: DEFAULT_API_MODEL, quality: 'low' },
+  'gpt-image-2-medium': { apiModel: DEFAULT_API_MODEL, quality: 'medium' },
+  'gpt-image-2-high': { apiModel: DEFAULT_API_MODEL, quality: 'high' },
+  'gpt-image-2': { apiModel: DEFAULT_API_MODEL },
+  'gpt-image-1.5': { apiModel: 'gpt-image-1.5' },
+  'gpt-image-1': { apiModel: 'gpt-image-1' },
+  'gpt-image-1-mini': { apiModel: 'gpt-image-1-mini' },
 };
 
 function coerceModelId(value?: string): string | undefined {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return undefined;
-  if (raw === 'gpt-image-2') return DEFAULT_MODEL;
   return MODEL_METADATA[raw] ? raw : undefined;
+}
+
+function resolveApiModelForRequest(model: string, requestedModel: string | undefined, background: string): { model: string; apiModel: string; explicitUnsupportedTransparent: boolean } {
+  const meta = MODEL_METADATA[model] || MODEL_METADATA[DEFAULT_MODEL];
+  const explicitRequested = Boolean(String(requestedModel || '').trim());
+  if (background === 'transparent' && String(meta.apiModel).startsWith('gpt-image-2')) {
+    if (explicitRequested) {
+      return { model, apiModel: meta.apiModel, explicitUnsupportedTransparent: true };
+    }
+    return { model: TRANSPARENT_API_MODEL, apiModel: TRANSPARENT_API_MODEL, explicitUnsupportedTransparent: false };
+  }
+  return { model, apiModel: meta.apiModel, explicitUnsupportedTransparent: false };
 }
 
 function getOpenAIProviderConfig(): Record<string, unknown> {
@@ -81,9 +106,13 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
 
   async generate(request: ImageGenerationResolvedRequest): Promise<ImageGenerationResult> {
     const prompt = String(request.prompt || '').trim();
-    const model = this.resolveModel(request.model);
+    let model = this.resolveModel(request.model);
     const size = IMAGE_SIZE_BY_ASPECT_RATIO[request.aspect_ratio];
-    const meta = MODEL_METADATA[model] || MODEL_METADATA[DEFAULT_MODEL];
+    const resolved = resolveApiModelForRequest(model, request.model, request.background);
+    model = resolved.model;
+    const meta = MODEL_METADATA[model] || { apiModel: resolved.apiModel };
+    const quality = request.quality || meta.quality || 'medium';
+    const mimeType = mimeTypeForImageOutputFormat(request.output_format);
     const apiKey = getApiKey();
     const referenceImages = request.reference_images || [];
 
@@ -93,6 +122,8 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        background: request.background,
+        outputFormat: request.output_format,
         error: 'Prompt is required and must be a non-empty string.',
         errorType: 'invalid_argument',
       });
@@ -104,8 +135,23 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        background: request.background,
+        outputFormat: request.output_format,
         error: 'OPENAI_API_KEY is not configured for OpenAI image generation.',
         errorType: 'auth_required',
+      });
+    }
+
+    if (resolved.explicitUnsupportedTransparent) {
+      return buildImageGenerationError({
+        provider: this.id,
+        model,
+        prompt,
+        aspectRatio: request.aspect_ratio,
+        background: request.background,
+        outputFormat: request.output_format,
+        error: `${resolved.apiModel} does not support transparent backgrounds. Use background="opaque"/"auto" with ${resolved.apiModel}, or omit the model so Prometheus can use ${TRANSPARENT_API_MODEL} for true alpha output.`,
+        errorType: 'unsupported_background',
       });
     }
 
@@ -114,11 +160,13 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
       if (referenceImages.length) {
         const resolvedReferences = await resolveReferenceImages(referenceImages);
         const form = new FormData();
-        form.set('model', API_MODEL);
+        form.set('model', resolved.apiModel);
         form.set('prompt', prompt);
         form.set('size', size);
         form.set('n', String(request.count));
-        form.set('quality', meta.quality);
+        form.set('quality', quality);
+        form.set('background', request.background);
+        form.set('output_format', request.output_format);
 
         for (const reference of resolvedReferences) {
           if (reference.bytes) {
@@ -153,11 +201,13 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: API_MODEL,
+          model: resolved.apiModel,
           prompt,
           size,
           n: request.count,
-          quality: meta.quality,
+          quality,
+          background: request.background,
+          output_format: request.output_format,
         }),
         signal: AbortSignal.timeout(5 * 60 * 1000),
       });
@@ -172,6 +222,8 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
           model,
           prompt,
           aspectRatio: request.aspect_ratio,
+          background: request.background,
+          outputFormat: request.output_format,
           error: `OpenAI image generation failed: ${message}`,
           errorType: 'api_error',
         });
@@ -183,20 +235,20 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
 
       for (const item of data) {
         let imageBytes: Buffer | null = null;
-        let mimeType = 'image/png';
+        let itemMimeType = mimeType;
 
         if (typeof item?.b64_json === 'string' && item.b64_json) {
           imageBytes = Buffer.from(item.b64_json, 'base64');
         } else if (typeof item?.url === 'string' && item.url) {
           const downloaded = await fetchBinaryAsset(item.url);
           imageBytes = downloaded.bytes;
-          mimeType = downloaded.mimeType || mimeType;
+          itemMimeType = downloaded.mimeType || itemMimeType;
         }
 
         if (!imageBytes || imageBytes.length === 0) continue;
         const persisted = await persistGeneratedImage({
           bytes: imageBytes,
-          mimeType,
+          mimeType: itemMimeType,
           provider: this.id,
           prompt,
           outputDir: request.output_dir,
@@ -215,6 +267,8 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
           model,
           prompt,
           aspectRatio: request.aspect_ratio,
+          background: request.background,
+          outputFormat: request.output_format,
           error: 'OpenAI returned no image data.',
           errorType: 'empty_response',
         });
@@ -228,8 +282,10 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         image: images[0],
         images,
         revisedPrompt,
-        quality: meta.quality,
+        quality,
         size,
+        background: request.background,
+        outputFormat: request.output_format,
       });
     } catch (error: any) {
       return buildImageGenerationError({
@@ -237,6 +293,8 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        background: request.background,
+        outputFormat: request.output_format,
         error: `OpenAI image generation failed: ${String(error?.message || error)}`,
         errorType: 'api_error',
       });

@@ -1,0 +1,204 @@
+src/gateway/routes/canvas.router.ts (7801 lines) [window 7600-7801, truncated]:
+7600:       outputPath: result.outputPath,
+7601:       projectDir: result.projectDir,
+7602:       job: {
+7603:         id: result.job?.id,
+7604:         status: result.job?.status,
+7605:         outputPath: result.job?.outputPath,
+7606:         duration: result.job?.duration,
+7607:         totalFrames: result.job?.totalFrames,
+7608:       },
+7609:     });
+7610:   } catch (err: any) {
+7611:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7612:   }
+7613: });
+7614: 
+7615: // POST /api/canvas/hyperframes/catalog/import  body: { id, ingestAssets? }
+7616: router.post('/api/canvas/hyperframes/catalog/import', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7617:   try {
+7618:     const id = String(req.body?.id || '').trim();
+7619:     if (!id) {
+7620:       res.status(400).json({ success: false, error: 'id is required' });
+7621:       return;
+7622:     }
+7623:     const item = getHyperframesCatalog().getHyperframesCatalogItem(id);
+7624:     if (!item) {
+7625:       res.status(404).json({ success: false, error: `Unknown HyperFrames component: ${id}` });
+7626:       return;
+7627:     }
+7628:     // Use existing creative storage shape from the canvas root.
+7629:     const workspacePath = getWorkspaceRoot();
+7630:     const storage: any = { workspacePath, rootAbsPath: workspacePath, creativeDir: path.join(workspacePath, '.prometheus', 'creative') };
+7631:     const ingestAssets = !!req.body?.ingestAssets;
+7632:     const result = ingestAssets
+7633:       ? await getHyperframesCatalog().importHyperframesComponentWithIngest(storage, storage, id)
+7634:       : await getHyperframesCatalog().importHyperframesComponent(storage, id);
+7635:     res.json({ success: true, ...result });
+7636:   } catch (err: any) {
+7637:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7638:   }
+7639: });
+7640: 
+7641: // ─── File Preview Routes (used by Telegram /browse preview feature) ─────────────────────
+7642: // These routes are ONLY called by the Telegram channel's file browser.
+7643: // They do not touch handleChat, sessions, SSE streams, or any main chat state.
+7644: 
+7645: // GET /preview?path=<rel>&token=<tok>
+7646: // Serves any workspace file as renderable HTML. HTML files are served as-is;
+7647: // other text types are wrapped in a clean styled HTML template.
+7648: router.get('/preview', async (req: any, res: any) => {
+7649:   const auth = evaluateGatewayRequest(req, { allowQueryToken: true });
+7650:   if (!auth.ok) {
+7651:     const title = auth.status === 403 ? 'Forbidden' : 'Unauthorized';
+7652:     res.status(auth.status).send(`<h1>${title}</h1>`);
+7653:     return;
+7654:   }
+7655: 
+7656:   const relPath = String(req.query.path || '').trim();
+7657:   if (!relPath) { res.status(400).send('<h1>path required</h1>'); return; }
+7658:   const workspacePath = getConfig().getWorkspacePath();
+7659:   const absPath = relPath.startsWith(workspacePath) ? relPath : path.join(workspacePath, relPath);
+7660:   const rel = path.relative(workspacePath, absPath);
+7661:   if (rel.startsWith('..') || path.isAbsolute(rel)) { res.status(403).send('<h1>Forbidden</h1>'); return; }
+7662:   if (!fs.existsSync(absPath)) { res.status(404).send('<h1>File not found</h1>'); return; }
+7663: 
+7664:   const ext = path.extname(absPath).toLowerCase().slice(1);
+7665:   const content = fs.readFileSync(absPath, 'utf-8');
+7666:   const fileName = path.basename(absPath);
+7667: 
+7668:   // HTML — serve directly
+7669:   if (ext === 'html' || ext === 'htm') {
+7670:     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+7671:     res.send(content);
+7672:     return;
+7673:   }
+7674: 
+7675:   // SVG — serve directly
+7676:   if (ext === 'svg') {
+7677:     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+7678:     res.send(content);
+7679:     return;
+7680:   }
+7681: 
+7682:   // JSON — syntax-highlighted HTML
+7683:   if (ext === 'json') {
+7684:     let pretty = content;
+7685:     try { pretty = JSON.stringify(JSON.parse(content), null, 2); } catch {}
+7686:     const escaped = pretty.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+7687:     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+7688:     res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileName}</title>
+7689: <style>*{box-sizing:border-box}body{margin:0;background:#1e1e2e;color:#cdd6f4;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6;padding:20px}pre{white-space:pre-wrap;word-break:break-word}h2{color:#89b4fa;margin:0 0 12px;font-size:14px;font-weight:600}</style>
+7690: </head><body><h2>📄 ${fileName}</h2><pre>${escaped}</pre></body></html>`);
+7691:     return;
+7692:   }
+7693: 
+7694:   // Markdown — render with a simple inline renderer
+7695:   if (ext === 'md' || ext === 'markdown') {
+7696:     const html = content
+7697:       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+7698:       .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+7699:       .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+7700:       .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+7701:       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+7702:       .replace(/\*(.+?)\*/g, '<em>$1</em>')
+7703:       .replace(/`([^`]+)`/g, '<code>$1</code>')
+7704:       .replace(/^```[\s\S]*?^```/gm, (m) => `<pre><code>${m.slice(m.indexOf('\n')+1, m.lastIndexOf('```')).trim()}</code></pre>`)
+7705:       .replace(/^- (.+)$/gm, '<li>$1</li>')
+7706:       .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+7707:       .replace(/^(?!<[hul]|$)(.+)$/gm, '<p>$1</p>')
+7708:       .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>');
+7709:     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+7710:     res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileName}</title>
+7711: <style>*{box-sizing:border-box}body{margin:0;background:#fff;color:#1a1a1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;line-height:1.7;max-width:860px;margin:0 auto;padding:32px 24px}h1,h2,h3{color:#111;margin-top:1.5em}code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-family:monospace;font-size:13px}pre{background:#f3f4f6;padding:16px;border-radius:8px;overflow-x:auto}pre code{background:none;padding:0}a{color:#2563eb}li{margin:4px 0}p{margin:0.8em 0}</style>
+7712: </head><body>${html}</body></html>`);
+7713:     return;
+7714:   }
+7715: 
+7716:   // CSV — render as styled table
+7717:   if (ext === 'csv' || ext === 'tsv') {
+7718:     const sep = ext === 'tsv' ? '\t' : ',';
+7719:     const rows = content.split('\n').filter(Boolean).map(r => r.split(sep).map(c => c.replace(/^["']|["']$/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')));
+7720:     const thead = rows[0]?.map(c => `<th>${c}</th>`).join('') || '';
+7721:     const tbody = rows.slice(1).map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('');
+7722:     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+7723:     res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileName}</title>
+7724: <style>*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;background:#f9fafb;padding:16px}h2{color:#374151;font-size:14px;margin:0 0 10px}table{border-collapse:collapse;width:100%;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)}th{background:#374151;color:#fff;padding:8px 12px;text-align:left;font-weight:600}td{padding:7px 12px;border-bottom:1px solid #e5e7eb;color:#111}tr:last-child td{border-bottom:none}tr:nth-child(even) td{background:#f9fafb}</style>
+7725: </head><body><h2>📊 ${fileName}</h2><table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table></body></html>`);
+7726:     return;
+7727:   }
+7728: 
+7729:   // All other text types (ts, js, py, txt, yaml, etc.) — syntax-highlighted code view
+7730:   const escaped = content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+7731:   const langClass = ['ts','js','py','sh','rs','go','java','cpp','c','css'].includes(ext) ? ext : 'text';
+7732:   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+7733:   res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileName}</title>
+7734: <style>*{box-sizing:border-box}body{margin:0;background:#1e1e2e;color:#cdd6f4;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6}header{background:#181825;padding:10px 20px;color:#89b4fa;font-size:13px;font-weight:600;border-bottom:1px solid #313244;position:sticky;top:0;z-index:10}pre{margin:0;padding:20px;white-space:pre-wrap;word-break:break-word}.line-num{color:#585b70;user-select:none;display:inline-block;min-width:3em;text-align:right;margin-right:16px;font-size:11px}</style>
+7735: </head><body><header>💻 ${fileName} &nbsp;<span style="color:#585b70;font-weight:400">.${ext}</span></header><pre>${
+7736:   escaped.split('\n').map((line, i) => `<span class="line-num">${i+1}</span>${line}`).join('\n')
+7737: }</pre></body></html>`);
+7738: });
+7739: 
+7740: // GET /api/preview/screenshot?path=<rel>&token=<tok>
+7741: // Takes a full-page screenshot of the /preview route for a given file and
+7742: // returns the chunks as base64-encoded PNGs. Called only by Telegram.
+7743: router.get('/api/preview/screenshot', (req: any, res: any, next: any) => {
+7744:   const auth = evaluateGatewayRequest(req, { allowQueryToken: true });
+7745:   if (!auth.ok) {
+7746:     res.status(auth.status).json({ error: auth.message });
+7747:     return;
+7748:   }
+7749:   next();
+7750: }, async (req: any, res: any) => {
+7751:   const relPath = String(req.query.path || '').trim();
+7752:   if (!relPath) { res.status(400).json({ error: 'path required' }); return; }
+7753: 
+7754:   const cfg = getConfig().getConfig() as any;
+7755:   const token = resolveGatewayAuthToken();
+7756:   const port = Number(cfg?.gateway?.port || 18789);
+7757:   const host = '127.0.0.1'; // always localhost — preview is internal only
+7758:   const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+7759:   const previewUrl = `http://${host}:${port}/preview?path=${encodeURIComponent(relPath)}${tokenParam}`;
+7760: 
+7761:   try {
+7762:     const chunks = await browserPreviewScreenshot(previewUrl, 1200, 10);
+7763:     res.json({ success: true, chunks, total: chunks.length });
+7764:   } catch (err: any) {
+7765:     res.status(500).json({ success: false, error: err.message });
+7766:   }
+7767: });
+7768: 
+7769: // GET /api/open-path — open a path in the OS file manager / shell
+7770: router.get('/api/open-path', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7771:   const fp = req.query.path as string;
+7772:   if (!fp) { res.status(400).json({ error: 'Path required' }); return; }
+7773:   try {
+7774:     const { exec } = await import('child_process');
+7775:     const cmd = process.platform === 'win32' ? `start "" "${fp}"` : process.platform === 'darwin' ? `open "${fp}"` : `xdg-open "${fp}"`;
+7776:     exec(cmd, (err) => { err ? res.status(500).json({ error: err.message }) : res.json({ success: true }); });
+7777:   } catch (err: any) { res.status(500).json({ error: err.message }); }
+7778: });
+7779: 
+7780: // POST /api/clear-history — clear chat history for a session
+7781: router.post('/api/clear-history', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7782:   const sid = req.body.sessionId || 'default';
+7783:   const ws = getWorkspace(sid) || (getConfig().getConfig() as any).workspace?.path || '';
+7784:   if (ws) {
+7785:     await hookBus.fire({
+7786:       type: 'command:reset',
+7787:       sessionId: sid,
+7788:       workspacePath: ws,
+7789:       timestamp: Date.now(),
+7790:     });
+7791:     await hookBus.fire({
+7792:       type: 'command:new',
+7793:       sessionId: sid,
+7794:       workspacePath: ws,
+7795:       timestamp: Date.now(),
+7796:     });
+7797:   }
+7798:   clearHistory(sid);
+7799:   res.json({ success: true });
+7800: });
+7801: 
+[READ_TRUNCATED] Returned 202 of 7801 lines. Use start_line:7802, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

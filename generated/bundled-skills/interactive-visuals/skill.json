@@ -1,51 +1,39 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "name": "Interactive Visuals Router",
-  "description": "Route visual-output requests to the right Prometheus visual skill: Chart.js charts, inline HTML widgets/dashboards, SVG architecture diagrams, or Mermaid flow/sequence/schema diagrams.",
-  "version": "1.0.0",
+  "name": "Interactive Visuals",
+  "description": "Use this skill when the user asks for a polished visual, interactive card, dashboard, chart, comparison table, sources card, map, product carousel, or scannable rich output instead of plain text.",
   "triggers": [
-    "interactive visual",
-    "visualize this",
-    "visual summary",
-    "make this visual",
     "show this visually",
-    "dashboard or chart",
-    "diagram or chart",
-    "turn this into a visual",
-    "which visual skill",
-    "visual report",
-    "scorecard",
-    "kpi dashboard",
-    "comparison dashboard",
-    "visualize results",
-    "interactive report"
+    "make it interactive",
+    "visual card",
+    "rich output",
+    "comparison table",
+    "sources card",
+    "map card",
+    "dashboard view",
+    "chart this",
+    "product carousel",
+    "polished visual",
+    "scannable output",
+    "visual summary",
+    "interactive card",
+    "data card",
+    "present this nicely",
+    "UI card",
+    "make a dashboard",
+    "visualize the results"
   ],
   "categories": [
-    "visualization",
-    "interactive-output",
-    "charts",
-    "diagrams",
-    "reports"
+    "visuals",
+    "router",
+    "cards",
+    "dashboards"
   ],
   "requiredTools": [
-    "skill_read"
+    "show_ui_card",
+    "skills"
   ],
-  "toolBinding": {
-    "requiredTools": [
-      "skill_read"
-    ],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [
-      "Read interactive-visuals to choose the right visual format.",
-      "Read the selected specialized skill: chart-visualizer, html-interactive, svg-diagrams, or mermaid-diagrams.",
-      "Produce the inline fenced visual block requested by the selected skill."
-    ],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceWrite": false,
-    "externalSideEffects": false
-  },
+  "lifecycle": "active",
   "id": "interactive-visuals"
 }

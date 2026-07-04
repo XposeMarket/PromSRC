@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when researching a market, audience, industry, customer segment, demand, competitors, trends, pricing, TAM/SAM/SOM, category dynamics, or go-to-market context.",
+  "triggers": [
+    "market research",
+    "research this market",
+    "audience research",
+    "industry trends",
+    "customer segment",
+    "market size",
+    "TAM SAM SOM",
+    "category analysis",
+    "demand research",
+    "pricing research",
+    "go-to-market research",
+    "market opportunity",
+    "target customer",
+    "buyer persona research",
+    "trend analysis",
+    "industry landscape",
+    "customer pain points"
+  ],
+  "categories": [
+    "research",
+    "business",
+    "strategy"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch"
+  ],
+  "lifecycle": "active",
+  "id": "market-research"
+}

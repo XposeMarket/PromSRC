@@ -64,6 +64,13 @@ import {
   summarizeHtmlMotionTemplates,
 } from '../creative/html-motion-templates';
 import { resolveBundledPlaywrightChromium, resolveRuntimeBinary } from '../../runtime/dependencies';
+import {
+  createWorkspaceSnapshot,
+  listWorkspaceHistory,
+  restoreWorkspaceCheckpoint,
+  restoreWorkspaceSnapshot,
+  toSnapshotRef,
+} from '../../workspace-history';
 
 export const router = Router();
 
@@ -106,10 +113,97 @@ function isPathInside(basePath: string, targetPath: string): boolean {
 function requireGatewayAuthAllowQueryToken(req: any, res: any, next: any): void {
   const evaluation = evaluateGatewayRequest(req, { allowQueryToken: true });
   if (!evaluation.ok) {
-    res.status(evaluation.status).json({ error: evaluation.message });
-    return;
+    const subresourceEvaluation = evaluateCanvasCookieAuth(req).ok
+      ? { ok: true as const }
+      : evaluateCanvasReferrerAuth(req);
+    if (!subresourceEvaluation.ok) {
+      res.status(evaluation.status).json({ error: evaluation.message });
+      return;
+    }
+  } else {
+    maybeSetCanvasPairingCookie(req, res);
   }
   next();
+}
+
+function getRequestQueryParam(req: any, name: string): string {
+  const fromQuery = req.query && typeof req.query === 'object' ? String(req.query[name] || '').trim() : '';
+  if (fromQuery) return fromQuery;
+  try {
+    const host = String(req.headers?.host || 'localhost').trim() || 'localhost';
+    const parsed = new URL(String(req.originalUrl || req.url || '/'), `http://${host}`);
+    return String(parsed.searchParams.get(name) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function maybeSetCanvasPairingCookie(req: any, res: any): void {
+  const token = getRequestQueryParam(req, 'pt');
+  if (!token) return;
+  try {
+    const secure = /^https$/i.test(String(req.protocol || '')) || String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase() === 'https';
+    res.cookie('pm_canvas_pt', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure,
+      path: '/api/canvas',
+      maxAge: 1000 * 60 * 60 * 12,
+    });
+  } catch {}
+}
+
+function getCookieValue(req: any, name: string): string {
+  const raw = String(req.headers?.cookie || '');
+  if (!raw) return '';
+  const target = `${name}=`;
+  for (const part of raw.split(';')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(target)) {
+      try { return decodeURIComponent(trimmed.slice(target.length)); } catch { return trimmed.slice(target.length); }
+    }
+  }
+  return '';
+}
+
+function evaluateCanvasCookieAuth(req: any): { ok: true } | { ok: false } {
+  const token = getCookieValue(req, 'pm_canvas_pt');
+  if (!token) return { ok: false };
+  const cookieReq = {
+    ...req,
+    url: `/?pt=${encodeURIComponent(token)}`,
+    originalUrl: `/?pt=${encodeURIComponent(token)}`,
+    query: { pt: token },
+  };
+  const evaluation = evaluateGatewayRequest(cookieReq, { allowQueryToken: true });
+  return evaluation.ok ? { ok: true } : { ok: false };
+}
+
+function evaluateCanvasReferrerAuth(req: any): { ok: true } | { ok: false } {
+  const rawReferrer = String(req.headers?.referer || req.headers?.referrer || '').trim();
+  if (!rawReferrer) return { ok: false };
+  try {
+    const host = String(req.headers?.host || 'localhost').trim() || 'localhost';
+    const currentUrl = new URL(String(req.originalUrl || req.url || '/'), `http://${host}`);
+    const referrerUrl = new URL(rawReferrer, `http://${host}`);
+    if (referrerUrl.host !== currentUrl.host) return { ok: false };
+    if (!referrerUrl.pathname.startsWith('/api/canvas/workspace/')) return { ok: false };
+    const token = referrerUrl.searchParams.get('pt') || referrerUrl.searchParams.get('token') || '';
+    if (!token) return { ok: false };
+    const referrerReq = {
+      ...req,
+      url: `/?${referrerUrl.searchParams.toString()}`,
+      originalUrl: `/?${referrerUrl.searchParams.toString()}`,
+      query: {
+        pt: referrerUrl.searchParams.get('pt') || undefined,
+        token: referrerUrl.searchParams.get('token') || undefined,
+      },
+    };
+    const evaluation = evaluateGatewayRequest(referrerReq, { allowQueryToken: true });
+    return evaluation.ok ? { ok: true } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
 }
 
 // Dev-only: in non-public builds, the canvas (e.g. end-of-turn diffs) may open
@@ -156,6 +250,58 @@ function resolveCanvasPath(rawPath: string): { workspacePath: string; absPath: s
     throw new Error('Path outside workspace or allowed directories');
   }
   return { workspacePath, absPath, relPath, inWorkspace };
+}
+
+function isWorkspaceCheckpointId(id: string, kind?: string): boolean {
+  return kind === 'checkpoint' || /^turn_/i.test(String(id || ''));
+}
+
+function streamCanvasFile(absPath: string, res: any, rangeHeader = ''): void {
+  if (!fs.existsSync(absPath)) {
+    res.status(404).json({ success: false, error: 'File not found' });
+    return;
+  }
+  const stat = fs.statSync(absPath);
+  if (stat.isDirectory()) {
+    res.status(400).json({ success: false, error: 'Path is a directory' });
+    return;
+  }
+  const contentType = String(guessContentType(absPath) || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
+  const filename = path.basename(absPath).replace(/"/g, '');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  res.type(contentType);
+  if (/^(video|audio)\//i.test(contentType)) {
+    const range = String(rangeHeader || '').trim();
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (range) {
+      const match = range.match(/^bytes=(\d*)-(\d*)$/);
+      if (match) {
+        const startRaw = match[1];
+        const endRaw = match[2];
+        let start = startRaw ? Number(startRaw) : 0;
+        let end = endRaw ? Number(endRaw) : stat.size - 1;
+        if (!startRaw && endRaw) {
+          const suffixLength = Number(endRaw);
+          start = Math.max(0, stat.size - suffixLength);
+        }
+        if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && start < stat.size) {
+          end = Math.min(end, stat.size - 1);
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+          res.setHeader('Content-Length', String(end - start + 1));
+          fs.createReadStream(absPath, { start, end }).pipe(res);
+          return;
+        }
+      }
+      res.status(416);
+      res.setHeader('Content-Range', `bytes */${stat.size}`);
+      res.end();
+      return;
+    }
+    res.setHeader('Content-Length', String(stat.size));
+  }
+  res.sendFile(absPath);
 }
 
 function sanitizeRelativeUploadPath(rawPath: string): string {
@@ -4413,6 +4559,71 @@ router.get('/api/canvas/diff-ranges', (req: any, res: any, next: any) => _requir
   }
 });
 
+router.get('/api/canvas/history', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (_req: any, res: any) => {
+  try {
+    const workspacePath = getWorkspaceRoot();
+    const history = listWorkspaceHistory(workspacePath).slice(0, 100).map((entry) => ({
+      id: entry.id,
+      kind: entry.kind,
+      createdAt: entry.createdAt,
+      path: path.relative(workspacePath, entry.path).replace(/\\/g, '/'),
+    }));
+    res.json({ success: true, history });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+router.post('/api/canvas/history/restore', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const workspacePath = getWorkspaceRoot();
+    const dryRun = req.body?.dryRun === true || req.body?.dry_run === true;
+    const confirmed = req.body?.confirm === true || req.body?.confirmed === true;
+    if (!dryRun && !confirmed) {
+      res.status(400).json({ success: false, error: 'confirm=true required to restore workspace history' });
+      return;
+    }
+
+    const requestedId = String(
+      req.body?.checkpoint_id
+      || req.body?.checkpointId
+      || req.body?.snapshot_id
+      || req.body?.snapshotId
+      || req.body?.id
+      || '',
+    ).trim();
+    const history = listWorkspaceHistory(workspacePath);
+    const entry = requestedId ? history.find((item) => item.id === requestedId) : history[0];
+    const id = requestedId || entry?.id || '';
+    if (!id) {
+      res.status(404).json({ success: false, error: 'No workspace history entry found' });
+      return;
+    }
+
+    const kind = isWorkspaceCheckpointId(id, entry?.kind) ? 'checkpoint' : 'snapshot';
+    const result = kind === 'checkpoint'
+      ? restoreWorkspaceCheckpoint(workspacePath, id, { dryRun })
+      : restoreWorkspaceSnapshot(workspacePath, id, { dryRun });
+    if (!result.ok) {
+      res.status(400).json({ success: false, id, kind, ...result });
+      return;
+    }
+
+    if (!dryRun) {
+      _broadcastWS({
+        type: 'workspace_history_restored',
+        id,
+        kind,
+        restored: result.restored,
+        deleted: result.deleted,
+      });
+    }
+    res.json({ success: true, id, kind, ...result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
 // POST /api/canvas/file  body: { path, content }
 // Writes content back to the workspace file from the canvas.
 router.post('/api/canvas/file', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
@@ -4420,17 +4631,26 @@ router.post('/api/canvas/file', (req: any, res: any, next: any) => _requireGatew
   const content = req.body?.content;
   if (!relPath) { res.status(400).json({ success: false, error: 'path required' }); return; }
   if (typeof content !== 'string') { res.status(400).json({ success: false, error: 'content must be a string' }); return; }
+  let workspacePath = '';
   let absPath = '';
   try {
-    absPath = resolveCanvasPath(relPath).absPath;
+    const resolved = resolveCanvasPath(relPath);
+    workspacePath = resolved.workspacePath;
+    absPath = resolved.absPath;
   } catch {
     res.status(403).json({ success: false, error: 'Path outside workspace' }); return;
   }
   try {
+    const snapshot = toSnapshotRef(createWorkspaceSnapshot({
+      workspacePath,
+      targetPath: absPath,
+      displayPath: relPath,
+      operation: 'canvas_file_write',
+    }));
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     fs.writeFileSync(absPath, content, 'utf-8');
-    _broadcastWS({ type: 'canvas_saved', path: relPath, absPath, size: content.length });
-    res.json({ success: true, path: relPath, absPath, size: content.length });
+    _broadcastWS({ type: 'canvas_saved', path: relPath, absPath, size: content.length, workspaceSnapshot: snapshot });
+    res.json({ success: true, path: relPath, absPath, size: content.length, workspaceSnapshot: snapshot });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -4499,7 +4719,7 @@ router.post('/api/canvas/upload-binary', (req: any, res: any, next: any) => _req
   }
 });
 
-router.get('/api/canvas/download', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+router.get('/api/canvas/download', requireGatewayAuthAllowQueryToken, async (req: any, res: any) => {
   const relPath = String(req.query.path || '').trim();
   if (!relPath) {
     res.status(400).json({ success: false, error: 'path query param required' });
@@ -4527,7 +4747,7 @@ router.get('/api/canvas/download', (req: any, res: any, next: any) => _requireGa
   }
 });
 
-router.get('/api/canvas/inline', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+router.get('/api/canvas/inline', requireGatewayAuthAllowQueryToken, async (req: any, res: any) => {
   const relPath = String(req.query.path || '').trim();
   if (!relPath) {
     res.status(400).json({ success: false, error: 'path query param required' });
@@ -4535,54 +4755,25 @@ router.get('/api/canvas/inline', (req: any, res: any, next: any) => _requireGate
   }
   try {
     const { absPath } = resolveCanvasPath(relPath);
-    if (!fs.existsSync(absPath)) {
-      res.status(404).json({ success: false, error: 'File not found' });
-      return;
-    }
-    const stat = fs.statSync(absPath);
-    if (stat.isDirectory()) {
-      res.status(400).json({ success: false, error: 'Path is a directory' });
-      return;
-    }
-    const contentType = String(guessContentType(absPath) || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
-    const filename = path.basename(absPath).replace(/"/g, '');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-    res.type(contentType);
-    if (/^(video|audio)\//i.test(contentType)) {
-      const range = String(req.headers.range || '').trim();
-      res.setHeader('Accept-Ranges', 'bytes');
-      if (range) {
-        const match = range.match(/^bytes=(\d*)-(\d*)$/);
-        if (match) {
-          const startRaw = match[1];
-          const endRaw = match[2];
-          let start = startRaw ? Number(startRaw) : 0;
-          let end = endRaw ? Number(endRaw) : stat.size - 1;
-          if (!startRaw && endRaw) {
-            const suffixLength = Number(endRaw);
-            start = Math.max(0, stat.size - suffixLength);
-            end = stat.size - 1;
-          }
-          if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && start < stat.size) {
-            end = Math.min(end, stat.size - 1);
-            res.status(206);
-            res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
-            res.setHeader('Content-Length', String(end - start + 1));
-            fs.createReadStream(absPath, { start, end }).pipe(res);
-            return;
-          }
-        }
-        res.status(416);
-        res.setHeader('Content-Range', `bytes */${stat.size}`);
-        res.end();
-        return;
-      }
-      res.setHeader('Content-Length', String(stat.size));
-    }
-    res.sendFile(absPath);
+    streamCanvasFile(absPath, res, String(req.headers.range || ''));
   } catch (err: any) {
     const message = String(err?.message || 'Inline preview failed');
+    const status = /outside workspace|allowed/i.test(message) ? 403 : 500;
+    res.status(status).json({ success: false, error: message });
+  }
+});
+
+router.get('/api/canvas/workspace/*', requireGatewayAuthAllowQueryToken, async (req: any, res: any) => {
+  const relPath = String(req.params?.[0] || '').trim();
+  if (!relPath) {
+    res.status(400).json({ success: false, error: 'workspace file path required' });
+    return;
+  }
+  try {
+    const { absPath } = resolveCanvasPath(relPath);
+    streamCanvasFile(absPath, res, String(req.headers.range || ''));
+  } catch (err: any) {
+    const message = String(err?.message || 'Workspace asset preview failed');
     const status = /outside workspace|allowed/i.test(message) ? 403 : 500;
     res.status(status).json({ success: false, error: message });
   }
@@ -6043,6 +6234,8 @@ router.post('/api/canvas/creative-extract-layers', (req: any, res: any, next: an
         useSam: req.body?.useSam !== false,
         inpaintBackground: req.body?.inpaintBackground !== false,
         vectorTraceShapes: req.body?.vectorTraceShapes !== false,
+        saveLayerAssets: req.body?.saveLayerAssets === true || req.body?.autoSaveLayerAssets === true,
+        layerAssetBatchName: req.body?.layerAssetBatchName ? String(req.body.layerAssetBatchName) : undefined,
         requestId,
         onProgress: (event) => {
           _broadcastWS({

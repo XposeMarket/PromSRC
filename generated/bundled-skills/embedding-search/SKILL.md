@@ -1,8 +1,9 @@
 ---
 name: embedding-search
-description: Build semantic retrieval workflows that help Prometheus (or a user system) find meaning-based matches across documents.
+description: Use this skill when the user asks to build semantic search, vector search, embeddings, RAG retrieval, document Q&A, similarity search, chunking strategy, vector indexes, reranking, or retrieval evaluation. Triggers on phrases like build semantic search, vector database, embeddings, RAG pipeline, retrieve similar documents, document Q&A, chunk these docs, top-k retrieval, rerank results, and make this searchable by meaning. Use it to design local-first retrieval workflows with model/index versioning, metadata, citations, and evaluation.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: semantic search, vector search, embeddings, RAG pipeline, document Q&A, similarity search, vector database, chunk documents, top-k retrieval, rerank results, build a vector index, make docs searchable, retrieval evaluation, embedding model, semantic retrieval
 ---
 
 # Embedding Search

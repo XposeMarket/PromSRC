@@ -1,6 +1,9 @@
 export const VALID_IMAGE_ASPECT_RATIOS = ['landscape', 'square', 'portrait'] as const;
 
 export type ImageAspectRatio = typeof VALID_IMAGE_ASPECT_RATIOS[number];
+export type ImageBackground = 'transparent' | 'opaque' | 'auto';
+export type ImageOutputFormat = 'png' | 'jpeg' | 'webp';
+export type ImageQuality = 'low' | 'medium' | 'high' | 'auto';
 
 export interface GeneratedImageAsset {
   path: string;
@@ -20,6 +23,9 @@ export interface ImageGenerationRequest {
   count?: number;
   provider?: string;
   model?: string;
+  background?: string;
+  output_format?: string;
+  quality?: string;
   output_dir?: string;
   save_to_workspace?: boolean;
   on_image_persisted?: ImagePersistedCallback;
@@ -31,6 +37,9 @@ export interface ImageGenerationResolvedRequest {
   aspect_ratio: ImageAspectRatio;
   count: number;
   model?: string;
+  background: ImageBackground;
+  output_format: ImageOutputFormat;
+  quality?: ImageQuality;
   output_dir?: string;
   output_run_dir?: string;
   save_to_workspace: boolean;
@@ -49,6 +58,8 @@ export interface ImageGenerationSuccess {
   revised_prompt?: string | null;
   quality?: string;
   size?: string;
+  background?: ImageBackground;
+  output_format?: ImageOutputFormat;
 }
 
 export interface ImageGenerationFailure {
@@ -57,6 +68,8 @@ export interface ImageGenerationFailure {
   model?: string;
   prompt: string;
   aspect_ratio: ImageAspectRatio;
+  background?: ImageBackground;
+  output_format?: ImageOutputFormat;
   error: string;
   error_type: string;
 }

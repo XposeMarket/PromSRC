@@ -1,7 +1,9 @@
 ---
 name: website-to-hyperframes
-description: |
-  Capture a website and create a HyperFrames video from it. Use when: (1) a user provides a URL and wants a video, (2) someone says "capture this site", "turn this into a video", "make a promo from my site", (3) the user wants a social ad, product tour, or any video based on an existing website, (4) the user shares a link and asks for any kind of video content. Even if the user just pastes a URL — this is the skill to use.
+description: Use this skill when the user provides a website URL and wants a HyperFrames video, promo, social ad, product tour, website capture, or video content based on the existing site. Triggers on phrases like turn this website into a video, capture this site, make a promo from my site, website to HyperFrames, social ad from URL, product tour from site, video based on this website, and make a video from this link. Use it to capture the site, extract messaging/assets, storyboard scenes, and build a HyperFrames composition from real website evidence.
+emoji: "🎬"
+version: 1.1.0
+triggers: turn website into video, capture this site, make promo from my site, website to HyperFrames, social ad from URL, product tour from site, video based on website, make video from link, website promo video, site capture video, HyperFrames from website
 ---
 
 # Website to HyperFrames

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when designing or improving website visuals, layouts, sections, landing pages, typography, spacing, responsive structure, style direction, or conversion-focused website composition.",
+  "triggers": [
+    "design a website",
+    "website layout",
+    "landing page design",
+    "homepage design",
+    "improve the design",
+    "redesign this page",
+    "website sections",
+    "hero section",
+    "pricing section",
+    "visual direction",
+    "typography for website",
+    "make it look premium",
+    "responsive web design",
+    "site style",
+    "web design",
+    "better layout",
+    "agency website",
+    "portfolio website"
+  ],
+  "categories": [
+    "web-design",
+    "frontend",
+    "creative"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "workspace_write",
+    "creative_basic"
+  ],
+  "lifecycle": "active",
+  "name": "Web Design Skill",
+  "id": "web-design-skill"
+}

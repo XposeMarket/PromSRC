@@ -6,8 +6,11 @@ import { getActiveWorkspace } from '../tools/workspace-context.js';
 import type {
   GeneratedImageAsset,
   ImageAspectRatio,
+  ImageBackground,
   ImageGenerationFailure,
   ImageGenerationSuccess,
+  ImageOutputFormat,
+  ImageQuality,
 } from './types.js';
 
 export const DEFAULT_IMAGE_ASPECT_RATIO: ImageAspectRatio = 'landscape';
@@ -200,6 +203,38 @@ export function normalizeImageCount(value?: unknown): number {
   return Math.max(1, Math.min(MAX_IMAGE_COUNT, count));
 }
 
+export function promptRequestsTransparentBackground(prompt: string): boolean {
+  const text = String(prompt || '').toLowerCase();
+  return /\b(transparent background|transparent bg|alpha channel|with alpha|png transparency|no background|remove background|cutout|sprite sheet|game sprite|icon sprite)\b/.test(text);
+}
+
+export function normalizeImageBackground(value?: unknown, prompt?: string): ImageBackground {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'transparent' || raw === 'opaque' || raw === 'auto') return raw;
+  return promptRequestsTransparentBackground(String(prompt || '')) ? 'transparent' : 'auto';
+}
+
+export function normalizeImageOutputFormat(value?: unknown, background?: ImageBackground): ImageOutputFormat {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'png' || raw === 'webp' || raw === 'jpeg') {
+    if (background === 'transparent' && raw === 'jpeg') return 'png';
+    return raw;
+  }
+  return 'png';
+}
+
+export function normalizeImageQuality(value?: unknown): ImageQuality | undefined {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'auto') return raw;
+  return undefined;
+}
+
+export function mimeTypeForImageOutputFormat(format?: ImageOutputFormat): string {
+  if (format === 'jpeg') return 'image/jpeg';
+  if (format === 'webp') return 'image/webp';
+  return 'image/png';
+}
+
 export function getImageGenerationConfig(): {
   provider: string;
   model: string;
@@ -297,6 +332,8 @@ export function buildImageGenerationSuccess(input: {
   revisedPrompt?: string | null;
   quality?: string;
   size?: string;
+  background?: ImageBackground;
+  outputFormat?: ImageOutputFormat;
 }): ImageGenerationSuccess {
   const images = Array.isArray(input.images) && input.images.length
     ? input.images
@@ -313,6 +350,8 @@ export function buildImageGenerationSuccess(input: {
     revised_prompt: input.revisedPrompt ?? null,
     quality: input.quality,
     size: input.size,
+    background: input.background,
+    output_format: input.outputFormat,
   };
 }
 
@@ -321,6 +360,8 @@ export function buildImageGenerationError(input: {
   model?: string;
   prompt: string;
   aspectRatio: ImageAspectRatio;
+  background?: ImageBackground;
+  outputFormat?: ImageOutputFormat;
   error: string;
   errorType: string;
 }): ImageGenerationFailure {
@@ -330,6 +371,8 @@ export function buildImageGenerationError(input: {
     model: input.model,
     prompt: input.prompt,
     aspect_ratio: input.aspectRatio,
+    background: input.background,
+    output_format: input.outputFormat,
     error: input.error,
     error_type: input.errorType,
   };

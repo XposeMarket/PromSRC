@@ -41,17 +41,27 @@ type PricingRule = {
 const BUILT_IN_RULES: PricingRule[] = [
   { provider: /^(ollama|llama_cpp|lm_studio)$/i, model: /.*/, input: 0, output: 0, source: 'local' },
 
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5\.5/i, input: 5.00, output: 30.00, cacheRead: 0.50 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5\.4-nano/i, input: 0.20, output: 1.25, cacheRead: 0.020 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5\.4-mini/i, input: 0.75, output: 4.50, cacheRead: 0.075 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5\.4/i, input: 2.50, output: 15.00, cacheRead: 0.25 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5-nano/i, input: 0.05, output: 0.40, cacheRead: 0.005 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5-mini/i, input: 0.25, output: 2.00, cacheRead: 0.025 },
   { provider: /^(openai|openai_codex)$/i, model: /(?:mini|spark)/i, input: 0.25, output: 2.00, cacheRead: 0.025 },
   { provider: /^(openai|openai_codex)$/i, model: /(?:nano)/i, input: 0.10, output: 0.40, cacheRead: 0.010 },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-4\.1/i, input: 2.00, output: 8.00, cacheRead: 0.50 },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5/i, input: 1.25, output: 10.00, cacheRead: 0.125 },
   { provider: /^(openai|openai_codex)$/i, model: /^o[134]/i, input: 2.50, output: 10.00, cacheRead: 1.25 },
 
+  { provider: /^anthropic$/i, model: /fable/i, input: 10.00, output: 50.00, cacheRead: 1.00, cacheWrite: 12.50 },
+  { provider: /^anthropic$/i, model: /opus-4-(6|7|8)|opus-4\.(6|7|8)/i, input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
   { provider: /^anthropic$/i, model: /opus/i, input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
   { provider: /^anthropic$/i, model: /sonnet/i, input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
-  { provider: /^anthropic$/i, model: /haiku/i, input: 0.80, output: 4.00, cacheRead: 0.08, cacheWrite: 1.00 },
+  { provider: /^anthropic$/i, model: /haiku/i, input: 1.00, output: 5.00, cacheRead: 0.10, cacheWrite: 1.25 },
 
-  { provider: /^xai$/i, model: /grok/i, input: 3.00, output: 15.00 },
+  { provider: /^xai$/i, model: /^(grok-build-0\.1|grok-code-fast)/i, input: 1.00, output: 2.00, cacheRead: 0.20 },
+  { provider: /^xai$/i, model: /^grok-4\.(?:3|20)|^grok-latest/i, input: 1.25, output: 2.50, cacheRead: 0.20 },
+  { provider: /^xai$/i, model: /grok/i, input: 1.25, output: 2.50, cacheRead: 0.20 },
   { provider: /^gemini$/i, model: /flash|lite/i, input: 0.35, output: 1.05 },
   { provider: /^gemini$/i, model: /pro/i, input: 1.25, output: 10.00 },
   { provider: /^perplexity$/i, model: /.*/, input: 1.00, output: 1.00 },
@@ -237,4 +247,3 @@ export function costMicrosToUsd(microsValue: unknown): number {
   const micros = Number(microsValue);
   return Number.isFinite(micros) ? micros / 1_000_000 : 0;
 }
-

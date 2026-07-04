@@ -11,7 +11,7 @@ import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
 import { resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
-import { getRecentToolObservationsForContext as readRecentToolObservationsForContext } from './tool-observations';
+import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -881,7 +881,7 @@ function buildSessionSummary(session: Session): SessionSummary {
 function upsertSessionSummary(session: Session): void {
   const index = loadSessionIndex();
   const summary = buildSessionSummary(session);
-  const shouldIndex = summary.messageCount > 0 || summary.channel === 'mobile';
+  const shouldIndex = summary.messageCount > 0;
   if (shouldIndex) {
     index.summaries[summary.id] = summary;
   } else {
@@ -951,7 +951,7 @@ function rebuildSessionIndex(): SessionIndex {
   for (const file of files) {
     const sessionId = file.slice(0, -5);
     const summary = buildSessionSummaryFromFile(sessionId);
-    if (summary && (summary.messageCount > 0 || summary.channel === 'mobile')) {
+    if (summary && summary.messageCount > 0) {
       index.summaries[summary.id] = summary;
     }
   }
@@ -990,7 +990,7 @@ function getSortedSessionSummaries(
       if (summary.channel === channel) return true;
       return admitAutomated && summary.channel === 'system' && /^auto_/i.test(summary.id);
     })
-    .filter((summary) => summary.messageCount > 0 || summary.channel === 'mobile')
+    .filter((summary) => summary.messageCount > 0)
     .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0));
 }
 
@@ -1118,17 +1118,8 @@ export function touchSession(id: string, options: { channel?: Session['channel']
   session.lastActiveAt = Date.now();
 
   const title = String(options.title || '').trim();
-  if (title && !session.history.length) {
-    session.history.push({
-      role: 'user',
-      content: title,
-      timestamp: session.lastActiveAt,
-      channel: session.channel,
-      channelLabel: session.channel === 'mobile' ? 'Mobile app' : session.channel,
-      origin: session.channel === 'mobile'
-        ? { channel: 'mobile', surface: 'mobile_app', device: 'phone', label: 'Mobile app', source: 'session_touch' }
-        : undefined,
-    });
+  if (title && !session.history.length && !shouldLockExistingSessionTitle(session.title)) {
+    session.title = title.slice(0, 80);
   }
 
   saveSession(id);
@@ -1898,7 +1889,7 @@ export function getHistoryForApiCall(
 }
 
 /**
- * Builds a [RECENT_TOOL_LOG] block from full toolLog fields stored on the
+ * Builds a legacy [RECENT_TOOL_LOG] block from toolLog fields stored on the
  * last `lookbackTurns` assistant messages. Returns empty string if no tool
  * log data exists. If maxChars is omitted, no application-level cap is applied.
  *
@@ -1935,20 +1926,23 @@ export function getRecentToolObservationsForContext(
   maxChars?: number,
   includeTelemetry = false,
 ): string {
-  const observations = readRecentToolObservationsForContext(id, {
+  const observations = readRecentToolStateSummaryForContext(id, {
     lookbackTurns,
     maxChars,
     includeHeader: true,
     includeTelemetry,
   });
   if (observations) return observations;
-  const legacy = getRecentToolLog(id, lookbackTurns, maxChars);
-  return legacy ? legacy.replace(/^\[RECENT_TOOL_LOG\]/, '[RECENT_TOOL_OBSERVATIONS]\nlegacy_format: true') : '';
+  const legacy = getRecentToolLog(id, lookbackTurns, Math.min(1200, Math.max(400, Number(maxChars || 1200))));
+  return legacy
+    ? `[TOOL_STATE_SUMMARY]\nlegacy_tool_log_available: true\nfull_raw_observations: unavailable for this legacy turn\npreview:\n${legacy.replace(/^\[RECENT_TOOL_LOG\]\n?/, '')}`
+    : '';
 }
 
 /**
- * Persists a full tool log string onto the most recent assistant message
+ * Persists a compact tool state summary onto the most recent assistant message
  * in session history. Called by chat.router after allToolResults are finalized.
+ * Full raw tool observations are stored out-of-band in tool-observation JSONL.
  */
 export function persistToolLog(id: string, toolLog: string): void {
   const session = getSession(id);

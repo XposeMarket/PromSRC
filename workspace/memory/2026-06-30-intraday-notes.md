@@ -105,3 +105,59 @@ Temporary heartbeat test fired successfully and sent Raul the one-time visible h
 _Source: Mobile chat session; session: mobile_mr06pi8f_l0rhm3; origin: Mobile app_
 Raul asked how Sparky is going after pointing out the iterative Pocket Zombies loop should continue. Checked Sparky runs: old task `e2fcaf8e-de8b-43ee-a387-c3fb17622e80` is paused from gateway_restart and recent `8f12ce76-023d-4289-8321-a198658c6ea5` had completed only smoke/start checks. Sent Sparky a new background handoff `86b1bf22-cb3a-4352-8c29-0628b47d2de4` to continue a substantial gameplay-quality pass strictly under `games/mobile-sideways-fps/`, no flappy, update roadmap and run `node --check games/mobile-sideways-fps/__check.js`.
 _Related task: 86b1bf22-cb3a-4352-8c29-0628b47d2de4_
+
+### [GENERAL] 2026-06-30T19:07:18.343Z
+_Source: Main chat session; session: heartbeat_main_
+Heartbeat test fired successfully: sent Raul the one-time visible heartbeat test message and confirmed heartbeat can wake on schedule for light checks/alerts.
+
+### [TASK] 2026-06-30T19:54:59.435Z
+_Source: Mobile chat session; session: mobile_mr06pi8f_l0rhm3; origin: Mobile app_
+Pocket Zombies/Sparky continuation at 2026-06-30T19:54Z: Raul said game is not playing. Prom inspected active Sparky runs: newest task 86b1bf22-cb3a-4352-8c29-0628b47d2de4 paused from gateway_restart; recover failed with `[task-router] Not initialized`. Prom verified `games/mobile-sideways-fps/index.html` exists, `node --check games/mobile-sideways-fps/__check.js` passes, browser opens file with no console entries, but clicking START GAME leaves overlay/page text visible. Found `index.html` missing final `})();` before `</body>` and patched it; after reload/click overlay still appeared unchanged. Sent fresh Sparky handoff task `bcf6f47c-7125-48b7-a4af-48f7bb454ffd` to fix start/play and continue gameplay pass, scoped only to games/mobile-sideways-fps and no flappy. Created timer `timer_mr12fp11_852993` for 5 minutes to check Sparky, verify, and retrigger if needed.
+_Related task: bcf6f47c-7125-48b7-a4af-48f7bb454ffd_
+
+### [GENERAL] 2026-06-30T20:09:05.279Z
+_Source: Main chat session; session: heartbeat_main_
+Main heartbeat temporary test fired successfully: sent visible heartbeat capability message and switched future heartbeat behavior back to quiet unless real actionable issues are found.
+
+### [GENERAL] 2026-06-30T20:11:34.775Z
+_Source: Mobile chat session; session: mobile_mr130zgd_dbcm6u; origin: Mobile app_
+Raul asked to clear/disable the temporary hourly main heartbeat test. Main heartbeat config was set to enabled=false and HEARTBEAT.md reset to quiet HEARTBEAT_OK behavior.
+
+### [TASK] 2026-06-30T20:11:40.355Z
+_Source: Subagent; session: task_86b1bf22-cb3a-4352-8c29-0628b47d2de4; task: 86b1bf22-cb3a-4352-8c29-0628b47d2de4; title: [Subagent] Sparky; profile: sparky_v1_
+Task Sparky step 1 diagnostics: inspected game files and verified scope; index/html assets appear complete with pause-ready start flow and HUD. Started local server at http://127.0.0.1:8012 and loaded index.html?debug=1. Browser diagnostics: start overlay initially visible; START GAME button existed but __pocketZombiesDebug remains undefined, suggesting debug hook may not be attaching due to script exception or race. Node syntax check passes via cmd. No code edits made yet. Need switch approach from repeated file reads to targeted JS/page interaction logging to avoid loop detection.
+_Related task: bcf6f47c-7125-48b7-a4af-48f7bb454ffd_
+
+### [TASK_COMPLETE] 2026-06-30T20:11:43.552Z
+_Source: Subagent; session: task_bcf6f47c-7125-48b7-a4af-48f7bb454ffd; task: bcf6f47c-7125-48b7-a4af-48f7bb454ffd; title: [Subagent] Sparky; profile: sparky_v1_
+[Sparky Step 3] I pulled task context and verification artifacts for bcf6f47c-7125-48b7-a4af-48f7bb454ffd. task_control shows status=running, step=3/3, completed_steps=2, last_issue='paused', still active. Scope-limited diff in workspace shows only one modified file: games/mobile-sideways-fps/index.html (53-line change set: ~49 insertions/4 deletions), no roadmap/asst files changed. __check validation run by me: `node --check games/mobile-sideways-fps/__check.js` passed (exit 0). Browser check on file://.../index.html?debug=1: initial page renders HUD + START GAME, and after clicking START GAME (selector #hud button) page remains on overlay with start control still visible, no obvious transition into active wave state from my view in this run.
+_Related task: bcf6f47c-7125-48b7-a4af-48f7bb454ffd_
+
+### [TASK_COMPLETE] 2026-06-30T20:23:52.374Z
+_Source: Subagent; session: task_86b1bf22-cb3a-4352-8c29-0628b47d2de4; task: 86b1bf22-cb3a-4352-8c29-0628b47d2de4; title: [Subagent] Sparky; profile: sparky_v1_
+[Subagent] Sparky step 3 complete data handoff: inspected task 86b1bf22-cb3a-4352-8c29-0628b47d2de4 and confirmed status still running, paused for gateway_restart, step=3/3 with 2/3 previously completed; no new step-level resume/restart action performed. Scope check: no git diffs on games/mobile-sideways-fps/index.html, ZOMBIES_ROADMAP.md, ASSET_NOTES.md, __check.js (git diff --name-only returned none for those paths). Ran node syntax check: `node --check games/mobile-sideways-fps/__check.js` passed (exit 0, no errors). Browser sanity at `index.html?debug=1`: page loads; HUD shows HEART/POINTS/WAVE, SOUND/PAUSE, weapon/ammo/zombie count, start prompt; after clicking START GAME via DOM selector #startButton the UI transitions to gameplay text (START button no longer shown), controls still rendered (BUY/R/FIRE). Roadmap + asset docs present and indicate implemented feature set through Phase12 with Co-op deferred. Current task still not marked complete in task control metadata.
+_Related task: 86b1bf22-cb3a-4352-8c29-0628b47d2de4_
+
+### [TASK_COMPLETE] 2026-06-30T21:22:50.718Z
+_Source: Subagent; session: task_517ec11d-ba47-42ec-8da9-e8a1823b3b2b; task: 517ec11d-ba47-42ec-8da9-e8a1823b3b2b; title: [Subagent] Sparky; profile: sparky_v1_
+[Sparky Step 3] Executed as required after inspecting all active Sparky-related tasks. Current statuses pulled via task_control:
+- 517ec11d-ba47-42ec-8da9-e8a1823b3b2b: status=running, step=2 of 3, completed_steps=1. last_issue='paused', last_progress 2026-06-30T21:22:42Z. This appears to be the only truly active run.
+- e2fcaf8e-de8b-43ee-a387-c3fb17622e80: status=paused (gateway_restart), step1 of3.
+- 7471309c-aba6-4d49-b189-d47b700dce87: status=paused (gateway_restart), step1 of3.
+- 3e331bf3-099b-4f09-9337-1db84f73cca5: status=paused (user_pause), step1 of3.
+- 3e4423be-8df1-4e5f-b866-e94d543ea817: status=paused (user_pause), step1 of3.
+- f8ef41bd-2d0c-4947-8d52-f30dd2602e5c: status=paused (user_pause), step1 of3, last_issue is explicit user instruction to ignore stale flappy/NebulaX context and target Pocket Zombies FPS in games/mobile-sideways-fps.
+- 5eb9afc5-b87d-4cb9-ac03-ff0e7a54984b: status=paused (user_pause), step2 of3, completed_steps=1.
+Cross-check list() confirms same inventory and shows no other newly-running Sparky tasks. No step_complete blockers from task runtime besides pause reasons.
+Recommended parent action: only continue 517ec11d... if desired (if still needed); all other paused tasks remain frozen unless explicitly resumed/rerun per instruction and should not be auto-resumed. Also likely avoid rerun unless authorized.
+_Related task: 517ec11d-ba47-42ec-8da9-e8a1823b3b2b_
+
+### [TASK_COMPLETE] 2026-06-30T21:25:29.742Z
+_Source: Subagent; session: task_517ec11d-ba47-42ec-8da9-e8a1823b3b2b; task: 517ec11d-ba47-42ec-8da9-e8a1823b3b2b; title: [Subagent] Sparky; profile: sparky_v1_
+[Sparky Step 3] Parent-return data extracted now. Task 517ec11d (this active run) is still running at Step 3/3, paused marker stale/none with last progress 21:25:23Z, no new run events. Inventory from task_control.list(status=running,paused): only task 517ec11d is running; the rest Sparky tasks are paused (gateway_restart: e2fcaf8e,7471309c ; user_pause: 3e331b,3e4423,f8ef41 ; 5eb9afb2 step2). No user authorization present in this turn to resume or rerun any paused tasks. Cross-check in /audit/tasks/state/517ec11d confirms runtimeProgress indicates this step (p2) in progress and active task item remains Step3 target. Recommendation: continue only 517ec11d if parent wants it to proceed; do not auto-resume/rerun others.
+_Related task: 517ec11d-ba47-42ec-8da9-e8a1823b3b2b_
+
+### [TASK_COMPLETE] 2026-06-30T22:10:18.883Z
+_Source: Subagent; session: task_e2fcaf8e-de8b-43ee-a387-c3fb17622e80; task: e2fcaf8e-de8b-43ee-a387-c3fb17622e80; title: [Subagent] Sparky; profile: sparky_v1_
+Step 3 completed for [Subagent] Sparky: reviewed recovery state and extracted data for parent. Task e2fcaf8e-e2fc is running at step 3/3 with completed step count 2; last issue was gateway_restart pause/recovery, context preserved. Inspect results: `games/mobile-sideways-fps/index.html` is modified and git diff indicates major repair completion (wave loop overhaul, spawn pacing, kill/point rewards, wave intro/bonus messaging, power-ups, interaction/purchase/audio/input polish). `ZOMBIES_ROADMAP.md` status updated to feature-complete mobile loop, phases 0-12 complete. `ASSET_NOTES.md` confirms local sprite sheet `assets/pocket-zombies-sprites.png` and generated local fallback behavior. `workspace_git diff -- games/mobile-sideways-fps` also shows index updates around waveState, state initialization, spawn timing, enemy tiers, wave transitions, HUD updates, touch controls constants. I could not fully replay/verify gameplay via browser in this step; only static/extractive validation was performed. Suggested parent update: merge with existing parent summary and mark implementation/fix pass complete pending manual playtest sign-off.
+_Related task: e2fcaf8e-de8b-43ee-a387-c3fb17622e80_

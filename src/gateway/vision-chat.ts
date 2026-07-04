@@ -18,11 +18,11 @@ type CapabilityHint = {
 
 const NON_VISION_MODEL_RE = /\b(?:spark|codex-spark)\b/i;
 const OLLAMA_VISION_MODEL_RE = /llava|bakllava|moondream|minicpm.?v|qwen.*vl|internvl|phi.*vision|pixtral|cogvlm|granite.*vision|vision/i;
-// xAI/Grok vision support: grok-2-vision and the grok-4 family (incl. grok-4.x,
-// grok-4-fast, grok-4-1) are multimodal. grok-code-* are code-only and the
-// grok-3 family (incl. grok-3-mini) are text-only — exclude those.
-const XAI_NON_VISION_MODEL_RE = /grok-code|grok-3/i;
-const XAI_VISION_MODEL_RE = /grok-(?:2-vision|4)/i;
+// xAI/Grok vision support: current Grok 4.x and Grok Build model cards list
+// Text + Image input. Composer 2.5 Fast rejects raw image inputs on the xAI OAuth
+// surface, so route it through sidecar summaries instead of direct image parts.
+const XAI_NON_VISION_MODEL_RE = /grok-3|grok-composer/i;
+const XAI_VISION_MODEL_RE = /grok-(?:2-vision|4|build(?:-0\.1)?|code-fast(?:-1)?(?:-\d{4})?)/i;
 
 function readConfiguredProviderAndModel(): { provider: string; model: string; providerCfg: any } {
   const cfg = getConfig().getConfig() as any;

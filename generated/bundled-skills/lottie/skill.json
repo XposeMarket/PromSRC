@@ -1,55 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "lottie",
-  "name": "lottie",
-  "description": "Lottie and dotLottie adapter patterns for HyperFrames. Use when embedding lottie-web JSON animations, .lottie files, @lottiefiles/dotlottie-web players, registering instances on window.__hfLottie, or making After Effects exports deterministic in HyperFrames.",
-  "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when using, inspecting, embedding, creating, optimizing, or troubleshooting Lottie animations, JSON animation assets, Bodymovin exports, animated icons, or lightweight web motion assets.",
   "triggers": [
-    "lottie"
+    "Lottie animation",
+    "Bodymovin export",
+    "Lottie JSON",
+    "animated icon",
+    "embed Lottie",
+    "optimize Lottie",
+    "inspect Lottie file",
+    "create Lottie",
+    "troubleshoot Lottie",
+    "lightweight animation asset",
+    "Lottie web animation",
+    "convert animation to Lottie",
+    "Lottie player",
+    "animation JSON asset"
   ],
   "categories": [
-    "generic",
-    "imported"
+    "creative",
+    "animation",
+    "assets"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "shell",
-      "browser",
-      "desktop",
-      "externalSideEffects"
-    ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": true,
-    "browser": true,
-    "desktop": true,
-    "externalSideEffects": true
-  },
-  "resources": [],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium"
+  "requiredTools": [
+    "media_assets",
+    "creative_basic",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "id": "lottie"
 }

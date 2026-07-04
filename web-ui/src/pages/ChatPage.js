@@ -859,12 +859,15 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
   const windowTokens = getChatContextWindowDisplayLimit(data, currentState);
   const modelWindowTokens = Math.max(0, Number(data.contextWindowTokens || currentState.contextWindowTokens || 0));
+  const isCompactionLimit = modelWindowTokens > 0 && windowTokens > 0 && modelWindowTokens !== windowTokens;
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
   btn.title = `Context before compaction: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens${modelWindowTokens && modelWindowTokens !== windowTokens ? ` (model window ${formatContextTokenCount(modelWindowTokens)})` : ''}`;
   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
-  setChatContextWindowHeadLabel('Context window');
-  if (total) total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)`;
+  setChatContextWindowHeadLabel(isCompactionLimit ? 'Before compaction' : 'Context window');
+  if (total) {
+    total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)${isCompactionLimit ? ` · window ${formatContextTokenCount(modelWindowTokens)}` : ''}`;
+  }
   renderChatContextRows(currentState.rows, windowTokens);
 }
 
@@ -10498,6 +10501,18 @@ function normalizeFileChangesPayload(fileChanges) {
       deletions: Math.max(0, Number(summary.deletions) || normalizedFiles.reduce((sum, file) => sum + file.deletions, 0)),
     },
     files: normalizedFiles,
+    checkpoint: normalizeWorkspaceCheckpoint(fileChanges?.checkpoint),
+  };
+}
+
+function normalizeWorkspaceCheckpoint(checkpoint) {
+  if (!checkpoint || typeof checkpoint !== 'object') return null;
+  const id = String(checkpoint.id || checkpoint.checkpoint_id || checkpoint.checkpointId || '').trim();
+  if (!id) return null;
+  return {
+    id,
+    createdAt: Number(checkpoint.createdAt || checkpoint.created_at || 0) || 0,
+    snapshotCount: Math.max(0, Number(checkpoint.snapshotCount || checkpoint.snapshot_count || 0) || 0),
   };
 }
 
@@ -10537,6 +10552,15 @@ function renderFileChangeRow(file) {
   `;
 }
 
+function renderWorkspaceCheckpointAction(checkpoint) {
+  if (!checkpoint?.id) return '';
+  const idArg = encodeInlineJsString(checkpoint.id);
+  const title = checkpoint.snapshotCount
+    ? `Restore this turn checkpoint (${checkpoint.snapshotCount} snapshots)`
+    : 'Restore this turn checkpoint';
+  return `<button type="button" class="file-change-restore-btn" title="${escHtml(title)}" onclick="restoreWorkspaceCheckpointFromDiff(${idArg}, this)">Restore turn</button>`;
+}
+
 function renderFileChangesGroup(data, options = {}) {
   if (!data) return '';
   const files = data.files;
@@ -10544,11 +10568,12 @@ function renderFileChangesGroup(data, options = {}) {
   const rest = files.slice(3);
   const fileWord = data.summary.fileCount === 1 ? 'file' : 'files';
   const label = String(options.label || '').trim();
+  const checkpointAction = renderWorkspaceCheckpointAction(options.checkpoint || data.checkpoint);
   return `
     <div class="file-changes-card">
       <div class="file-changes-head">
         <strong>${label ? `${escHtml(label)} - ` : ''}${data.summary.fileCount} ${fileWord} changed</strong>
-        <span class="file-changes-total"><span class="ins">+${data.summary.insertions}</span><span class="del">-${data.summary.deletions}</span></span>
+        <span class="file-changes-actions">${checkpointAction}<span class="file-changes-total"><span class="ins">+${data.summary.insertions}</span><span class="del">-${data.summary.deletions}</span></span></span>
       </div>
       <div class="file-change-list">
         ${visible.map(renderFileChangeRow).join('')}
@@ -10565,10 +10590,63 @@ function renderFileChangesGroup(data, options = {}) {
 
 function renderFileChanges(fileChanges) {
   const groups = normalizeFileChangeGroups(fileChanges);
+  const checkpoint = normalizeWorkspaceCheckpoint(fileChanges?.checkpoint);
   if (groups.length) {
-    return `<div class="file-changes-grouped">${groups.map((group) => renderFileChangesGroup(group.data, { label: group.label })).join('')}</div>`;
+    return `<div class="file-changes-grouped">${groups.map((group, index) => renderFileChangesGroup(group.data, { label: group.label, checkpoint: index === 0 ? checkpoint : null })).join('')}</div>`;
   }
   return renderFileChangesGroup(normalizeFileChangesPayload(fileChanges));
+}
+
+function confirmWorkspaceCheckpointRestore(checkpointId) {
+  const id = String(checkpointId || '').trim();
+  const message = `Restore this turn checkpoint?\n\nThis will put every changed file back to its state before that Prometheus turn.`;
+  if (typeof showConfirm === 'function') {
+    return new Promise((resolve) => {
+      showConfirm(
+        message,
+        () => resolve(true),
+        () => resolve(false),
+        {
+          title: 'Restore turn?',
+          confirmText: 'Restore',
+          cancelText: 'Cancel',
+          danger: true,
+          details: id,
+        },
+      );
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
+
+async function restoreWorkspaceCheckpointFromDiff(checkpointId, button = null) {
+  const id = String(checkpointId || '').trim();
+  if (!id) return;
+  const approved = await confirmWorkspaceCheckpointRestore(id);
+  if (!approved) return;
+  const btn = button && typeof button === 'object' ? button : null;
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+  }
+  try {
+    const result = await api('/api/canvas/history/restore', {
+      method: 'POST',
+      body: { checkpoint_id: id, confirm: true },
+      timeoutMs: 30000,
+    });
+    const touched = (Array.isArray(result?.restored) ? result.restored.length : 0) + (Array.isArray(result?.deleted) ? result.deleted.length : 0);
+    addProcessEntry('warn', `Restored workspace checkpoint ${id}${touched ? ` (${touched} path${touched === 1 ? '' : 's'})` : ''}.`);
+    showToast('Workspace restored', touched ? `Restored ${touched} path${touched === 1 ? '' : 's'}.` : 'Restored checkpoint.', 'success', 2600);
+  } catch (err) {
+    addProcessEntry('error', `Workspace restore failed: ${String(err?.message || err)}`);
+    showToast('Restore failed', String(err?.message || err), 'error', 4000);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+    }
+  }
 }
 
 function renderDesktopSlashCommandTokens(html) {
@@ -10725,6 +10803,28 @@ function renderLiveTraceEntry(entry) {
   </div>`;
 }
 
+function isLiveTraceCompactionEntry(entry) {
+  return String(entry?.type || '').toLowerCase() === 'compaction';
+}
+
+function renderLiveTraceCompactionBreak(entry) {
+  const status = String(entry?.status || entry?.extra?.status || '').toLowerCase();
+  const label = String(entry?.text || '').trim()
+    || (status === 'compacting' ? 'Compacting Context' : status === 'failed' ? 'Context Compaction Failed' : 'Context Compacted');
+  const summary = String(entry?.summary || entry?.extra?.summary || '').trim();
+  const body = summary
+    ? `<div class="live-turn-compaction-body"><div class="live-turn-md">${renderMd(summary)}</div></div>`
+    : (status === 'compacting' ? '<div class="live-turn-compaction-body muted">Compaction summary will appear when complete.</div>' : '');
+  return `<details class="live-turn-compaction" data-status="${escHtml(status || 'done')}">
+    <summary>
+      <span class="live-turn-compaction-line" aria-hidden="true"></span>
+      <strong>${escHtml(label)}</strong>
+      <span class="live-turn-compaction-line" aria-hidden="true"></span>
+    </summary>
+    ${body}
+  </details>`;
+}
+
 function renderLiveTraceList(entries) {
   const list = visibleLiveTraceEntries(entries);
   if (!list.length) return '';
@@ -10745,6 +10845,11 @@ function liveTraceGroups(entries) {
   const groups = [];
   let activeToolGroup = null;
   list.forEach((entry) => {
+    if (isLiveTraceCompactionEntry(entry)) {
+      activeToolGroup = null;
+      groups.push({ kind: 'compaction', entries: [entry] });
+      return;
+    }
     if (isLiveTraceThoughtEntry(entry)) {
       activeToolGroup = null;
       groups.push({ kind: 'thought', entries: [entry] });
@@ -10760,7 +10865,9 @@ function liveTraceGroups(entries) {
 }
 
 function liveTraceHasToolGroup(entries) {
-  return liveTraceGroups(entries).some((group) => group.kind === 'tools' && group.entries.length > 0);
+  return liveTraceGroups(entries).some((group) =>
+    (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0
+  );
 }
 
 function liveTraceToolLabel(text) {
@@ -10996,10 +11103,13 @@ function liveTraceSummaryKey(text) {
 function renderLiveTurnTrace(entries, { streaming = false } = {}) {
   const groups = liveTraceGroups(entries);
   if (!groups.length) return '';
-  if (!streaming && !groups.some((group) => group.kind === 'tools' && group.entries.length > 0)) return '';
+  if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
       return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
+    }
+    if (group.kind === 'compaction') {
+      return group.entries.map(renderLiveTraceCompactionBreak).join('');
     }
     const isLiveCurrent = streaming && index === groups.length - 1;
     const summary = isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries);
@@ -11024,7 +11134,29 @@ function desktopWorkflowTraceEntriesForMessage(message) {
     if (!entry || typeof entry !== 'object') return;
     const normalizedEntry = normalizeProcessEntryForRender(entry) || entry;
     let type = String(normalizedEntry.type || normalizedEntry.kind || fallbackType || 'info').toLowerCase();
-    const text = String(normalizedEntry.text || normalizedEntry.content || normalizedEntry.message || '').trim();
+    const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : null;
+    const action = String(extra?.action || extra?.toolName || normalizedEntry.action || normalizedEntry.toolName || '').trim();
+    let text = String(normalizedEntry.text || normalizedEntry.content || normalizedEntry.message || '').trim();
+    let traceEntry = normalizedEntry;
+    if (action === 'context_compaction') {
+      const status = String(extra?.extra?.status || extra?.status || '').toLowerCase()
+        || (type === 'error' ? 'failed' : type === 'tool' ? 'compacting' : 'compacted');
+      type = 'compaction';
+      text = status === 'compacting'
+        ? 'Compacting Context'
+        : status === 'failed'
+          ? 'Context Compaction Failed'
+          : status === 'skipped'
+            ? 'Context Compaction Skipped'
+            : 'Context Compacted';
+      traceEntry = {
+        ...normalizedEntry,
+        type,
+        text,
+        status,
+        summary: String(extra?.extra?.summary || extra?.summary || normalizedEntry.summary || '').trim(),
+      };
+    }
     const preview = normalizedEntry.preview && typeof normalizedEntry.preview === 'object' ? normalizedEntry.preview : null;
     const previewData = String(preview?.dataUrl || normalizedEntry.dataUrl || '').trim();
     if (!text && !previewData) return;
@@ -11041,7 +11173,7 @@ function desktopWorkflowTraceEntriesForMessage(message) {
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
-      ...normalizedEntry,
+      ...traceEntry,
       type,
       text,
       ts: String(normalizedEntry.ts || normalizedEntry.time || normalizedEntry.timestamp || ''),
@@ -13912,7 +14044,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     }
     scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
   };
-  const appendLiveTrace = (type, text, { append = false } = {}) => {
+  const appendLiveTrace = (type, text, { append = false, extra = null } = {}) => {
     const content = String(text || '');
     if (!content) return;
     if (isBareThinkingLiveTraceText(content)) return;
@@ -13929,6 +14061,38 @@ async function sendChat(queuedMessage = null, options = {}) {
         id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type: normalizedType,
         text: trimmed,
+        ts: new Date().toLocaleTimeString(),
+        ...(extra && typeof extra === 'object' ? { extra } : {}),
+      });
+    }
+    scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
+  };
+  const appendCompactionTrace = (status = 'compacting', summary = '', extra = null) => {
+    if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+    const normalizedStatus = String(status || 'compacting').toLowerCase();
+    const label = normalizedStatus === 'compacting'
+      ? 'Compacting Context'
+      : normalizedStatus === 'failed'
+        ? 'Context Compaction Failed'
+        : normalizedStatus === 'skipped'
+          ? 'Context Compaction Skipped'
+          : 'Context Compacted';
+    const cleanSummary = String(summary || extra?.summary || '').trim();
+    const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
+    const payload = extra && typeof extra === 'object' ? extra : {};
+    if (last && String(last.type || '').toLowerCase() === 'compaction') {
+      last.text = label;
+      last.status = normalizedStatus;
+      if (cleanSummary) last.summary = cleanSummary;
+      last.extra = { ...(last.extra || {}), ...payload };
+    } else {
+      streamState.liveTraceEntries.push({
+        id: `trace_compact_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        type: 'compaction',
+        text: label,
+        status: normalizedStatus,
+        summary: cleanSummary,
+        extra: payload,
         ts: new Date().toLocaleTimeString(),
       });
     }
@@ -14569,17 +14733,17 @@ async function sendChat(queuedMessage = null, options = {}) {
             const displayAction = formatToolCallForLog(action, args, streamState);
             const syntheticTag = event.synthetic ? ' [synthetic]' : '';
             movePreToolAnswerTextIntoPreamble();
-            sawToolActivityThisTurn = true;
             if (action === 'context_compaction') {
               pushProgressLine('Compacting thread context...');
-              appendLiveTrace('tool', 'Compacting thread context...');
+              appendCompactionTrace('compacting', '', args || event);
               addProcessEntry(
                 'tool',
                 `${stepPrefix}Compacting thread context...${syntheticTag}`,
-                (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
+                { action, ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) },
               );
               break;
             }
+            sawToolActivityThisTurn = true;
             const isSkillTool = action === 'skill_list' || action === 'skill_read' || action === 'skill_resource_list' || action === 'skill_resource_read' || action === 'skill_create';
             const isBackgroundAgentTool = action.startsWith('background_');
             if (isSkillTool) {
@@ -14614,7 +14778,6 @@ async function sendChat(queuedMessage = null, options = {}) {
             const stepNum = Number(event.stepNum || 0);
             const stepPrefix = getDeclaredPlanToolPrefix(stepNum);
             movePreToolAnswerTextIntoPreamble();
-            sawToolActivityThisTurn = true;
             const text = String(event.result || '');
 	            const ok = event.error === true ? false : !/^ERROR:/i.test(text);
 	            const syntheticTag = event.synthetic ? ' [synthetic]' : '';
@@ -14646,14 +14809,15 @@ async function sendChat(queuedMessage = null, options = {}) {
                 : `Thread compaction failed: ${text || '(no output)'}`;
               const displayResultText = String(text || '').trim() || baseResultText;
               pushProgressLine(status === 'skipped' ? 'Thread compaction skipped' : (ok ? 'Thread compacted' : 'Thread compaction failed'));
-              appendLiveTrace(ok ? 'result' : 'error', status === 'skipped' ? 'Thread compaction skipped' : (ok ? 'Thread compacted' : 'Thread compaction failed'));
+              appendCompactionTrace(status || (ok ? 'compacted' : 'failed'), extraData.summary || '', extraData);
               addProcessEntry(
                 ok ? 'result' : 'error',
                 `${stepPrefix}${displayResultText}${syntheticTag}`,
-                extraPayload,
+                { action, ...(extraPayload || {}) },
               );
               break;
             }
+            sawToolActivityThisTurn = true;
             const resultDisplay = formatToolResultForLog(action, text, ok, streamState);
             if (action) pushProgressLine(`${stepPrefix}${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}`);
             if (action) appendLiveTrace(ok ? 'result' : 'error', `${stepPrefix}${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}`);
@@ -38398,6 +38562,7 @@ window.applySessionCreativeMode = applySessionCreativeMode;
 window.showToast = showToast;
 window.bgtToast = bgtToast;
 window.showConfirm = showConfirm;
+window.restoreWorkspaceCheckpointFromDiff = restoreWorkspaceCheckpointFromDiff;
 window.renderQueuedPromptsPanel = renderQueuedPromptsPanel;
 window.removeQueuedPrompt = removeQueuedPrompt;
 window.steerQueuedPrompt = steerQueuedPrompt;

@@ -128,9 +128,16 @@ Model resolver:
 
 `src/gateway/creative/onnx/model-paths.ts`
 
-The resolver now checks packaged resources before config-dir models:
+The resolver checks model locations in this order:
 
-`resources/creative-models/<model>.onnx`
+- explicit env override path
+- packaged `resources/creative-models/<model>.onnx`
+- canonical config-dir cache at `<PromSRC>/.prometheus/models/<model>.onnx`
+- compatibility fallback at `workspace/.prometheus/models/<model>.onnx`
+
+`scripts/download-creative-models.mjs` resolves the PromSRC project root from the script path before choosing `.prometheus/models`, so downloads do not drift into `workspace/.prometheus/models` merely because the script was launched from `workspace/`.
+
+`creative_image_ops(action: "model_status")` and `GET /api/canvas/creative-model-status` expose selected paths, candidate paths, availability, and file sizes.
 
 Current managed model names:
 

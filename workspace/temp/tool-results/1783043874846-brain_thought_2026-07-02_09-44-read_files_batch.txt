@@ -1,0 +1,110 @@
+Brain/thoughts/2026-06-18/18-12-thought.md (109 lines) [window 1-109]:
+1: ---
+2: # Thought 1 - 2026-06-18 | Window: 2026-06-17 22:12 UTC-2026-06-18 07:46 UTC
+3: _Generated: 2026-06-18 18:12 local_
+4: 
+5: ## Summary
+6: This window was dominated by a tight Prometheus mobile recovery/UX repair loop. The highest-value work landed in the mobile chat surface: reconnect/cold-reopen recovery now preserves full tool streams, cold opens are faster via a smaller first history pull plus a local thread skeleton cache, image-generation spinner false positives were fixed, and the finished-turn “Worked for Xs” timer can now expand the original tool stream through `liveTraceEntries` persistence.
+7: 
+8: The active-work ledger was maintained and now reflects this as five resolved mobile entries plus refreshed open debt. The main unresolved theme is not the mobile fixes themselves; it is follow-through discipline around self-doc synchronization. `self/16-mobile-app.md` was updated after the first reconnect edit, but several later 2026-06-18 edits landed afterward: cache/historyLimit behavior, pagehide/visibility disconnect stamping, image-generation pending guard, expandable trace drawer, and server save/load of `liveTraceEntries`. That keeps the broader self-doc compliance gap open.
+9: 
+10: The other high-signal open seed remains the interactive `/goal` judge context gap from the prior window. Source evidence still points to `judgeMainChatGoal()` being under-contextualized compared with the worker and compactor paths. No new source patch was created in this scheduled run.
+11: 
+12: Skill-gardener signals were noisy again. The 2026-06-18 gardener produced 17 live candidates, all deferred as `no_action_but_record_episode`, while repeatedly classifying technical Prometheus mobile/source work as business/vendor-style activity. That reinforces the existing classifier-tightening ledger item rather than requiring new skill creation.
+13: 
+14: ## Pulse Cards
+15: ```json
+16: [
+17:   {
+18:     "title": "Mobile Self-Docs Drift Sweep",
+19:     "body": "The mobile fixes shipped, but the docs trail the final state.",
+20:     "prompt": "Audit 2026-06-18 mobile edits against workspace/self/16-mobile-app.md. Re-read self/index.md and self/16-mobile-app.md, then inspect web-ui/src/mobile/mobile-pages.js and web-ui/src/styles/mobile.css for reconnect recovery, cold-open caching, disconnected stamping, _mobileHasPendingImageGeneration, Worked-for trace drawer, and liveTraceEntries server persistence. Update only the correlated mobile self docs with source-grounded behavior and verification notes."
+21:   },
+22:   {
+23:     "title": "Fix /goal Judge Context",
+24:     "body": "The worker path uses normal interactive turns; the judge still needs richer evidence before Raul relies on /goal for coding work.",
+25:     "prompt": "Continue the interrupted /goal dev edit. Re-read self/index.md and relevant self docs, then inspect src/gateway/main-chat-goals.ts and src/gateway/routes/chat.router.ts. Patch judgeMainChatGoal so it receives original session context, recent goal messages/tool observations, and a richer continuation directive. Update correlated self docs, run the appropriate build/reload flow, and smoke a tiny /goal loop."
+26:   },
+27:   {
+28:     "title": "Skill Classifier Tightening",
+29:     "body": "The gardener keeps treating Prometheus mobile/source work as business/vendor workflows.",
+30:     "prompt": "Investigate src/gateway/brain/skill-episodes.ts business workflow classification using 2026-06-18 gardener fixtures. Add or propose context-aware exclusions/tests so Prometheus self-edits, mobile UI/source work, desktop smoke checks, skill maintenance, and trading/market briefs are not mislabeled as vendor_research/outreach/quote/social workflows."
+31:   }
+32: ]
+33: ```
+34: 
+35: ## A. Activity Summary
+36: - Mobile reconnect/tool-stream recovery was fixed through multiple dev edits. The active-run recovery path no longer replaces the live streaming turn with server history before checking whether the run is still active, and cold reopen now forces seq=0 replay when the prior mobile state is marked disconnected. | evidence: `memory/2026-06-18-intraday-notes.md:2-4,18-32`; `Brain/active-work.jsonl:33`
+37: - Mobile cold-open speed was improved. Initial history fetch was reduced from 300 to 80 messages unless forced, a localStorage thread cache under `pm_mobile_thread_cache_v1` stores the last 30 non-streaming messages for instant skeleton render, and post-load recovery avoids a duplicate full session fetch. | evidence: `memory/2026-06-18-intraday-notes.md:22-24`; `Brain/active-work.jsonl:34`
+38: - Cold-reopen recovery was hardened for iOS app close/kill. Normal app hiding now stamps `disconnected:true` through `pagehide` and `visibilitychange` so recovery can replay from the beginning instead of assuming only an incremental reconnect. | evidence: `memory/2026-06-18-intraday-notes.md:26-32`; `Brain/active-work.jsonl:33`
+39: - `_mobileHasPendingImageGeneration` was fixed so completed `Generate Image complete` tool results no longer trigger a pending image-generation loading card. | evidence: `memory/2026-06-18-intraday-notes.md:34-36`; `Brain/active-work.jsonl:35`
+40: - The mobile `Worked for Xs` timer became expandable after a UX correction loop. The Process button remains separate at the bottom of the AI bubble, while the timer can expand a `pm-trace-drawer` above the final response containing the original TOOL/TOOL RESULT stream. | evidence: `memory/2026-06-18-intraday-notes.md:38-64`; `Brain/active-work.jsonl:36`
+41: - `liveTraceEntries` persistence was fixed. Finished turns store the live tool trace, `_mapServerMessageToMobile` reads it back from server messages, and `_mobileHistoryForServer` preserves it during normal save while branch copies still strip it intentionally. | evidence: `memory/2026-06-18-intraday-notes.md:58-64`; `Brain/active-work.jsonl:37`
+42: - Active Work Ledger maintenance completed. The ledger was updated from 32 to 37 lines with five new resolved mobile entries and refreshed open entries for mobile docs, skill-gardener classifier false positives, dev-edit completion-note/hot-restart determinism, and the AI smoke-test state. | evidence: `Brain/active-work.jsonl:9,20-21,24-25,31,33-37`
+43: - Skill-gardener produced 17 workflow/live-candidate rows for 2026-06-18, all classified as `no_action_but_record_episode`. The underlying businessContext labels remain noisy and frequently misclassify technical mobile/source work as vendor/business categories. | evidence: `Brain/skill-gardener/2026-06-18/workflow-episodes.jsonl`; `Brain/skill-gardener/2026-06-18/live-candidates.jsonl`; `Brain/active-work.jsonl:20`
+44: - No `Brain/skill-episodes/2026-06-18/` output was found during the observation pass, so this Thought relied on intraday notes, skill-gardener artifacts, source/file stats, and the active-work ledger rather than a separate skill-episodes file for today. | evidence: observation result from this run
+45: 
+46: ## B. Behavior Quality
+47: **Went well:**
+48: - The rapid mobile repair loop kept narrowing real UX failures instead of stopping at the first apparent fix. Reconnect recovery, cold-open speed, pending image-generation state, trace drawer placement, and trace persistence each received focused follow-up fixes. | evidence: `memory/2026-06-18-intraday-notes.md:2-64`
+49: - The final mobile UX direction became cleaner after correction: Process stayed as its own bottom-of-bubble control, while “Worked for Xs” became the natural place to inspect the full execution trace. | evidence: `memory/2026-06-18-intraday-notes.md:38-64`; `Brain/active-work.jsonl:36`
+50: - Ledger maintenance was concrete and current. Resolved fixes are now separated from open doc/compliance debt instead of being blurred into one vague mobile recovery item. | evidence: `Brain/active-work.jsonl:9,33-37`
+51: 
+52: **Stalled or struggled:**
+53: - Self-doc sync lagged behind the final mobile state. `self/16-mobile-app.md` was last modified after the first reconnect fix, but later fixes changed important recovery and tool-stream behavior afterward. | evidence: `self/16-mobile-app.md file_stats last_modified 2026-06-18T03:16:59.439Z`; `memory/2026-06-18-intraday-notes.md:18-64`; `Brain/active-work.jsonl:9,21`
+54: - `/goal` judge-context work remains open from the prior window. The scheduled Thought did not create a source patch or proposal, correctly preserving scope, but this remains one of the most important product reliability seeds. | evidence: `Brain/active-work.jsonl:29`; prior source findings `src/gateway/main-chat-goals.ts:230-255,308-351`; `src/gateway/routes/chat.router.ts:7353-7425`
+55: - Skill-gardener classification remains too broad. Technical terms like tool, provider, proposal, process, social, and follow-up can trigger business workflow tags inside Prometheus source/debug sessions. | evidence: `Brain/active-work.jsonl:20`; `src/gateway/brain/skill-episodes.ts:205-221`
+56: 
+57: **Tool usage patterns:**
+58: - File tools were sufficient for the final synthesis and ledger verification. No browser, external posting, source patching, proposal, or new skill creation was needed.
+59: - The active-work ledger is now a stronger recovery surface than raw intraday notes for this cluster because it separates resolved mobile behavior from open documentation/compliance debt.
+60: - Skill-gardener artifacts remain useful for detecting repeated workflow patterns, but their business labels need cross-checking before being treated as entity/business facts.
+61: 
+62: ## C. Skill And Workflow Signals
+63: | Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
+64: |---|---|---|---|---|
+65: | Mobile reconnect/recovery source-edit workflow | Multiple mobile dev edits shipped in one window and converged on stable recovery/tool-stream behavior. | No new skill in this scheduled run. Later, consider strengthening an existing Prometheus mobile/source-edit playbook with a recovery checklist after docs are synced. | medium | `memory/2026-06-18-intraday-notes.md:2-64`; `Brain/active-work.jsonl:33-37` |
+66: | Self-doc sync for Prometheus self-edits | Rule compliance improved once but lagged after later edits. | Run a targeted self-doc sweep before starting more mobile feature work. | high | `self/16-mobile-app.md file_stats`; `Brain/active-work.jsonl:9,21` |
+67: | Skill/business classifier | False positives repeated on 2026-06-18 mobile/source work. | Source-level classifier/test improvement, not skill metadata churn. | high | `Brain/skill-gardener/2026-06-18/live-candidates.jsonl:1-16`; `src/gateway/brain/skill-episodes.ts:205-221` |
+68: | `/goal` interactive loop repair | Still a source/product gap, not a skill gap. | Continue via dev-source fast route in a foreground/dev session with self-doc updates included. | high | `Brain/active-work.jsonl:29`; prior source evidence in `src/gateway/main-chat-goals.ts` and `src/gateway/routes/chat.router.ts` |
+69: 
+70: ## C2. Existing Skill Maintenance
+71: **Applied during this Thought / current window:**
+72: - No skill metadata or resource changes were applied in this continuation. The gardener’s 17 live candidates all deferred with `no_action_but_record_episode`, and the schedule scope allowed only low-risk existing-skill maintenance.
+73: 
+74: **Deferred:**
+75: - Mobile recovery/source-edit workflow resource: defer until `self/16-mobile-app.md` is synced to the actual 2026-06-18 state.
+76: - Skill/business classifier fix: defer to source-level investigation because the issue is classification logic, not missing skill metadata.
+77: - `/goal` workflow documentation: defer until the actual judge-context source fix is completed.
+78: 
+79: ## D. Business Candidates
+80: | Candidate | Destination | Action | Confidence | Evidence |
+81: |---|---|---|---|---|
+82: | Mobile recovery/UX resolved cluster | `entities/projects/prometheus.md` / project event | Append project event summarizing reconnect recovery, cold-open cache, image-generation pending guard, expandable Worked-for trace drawer, and liveTraceEntries persistence as resolved mobile reliability work. | high | `memory/2026-06-18-intraday-notes.md:2-64`; `Brain/active-work.jsonl:33-37` |
+83: | Mobile self-doc drift after rapid edits | `entities/projects/prometheus.md` / project event | Append open project event: `self/16-mobile-app.md` needs sync for post-03:16 mobile recovery/tool-stream changes. | high | `self/16-mobile-app.md file_stats`; `Brain/active-work.jsonl:9,21` |
+84: | `/goal` judge-context gap | `entities/projects/prometheus.md` / project event | Keep/append open event that `/goal` judge needs richer context before Raul relies on it heavily for coding tasks. | high | `Brain/active-work.jsonl:29`; prior source evidence `src/gateway/main-chat-goals.ts:230-255` |
+85: | Skill-gardener classifier false positives | `entities/projects/prometheus.md` / project event | Append or refresh operational gap event for false business/vendor labels on technical Prometheus work. | medium-high | `Brain/skill-gardener/2026-06-18/live-candidates.jsonl:1-16`; `Brain/active-work.jsonl:20` |
+86: 
+87: A matching `Brain/business-candidates/2026-06-18/candidates.jsonl` was written for these Prometheus project event seeds.
+88: 
+89: ## E. Improvement Candidates
+90: 1. **Sync mobile self docs to the final 2026-06-18 behavior.** Cover active-run merge guard, cold-open cache/historyLimit behavior, pagehide/visibility disconnect stamping, image-generation pending guard, Worked-for trace drawer, and liveTraceEntries server persistence. | confidence: high
+91: 2. **Patch `/goal` judge context and continuation directive.** The worker path is not the main weakness; the judge should receive original session context, recent goal messages, structured tool observations, and return a richer continuation directive. | confidence: high
+92: 3. **Make self-doc sync an enforced completion gate for dev edits.** The repeated pattern is not that docs are impossible, but that rapid edits can finish after docs were updated once. Completion should verify doc timestamp/content against all edits in the cluster. | confidence: high
+93: 4. **Tighten skill-gardener business workflow classifier.** Add exclusions/tests for Prometheus self-edits, mobile UI/source work, desktop smoke checks, skill maintenance, and market/trading briefs before vendor/outreach/quote/social labels are emitted. | confidence: high
+94: 5. **Use `liveTraceEntries` as a broader product primitive.** Now that finished turns can persist their execution trace, consider using it consistently in mobile history/recovery and possibly desktop chat trace inspection instead of relying only on transient live stream state. | confidence: medium
+95: 
+96: ## F. Active Work Ledger Changes
+97: - Updated `mobile-realtime-voice-photo-attachments-doc-gap` into broader mobile recovery/canvas/tool-stream doc debt for 2026-06-18.
+98: - Updated `skill-gardener-business-classifier-false-positives` with 2026-06-18 false-positive evidence.
+99: - Updated `dev-edit-completion-note-hot-restart-determinism` last verification to 2026-06-18.
+100: - Updated `ai-smoke-test-paused-after-reddit` to resolved after current verification.
+101: - Added `mobile-reconnect-recovery-full-tool-stream` as resolved.
+102: - Added `mobile-cold-open-speed-thread-cache` as resolved.
+103: - Added `mobile-image-gen-pending-false-positive` as resolved.
+104: - Added `mobile-worked-for-expandable-trace-drawer` as resolved.
+105: - Added `mobile-livetraceentries-server-persistence` as resolved.
+106: 
+107: ## Completion Note
+108: Thought output written. Active Work Ledger maintained. Business/project candidate seeds written. No proposal, memory write, new skill, external post, or source patch was created in this scheduled run.
+109: 

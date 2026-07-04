@@ -49,18 +49,25 @@ router.get('/api/skills', async (req, res) => {
   res.json({ success: true, skills, skillsDir: _sm.getSkillsDir() });
 });
 
-// Unified skill-trigger matcher. The SAME matcher that feeds matching skills to
-// the AI at runtime also powers the mobile composer skill-trigger pill, so the
-// two can never drift. Pass the composer/message text as ?q=...
+// Composer skill matcher. Runtime skill matching remains broader; the composer
+// pill needs a higher-confidence signal so generic partial text such as
+// "I want" does not surface unrelated workflows from descriptions.
 router.get('/api/skills/match', (req, res) => {
   recoverSkillsIfEmpty();
   const q = String(req.query.q || '').trim();
   if (!q) { res.json({ success: true, matches: [] }); return; }
-  const ids = _sm.findMatchingSkillsForMessage(q);
   const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 8));
-  const matches = ids.slice(0, limit).map((id) => {
+  const mentionsX = /\b(?:x|twitter|tweet|tweets)\b|(?:x|twitter)\.com/i.test(q);
+  const ids = _sm.findComposerSkillMatches(q, limit * 2);
+  const matches = ids.map((id) => {
     const s = _sm.get(id);
     if (!s) return null;
+    const isXSkill = [
+      s.id,
+      s.name,
+      ...(Array.isArray(s.categories) ? s.categories : []),
+    ].some((value) => /\b(?:x|twitter)\b/i.test(String(value || '')));
+    if (isXSkill && !mentionsX) return null;
     return {
       id: s.id,
       name: s.name,
@@ -69,7 +76,7 @@ router.get('/api/skills/match', (req, res) => {
       categories: s.categories,
       requiredTools: s.requiredTools,
     };
-  }).filter(Boolean);
+  }).filter(Boolean).slice(0, limit);
   res.json({ success: true, matches });
 });
 

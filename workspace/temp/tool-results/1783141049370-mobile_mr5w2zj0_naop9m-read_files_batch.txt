@@ -1,0 +1,170 @@
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28841 lines) [window 10039-10118, truncated]:
+10039:   function applyMobileChatStreamEvent(aiTurn, evt) {
+10040:     aiTurn = _mobileStreamTargetTurn(aiTurn);
+10041:     if (!aiTurn || !evt?.type) return '';
+10042:     if (!noteChatStreamSeq(evt)) return 'duplicate';
+10043:     switch (evt.type) {
+10044:       case 'token':
+10045:         if (evt.text) {
+10046:           const chunk = String(evt.text);
+10047:           _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
+10048:         }
+10049:         renderThreadSoon();
+10050:         return 'streaming';
+10051:       case 'agent_mode':
+10052:         aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
+10053:         if (aiTurn.agentExecutionMode === 'execute') _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10054:         if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
+10055:         renderThreadSoon();
+10056:         return 'streaming';
+10057:       case 'runtime_registered':
+10058:         if (evt.runtimeId || evt.run?.id) {
+10059:           aiTurn.runtimeId = String(evt.runtimeId || evt.run?.id || '').trim();
+10060:         }
+10061:         return 'streaming';
+10062:       case 'thinking_delta': {
+10063:         const text = String(evt.thinking || evt.text || '');
+10064:         if (text) {
+10065:           _appendMobileLiveTrace(aiTurn, 'think', text, { append: true });
+10066:           renderThreadSoon();
+10067:         }
+10068:         return 'streaming';
+10069:       }
+10070:       case 'info':
+10071:       case 'ui_preflight':
+10072:       case 'heartbeat':
+10073:         if (evt.message) {
+10074:           const messageText = String(evt.message);
+10075:           const isCompactionPreflight = String(evt.type || '') === 'ui_preflight' && /^Compacting the thread before continuing/i.test(messageText);
+10076:           if (!isCompactionPreflight) {
+10077:             _appendMobileProcess(aiTurn, 'info', messageText, evt);
+10078:             _appendMobileLiveTrace(aiTurn, 'info', messageText);
+10079:           }
+10080:           renderThreadSoon();
+10081:         }
+10082:         return 'streaming';
+10083:       case 'tool_call': {
+10084:         if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+10085:           _appendMobileCompactionTrace(aiTurn, 'compacting', '', evt.args || evt);
+10086:           renderThreadSoon();
+10087:           return 'streaming';
+10088:         }
+10089:         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10090:         aiTurn.toolActivityStarted = true;
+10091:         const label = _mobileToolLabel(evt);
+10092:         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
+10093:         _appendMobileProcess(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`, evt);
+10094:         _appendMobileLiveTrace(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`);
+10095:         renderThreadSoon();
+10096:         return 'streaming';
+10097:       }
+10098:       case 'tool_result': {
+10099:         if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+10100:           const status = String(evt?.extra?.status || '').toLowerCase() || (evt.error ? 'failed' : 'compacted');
+10101:           _appendMobileCompactionTrace(aiTurn, status, evt?.extra?.summary || '', evt.extra || evt);
+10102:           _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', status === 'failed' ? 'Context compaction failed' : 'Context compacted', evt);
+10103:           renderThreadSoon();
+10104:           return 'streaming';
+10105:         }
+10106:         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10107:         aiTurn.toolActivityStarted = true;
+10108:         const label = _mobileToolLabel(evt);
+10109:         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
+10110:         _collectMediaFromToolEvent(aiTurn, evt);
+10111:         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
+10112:         _appendMobileLiveTrace(aiTurn, evt.error ? 'error' : 'result', `${label}${evt.error ? ' failed' : ' complete'}`);
+10113:         renderThreadSoon();
+10114:         return 'streaming';
+10115:       }
+10116:       case 'vision_injected':
+10117:         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10118:         aiTurn.toolActivityStarted = true;
+[READ_TRUNCATED] Returned 80 of 28841 lines. Use start_line:10119, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28841 lines) [window 6087-6166, truncated]:
+6087:         const toggle = snapshot.host.parentElement?.querySelector?.('[data-pm-process-action="load-approval"]');
+6088:         if (toggle) toggle.textContent = snapshot.toggleText || 'Close terminal';
+6089:       });
+6090:     } catch {}
+6091:   }
+6092:   const patchedEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`) || nextEl;
+6093:   patchedEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
+6094:     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
+6095:   });
+6096:   _wireMobileProcessRunActions(patchedEl);
+6097:   _wireMobileChatEnhancements(patchedEl);
+6098:   return true;
+6099: }
+6100: 
+6101: function _patchLatestMobileStreamingMessage(threadEl, bodyEl, key = 'chat') {
+6102:   const thread = _activeMobileThread();
+6103:   const message = [...thread].reverse().find((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+6104:   if (!message) return false;
+6105:   const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
+6106:   const patched = _patchMobileThreadMessage(threadEl, message, thread.indexOf(message));
+6107:   if (!patched) return false;
+6108:   _syncMobileWorkTimer(threadEl, bodyEl, key);
+6109:   _restoreMobileChatScroll(bodyEl, scrollSnapshot);
+6110:   return true;
+6111: }
+6112: 
+6113: function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 16) {
+6114:   if (!threadEl) return false;
+6115:   const timerKey = String(key || 'chat');
+6116:   if (__pmChat.patchRenderTimers?.[timerKey]) return true;
+6117:   if (!__pmChat.patchRenderTimers || typeof __pmChat.patchRenderTimers !== 'object') __pmChat.patchRenderTimers = {};
+6118:   __pmChat.patchRenderTimers[timerKey] = setTimeout(() => {
+6119:     delete __pmChat.patchRenderTimers[timerKey];
+6120:     if (!_patchLatestMobileStreamingMessage(threadEl, bodyEl, timerKey)) {
+6121:       _scheduleThreadRender(threadEl, bodyEl, timerKey, delay);
+6122:     }
+6123:   }, Math.max(16, Number(delay) || 50));
+6124:   return true;
+6125: }
+6126: 
+6127: function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
+6128:   const hasStreamingAssistant = _activeMobileThread().some((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+6129:   if (hasStreamingAssistant) {
+6130:     if (!__pmChat.workTimer) {
+6131:       __pmChat.workTimer = setInterval(() => {
+6132:         const activeThreadEl = document.getElementById('pm-chat-thread') || threadEl;
+6133:         const activeBodyEl = document.getElementById('pm-chat-body') || bodyEl;
+6134:         if (!activeThreadEl) return;
+6135:         if (!_patchLatestMobileStreamingMessage(activeThreadEl, activeBodyEl, key)) {
+6136:           _flushThreadRender(activeThreadEl, activeBodyEl, key);
+6137:         }
+6138:       }, 1000);
+6139:     }
+6140:   } else if (__pmChat.workTimer) {
+6141:     clearInterval(__pmChat.workTimer);
+6142:     __pmChat.workTimer = null;
+6143:   }
+6144: }
+6145: 
+6146: function _installMobileTimestampReveal(threadEl, onMessageAction) {
+6147:   if (!threadEl || threadEl.dataset.pmTimestampRevealInstalled === '1') return;
+6148:   threadEl.dataset.pmTimestampRevealInstalled = '1';
+6149: 
+6150:   let startX = 0;
+6151:   let startY = 0;
+6152:   let pointerId = null;
+6153:   let activeInput = '';
+6154:   let dragging = false;
+6155:   let resetTimer = null;
+6156:   let lastTouchStartedAt = 0;
+6157:   const maxReveal = 88;
+6158: 
+6159:   const isInteractiveTarget = (target) => {
+6160:     if (!target) return false;
+6161:     if (target.closest?.(
+6162:       'button,a,input,textarea,select,summary,details,[data-msg-action],[data-pm-command-action],[data-pm-file-change-path],[data-pm-restore-checkpoint],.pm-media-card,.pm-generated-file,.pm-product-carousel,.pm-product-track,.pm-product-card'
+6163:     )) return true;
+6164:     if (target.closest?.('.pm-md-table-scroll')) return true;
+6165:     return false;
+6166:   };
+[READ_TRUNCATED] Returned 80 of 28841 lines. Use start_line:6167, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- [batch truncated] ---
+Only first 2 files read. Re-run with remaining files if needed.

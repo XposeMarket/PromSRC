@@ -117,7 +117,8 @@ Known context table facts:
 - Anthropic `claude-opus-4-8` is treated as 1m context with 128k max output
 - Anthropic `claude-*` models are treated as 200k context
 - Gemini `gemini-*` models are treated as 1m context
-- Perplexity sonar models and xAI Grok models currently fall back to 128k known-table entries unless overridden or provider metadata says otherwise
+- xAI static models include `grok-build-0.1`, the OAuth/subscription-gated `grok-composer-2.5-fast` Composer 2.5 id, and current Grok 4.x ids. Composer 2.5 is available in Grok Build to SuperGrok/X Premium+ and may be absent from public `/v1/models`, so keep it as a curated static model while live model discovery remains enabled.
+- Perplexity sonar models and xAI Grok/Composer models currently fall back to 128k known-table entries unless overridden or provider metadata says otherwise
 - unknown local/llama providers fall back lower, currently 8192; unknown cloud-ish providers fall back to 32768
 
 Budget math:

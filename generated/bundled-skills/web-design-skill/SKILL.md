@@ -1,8 +1,9 @@
 ---
 name: web-design-skill
-description: Front End UI Design Skill
-emoji: "🧩"
-version: 1.0.0
+description: Use this skill when the user asks for a beautiful, modern, premium, polished, professional, luxury, sleek, stunning, or visually impressive website, landing page, portfolio, SaaS page, web UI, hero section, color palette, typography system, layout, theme, background treatment, or site aesthetic. Triggers on phrases like make it beautiful, modern website, premium design, polished UI, web design, hero section, color palette, typography, glassmorphism, dark theme, and stunning landing page. Use it to apply a studio-level visual design system before coding or revising web pages.
+emoji: "🎨"
+version: 1.1.0
+triggers: make it beautiful, modern website, premium design, polished UI, web design, hero section, color palette, typography, glassmorphism, dark theme, stunning landing page, luxury website, sleek UI, site aesthetic, professional website
 ---
 
 ---

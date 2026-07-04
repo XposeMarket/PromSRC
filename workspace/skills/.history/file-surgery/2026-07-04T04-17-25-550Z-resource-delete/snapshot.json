@@ -1,0 +1,13 @@
+{
+  "skillId": "file-surgery",
+  "reason": "resource-delete",
+  "createdAt": "2026-07-04T04:17:25.556Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\file-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-03.md"
+  ],
+  "hash": "5e38cb0c990ab652"
+}

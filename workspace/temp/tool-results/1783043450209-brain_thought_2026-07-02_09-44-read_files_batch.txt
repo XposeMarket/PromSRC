@@ -1,0 +1,167 @@
+--- web-ui/src/mobile/mobile-shell.js ---
+web-ui/src/mobile/mobile-shell.js (2774 lines) [window 1960-2039, truncated]:
+1960:       if (interactionToggle) {
+1961:         interactionToggle.style.display = iframeBacked ? 'inline-flex' : 'none';
+1962:         interactionToggle.querySelectorAll('[data-canvas-interaction-mode]').forEach((button) => {
+1963:           const mode = button.getAttribute('data-canvas-interaction-mode');
+1964:           const active = mode === (tab?.interactionMode || 'inspect');
+1965:           button.classList.toggle('active', active);
+1966:           button.setAttribute('aria-pressed', String(active));
+1967:         });
+1968:       }
+1969: 
+1970:       if (!tab) {
+1971:         bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">No file open</div>';
+1972:         sheetEl.classList.remove('is-interacting', 'is-inspecting');
+1973:         resetCanvasZoom(bodyEl);
+1974:         return;
+1975:       }
+1976: 
+1977:       if (tab.kind === 'image') {
+1978:         bodyEl.innerHTML = canvasZoomHtml(`<img src="${escapeHtml(tab.src)}" alt="${escapeHtml(tab.name)}">`);
+1979:       } else if (tab.kind === 'video') {
+1980:         bodyEl.innerHTML = canvasZoomHtml(`<video src="${escapeHtml(tab.src)}" controls playsinline></video>`);
+1981:       } else if (tab.kind === 'audio') {
+1982:         bodyEl.innerHTML = `<audio src="${escapeHtml(tab.src)}" controls></audio>`;
+1983:         sheetEl.classList.remove('is-interacting', 'is-inspecting');
+1984:         resetCanvasZoom(bodyEl);
+1985:       } else if (isLiveWebCanvasFile(tab)) {
+1986:         const liveSrc = canvasWorkspaceUrl(tab);
+1987:         bodyEl.innerHTML = canvasZoomHtml(`<iframe src="${escapeHtml(liveSrc)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`);
+1988:       } else if (tab.openMode === 'diff' && isCanvasCodeExt(getCanvasFileExt(tab)) && tab._canvasPreviewView !== 'full') {
+1989:         // Opened from the end-of-turn diff card: default to the collapsed,
+1990:         // syntax-highlighted edited-regions view (Codex-style). The Preview
+1991:         // button flips _canvasPreviewView to toggle full \u2194 edits.
+1992:         renderCanvasCodePreview(bodyEl, tab);
+1993:       } else {
+1994:         // Text-like files (md, txt, json, code, logs): render readable, scrollable
+1995:         // content into a srcdoc iframe instead of the raw byte stream. This both
+1996:         // fixes scrolling (the text iframe scrolls natively, independent of the
+1997:         // pinch-zoom viewport) and gives clean Markdown formatting.
+1998:         renderCanvasTextInto(bodyEl, tab);
+1999:       }
+2000:       applyCanvasInteractionMode(sheetEl, bodyEl, tab);
+2001:     },
+2002: 
+2003:     setFullscreen(enabled) {
+2004:       const active = !!enabled && !!api.tabs[api.activeIdx];
+2005:       sheetEl.classList.toggle('is-fullscreen', active);
+2006:       document.body.classList.toggle('pm-canvas-fullscreen-open', active);
+2007:       const btn = document.getElementById('pm-canvas-fullscreen');
+2008:       if (btn) {
+2009:         btn.setAttribute('aria-pressed', String(active));
+2010:         btn.setAttribute('aria-label', active ? 'Canvas is fullscreen' : 'Open fullscreen canvas');
+2011:       }
+2012:     },
+2013: 
+2014:     toggleFullscreen() {
+2015:       api.setFullscreen(!sheetEl.classList.contains('is-fullscreen'));
+2016:     },
+2017: 
+2018:     setInteractionMode(mode) {
+2019:       const tab = api.tabs[api.activeIdx];
+2020:       const nextMode = normalizeCanvasInteractionMode(mode);
+2021:       if (!tab || !nextMode || ['image', 'video', 'audio'].includes(tab.kind)) return;
+2022:       tab.interactionMode = nextMode;
+2023:       applyCanvasInteractionMode(sheetEl, document.getElementById('pm-canvas-body'), tab);
+2024:       const toggle = document.getElementById('pm-canvas-interaction-toggle');
+2025:       toggle?.querySelectorAll?.('[data-canvas-interaction-mode]')?.forEach((button) => {
+2026:         const active = button.getAttribute('data-canvas-interaction-mode') === nextMode;
+2027:         button.classList.toggle('active', active);
+2028:         button.setAttribute('aria-pressed', String(active));
+2029:       });
+2030:     },
+2031:   };
+2032: 
+2033:   document.getElementById('pm-canvas-tabs').addEventListener('click', (ev) => {
+2034:     const closeBtn = ev.target.closest('[data-cs-close]');
+2035:     if (closeBtn) { ev.stopPropagation(); api.removeTab(Number(closeBtn.getAttribute('data-cs-close'))); return; }
+2036:     const tabBtn = ev.target.closest('[data-cs-tab]');
+2037:     if (tabBtn) api.switchTab(Number(tabBtn.getAttribute('data-cs-tab')));
+2038:   });
+2039:   document.getElementById('pm-canvas-close').addEventListener('click', () => api.close());
+[READ_TRUNCATED] Returned 80 of 2774 lines. Use start_line:2040, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-api.js ---
+web-ui/src/mobile/mobile-api.js (1792 lines) [window 1495-1574, truncated]:
+1495:   return mfetch('/api/mobile/commands/models');
+1496: }
+1497: 
+1498: export async function loadMobileStopTargets() {
+1499:   return mfetch('/api/mobile/commands/stop-targets');
+1500: }
+1501: 
+1502: export async function loadMobileWorkspaceFiles(root = '') {
+1503:   const qs = new URLSearchParams();
+1504:   if (root) qs.set('root', root);
+1505:   qs.set('shallow', '1');
+1506:   return mfetch(`/api/canvas/files?${qs.toString()}`);
+1507: }
+1508: 
+1509: /* ---------------- creative ---------------- */
+1510: 
+1511: // GET a workspace file (images returned as base64).
+1512: export async function loadCanvasFile(relPath) {
+1513:   return mfetch(`/api/canvas/file?path=${encodeURIComponent(relPath)}`);
+1514: }
+1515: 
+1516: // Build an authenticated streaming URL for <video src> / <img src>.
+1517: // `/api/canvas/inline` supports HTTP Range requests and accepts the paired-device
+1518: // token via `?pt=<token>` (browsers can't set headers on media element requests).
+1519: export function buildInlineMediaUrl(relPath) {
+1520:   if (!relPath) return '';
+1521:   const base = String(API || '').replace(/\/+$/, '');
+1522:   const token = getDeviceToken();
+1523:   const qs = new URLSearchParams({ path: relPath });
+1524:   if (token) qs.set('pt', token);
+1525:   return `${base}/api/canvas/inline?${qs.toString()}`;
+1526: }
+1527: 
+1528: // Resolve a workspace-relative path to a base64 data URL for <img src>.
+1529: export async function loadCanvasImageDataUrl(relPath) {
+1530:   try {
+1531:     const r = await loadCanvasFile(relPath);
+1532:     if (r?.success && r.isImage && r.base64 && r.mimeType) {
+1533:       return `data:${r.mimeType};base64,${r.base64}`;
+1534:     }
+1535:   } catch {}
+1536:   return '';
+1537: }
+1538: 
+1539: // Kick off the multi-stage extract-layers pipeline. Server streams progress via
+1540: // the `creative_extract_layers_progress` WebSocket event (subscribe through
+1541: // window.wsEventBus); this promise resolves with the final scene.
+1542: export async function creativeExtractLayers({ sessionId, source, mode = 'balanced', prompt = '', requestId = '', saveLayerAssets = false, layerAssetBatchName = '' } = {}) {
+1543:   return mfetch('/api/canvas/creative-extract-layers', {
+1544:     method: 'POST',
+1545:     body: JSON.stringify({
+1546:       sessionId: sessionId || MOBILE_CHAT_SESSION_ID,
+1547:       source,
+1548:       mode,
+1549:       prompt: prompt || undefined,
+1550:       requestId: requestId || undefined,
+1551:       saveLayerAssets: saveLayerAssets === true,
+1552:       autoSaveLayerAssets: saveLayerAssets === true,
+1553:       layerAssetBatchName: layerAssetBatchName || undefined,
+1554:       textEditable: true,
+1555:       extractObjects: true,
+1556:       preserveOriginal: true,
+1557:       copySource: true,
+1558:       useVision: true,
+1559:       useOcr: false,
+1560:       useSam: true,
+1561:       inpaintBackground: true,
+1562:       vectorTraceShapes: true,
+1563:     }),
+1564:   });
+1565: }
+1566: 
+1567: // List generated media for the gallery. Returns an array of { name, path, kind }.
+1568: export async function loadCreativeGallery({ kind = 'image' } = {}) {
+1569:   const root = kind === 'video' ? 'generated/videos' : 'generated/images';
+1570:   try {
+1571:     const r = await mfetch(`/api/canvas/files?root=${encodeURIComponent(root)}`);
+1572:     const flat = [];
+1573:     const walk = (nodes) => {
+1574:       if (!Array.isArray(nodes)) return;
+[READ_TRUNCATED] Returned 80 of 1792 lines. Use start_line:1575, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

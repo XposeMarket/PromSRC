@@ -230,7 +230,7 @@ export function renderMobileContextChip() {
     <div class="pm-ctx-popover" id="pm-ctx-popover" hidden role="dialog" aria-label="Context window">
       <button type="button" class="pm-ctx-toggle" id="pm-ctx-toggle" aria-expanded="false">
         <div class="pm-ctx-head">
-          <span>Context window<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg></span>
+          <span id="pm-ctx-head-label">Context window<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg></span>
           <span id="pm-ctx-total">…</span>
         </div>
         <div class="pm-ctx-track" aria-hidden="true"><div class="pm-ctx-fill" id="pm-ctx-fill"></div></div>
@@ -278,11 +278,13 @@ function _renderContext(data) {
   const chip = document.getElementById('pm-ctx-chip');
   const fill = document.getElementById('pm-ctx-fill');
   const total = document.getElementById('pm-ctx-total');
+  const headLabel = document.getElementById('pm-ctx-head-label');
   const metrics = document.getElementById('pm-ctx-metrics');
   if (!data || data.success === false) {
     if (ring) ring.style.setProperty('--pm-ctx-deg', '0deg');
     if (fill) fill.style.width = '0%';
     if (total) total.textContent = 'Unavailable';
+    if (headLabel) headLabel.innerHTML = 'Context window<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
     if (metrics) metrics.innerHTML = '';
     return;
   }
@@ -290,11 +292,13 @@ function _renderContext(data) {
   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
   const windowTokens = _displayLimit(data, currentState);
   const modelWindowTokens = Math.max(0, Number(data.contextWindowTokens || currentState.contextWindowTokens || 0));
+  const isCompactionLimit = modelWindowTokens > 0 && windowTokens > 0 && modelWindowTokens !== windowTokens;
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   if (ring) ring.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
   if (chip) chip.title = `Context before compaction: ${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} tokens${modelWindowTokens && modelWindowTokens !== windowTokens ? ` (model window ${_fmtTokens(modelWindowTokens)})` : ''}`;
   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
-  if (total) total.textContent = `${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} (${Math.round(percent)}%)`;
+  if (headLabel) headLabel.innerHTML = `${isCompactionLimit ? 'Before compaction' : 'Context window'}<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
+  if (total) total.textContent = `${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} (${Math.round(percent)}%)${isCompactionLimit ? ` · window ${_fmtTokens(modelWindowTokens)}` : ''}`;
 
   const rows = Array.isArray(currentState.rows) ? currentState.rows : [];
   if (metrics) {

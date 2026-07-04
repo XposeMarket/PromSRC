@@ -1,8 +1,8 @@
 ---
 name: X Post Fetch
-description: Use this skill when the user gives an X/Twitter status URL and wants the post or thread fetched. For X URLs, `web_fetch` is the default and complete path — use it directly and answer from the returned X-aware payload. Triggers on requests like: webfetch this X URL, fetch this tweet, read this X post, pull this thread, get this tweet, or inspect this X status link. Best for X URL retrieval, thread parsing, and direct reporting from the `web_fetch` result without extra retrieval steps.
+description: Use this skill when the user gives an X/Twitter status URL and wants the post or thread fetched, read, inspected, or summarized without interaction. For X URLs, `web_fetch` is the default and complete path; answer from the returned X-aware payload. Triggers on phrases like webfetch this X URL, fetch this tweet, read this X post, pull this thread, get this tweet, inspect this X status link, X status URL, and tweet fetch. Do not use it for posting, liking, replying, or browser feed interaction.
 emoji: "🧩"
-version: 2.0.0
+version: 2.1.0
 triggers: webfetch this x url, web fetch this x url, fetch this x post, fetch this tweet, read this tweet, read this x post, pull this x thread, get this tweet, get this x post, inspect this x link, x status url, x url fetch, tweet fetch
 ---
 
@@ -15,6 +15,8 @@ The rule is simple:
 > For X URLs, use **`web_fetch`** first and treat its returned X-aware payload as the primary result.
 
 If `web_fetch` returns the post/thread cleanly, that is the job. Do not add extra retrieval steps unless the user explicitly asks for something beyond the fetched content.
+
+If the user provides several X status URLs and wants each inspected, use `web_fetch_batch` with those exact URLs. Interpret each per-URL result independently; one blocked/deleted post does not invalidate the others.
 
 ---
 
@@ -46,6 +48,17 @@ web_fetch({ "url": "https://x.com/<handle>/status/<id>" })
 
 Then answer directly from what comes back.
 
+For multiple X status URLs:
+```json
+web_fetch_batch({
+  "urls": [
+    "https://x.com/<handle>/status/<id>",
+    "https://x.com/<handle>/status/<id>"
+  ],
+  "max_chars": 6000
+})
+```
+
 No browser first.
 No extra media/download flow by default.
 No unnecessary handoff.
@@ -63,6 +76,13 @@ If the user says **"webfetch this"** for an X URL, this skill should be enough o
 3. If it includes `tweets`, treat that as the canonical extracted result
 4. Report the useful fields clearly
 5. Stop unless the user asked for more
+
+### Flow B — Multiple X URLs
+
+1. Run `web_fetch_batch` on the URL list
+2. For each result, inspect whether the embedded payload/text contains captured tweets or a blocker message
+3. Report each URL separately with status: captured, empty/blocker, or fetch error
+4. Do not open X browser tabs unless the user asked for interaction or the batch results are insufficient
 
 ### What to report
 

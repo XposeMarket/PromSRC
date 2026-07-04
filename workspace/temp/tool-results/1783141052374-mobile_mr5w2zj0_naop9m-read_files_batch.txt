@@ -1,0 +1,167 @@
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28841 lines) [window 10039-10118, truncated]:
+10039:   function applyMobileChatStreamEvent(aiTurn, evt) {
+10040:     aiTurn = _mobileStreamTargetTurn(aiTurn);
+10041:     if (!aiTurn || !evt?.type) return '';
+10042:     if (!noteChatStreamSeq(evt)) return 'duplicate';
+10043:     switch (evt.type) {
+10044:       case 'token':
+10045:         if (evt.text) {
+10046:           const chunk = String(evt.text);
+10047:           _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
+10048:         }
+10049:         renderThreadSoon();
+10050:         return 'streaming';
+10051:       case 'agent_mode':
+10052:         aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
+10053:         if (aiTurn.agentExecutionMode === 'execute') _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10054:         if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
+10055:         renderThreadSoon();
+10056:         return 'streaming';
+10057:       case 'runtime_registered':
+10058:         if (evt.runtimeId || evt.run?.id) {
+10059:           aiTurn.runtimeId = String(evt.runtimeId || evt.run?.id || '').trim();
+10060:         }
+10061:         return 'streaming';
+10062:       case 'thinking_delta': {
+10063:         const text = String(evt.thinking || evt.text || '');
+10064:         if (text) {
+10065:           _appendMobileLiveTrace(aiTurn, 'think', text, { append: true });
+10066:           renderThreadSoon();
+10067:         }
+10068:         return 'streaming';
+10069:       }
+10070:       case 'info':
+10071:       case 'ui_preflight':
+10072:       case 'heartbeat':
+10073:         if (evt.message) {
+10074:           const messageText = String(evt.message);
+10075:           const isCompactionPreflight = String(evt.type || '') === 'ui_preflight' && /^Compacting the thread before continuing/i.test(messageText);
+10076:           if (!isCompactionPreflight) {
+10077:             _appendMobileProcess(aiTurn, 'info', messageText, evt);
+10078:             _appendMobileLiveTrace(aiTurn, 'info', messageText);
+10079:           }
+10080:           renderThreadSoon();
+10081:         }
+10082:         return 'streaming';
+10083:       case 'tool_call': {
+10084:         if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+10085:           _appendMobileCompactionTrace(aiTurn, 'compacting', '', evt.args || evt);
+10086:           renderThreadSoon();
+10087:           return 'streaming';
+10088:         }
+10089:         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10090:         aiTurn.toolActivityStarted = true;
+10091:         const label = _mobileToolLabel(evt);
+10092:         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
+10093:         _appendMobileProcess(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`, evt);
+10094:         _appendMobileLiveTrace(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`);
+10095:         renderThreadSoon();
+10096:         return 'streaming';
+10097:       }
+10098:       case 'tool_result': {
+10099:         if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+10100:           const status = String(evt?.extra?.status || '').toLowerCase() || (evt.error ? 'failed' : 'compacted');
+10101:           _appendMobileCompactionTrace(aiTurn, status, evt?.extra?.summary || '', evt.extra || evt);
+10102:           _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', status === 'failed' ? 'Context compaction failed' : 'Context compacted', evt);
+10103:           renderThreadSoon();
+10104:           return 'streaming';
+10105:         }
+10106:         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10107:         aiTurn.toolActivityStarted = true;
+10108:         const label = _mobileToolLabel(evt);
+10109:         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
+10110:         _collectMediaFromToolEvent(aiTurn, evt);
+10111:         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
+10112:         _appendMobileLiveTrace(aiTurn, evt.error ? 'error' : 'result', `${label}${evt.error ? ' failed' : ' complete'}`);
+10113:         renderThreadSoon();
+10114:         return 'streaming';
+10115:       }
+10116:       case 'vision_injected':
+10117:         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+10118:         aiTurn.toolActivityStarted = true;
+[READ_TRUNCATED] Returned 80 of 28841 lines. Use start_line:10119, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28841 lines) [window 10159-10238, truncated]:
+10159:           _appendMobileLiveTrace(aiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
+10160:           renderThreadSoon();
+10161:         }
+10162:         return 'streaming';
+10163:       }
+10164:       case 'model_switched':
+10165:       case 'main_model_changed': {
+10166:         const detail = notifyMobileModelChanged(evt, { sessionId: __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
+10167:         const model = detail?.modelRef || detail?.model || evt.model || evt.modelRef || evt.providerId || 'model';
+10168:         _appendMobileProcess(aiTurn, 'info', `Model: ${model}`, evt);
+10169:         renderThreadSoon();
+10170:         return 'streaming';
+10171:       }
+10172:       case 'model_reverted': {
+10173:         // switch_model is turn-scoped; gateway emits this at turn end to revert the badge.
+10174:         import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => {
+10175:           refreshMobileModelBadge(true, null).catch(() => {});
+10176:         }).catch(() => {});
+10177:         return 'streaming';
+10178:       }
+10179:       case 'session_title':
+10180:         invalidateMobileDrawerSessions('mobile');
+10181:         return 'streaming';
+10182:       case 'final':
+10183:         _collectMediaFromToolEvent(aiTurn, evt);
+10184:         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
+10185:         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+10186:         if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
+10187:         if (evt.text) {
+10188:           aiTurn.finalResponseStarted = true;
+10189:           _finishMobileVisualStreamText(aiTurn, String(evt.text));
+10190:         } else {
+10191:           _finishMobileVisualStreamText(aiTurn);
+10192:         }
+10193:         renderThreadSoon();
+10194:         return 'final';
+10195:       case 'done':
+10196:         _collectMediaFromToolEvent(aiTurn, evt);
+10197:         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
+10198:         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
+10199:         if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
+10200:         if (evt.reply && !String(aiTurn.body.text || '').trim()) {
+10201:           aiTurn.finalResponseStarted = true;
+10202:           _finishMobileVisualStreamText(aiTurn, String(evt.reply));
+10203:         } else {
+10204:           _finishMobileVisualStreamText(aiTurn);
+10205:         }
+10206:         return 'done';
+10207:       case 'error':
+10208:         _finishMobileVisualStreamText(aiTurn);
+10209:         _appendMobileProcess(aiTurn, 'error', String(evt.message || 'Chat error'), evt);
+10210:         aiTurn.body.text = (aiTurn.body.text ? `${aiTurn.body.text}\n\n` : '') + `Warning: ${String(evt.message || 'Chat error')}`;
+10211:         renderThreadNow();
+10212:         return 'error';
+10213:       default:
+10214:         return '';
+10215:     }
+10216:   }
+10217: 
+10218:   function finalizeMobileLiveAiTurn(aiTurn) {
+10219:     if (!aiTurn) return;
+10220:     _finishMobileVisualStreamText(aiTurn);
+10221:     aiTurn.streaming = false;
+10222:     aiTurn.workEndedAt = Number(aiTurn.workEndedAt || Date.now()) || Date.now();
+10223:     aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
+10224:     aiTurn.time = _nowTime();
+10225:     aiTurn.timestamp = Number(aiTurn.timestamp || Date.now()) || Date.now();
+10226:     aiTurn.content = String(aiTurn.body?.text || '');
+10227:     _mergeMobileLiveTraceIntoProcess(aiTurn);
+10228:     _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
+10229:     if (__pmChat.activeRuns?.[requestedSession]) __pmChat.activeRuns[requestedSession].abort = null;
+10230:     __pmChat.abort = null;
+10231:     _clearMobileActiveRun(requestedSession);
+10232:     _markMobileSessionRunning(requestedSession, false);
+10233:     if (_isMobileChatSessionVisibleToUser(requestedSession)) {
+10234:       markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
+10235:     }
+10236:     const timerKey = String(requestedSession || 'chat');
+10237:     if (__pmChat.renderTimers?.[timerKey]) {
+10238:       clearTimeout(__pmChat.renderTimers[timerKey]);
+[READ_TRUNCATED] Returned 80 of 28841 lines. Use start_line:10239, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

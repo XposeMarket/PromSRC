@@ -1,0 +1,182 @@
+web-ui/src/mobile/mobile-pages.js (28841 lines) [window 5439-5618, truncated]:
+5439: function _renderChatMessageHtml(m, index = -1) {
+5440:   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
+5441:   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
+5442:   const attachmentHtml = attachments.length ? _renderChatAttachmentPreviews(attachments, false) : '';
+5443:   const revealTime = m.time ? `<span class="pm-reveal-time" aria-hidden="true">${escapeHtml(m.time)}</span>` : '';
+5444:   if (m.role === 'user') {
+5445:     const isWorkerHandoff = _isMobileVoiceAgentWorkerHandoff(m);
+5446:     const isEditing = __pmChat.editingMessageIndex === msgIndex;
+5447:     // While editing, render the composer in place of the bubble (NOT nested
+5448:     // inside .pm-bubble) so it reads as an editable message, not an inner panel.
+5449:     const contentHtml = isEditing
+5450:       ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
+5451:       : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileSkillReferencedMarkdown(m.body.text, m.body.selectedSkillRefs || m.selectedSkillRefs)}</div>${attachmentHtml}</div>`;
+5452:     return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
+5453:       ${m.workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
+5454:       ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
+5455:   }
+5456:   const b = m.body || {};
+5457:   const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
+5458:   const isVoiceTraceTurn = _isMobileVoiceTraceTurn(m);
+5459:   const statusDividerHtml = '<div class="pm-msg-status-divider" aria-hidden="true"></div>';
+5460:   let inner = _renderMobileWorkTimer(m);
+5461:   if (inner) inner += statusDividerHtml;
+5462:   const renderedApprovalIds = new Set();
+5463:   if (m.approvalRequest) {
+5464:     const approvalId = String(m.approvalRequest.id || '').trim();
+5465:     if (approvalId) renderedApprovalIds.add(approvalId);
+5466:     inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
+5467:   }
+5468:   if (m.questionRequest) {
+5469:     // While the turn is live, the pending question is docked into the streaming
+5470:     // bubble below (mirrors desktop). Suppress the standalone history copy so it
+5471:     // isn't shown twice; a question-only message then renders nothing here.
+5472:     const qPending = String(m.questionRequest.status || 'pending').toLowerCase() === 'pending';
+5473:     const threadStreaming = (__pmChat.threads?.[__pmChat.activeSessionId] || []).some((x) => _isMobileAssistantMessage(x) && x.streaming === true);
+5474:     const dockElsewhere = qPending && threadStreaming;
+5475:     if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
+5476:     if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
+5477:   }
+5478:   const liveTraceHtml = m.streaming && (!answerStarted || isVoiceTraceTurn) && Array.isArray(m.liveTraceEntries)
+5479:     ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
+5480:     : '';
+5481:   const hasLiveTrace = !!liveTraceHtml;
+5482:   const completedTraceEntries = !m.streaming ? _mobileWorkflowTraceEntriesForMessage(m) : [];
+5483:   const hasCompletedTrace = _mobileTraceHasToolGroup(completedTraceEntries);
+5484:   const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
+5485:   if (hasLiveTrace) {
+5486:     inner += liveTraceHtml;
+5487:   } else if (hasCompletedTrace) {
+5488:     // Completed turn — trace hidden in collapsible drawer behind the work timer
+5489:     inner += `<div class="pm-trace-drawer" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
+5490:   } else if (m.streaming && !answerStarted && !hasPendingImageGeneration) {
+5491:     inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
+5492:   }
+5493:   if (hasPendingImageGeneration) {
+5494:     inner += _renderMobileGeneratedImageLoadingCard();
+5495:   }
+5496:   if (m.streaming) {
+5497:     const dockedQuestion = _getPendingQuestionForSession(__pmChat.activeSessionId);
+5498:     if (dockedQuestion) inner += `<div class="pm-streaming-question-dock">${_renderMobileQuestionCard(dockedQuestion)}</div>`;
+5499:   }
+5500:   if (b.text) {
+5501:     const liveVoiceHtml = _renderMobileRealtimeVoiceAssistantText(m);
+5502:     inner += liveVoiceHtml || `<div class="markdown-body">${_renderMobileMarkdown(_normalizeMobileTraceProseText(b.text))}</div>`;
+5503:     // rendered above with the shared desktop Markdown renderer
+5504:   }
+5505:   if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');
+5506:   if (b.summary) {
+5507:     inner += `<div class="pm-summary-rows">${b.summary.map(s => `
+5508:       <div class="pm-summary-row">
+5509:         <span class="pm-icon">${ICONS[s.icon] || ICONS.clipboard}</span>
+5510:         <span class="pm-meta"><strong>${escapeHtml(s.title)}</strong><span>${escapeHtml(s.subtitle)}</span></span>
+5511:       </div>`).join('')}</div>`;
+5512:   }
+5513:   if (b.numbered) {
+5514:     inner += `<ol class="pm-numbered">${b.numbered.map((n, i) => `
+5515:       <li><span class="pm-num">${i+1}</span><div><strong>${escapeHtml(n.title)}</strong><span>${escapeHtml(n.subtitle)}</span></div></li>
+5516:     `).join('')}</ol>`;
+5517:   }
+5518:   if (b.teamRows) {
+5519:     inner += `<div class="pm-team-rows">${b.teamRows.map(t => `
+5520:       <div class="pm-team-row"><span class="pm-team-icon">${t.icon}</span><div><strong>${escapeHtml(t.name)}</strong><span>${escapeHtml(t.detail)}</span></div></div>
+5521:     `).join('')}</div>`;
+5522:   }
+5523:   if (b.image?.base64) {
+5524:     inner += _renderMobileMediaGallery([_normalizeMobileMedia({
+5525:       kind: 'image',
+5526:       name: b.image.name || 'Screenshot.png',
+5527:       mimeType: b.image.mimeType || 'image/png',
+5528:       base64: b.image.base64,
+5529:     })].filter(Boolean));
+5530:   }
+5531:   if (Array.isArray(b.actions) && b.actions.length) {
+5532:     inner += `<div class="pm-command-actions">${b.actions.map((action) => `
+5533:       <button type="button" class="pm-command-action ${escapeHtml(action.kind || '')}" data-pm-command-action="${escapeHtml(action.action || '')}" data-pm-command-id="${escapeHtml(action.id || '')}">
+5534:         ${action.icon ? `<span>${ICONS[action.icon] || escapeHtml(action.icon)}</span>` : ''}<strong>${escapeHtml(action.label || action.action || 'Action')}</strong>
+5535:       </button>
+5536:     `).join('')}</div>`;
+5537:   }
+5538:   const activeApprovals = m.streaming
+5539:     ? _getPendingApprovalsForSession(__pmChat.activeSessionId).filter((approval) => {
+5540:         const approvalId = String(approval?.id || '').trim();
+5541:         return !approvalId || !renderedApprovalIds.has(approvalId);
+5542:       })
+5543:     : [];
+5544:   if (activeApprovals.length) {
+5545:     inner += `<div class="pm-chat-approvals-inline">${activeApprovals.map((approval) => _renderMobileApprovalCard(approval, { compact: true })).join('')}</div>`;
+5546:   }
+5547:   if (b.browseState) inner += _renderBrowseCard(b.browseState);
+5548:   inner += _renderMobileRichArtifacts(m);
+5549:   if (!(Array.isArray(m.richArtifacts) && m.richArtifacts.some((a) => a?.type === 'products'))) {
+5550:     inner += _renderMobileProductCarousel(m);
+5551:   }
+5552:   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
+5553:   inner += _renderMobileFileChanges(m.fileChanges);
+5554:   if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
+5555:   return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
+5556:     ${m.workflowLabel ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
+5557:     <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
+5558: }
+5559: 
+5560: function _addMobileMedia(message, key, items, forcedKind = '') {
+5561:   if (!message) return;
+5562:   const normalized = _normalizeMobileMediaList(items).map((media) => forcedKind ? { ...media, kind: forcedKind } : media);
+5563:   if (!normalized.length) return;
+5564:   if (!Array.isArray(message[key])) message[key] = [];
+5565:   const existing = new Set(_normalizeMobileMediaList(message[key]).map((media) => media.dataUrl || media.path || media.name));
+5566:   for (const media of normalized) {
+5567:     const raw = {
+5568:       kind: media.kind,
+5569:       path: media.path,
+5570:       dataUrl: media.dataUrl,
+5571:       name: media.name,
+5572:       file_name: media.name,
+5573:       prompt: media.prompt,
+5574:       provider: media.provider,
+5575:       model: media.model,
+5576:       bytes: media.bytes,
+5577:     };
+5578:     const id = media.dataUrl || media.path || media.name;
+5579:     if (id && !existing.has(id)) {
+5580:       message[key].push(raw);
+5581:       existing.add(id);
+5582:     }
+5583:   }
+5584: }
+5585: 
+5586: function _collectMediaFromToolEvent(message, evt, inheritedToolName = '') {
+5587:   const toolName = _mobileToolEventName(evt) || _mobileToolEventName(inheritedToolName);
+5588:   const isGenerateImageTool = _isMobileGenerateImageToolName(toolName);
+5589:   const isGenerateVideoTool = _isMobileGenerateVideoToolName(toolName);
+5590:   const isExplicitMediaTool = _isMobileExplicitMediaToolName(toolName);
+5591:   const isTerminalEnvelope = /^(final|done)$/i.test(String(evt?.type || evt?.event || ''));
+5592:   const extra = evt?.extra && typeof evt.extra === 'object' ? evt.extra : {};
+5593:   let result = evt?.result && typeof evt.result === 'object' ? evt.result : {};
+5594:   if ((!result || !Object.keys(result).length) && typeof evt?.result === 'string') {
+5595:     try {
+5596:       const parsed = JSON.parse(evt.result);
+5597:       if (parsed && typeof parsed === 'object') result = parsed;
+5598:     } catch {}
+5599:   }
+5600:   const sources = [extra, result, evt].filter(Boolean);
+5601:   for (const source of sources) {
+5602:     const hasExplicitGeneratedImages = Array.isArray(source.generated_images)
+5603:       || Array.isArray(source.generatedImages)
+5604:       || !!source.generated_image
+5605:       || !!source.generatedImage;
+5606:     const hasExplicitGeneratedVideos = Array.isArray(source.generated_videos)
+5607:       || Array.isArray(source.generatedVideos)
+5608:       || !!source.generated_video
+5609:       || !!source.generatedVideo;
+5610:     const allowGeneratedImages = isGenerateImageTool || (isTerminalEnvelope && hasExplicitGeneratedImages);
+5611:     const allowGeneratedVideos = isGenerateVideoTool || (isTerminalEnvelope && hasExplicitGeneratedVideos);
+5612:     if (allowGeneratedImages && Array.isArray(source.generated_images)) _addMobileMedia(message, 'generatedImages', source.generated_images, 'image');
+5613:     if (allowGeneratedImages && Array.isArray(source.generatedImages)) _addMobileMedia(message, 'generatedImages', source.generatedImages, 'image');
+5614:     if (allowGeneratedImages && source.generated_image) _addMobileMedia(message, 'generatedImages', source.generated_image, 'image');
+5615:     if (allowGeneratedImages && source.generatedImage) _addMobileMedia(message, 'generatedImages', source.generatedImage, 'image');
+5616:     if (isGenerateImageTool && Array.isArray(source.images)) _addMobileMedia(message, 'generatedImages', source.images, 'image');
+5617:     if (isGenerateImageTool && source.image && typeof source.image === 'object' && (source.image.path || source.image.rel_path || source.image.base64)) _addMobileMedia(message, 'generatedImages', source.image, 'image');
+5618:     if (allowGeneratedVideos && Array.isArray(source.generated_videos)) _addMobileMedia(message, 'generatedVideos', source.generated_videos, 'video');
+[READ_TRUNCATED] Returned 180 of 28841 lines. Use start_line:5619, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

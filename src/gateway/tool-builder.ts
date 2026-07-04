@@ -168,9 +168,9 @@ const SOURCE_WRITE_TOOL_NAMES = new Set([
 const DEV_ONLY_SOURCE_READ_TOOL_NAMES = new Set([
   'dev_source_read',
   'read_dev_sources',
-  'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
-  'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
-  'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',
+  'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats', 'validate_source',
+  'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats', 'validate_webui_source',
+  'list_prom', 'prom_file_stats', 'validate_prom_file', 'read_prom_file', 'grep_prom',
   'source_stats_batch',
 ]);
 
@@ -193,6 +193,7 @@ const FILE_OPS_TOOL_NAMES = new Set([
   'grep_file',
   'grep_files',
   'file_stats',
+  'validate_file',
   'mkdir',
   'present_file',
   'apply_workspace_patchset',
@@ -853,13 +854,16 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'grep_source',
   'source_stats',
   'src_stats',
+  'validate_source',
   'read_webui_source',
   'list_webui_source',
   'grep_webui_source',
   'webui_source_stats',
   'webui_stats',
+  'validate_webui_source',
   'list_prom',
   'prom_file_stats',
+  'validate_prom_file',
   'read_prom_file',
   'grep_prom',
   'source_stats_batch',
@@ -1071,13 +1075,13 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'terminal',
-        description: 'Unified terminal/process tool. action=run runs a bounded captured command; start creates a supervised background process; status/log/wait/kill/submit manage process runIds.',
+        description: 'Unified terminal/process tool. action=run runs a bounded captured command; start creates a supervised background process; status/log/wait/kill/submit manage process runIds. Default permissions ask before outside-workspace paths; Lite permissions allow full-computer terminal access except hard-blocked dangerous commands.',
         parameters: {
           type: 'object', required: [],
           properties: {
             action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'], description: 'Default run; mode=background also means start.' },
             command: { type: 'string', description: 'Command to run.' },
-            cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute path inside it.' },
+            cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions.' },
             mode: { type: 'string', enum: ['auto', 'foreground', 'background'], description: 'Legacy alias: background maps to action=start.' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use.' },
             pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth/REPLs.' },
@@ -1102,7 +1106,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object', required: ['command'],
           properties: {
             command: { type: 'string', description: 'Examples: "notepad", "git init", "npm install", "npm run build", "git push origin main", "code D:\\project", "git -C workspace/xposemarket-site status", "git status". **CRITICAL FOR GIT**: (1) Submodule at workspace/xposemarket-site — NEVER use `cd xposemarket-site` alone. Use `git -C workspace/xposemarket-site status` instead. (2) Do NOT use "chrome" or "msedge" — use browser_open instead.' },
-            cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute path inside it. Use this for repo folders with spaces, e.g. "Prometheus Website/prometheus-site".' },
+            cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions. Use this for repo folders with spaces, e.g. "Prometheus Website/prometheus-site".' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use. On Windows, use powershell for PowerShell-native commands.' },
             pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
             timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Default 120000.' },

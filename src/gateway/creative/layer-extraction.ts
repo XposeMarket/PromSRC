@@ -7,7 +7,9 @@ import { resolveSecretReference } from '../../image-generation/utils';
 import { OpenAICodexAdapter } from '../../providers/openai-codex-adapter';
 import {
   analyzeCreativeAsset,
+  getCreativeAssetsDir,
   importCreativeAsset,
+  upsertCreativeAssetRecord,
   type CreativeAssetRecord,
   type CreativeAssetStorage,
 } from './assets';
@@ -40,6 +42,8 @@ export type CreativeLayerExtractionOptions = {
   useSam?: boolean;
   inpaintBackground?: boolean;
   vectorTraceShapes?: boolean;
+  saveLayerAssets?: boolean;
+  layerAssetBatchName?: string;
   requestId?: string;
   onProgress?: (event: CreativeLayerExtractionProgressEvent) => void | Promise<void>;
 };
@@ -80,6 +84,13 @@ export type CreativeLayerExtractionResult = {
   sceneAbsPath: string;
   ops: any[];
   layers: any[];
+  savedLayerAssets?: {
+    batchName: string;
+    directory: string;
+    directoryAbsPath: string;
+    count: number;
+    assets: CreativeAssetRecord[];
+  } | null;
   diagnostics: {
     mode: CreativeLayerExtractionMode;
     vision: { attempted: boolean; used: boolean; error: string | null; model: string | null };
@@ -565,6 +576,8 @@ function mergeLayerProposals(visionLayers: ProposedLayer[], ocrLayers: ProposedL
       if (candidate.type !== layer.type) return false;
       if (overlapRatio(candidate, layer) > 0.48) return true;
       const centerX = layer.x + layer.width / 2;
+
+
       const centerY = layer.y + layer.height / 2;
       const candidateContainsCenter = centerX >= candidate.x && centerX <= candidate.x + candidate.width
         && centerY >= candidate.y && centerY <= candidate.y + candidate.height;
@@ -663,6 +676,8 @@ function layerToElement(layer: ExtractionPipelineLayer, index: number): any | nu
           },
         },
       };
+
+
     }
     return {
       ...common,
@@ -684,6 +699,77 @@ function layerToElement(layer: ExtractionPipelineLayer, index: number): any | nu
   }
   return null;
 }
+
+type SavedExtractedLayerAssets = NonNullable<CreativeLayerExtractionResult['savedLayerAssets']>;
+
+function resolveExtractionLayerSourceAbsPath(storage: CreativeAssetStorage, layer: ExtractionPipelineLayer): string | null {
+  const explicitAbs = String((layer as any).cutoutAbsPath || '').trim();
+  if (explicitAbs && fs.existsSync(explicitAbs)) return explicitAbs;
+  const rel = String((layer as any).cutoutPath || '').trim();
+  if (!rel) return null;
+  const candidates = [path.resolve(storage.workspacePath, rel), path.resolve(storage.rootAbsPath, rel), path.resolve(storage.creativeDir, rel)];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const base = path.resolve(String(basePath || ''));
+  const target = path.resolve(String(targetPath || ''));
+  const rel = path.relative(base, target);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+async function saveExtractedLayerAssets(storage: CreativeAssetStorage, opts: {
+  extractionId: string;
+  source: CreativeAssetRecord;
+  scene: CreativeSceneDoc;
+  layers: ExtractionPipelineLayer[];
+  batchName?: string;
+}): Promise<SavedExtractedLayerAssets | null> {
+  const assetDir = getCreativeAssetsDir(storage);
+  const batchName = sanitizeSegment(opts.batchName || `${opts.extractionId}-layers`, `${opts.extractionId}-layers`).replace(/\.[a-z0-9]+$/i, '');
+  const layerDir = path.join(assetDir, 'layers', batchName);
+  fs.mkdirSync(layerDir, { recursive: true });
+  if (!isPathInside(assetDir, layerDir)) throw new Error('Extracted layer asset output escaped the creative asset directory.');
+  const saved: CreativeAssetRecord[] = [];
+  const sourcePath = opts.source.path || opts.source.relativePath || opts.source.absPath || opts.source.source;
+  for (let index = 0; index < Math.min(opts.layers.length, 300); index += 1) {
+    const layer = opts.layers[index];
+    if (!layer || layer.type !== 'image') continue;
+    const layerSource = resolveExtractionLayerSourceAbsPath(storage, layer);
+    if (!layerSource) continue;
+    const label = sanitizeSegment(layer.role || layer.description || layer.id || `layer-${index + 1}`, `layer-${index + 1}`);
+    const filename = `${String(saved.length + 1).padStart(3, '0')}-${label}.png`;
+    const targetPath = path.join(layerDir, filename);
+    if (!isPathInside(layerDir, targetPath)) throw new Error('Extracted layer asset filename escaped the batch directory.');
+    fs.copyFileSync(layerSource, targetPath);
+    const record = await analyzeCreativeAsset(storage, {
+      source: targetPath,
+      tags: ['extracted-layer', 'layer-asset', 'sprite-asset', 'auto-saved-layer', String(layer.type || 'image').toLowerCase()],
+    });
+    const indexed = upsertCreativeAssetRecord(storage, {
+      ...record,
+      metadata: {
+        ...(record.metadata || {}),
+        layerAsset: {
+          sourceElementId: `extracted_${sanitizeSegment(layer.id || `${layer.type}_${index + 1}`, `${layer.type}_${index + 1}`).replace(/^[^a-zA-Z]+/, 'layer_')}_${index + 1}`,
+          sourceElementType: layer.type,
+          sourceSceneId: opts.scene.id,
+          sourceMode: 'image',
+          exportedAt: new Date().toISOString(),
+          width: Number.isFinite(Number(layer.width)) ? Math.round(Number(layer.width)) : record.width,
+          height: Number.isFinite(Number(layer.height)) ? Math.round(Number(layer.height)) : record.height,
+          autoSavedFromExtraction: true,
+          extractionId: opts.extractionId,
+          originalSource: sourcePath,
+          bbox: { x: Math.round(Number(layer.x) || 0), y: Math.round(Number(layer.y) || 0), width: Math.round(Number(layer.width) || 0), height: Math.round(Number(layer.height) || 0) },
+        },
+      },
+    });
+    saved.push(indexed);
+  }
+  return { batchName, directory: buildWorkspaceRelativePath(storage, layerDir), directoryAbsPath: layerDir, count: saved.length, assets: saved };
+}
+
 
 function buildScene(input: {
   id: string;
@@ -778,7 +864,7 @@ export async function extractCreativeLayers(
   options: CreativeLayerExtractionOptions,
 ): Promise<CreativeLayerExtractionResult> {
   const source = String(options.source || '').trim();
-  if (!source) throw new Error('creative_extract_layers requires a source image.');
+  if (!source) throw new Error('creative_extract_layers requires a source image. Pass source, path, sourceImage, image, inputs.sourceImage, inputs.image, or assetId via creative_image_ops.');
   const mode = (['fast', 'balanced', 'deep'].includes(String(options.mode || '')) ? options.mode : 'balanced') as CreativeLayerExtractionMode;
   const textEditable = options.textEditable === true;
   const extractObjects = options.extractObjects === true || (options.extractObjects !== false && mode === 'deep');
@@ -1140,6 +1226,27 @@ export async function extractCreativeLayers(
   ];
 
   void cleanPlateAbsPath;
+  let savedLayerAssets: SavedExtractedLayerAssets | null = null;
+  if (options.saveLayerAssets === true) {
+    try {
+      savedLayerAssets = await saveExtractedLayerAssets(storage, {
+        extractionId: id,
+        source: analyzed,
+        scene,
+        layers: pipelineLayers,
+        batchName: options.layerAssetBatchName,
+      });
+      await emitProgress({
+        stage: 'layer_assets_saved',
+        label: 'Layer PNG assets saved',
+        detail: `${savedLayerAssets?.count || 0} sprite-ready PNG asset${(savedLayerAssets?.count || 0) === 1 ? '' : 's'} indexed`,
+        boxes: progressBoxesForLayers(pipelineLayers.filter((layer) => layer.type === 'image'), storage),
+      });
+    } catch (err: any) {
+      warnings.push(`Layer asset auto-save skipped: ${String(err?.message || err).slice(0, 200)}`);
+    }
+  }
+
   return {
     id,
     source: analyzed,
@@ -1149,6 +1256,7 @@ export async function extractCreativeLayers(
     sceneAbsPath,
     ops,
     layers: pipelineLayers,
+    savedLayerAssets,
     diagnostics: {
       mode,
       vision,

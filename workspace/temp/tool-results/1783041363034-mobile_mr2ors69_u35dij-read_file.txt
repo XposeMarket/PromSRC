@@ -1,0 +1,183 @@
+self/16-mobile-app.md (505 lines) [window 1-180, truncated]:
+1: # 16) Prometheus Mobile App Maintenance Reference
+2: 
+3: Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, mobile subagent Home chat/Runs recovery surfaces, iOS Home Screen Web Push for chat/task/subagent/team/scheduled-job events, and package scripts on: 2026-06-30
+4: 
+5: Prometheus Mobile is a hash-routed PWA shell inside the existing web UI. It is not a separate native iOS/Android/Capacitor app in this repo. Treat `web-ui/src/mobile/*` as the canonical mobile app source and treat `generated/public-web-ui/static/mobile/*` as generated public-build output.
+6: 
+7: ## Source Layout
+8: 
+9: Canonical mobile source files:
+10: 
+11: - `web-ui/src/mobile/mobile-router.js` - activates mobile mode, owns hash routing, sticky mobile-mode behavior, pairing gate, and page dispatch.
+12: - `web-ui/src/mobile/mobile-shell.js` - mobile chrome, tab/drawer shell, session picker wiring.
+13: - `web-ui/src/mobile/mobile-pages.js` - most mobile screens and behavior: chat, voice, tasks, creative, schedules, teams, subagents, proposals, pairing, delivery notifications, live run UI, and mobile audio.
+14: - `web-ui/src/mobile/mobile-api.js` - thin API shim. Mobile fetches go through `mfetch`, which attaches `X-Pairing-Token`; media/WS URLs use query `pt`.
+15: - `web-ui/src/mobile/mobile-settings.js` - mobile settings surfaces, including model/voice settings.
+16: - `web-ui/src/mobile/mobile-data.js` - static first-pass/mock mobile nav/schedule/team data still used by parts of the shell.
+17: - `web-ui/src/styles/mobile.css` - isolated mobile styling. It only takes over when `body.pm-mobile-active` is present; mobile themes use `--pm-*` surface tokens and semantic `--pm-accent*` tokens, while legacy `--pm-orange*` variables are compatibility aliases.
+18: 
+19: 
+20: Mobile canvas/file viewer fullscreen mode: `initMobileCanvasSheet()` in `web-ui/src/mobile/mobile-shell.js` owns the canvas sheet chrome and fullscreen state. The toolbar includes `#pm-canvas-fullscreen`; when active, `.pm-canvas-sheet.is-fullscreen` hides the handle, file tabs/header, filename, Interact/Inspect, Preview, and Save chrome, leaving only `#pm-canvas-fullscreen-exit` as a top-right safe-area-aware X overlay. Styles live in `web-ui/src/styles/mobile.css`; keep source changes synced with `npm run sync:web-ui`. [2026-06-30]
+21: Mobile canvas live HTML asset linking: workspace HTML files opened in the mobile canvas must iframe through the path-shaped route `/api/canvas/workspace/<workspace-relative-path>` instead of query-style `/api/canvas/inline?path=...`. This preserves the browser URL directory so relative assets like `assets/zombie.png`, local CSS, JS, audio, and images resolve from the HTML file's own subdirectory on mobile. Keep `/api/canvas/inline` for direct media/file previews and downloads. [2026-07-01]
+22: Mobile background visual rule: `body.pm-mobile-active` and `.pm-app` must use flat theme background colors only. Do not add page-level radial/conic/linear background-image glow layers or pseudo-element glow overlays for any theme/skin; component-local shadows are okay, but the app backdrop itself should have no glow. [2026-06-29]
+23: 
+24: Root PWA/static entry files:
+25: 
+26: - `web-ui/index.html` - includes mobile CSS, PWA metadata, `#mobile-root`, boot screen, and `src/mobile/mobile-router.js`.
+27: - `web-ui/manifest.webmanifest` - PWA identity, start URL `/?source=pwa#mobile/chat`, shortcuts, icons, portrait display.
+28: - `web-ui/service-worker.js` - PWA cache strategy and cache version.
+29: - `web-ui/src/ws.js` - shared WebSocket event bus; mobile device token is added to `/ws` as `?pt=...`.
+30: - `web-ui/src/api.js` - shared API helper; it also attaches the paired-device token when present.
+31: 
+32: Generated public copies:
+33: 
+34: - `generated/public-web-ui/index.html`
+35: - `generated/public-web-ui/manifest.webmanifest`
+36: - `generated/public-web-ui/service-worker.js`
+37: - `generated/public-web-ui/static/mobile/*`
+38: - `generated/public-web-ui/static/styles/mobile.css`
+39: - `generated/public-web-ui/static/ws.js`
+40: 
+41: Never hand-edit generated mobile files except for emergency diagnosis. Make source changes under `web-ui/`, then sync generated output.
+42: 
+43: ## Generated Files and Sync
+44: 
+45: The canonical sync path is:
+46: 
+47: - `npm run sync:web-ui`
+48: - expands to `node scripts/prepare-public-build.js --web-only && npm run check:web-ui`
+49: - `npm run check:web-ui` runs `node scripts/check-public-web-ui-sync.js`
+50: 
+51: `scripts/prepare-public-build.js` copies `web-ui/src` to `generated/public-web-ui/static`, transforms `web-ui/index.html` references from `src/` to `static/`, copies root-level PWA files, and vendors browser assets/fonts.
+52: 
+53: `scripts/check-public-web-ui-sync.js` compares source files against generated public copies, including root-level `manifest.webmanifest` and `service-worker.js`. A stale generated mobile file means the source may be right but public runtime output is not.
+54: 
+55: Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump it on meaningful frontend/mobile changes or installed PWAs may keep old assets even after build/restart. The service worker intentionally never caches `/api/*`, `/ws`, or `/events`, so stale chat/auth/streaming data usually means app state or generated static files, not cached API responses. Current version: `pm-v69-2026-06-19-mobile-deep-links`. [2026-06-19]
+56: 
+57: Session cache: `web-ui/src/mobile/mobile-api.js` caches `loadMobileChatSession` results in-memory for 30s (max 20 entries). Use `invalidateMobileChatSessionCache(sessionId?)` to bust. Cache is automatically busted on `updateMobileChatSessionHistory` writes. This makes revisiting the same chat instant within the TTL window. [2026-06-17]
+58: 
+59: Recovery parallelism: `refreshMobileRunRecovery` in `mobile-pages.js` now fires `loadMobileChatRunStatus` + `loadMobileChatSession` in parallel (batch 1), then `loadMobileApprovals` + `loadMobileQuestions` in parallel (batch 2). Previously all were serial awaits — a 5-call waterfall on every reconnect. [2026-06-17]
+60: 
+61: ## Activation and Routing
+62: 
+63: Mobile activates when `web-ui/src/mobile/mobile-router.js` sees one of:
+64: 
+65: - hash route beginning `#mobile`
+66: - pathname `/mobile` or `/mobile/...`
+67: - query `?pair=...`
+68: - query `?source=pwa`
+69: - sticky localStorage flag `pm_force_mobile`
+70: - paired token in localStorage key `pm_device_token`
+71: 
+72: Once mobile mode is entered, the router writes `pm_force_mobile=1` so iOS/Android/PWA launches do not fall back to desktop UI if the hash/query is lost. If a paired token is missing and the current page is not `pair`, the router forces the pair page. `clearForceMobile()` removes only the sticky mobile flag, not the device token.
+73: 
+74: Primary routes currently dispatch from `mobile-router.js`:
+75: 
+76: - `#mobile/pair`
+77: - `#mobile/chat` and `#mobile/chat/:sessionId`
+78: - `#mobile/voice`
+79: - `#mobile/tasks`
+80: - `#mobile/creative`
+81: - `#mobile/schedule`
+82: - `#mobile/teams` and team detail routes
+83: - `#mobile/subagents` and subagent detail routes
+84: - `#mobile/proposals`
+85: - `#mobile/settings`
+86: - `#mobile/more`
+87: 
+88: ## Pairing, Auth, and Remote Access
+89: 
+90: Pairing source:
+91: 
+92: - `src/gateway/routes/pairing.router.ts`
+93: - `src/gateway/pairing/pairing-store.ts`
+94: - `src/gateway/gateway-auth.ts`
+95: - `src/gateway/server-v2.ts`
+96: - `web-ui/src/mobile/mobile-api.js`
+97: - `web-ui/src/mobile/mobile-pages.js`
+98: 
+99: `src/gateway/server-v2.ts` mounts `pairingRouter` before `requireGatewayAuth` and `requireAccountAccess`, so an unpaired phone can complete QR pairing. All normal API surfaces after that still go through gateway auth and account access.
+100: 
+101: Pairing endpoint flow:
+102: 
+103: - Desktop creates QR: `POST /api/pairing/qr`
+104: - Phone claims QR: `POST /api/pairing/claim`
+105: - Phone polls approval: `GET /api/pairing/poll/:id`
+106: - Desktop lists/approves/denies pending requests: `GET /api/pairing/pending`, `POST /api/pairing/approve`, `POST /api/pairing/deny`
+107: - Desktop manages devices: `GET /api/pairing/devices`, `PATCH /api/pairing/devices/:id`, `DELETE /api/pairing/devices/:id`
+108: - Phone validates current token: `GET /api/pairing/me`
+109: - Local HTTPS certificate download: `GET /api/pairing/certificate`
+110: 
+111: Remote/mobile reachability support in `pairing.router.ts`:
+112: 
+113: - QR origin resolution uses LAN IPv4 when the gateway is bound to `0.0.0.0`.
+114: - `gateway.remoteAccess.publicUrl` is used when remote access is enabled.
+115: - Tailscale/Funnel helpers: `GET /api/pairing/remote-access`, `PUT /api/pairing/remote-access`, `GET /api/pairing/tailscale/status`, `POST /api/pairing/tailscale/funnel/enable`, `POST /api/pairing/tailscale/funnel/disable`, `GET /api/pairing/tailscale/funnel/status`.
+116: - `ensureTailscaleFunnel` and `startFunnelWatchdog` keep the configured Funnel alive from startup/runtime code.
+117: 
+118: Mobile auth mechanics:
+119: 
+120: - `mobile-api.js` stores the opaque token in `localStorage.pm_device_token`.
+121: - HTTP requests add `X-Pairing-Token`.
+122: - WebSocket/media URLs use `pt=<token>` because browsers cannot attach headers to those requests.
+123: - `gateway-auth.ts` verifies paired-device tokens before checking the configured gateway token, so paired phones can work over LAN/remote access even when gateway token auth is enabled.
+124: - If a token returns 401, `mobile-api.js` clears it and dispatches `pm-device-revoked`, causing the router to return to pairing.
+125: 
+126: ## Chat, Sessions, and Channels
+127: 
+128: Mobile chat source:
+129: 
+130: - `web-ui/src/mobile/mobile-api.js`
+131: - `web-ui/src/mobile/mobile-pages.js`
+132: - `src/gateway/routes/chat.router.ts`
+133: - `src/gateway/session.ts`
+134: - `src/gateway/live-runtime-registry.ts`
+135: - `src/gateway/comms/broadcaster.ts`
+136: - `web-ui/src/ws.js`
+137: 
+138: Mobile default session:
+139: 
+140: - `MOBILE_CHAT_SESSION_ID` is `mobile_default`.
+141: - New explicit mobile chat IDs are generated as `mobile_<timestamp>_<rand>`.
+142: - `createMobileChatSession()` posts `POST /api/sessions` with `{ id, channel: 'mobile', title }`.
+143: 
+144: Mobile sends normal worker turns through `POST /api/chat` with SSE. `mobile-api.js::streamChat` includes:
+145: 
+146: - `sessionId`
+147: - optional `clientRequestId`
+148: - `origin: { channel: 'mobile', surface: 'mobile_app', device: 'phone', label: 'Mobile app', source: 'mobile_web_ui' }`
+149: - attachments and caller context when present
+150: 
+151: `chat.router.ts` normalizes turn origin. A session ID beginning `mobile_` or an explicit `origin.channel='mobile'` becomes channel `mobile`, surface `mobile_app`, device `phone`. The injected origin context tells the model that mobile is only the contact channel; local desktop/browser/files/tools can still be available.
+152: 
+153: Mobile chat attachment path:
+154: 
+155: - `web-ui/src/mobile/mobile-pages.js` owns the mobile chat attachment picker, attachment normalization, staged attachment chips, upload result mapping, and the shared team/subagent mobile composer.
+156: - Main mobile chat file input is `#pm-file-input`; shared team/subagent composer inputs are generated as `${id}-file-input`.
+157: - Camera-roll/file-picker video support was added on 2026-06-05 by allowing `video/*` plus common video extensions (`.mp4`, `.mov`, `.m4v`, `.webm`, `.avi`, `.mkv`) in both mobile chat inputs.
+158: - `_normalizeMobileFile(file)` now treats `mimeType.startsWith('video/')` as `kind: 'video'`. Videos intentionally are not converted into in-memory data URLs during staging; they upload as binary files through the existing canvas upload path.
+159: - `_uploadMobileChatAttachments(files)` preserves `isVideo` alongside `isImage`, and mobile send mappings convert uploaded videos back to `kind: 'video'` so chat previews and runtime attachment metadata do not collapse them into generic files.
+160: - `_renderChatAttachmentPreviews(...)` can render uploaded video chips with `<video muted playsinline preload="metadata">`; `web-ui/src/styles/mobile.css` styles `.pm-attach-chip.video video`.
+161: - Uploaded mobile videos are saved through `uploadMobileBinaryFile(...)` -> `POST /api/canvas/upload-binary`, which stores them under `workspace/uploads/` and returns a workspace path. The runtime prompt receives that exact path via `[UPLOADED FILES]`, so agents should use the media/video tools or workspace path directly to inspect/process the clip.
+162: - Keep generated mirrors in sync: `generated/public-web-ui/static/mobile/mobile-pages.js` and `generated/public-web-ui/static/styles/mobile.css`.
+163: - Because this is PWA-facing static JS/CSS, bump `web-ui/service-worker.js` `VERSION` on meaningful attachment/picker changes; the 2026-06-05 video attachment change uses `pm-v29-2026-06-05-mobile-video-attachments`.
+164: - Verification used for this change: `npm run sync:web-ui`, which regenerated public assets and passed `check:web-ui`.
+165: 
+166: 
+167: Mobile subagent chat layout:
+168: 
+169: - `mobile-pages.js::_renderSubagentChatTab` wraps the subagent message list and queue in `.pm-sa-chat-scrollport`, then renders the shared `_renderMobileAgentComposerHtml('pm-sa-chat', ...)` composer outside that scrollport.
+170: - `mobile.css` scopes `.pm-sa-chat-shell` as a flex column with a scrollable `.pm-sa-chat-scrollport` and a sticky `.pm-agent-chat-composer.pm-composer` offset above `--pm-tabbar-h` plus safe-area inset. This prevents the subagent composer from sitting under the bottom tab bar while preserving normal main-chat composer geometry.
+171: - Subagent Home chat must stay a normal conversational thread. Do not route a Home chat send into a paused/stalled run just because the subagent owns one.
+172: - `mobile-api.js::streamSubagentChat` sends Home chat through `/api/agents/:id/chat/stream`; it should forward `attachmentPreviews` so images/video/files selected in the shared composer reach the subagent runtime.
+173: - For non-OK subagent stream responses, read the response body and surface `Chat HTTP <status>: <detail>` when possible. A generic "HTTP failed" hides provider/model/backend errors and makes mobile debugging much harder.
+174: 
+175: Mobile subagent Runs/recovery layout:
+176: 
+177: - `mobile-pages.js::_renderSubagentRunsTab` uses `loadSubagentRuns(agentId)` and `loadSubagentRun(agentId, taskId)` from `mobile-api.js` to render task cards for the selected subagent.
+178: - The Runs tab is the canonical mobile surface for subagent task status, prompt/output/progress/process detail, and paused/stalled/needs-assistance recovery.
+179: - Recovery chat inside a run card uses the normal mobile agent chat bubble renderer (`_renderMobileAgentChatBubble`) and shared composer (`_renderMobileAgentComposerHtml`) so it visually matches regular chats instead of the old beige task-panel UI.
+180: - Recovery sends through `sendSubagentRunRecovery(agentId, taskId, message, attachmentPreviews)`, which posts to `POST /api/agents/:id/runs/:taskId/recovery`.
+[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.
+[READ_TRUNCATED] Returned 180 of 505 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

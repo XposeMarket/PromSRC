@@ -1,0 +1,83 @@
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28879 lines) [window 5420-5499, truncated]:
+5420:     if (q.id && q.sessionId) _upsertMobileQuestion(q);
+5421:   });
+5422:   wsEventBus.on('question_answered', (msg = {}) => _updateMobileQuestionStatus(msg, 'answered'));
+5423:   wsEventBus.on('question_cancelled', (msg = {}) => _updateMobileQuestionStatus(msg, 'cancelled'));
+5424:   wsEventBus.on('question_expired', (msg = {}) => _updateMobileQuestionStatus(msg, 'expired'));
+5425: }
+5426: 
+5427: 
+5428: function _renderMobileRealtimeVoiceAssistantText(m) {
+5429:   if (!m || m.role !== 'ai' || m.source !== 'voice_agent_realtime' || !m.voiceRealtimeActive) return '';
+5430:   const clean = String(m.body?.text || m.content || '').replace(/\s+/g, ' ').trim();
+5431:   if (!clean) return '';
+5432:   const progress = Math.max(0, Math.min(1, Number(m.voiceRealtimeProgress || 0) || 0));
+5433:   const split = Math.max(0, Math.min(clean.length, Math.round(clean.length * progress)));
+5434:   const spoken = clean.slice(0, split);
+5435:   const pending = clean.slice(split);
+5436:   return `<div class="pm-voice-chat-lyrics"><span class="pm-voice-chat-lyrics-spoken">${escapeHtml(spoken)}</span><span class="pm-voice-chat-lyrics-pending">${escapeHtml(pending)}</span></div>`;
+5437: }
+5438: 
+5439: function _renderChatMessageHtml(m, index = -1) {
+5440:   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
+5441:   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
+5442:   const attachmentHtml = attachments.length ? _renderChatAttachmentPreviews(attachments, false) : '';
+5443:   const revealTime = m.time ? `<span class="pm-reveal-time" aria-hidden="true">${escapeHtml(m.time)}</span>` : '';
+5444:   if (m.role === 'user') {
+5445:     const isWorkerHandoff = _isMobileVoiceAgentWorkerHandoff(m);
+5446:     const isEditing = __pmChat.editingMessageIndex === msgIndex;
+5447:     // While editing, render the composer in place of the bubble (NOT nested
+5448:     // inside .pm-bubble) so it reads as an editable message, not an inner panel.
+5449:     const contentHtml = isEditing
+5450:       ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
+5451:       : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileSkillReferencedMarkdown(m.body.text, m.body.selectedSkillRefs || m.selectedSkillRefs)}</div>${attachmentHtml}</div>`;
+5452:     return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
+5453:       ${m.workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
+5454:       ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
+5455:   }
+5456:   const b = m.body || {};
+5457:   const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
+5458:   const isVoiceTraceTurn = _isMobileVoiceTraceTurn(m);
+5459:   const statusDividerHtml = '<div class="pm-msg-status-divider" aria-hidden="true"></div>';
+5460:   let inner = _renderMobileWorkTimer(m);
+5461:   if (inner) inner += statusDividerHtml;
+5462:   const renderedApprovalIds = new Set();
+5463:   if (m.approvalRequest) {
+5464:     const approvalId = String(m.approvalRequest.id || '').trim();
+5465:     if (approvalId) renderedApprovalIds.add(approvalId);
+5466:     inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
+5467:   }
+5468:   if (m.questionRequest) {
+5469:     // While the turn is live, the pending question is docked into the streaming
+5470:     // bubble below (mirrors desktop). Suppress the standalone history copy so it
+5471:     // isn't shown twice; a question-only message then renders nothing here.
+5472:     const qPending = String(m.questionRequest.status || 'pending').toLowerCase() === 'pending';
+5473:     const threadStreaming = (__pmChat.threads?.[__pmChat.activeSessionId] || []).some((x) => _isMobileAssistantMessage(x) && x.streaming === true);
+5474:     const dockElsewhere = qPending && threadStreaming;
+5475:     if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
+5476:     if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
+5477:   }
+5478:   const liveTraceHtml = m.streaming && (!answerStarted || isVoiceTraceTurn) && Array.isArray(m.liveTraceEntries)
+5479:     ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
+5480:     : '';
+5481:   const hasLiveTrace = !!liveTraceHtml;
+5482:   const completedTraceEntries = !m.streaming ? _mobileWorkflowTraceEntriesForMessage(m) : [];
+5483:   const hasCompletedTrace = _mobileTraceHasToolGroup(completedTraceEntries);
+5484:   const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
+5485:   if (hasLiveTrace) {
+5486:     inner += liveTraceHtml;
+5487:   } else if (hasCompletedTrace) {
+5488:     // Completed turn — trace hidden in collapsible drawer behind the work timer
+5489:     inner += `<div class="pm-trace-drawer" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
+5490:   } else if (m.streaming && !answerStarted && !hasPendingImageGeneration) {
+5491:     inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
+5492:   }
+5493:   if (hasPendingImageGeneration) {
+5494:     inner += _renderMobileGeneratedImageLoadingCard();
+5495:   }
+5496:   if (m.streaming) {
+5497:     const dockedQuestion = _getPendingQuestionForSession(__pmChat.activeSessionId);
+5498:     if (dockedQuestion) inner += `<div class="pm-streaming-question-dock">${_renderMobileQuestionCard(dockedQuestion)}</div>`;
+5499:   }
+[READ_TRUNCATED] Returned 80 of 28879 lines. Use start_line:5500, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

@@ -254,7 +254,7 @@ export function validateSrcProposalDetails(details: string, affectedFiles: Propo
 
 function hasSourceReadEvidence(text: string): boolean {
   return (
-    /\b(read_source|grep_source|source_stats|read_webui_source|grep_webui_source|webui_source_stats|read_prom_file|grep_prom|prom_file_stats)\b/.test(text)
+    /\b(read_source|grep_source|source_stats|validate_source|read_webui_source|grep_webui_source|webui_source_stats|validate_webui_source|read_prom_file|grep_prom|prom_file_stats|validate_prom_file)\b/.test(text)
     || /\bsource[-\s]?read evidence\b/.test(text)
   );
 }

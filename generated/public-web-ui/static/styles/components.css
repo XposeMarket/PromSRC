@@ -1724,6 +1724,41 @@ main {
   color: var(--text);
   font-size: 13px;
 }
+.file-changes-head strong {
+  min-width: 0;
+}
+.file-changes-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.file-change-restore-btn {
+  border: 1px solid color-mix(in srgb, var(--brand) 42%, var(--line) 58%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 10%, var(--panel) 90%);
+  color: var(--brand);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-family: 'Manrope', sans-serif;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 6px 9px;
+}
+.file-change-restore-btn:hover,
+.file-change-restore-btn:focus-visible {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  outline: none;
+}
+.file-change-restore-btn:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
 .file-changes-total,
 .file-change-counts {
   display: inline-flex;
@@ -3579,6 +3614,87 @@ button.chat-context-window-row {
   min-width: 0;
   margin-top: 4px;
   padding-bottom: 2px;
+}
+.live-turn-compaction {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 4px 0 2px;
+  color: var(--muted);
+}
+.live-turn-compaction summary {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.live-turn-compaction summary::-webkit-details-marker {
+  display: none;
+}
+.live-turn-compaction-line {
+  display: block;
+  height: 1px;
+  min-width: 0;
+  background: linear-gradient(90deg, transparent, var(--line-strong), transparent);
+  opacity: .62;
+}
+.live-turn-compaction strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.live-turn-compaction strong::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+}
+.live-turn-compaction[data-status="compacting"] strong::before {
+  border-color: rgba(245,158,11,.75);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: live-turn-spin .9s linear infinite;
+}
+.live-turn-compaction[data-status="compacted"] strong::before,
+.live-turn-compaction[data-status="done"] strong::before {
+  border-color: rgba(34,197,94,.68);
+  background: linear-gradient(135deg, rgba(34,197,94,.95), rgba(22,163,74,.7));
+}
+.live-turn-compaction[data-status="failed"] strong::before {
+  border-color: rgba(248,113,113,.72);
+  background: rgba(248,113,113,.18);
+}
+.live-turn-compaction-body {
+  margin: 7px 0 2px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-2) 78%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: hidden;
+}
+.live-turn-compaction-body.muted {
+  color: var(--muted);
+}
+.live-turn-compaction-body .live-turn-md {
+  font-size: 12px;
+  line-height: 1.55;
+}
+@keyframes live-turn-spin {
+  to { transform: rotate(360deg); }
 }
 .live-turn-vision-preview {
   display: block;

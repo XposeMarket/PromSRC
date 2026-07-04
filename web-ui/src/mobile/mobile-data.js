@@ -153,7 +153,7 @@ export const mobileNavTabs = [
   { id: 'chat',     label: 'Chat',     icon: 'chat',     route: '#mobile/chat' },
   { id: 'voice',    label: 'Voice',    icon: 'mic',      route: '#mobile/voice' },
   { id: 'tasks',    label: 'Tasks',    icon: 'clipboard',route: '#mobile/tasks' },
-  { id: 'creative', label: 'Creative', icon: 'spark',    route: '#mobile/creative' },
+  { id: 'hub',      label: 'Hub',      icon: 'target',   route: '#mobile/hub' },
 ];
 
 export const mobileDrawerItems = [

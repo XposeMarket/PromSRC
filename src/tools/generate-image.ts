@@ -8,6 +8,9 @@ type GenerateImageArgs = {
   count?: number;
   provider?: string;
   model?: string;
+  background?: string;
+  output_format?: string;
+  quality?: string;
   output_dir?: string;
   save_to_workspace?: boolean;
   on_image_persisted?: (image: {
@@ -31,6 +34,9 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
     count: args?.count != null ? Number(args.count) : undefined,
     provider: args?.provider != null ? String(args.provider) : undefined,
     model: args?.model != null ? String(args.model) : undefined,
+    background: args?.background != null ? String(args.background) : undefined,
+    output_format: args?.output_format != null ? String(args.output_format) : undefined,
+    quality: args?.quality != null ? String(args.quality) : undefined,
     output_dir: args?.output_dir != null ? String(args.output_dir) : undefined,
     save_to_workspace: args?.save_to_workspace,
     on_image_persisted: args?.on_image_persisted,
@@ -58,6 +64,8 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
       revised_prompt: result.revised_prompt ?? null,
       aspect_ratio: result.aspect_ratio,
       image_count: imageCount,
+      background: result.background,
+      output_format: result.output_format,
       quality: result.quality,
       size: result.size,
       path: primary.path,
@@ -72,6 +80,8 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
         prompt: result.prompt,
         revised_prompt: result.revised_prompt ?? null,
         aspect_ratio: result.aspect_ratio,
+        background: result.background,
+        output_format: result.output_format,
         path: image.path,
         rel_path: image.rel_path,
         cache_path: image.cache_path,
@@ -85,7 +95,7 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
 
 export const generateImageTool = {
   name: 'generate_image',
-  description: 'Generate one or more raster images from a prompt or references using the configured image provider. Use count > 1 for separate standalone variations.',
+  description: 'Generate one or more raster images from a prompt or references using the configured image provider. Use background="transparent" and output_format="png" for true alpha transparency; do not rely only on prompt wording. Use count > 1 for separate standalone variations.',
   execute: executeGenerateImage,
   schema: {
     prompt: 'Text prompt describing the image to generate',
@@ -94,6 +104,9 @@ export const generateImageTool = {
     count: 'Optional number of images to generate at once (1-4)',
     provider: 'Optional provider override: auto, openai, openai_codex, or xai. openai may use either an OpenAI API key or saved OpenAI OAuth/Codex auth; use xai for Grok Imagine.',
     model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality',
+    background: 'Optional background mode: transparent, opaque, or auto. Use transparent for real alpha in generated PNG/WebP files.',
+    output_format: 'Optional output file format: png, jpeg, or webp. Transparency requires png or webp; png is used when transparent is requested.',
+    quality: 'Optional quality setting: low, medium, high, or auto.',
     output_dir: 'Optional workspace-relative parent output directory. Each generation run is saved in a new child folder. Default: generated/images',
     save_to_workspace: 'If false, keep the image only in Prometheus cache',
   },
@@ -125,6 +138,21 @@ export const generateImageTool = {
         description: 'Provider override.',
       },
       model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
+      background: {
+        type: 'string',
+        enum: ['transparent', 'opaque', 'auto'],
+        description: 'Background mode. Use transparent for true alpha; Prometheus also infers this when the prompt asks for a transparent/no background sprite or cutout.',
+      },
+      output_format: {
+        type: 'string',
+        enum: ['png', 'jpeg', 'webp'],
+        description: 'Output file format. Use png or webp for transparency; png is forced if background is transparent and jpeg was requested.',
+      },
+      quality: {
+        type: 'string',
+        enum: ['low', 'medium', 'high', 'auto'],
+        description: 'Image generation quality.',
+      },
       output_dir: { type: 'string', description: 'Workspace-relative parent output directory. Each generation run is saved in a new child folder.' },
       save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
     },

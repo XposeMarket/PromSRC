@@ -1,8 +1,9 @@
 ---
 name: chart-visualizer
-description: Render live Chart.js charts directly in chat
-emoji: "🧩"
-version: 1.0.0
+description: Use this skill when the user asks for a chart, graph, visualization, KPI trend, bar chart, line chart, pie chart, radar chart, sparkline, analytics visual, financial chart, comparison chart, or Chart.js output in chat. Triggers on phrases like make a chart, visualize this data, show a graph, chart visualizer, bar chart, line chart, pie chart, KPI dashboard chart, plot these numbers, and Chart.js. Use it to render a live inline Chart.js chart directly in chat with no file saving.
+emoji: "📊"
+version: 1.1.0
+triggers: make a chart, visualize this data, show a graph, chart visualizer, bar chart, line chart, pie chart, radar chart, KPI dashboard chart, plot these numbers, Chart.js, analytics visual, financial chart, comparison chart, sparkline
 ---
 
 # Chart Visualizer

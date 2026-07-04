@@ -1,0 +1,521 @@
+memory/2026-07-02-intraday-notes.md (68 lines) [window 31-68]:
+31: Fixed `games/mobile-sideways-fps/index.html` camera/movement regression. Root cause: prior edits left duplicate stale copies of render/drawSprite/input code after `</html>` (lines ~239-535), so old handlers/functions were still confusing patching and a stale `movementX` canvas pointermove remained. Deleted the duplicate tail, made pitch move the render horizon/wall columns instead of only shifting objects, rewired stick/look with pointerId-specific release, added setPointerCapture try/catch, and exposed debug `a`/`pitch`. Verified SYNTAX OK and browser synthetic pointer test: drag changed yaw by +0.54 and pitch by +0.32; stick movement changed x/y and released without lastError.
+32: 
+33: ### [TASK] 2026-07-02T06:31:38.319Z
+34: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+35: Fixed `games/mobile-sideways-fps/index.html` inverted vertical look by changing canvas pointermove pitch update from `+dy*.004` to `-dy*.004`; validation passed with `SYNTAX OK`. User had reported up/down camera look was inverted after prior camera-control fixes.
+36: 
+37: ### [TASK] 2026-07-02T14:46:52.659Z
+38: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+39: Fixed `games/mobile-sideways-fps/index.html` runtime break: the script defined `loop()` but never started `requestAnimationFrame(loop)` after prior patch damage, so debug/runtime state stayed undefined and the game looked broken. Inserted `publishDebug(); raf=requestAnimationFrame(loop);` before IIFE close and restored final `</script></body></html>` order. Verified syntax OK and browser smoke test at `http://127.0.0.1:8781/index.html?fix=finalverify3`: `window.__pocketStart` exists, debug publishes, start hides overlay, simultaneous joystick+look changed player position and camera (`delta x .74, y .44, a .54, pitch .32`) and release stopped movement.
+40: 
+41: ### [TASK] 2026-07-02T14:57:12.452Z
+42: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+43: Fixed `games/mobile-sideways-fps/index.html` gameplay polish: adjusted zombie sprite projection upward from floor factor 1.05/anchor .12 to .86/.18 so zombies are no longer sunk into the floor, added keyboard strafe event handlers, and added movement/running bob/sway via player.moveBob/moveAmount affecting horizon and gun. Verified syntax OK and browser runtime strafe: D key moved player x from 7.5 to 8.62 while game running.
+44: 
+45: ### [TASK] 2026-07-02T15:08:22.304Z
+46: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+47: Adjusted `games/mobile-sideways-fps/index.html` zombie vertical placement after Raul said zombies were still sitting too low: changed zombie sprite `sy` from `floorY-sz*.18` to `floorY-sz*.42`, moving zombies visibly upward without touching other gameplay logic. `validate_file` reported SYNTAX OK.
+48: 
+49: ### [TASK] 2026-07-02T15:17:08.001Z
+50: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+51: Updated `games/mobile-sideways-fps/index.html` per Raul: moved zombie anchor a little higher (`floorY-sz*.5`), reset starting HP/max HP to 100, changed Juggernog boost to 150 instead of old 260, added `damageFlash` state that is set on zombie bite, decays each update, shakes horizon briefly, and draws semi-transparent red + white damage overlay. Verified syntax OK and browser runtime at localhost:8781: start function present, game running, HP/max HP 100, strafe still works, overlay code present.
+52: 
+53: ### [TASK] 2026-07-02T15:54:49.080Z
+54: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+55: Updated `games/mobile-sideways-fps/index.html`: zombie bite damage is now 20 HP per bite (14 with Juggernog), copied extracted SMG cutouts into game assets as `assets/smg-buy.png` and `assets/smg-fps.png`, wired SMG wall-buy/floating pickup sprite to `smg-buy.png`, and wired FPS view to switch to `smg-fps.png` when `state.weapon==='SMG'`. Syntax validation passed; asset existence confirmed via workspace_read. Tool note: a quick Python heredoc check failed because PowerShell doesn't support bash heredoc syntax, then Lite terminal blocked a PowerShell inline command, so asset verification was redone with workspace_read exists instead.
+56: 
+57: ### [TASK] 2026-07-02T16:38:37.892Z
+58: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+59: Updated `games/mobile-sideways-fps/index.html` fire button controls so dragging on the FIRE button also changes camera yaw/pitch while firing. Added fire-button pointer capture/move tracking and verified in browser: after pointerdown+pointermove on FIRE, debug changed player angle -1.57 -> -1.233, pitch 0 -> 0.28, ammo 8 -> 7.
+60: 
+61: ### [TASK] 2026-07-02T16:48:25.327Z
+62: _Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+63: Updated `games/mobile-sideways-fps/index.html` per Raul: zombies now move faster (`speed` base .38→.55, wave scaling .025→.035; runner/brute multipliers adjusted), have a larger bite/collision radius (`r` .32→.38, hit distance .34→.55), bite sooner/more often (`atk` init .9→.35, cooldown 1.05→.58), and damage flash is stronger (.42→.5). Syntax validation passed. One tool issue: first workspace_edit patchset failed because nested edits lacked filename/op fields; fixed by using direct find_replace calls.
+64: 
+65: ### [TASK] 2026-07-02T16:56:55.531Z
+66: _Source: Mobile chat session; session: mobile_mr355ohw_oj66tk; origin: Mobile app_
+67: Installed Creative image extraction model weights into `.prometheus/models`: `mobile_sam_encoder.onnx` (28,157,093 bytes), `mobile_sam_decoder.onnx` (16,496,559 bytes), `lama.onnx` (208,044,816 bytes), and `rmbg.onnx` (176,153,355 bytes). These match `src/gateway/creative/onnx/model-paths.ts` resolver names, so future Creative layer extraction should use MobileSAM/LaMa/RMBG instead of approximate fallbacks. Tool notes: workspace shell was blocked by Lite permissions for `node -e` and `curl.exe`; `download_url` worked for HuggingFace ONNX binaries. Broad workspace search was slow (~116s) and should have been narrowed sooner.
+68: 
+
+audit/chats/transcripts/mobile_mr2ors69_u35dij.md (776 lines) [window 620-749, truncated]:
+620: - Zombies moved **up a bit** so they aren’t buried in the floor.
+621: - Added real strafing:
+622:   - `A` / `D`
+623:   - joystick side-to-side already maps to strafe too.
+624: - Added running/movement feel:
+625:   - camera horizon bobs while moving
+626:   - gun bobs and sways more when moving
+627: 
+628: Verified:
+629: - `SYNTAX OK`
+630: - Browser runtime starts correctly.
+631: - Strafe test passed: pressing `D` moved player from `x=7.5` to `x=8.62`.
+632: 
+633: Tool notes:
+634: - First browser open failed because the local server wasn’t running anymore. I restarted the static server on `8781`.
+635: - My first runtime strafe test failed because the file had no keyboard event listeners wired anymore. Added them and verified again.
+636: ### [2026-07-02T15:07:03.790Z] user
+637: 
+638: Zombies are still sitting too low!
+639: ### [2026-07-02T15:08:27.339Z] assistant
+640: 
+641: Fixed. I moved the zombie sprite up noticeably:
+642: 
+643: - Changed zombie vertical anchor from `floorY - sz*.18` to `floorY - sz*.42`
+644: - File: `games/mobile-sideways-fps/index.html`
+645: - Syntax check passed.
+646: 
+647: This should make them stand higher instead of being sunk into the floor.
+648: 
+649: Tool note: no tool issue this time. This was a simple anchor-value adjustment.
+650: ### [2026-07-02T15:12:12.381Z] user
+651: 
+652: A little bit higher pls
+653: 
+654: Also bring the HP down to just 100
+655: 
+656: And can you make thenusers screen sort of overlay a semictransparent white whenever i get bit so i can see that im getting bit
+657: 
+658: It should sort of shake/flash a red semi transparent overlay
+659: ### [2026-07-02T15:17:18.709Z] assistant
+660: 
+661: Done.
+662: 
+663: Changed `games/mobile-sideways-fps/index.html`:
+664: - Moved zombies a little higher again: `floorY-sz*.42` → `floorY-sz*.5`
+665: - Starting HP is now `100 / 100`
+666: - Reset HP is now `100 / 100`
+667: - Juggernog no longer jumps to 260. I set it to `150` so base health stays sane.
+668: - Added bite feedback:
+669:   - red semi-transparent full-screen flash
+670:   - white flash layer
+671:   - red border pulse
+672:   - quick screen shake when bitten
+673:   - flash decays automatically
+674: 
+675: Verified:
+676: - `SYNTAX OK`
+677: - Browser runtime starts
+678: - Debug state shows `hp: 100`, `maxHp: 100`
+679: - Strafe still works
+680: - Damage overlay code is present and wired to zombie bite damage
+681: 
+682: Tool note: one edit insertion initially landed at top-of-file because I used the wrong insertion mode inside a patchset. I immediately removed it and reinserted it in the right script location. No final syntax/runtime issue.
+683: ### [2026-07-02T15:52:02.447Z] user
+684: 
+685: Make zombies deal 20 damage each bite
+686: 
+687: Also pls use these 2 images as the SMG images pls
+688: 
+689: Make it so that the floating smg buy gun is this and the fps view also changes to the smg image
+690: 
+691: Done. This one worked.
+692: 
+693: Extracted and sent:
+694: - Layer 1: SMG side-view cutout
+695: - Layer 2: first-person hands/pistol cutout
+696: - Clean plate/background fallback
+697: 
+698: Paths:
+699: - `creative-projects/mobile_mr355ohw_oj66tk/prometheus-creative/extractions/image_layers_mr3ohqe0_d2c95440/cutouts/approx_cutout_1_c8c438d9.png`
+700: - `creative-projects/mobile_mr355ohw_oj66tk/prometheus-creative/extractions/image_layers_mr3ohqe0_d2c95440/cutouts/approx_cutout_2_c8c438d9.png`
+701: - `creative-projects/mobile_mr355ohw_oj66tk/prometheus-creative/extractions/image_layers_mr3ohqe0_d2c95440/clean_plate.png`
+702: 
+703: Tool note: extraction is approximate because the local rmbg/MobileSAM/LaMa weights are not installed, so the cutouts may have rough edges.
+704: ### [2026-07-02T15:54:59.100Z] assistant
+705: 
+706: Done.
+707: 
+708: Changed `games/mobile-sideways-fps/index.html`:
+709: - Zombies now deal **20 damage per bite**
+710:   - Juggernog reduces it to **14**.
+711: - Copied the two extracted SMG images into the game:
+712:   - `games/mobile-sideways-fps/assets/smg-buy.png`
+713:   - `games/mobile-sideways-fps/assets/smg-fps.png`
+714: - Floating SMG wall-buy / pickup now uses `smg-buy.png`.
+715: - FPS weapon view switches to `smg-fps.png` when the equipped weapon is `SMG`.
+716: 
+717: Verified:
+718: - HTML syntax passes.
+719: - Both SMG asset files exist in the game assets folder.
+720: 
+721: Tool note: one shell check failed because I accidentally used bash heredoc syntax in PowerShell, then the Lite terminal blocked an inline PowerShell check. I switched to `workspace_read exists`, which verified the assets cleanly.
+722: ### [2026-07-02T16:35:45.845Z] user
+723: 
+724: Can we make it so i can move the camera angle when im pressing the fire button pls
+725: ### [2026-07-02T16:38:44.561Z] assistant
+726: 
+727: Done.
+728: 
+729: Changed `games/mobile-sideways-fps/index.html`:
+730: - FIRE button now supports drag-look while held.
+731: - Dragging on FIRE changes camera yaw and pitch, same feel as the normal look area.
+732: - Releasing FIRE stops firing and releases the pointer cleanly.
+733: 
+734: Verified in browser:
+735: - Game starts.
+736: - Holding/dragging FIRE changed angle from `-1.57` → `-1.233`.
+737: - Pitch changed from `0` → `0.28`.
+738: - Shot fired too: ammo `8` → `7`.
+739: 
+740: Tool note: first verification ran too soon before the game start frame published debug state, so I reran it with `requestAnimationFrame`; second check passed.
+741: ### [2026-07-02T16:45:50.433Z] user
+742: 
+743: Can you make the zombies walk faster pls
+744: 
+745: And also please make it so that the damage is mroe sensetive
+746: 
+747: I feel like they hit me but i dont get bitten often
+748: ### [2026-07-02T16:48:32.051Z] assistant
+749: 
+[READ_TRUNCATED] Use start_line:750, num_lines:240 for the next chunk, or full:true only when needed.
+
+audit/chats/transcripts/mobile_mr355ohw_oj66tk.md (88 lines) [window 1-88]:
+1: ### [2026-07-02T06:46:42.901Z] user
+2: 
+3: Can you use the creative extract later tool here and then send me the layers extracted
+4: 
+5: [UPLOADED FILES]
+6:   - "BDB91B69-48F6-4767-8782-DF501223485A.png" -> saved to: C:\Users\rafel\PromSRC\workspace\uploads\BDB91B69-48F6-4767-8782-DF501223485A.png
+7: Images are attached directly for vision analysis.
+8: Use the exact workspace paths above to read, edit, present, or process the attached files.
+9: ### [2026-07-02T06:49:32.237Z] assistant
+10: 
+11: The Creative extract layer tool is failing before it actually processes the image.
+12: 
+13: What happened:
+14: 
+15: - I loaded the relevant Creative skill, then activated the Creative image tools.
+16: - I tried the intended tool path: `creative_image_ops` with `extract_layers_for_generation`.
+17: - The tool kept returning: `creative_extract_layers requires a source image`.
+18: - I tried several likely argument shapes: direct `path`, `inputs.sourceImage`, `inputs.image`, `assetId`, and import/analyze first.
+19: - Import/analyze also failed with: `Creative asset source is required`.
+20: - So this looks like a tool schema / wrapper mismatch: the exposed wrapper has `path/url/inputs`, but the underlying Creative extractor is not receiving that as the “source image.”
+21: - I started falling back to manual layer extraction with workspace/Python, but the first shell attempt used `bash` and this Windows environment doesn’t have `bash.exe`; the PowerShell heredoc fallback was blocked by Lite terminal permissions.
+22: - Then you stopped me, so I paused.
+23: 
+24: No layers were successfully extracted yet.
+25: 
+26: Tool issue/improvement notes:
+27: - `creative_image_ops.extract_layers_for_generation` should accept `path` directly or document the exact required `source image` field.
+28: - Error message should include the expected input key, not just “requires a source image.”
+29: - `import_asset`/`analyze_asset` also report “source required” despite receiving `path`/`url`, so the wrapper likely isn’t mapping those fields into the underlying asset source.
+30: - Workspace shell fallback is awkward on Windows because `bash` isn’t available and multiline PowerShell commands are blocked by Lite permissions. A small approved image-processing utility would make this much smoother.
+31: 
+32: Closest next viable path: I can either keep debugging the Creative tool input shape, or do a manual extraction using workspace file tools / a small script file instead of inline shell.
+33: ### [2026-07-02T15:47:12.902Z] user
+34: 
+35: Try again with this image
+36: 
+37: [UPLOADED FILES]
+38:   - "BDB91B69-48F6-4767-8782-DF501223485A.png" -> saved to: C:\Users\rafel\PromSRC\workspace\uploads\BDB91B69-48F6-4767-8782-DF501223485A_1783007223596.png
+39: Images are attached directly for vision analysis.
+40: Use the exact workspace paths above to read, edit, present, or process the attached files.
+41: ### [2026-07-02T15:48:24.725Z] assistant
+42: 
+43: Done. This one worked.
+44: 
+45: Extracted and sent:
+46: - Layer 1: SMG side-view cutout
+47: - Layer 2: first-person hands/pistol cutout
+48: - Clean plate/background fallback
+49: 
+50: Paths:
+51: - `creative-projects/mobile_mr355ohw_oj66tk/prometheus-creative/extractions/image_layers_mr3ohqe0_d2c95440/cutouts/approx_cutout_1_c8c438d9.png`
+52: - `creative-projects/mobile_mr355ohw_oj66tk/prometheus-creative/extractions/image_layers_mr3ohqe0_d2c95440/cutouts/approx_cutout_2_c8c438d9.png`
+53: - `creative-projects/mobile_mr355ohw_oj66tk/prometheus-creative/extractions/image_layers_mr3ohqe0_d2c95440/clean_plate.png`
+54: 
+55: Tool note: extraction is approximate because the local rmbg/MobileSAM/LaMa weights are not installed, so the cutouts may have rough edges.
+56: ### [2026-07-02T16:50:16.332Z] user
+57: 
+58: Can you install them?
+59: 
+60: Tool note: extraction is approximate because the local rmbg/MobileSAM/LaMa weights are not installed, so the cutouts may have rough edges.
+61: ### [2026-07-02T16:50:17.760Z] assistant
+62: 
+63: Restart Context Packet
+64: 
+65: Interrupted by user while I was working on: Can you install them? Tool note: extraction is approximate because the local rmbg/MobileSAM/LaMa weights are not installed, so the cutouts may have rough edges.
+66: Stopped before any tool calls completed.
+67: Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.
+68: ### [2026-07-02T16:50:24.985Z] user
+69: 
+70: ^
+71: ### [2026-07-02T16:57:02.549Z] assistant
+72: 
+73: Installed them.
+74: 
+75: Models now in `.prometheus/models/`:
+76: 
+77: - `mobile_sam_encoder.onnx` — 28.2 MB
+78: - `mobile_sam_decoder.onnx` — 16.5 MB
+79: - `lama.onnx` — 208.0 MB
+80: - `rmbg.onnx` — 176.2 MB
+81: 
+82: These match the resolver names Prometheus expects, so future Creative layer extraction should use the stronger MobileSAM / LaMa / RMBG path instead of the approximate fallback.
+83: 
+84: Tool notes:
+85: - Shell install via `node -e` / `curl.exe` was blocked by Lite terminal permissions.
+86: - `download_url` worked cleanly for the HuggingFace ONNX files.
+87: - My first broad workspace search was too wide and slow; should’ve narrowed directly to `src/gateway/creative/onnx/model-paths.ts` sooner.
+88: 
+
+games/mobile-sideways-fps/index.html (261 lines) [window 1-240, truncated]:
+1: <!doctype html>
+2: <html lang="en">
+3: <head>
+4: <meta charset="utf-8" />
+5: <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+6: <title>Pocket Zombies FPS</title>
+7: <style>
+8:   html,body{margin:0;height:100%;overflow:hidden;background:#070807;color:#f2ead8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;touch-action:none;user-select:none}
+9:   #game{display:block;width:100vw;height:100vh;background:#111;image-rendering:auto}
+10:   .hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 6px #000;font-weight:800;letter-spacing:.04em}
+11:   .top{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;justify-content:space-between;align-items:flex-start;font-size:13px}
+12:   .pill{background:rgba(0,0,0,.52);border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:7px 10px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+13:   #center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:44px;color:rgba(255,245,220,.75)}
+14:   #msg{position:absolute;left:50%;top:18%;transform:translateX(-50%);text-align:center;font-size:28px;line-height:1.1;color:#ffd36a;max-width:90vw}
+15:   #prompt{position:absolute;left:50%;bottom:25%;transform:translateX(-50%);font-size:16px;background:rgba(0,0,0,.55);padding:10px 14px;border:1px solid rgba(255,211,106,.5);border-radius:12px;display:none}
+16:   .controls{position:fixed;inset:0;pointer-events:none}.btn{pointer-events:auto;position:absolute;border:1px solid rgba(255,255,255,.18);background:rgba(20,20,20,.55);color:#fff;border-radius:999px;font-weight:900;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);touch-action:none;user-select:none}
+17:   #lookPad{pointer-events:auto;position:fixed;left:150px;right:0;top:0;bottom:0;z-index:2;touch-action:none;background:transparent}
+18:   #stick{z-index:4;left:22px;bottom:22px;width:112px;height:112px;background:rgba(255,255,255,.07)}#knob{width:48px;height:48px;background:rgba(255,255,255,.22);border-radius:50%;transform:translate(0,0)}
+19:   #fire{z-index:5;right:24px;bottom:32px;width:112px;height:112px;background:rgba(140,18,18,.72);font-size:17px}#reload{z-index:5;right:154px;bottom:42px;width:70px;height:70px}#use{z-index:5;right:34px;bottom:158px;width:76px;height:76px}#pause{z-index:5;right:12px;top:58px;width:50px;height:38px;border-radius:12px}#mute{z-index:5;right:70px;top:58px;width:50px;height:38px;border-radius:12px}
+20:   #start{pointer-events:auto;position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 42%,rgba(90,16,16,.9),rgba(0,0,0,.96));z-index:5;text-align:center;padding:22px}.card{max-width:560px;border:1px solid rgba(255,255,255,.18);border-radius:22px;background:rgba(0,0,0,.45);padding:24px;box-shadow:0 20px 80px rgba(0,0,0,.5)}h1{font-size:44px;margin:0 0 8px;color:#ffcc63}.card p{color:#d6c7a8}.startbtn{display:inline-block;margin-top:12px;background:#e43b28;color:white;border:0;border-radius:14px;padding:14px 22px;font-weight:1000;font-size:18px}
+21: </style>
+22: </head>
+23: <body>
+24: <canvas id="game"></canvas>
+25: <div class="hud">
+26:   <div class="top"><div class="pill" id="leftHud">WAVE 1 · ZOMBIES 0</div><div class="pill" id="midHud">M1911 · 8/48 · $500</div><div class="pill" id="rightHud">HP 100</div></div>
+27:   <div id="msg"></div><div id="center">+</div><div id="prompt"></div>
+28: <div class="controls"><div id="lookPad"></div><div class="btn" id="stick"><div id="knob"></div></div><div class="btn" id="fire">FIRE</div><div class="btn" id="reload">R</div><div class="btn" id="use">BUY</div><div class="btn" id="pause">Ⅱ</div><div class="btn" id="mute">♪</div></div>
+29: <div id="start"><div class="card"><h1>POCKET ZOMBIES</h1><p>Mobile sideways FPS. Survive waves, earn points, buy guns, open doors, grab perks and power-ups.</p><p>Desktop: WASD move, mouse/arrow look, Space or FIRE button to shoot, R reload, E buy, P pause.</p><button id="startBtn" class="startbtn" type="button" onclick="window.__pocketStart&&window.__pocketStart()">START GAME</button></div></div>
+30: <script>
+31: (()=>{
+32: 'use strict';
+33: const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+34: const ui={start:document.getElementById('start'),startBtn:document.getElementById('startBtn'),left:document.getElementById('leftHud'),mid:document.getElementById('midHud'),right:document.getElementById('rightHud'),msg:document.getElementById('msg'),prompt:document.getElementById('prompt'),knob:document.getElementById('knob'),lookPad:document.getElementById('lookPad')}; const dbg=window.__pocketZombiesDebug||{}; window.__pocketZombiesDebug=dbg;
+35: const zombieImg=new Image();zombieImg.src='assets/zombie.png';
+36: const gunImg=new Image();gunImg.src='assets/zombie-gun-8bit.png';
+37: const fireGunImg=new Image();fireGunImg.src='assets/zombie-gun-8bit-fire.png';
+38: const reloadGunImg=new Image();reloadGunImg.src='assets/zombie-gun-8bit-reload-custom.png';
+39: const smgBuyImg=new Image();smgBuyImg.src='assets/smg-buy.png';
+40: const smgFpsImg=new Image();smgFpsImg.src='assets/smg-fps.png';
+41: let W=1,H=1,last=0,raf=0,startClockId=null,audio=false,muted=false;
+42: const TAU=Math.PI*2,FOV=Math.PI/3,keys={},touch={mx:0,my:0,look:0,pitch:0,fire:false};
+43: const shots=[];
+44: const weapons={M1911:{name:'M1911',price:0,dmg:34,rate:.32,mag:8,reserve:48,reload:1.05,spread:.018},SMG:{name:'SMG',price:950,dmg:22,rate:.09,mag:28,reserve:140,reload:1.25,spread:.04},SHOTGUN:{name:'SHOTGUN',price:1250,dmg:92,rate:.72,mag:6,reserve:36,reload:1.45,spread:.085},RIFLE:{name:'RIFLE',price:1800,dmg:58,rate:.18,mag:20,reserve:100,reload:1.35,spread:.012}};
+45: const map0=[
+46: '111111111111111',
+47: '100000010000001',
+48: '100000010000001',
+49: '1000000D0000001',
+50: '100000010000001',
+51: '100000010000001',
+52: '100001000100001',
+53: '100000000000001',
+54: '100000000000001',
+55: '100011101110001',
+56: '100000000000001',
+57: '100000000000001',
+58: '111111111111111'];
+59: let map=[];
+60: const doors=[{x:7,y:3,cost:900,open:false,name:'Courtyard Door'}];
+61: const buys=[{x:2.5,y:2.5,type:'gun',id:'SMG'},{x:12.5,y:2.5,type:'gun',id:'SHOTGUN'},{x:12.5,y:10.5,type:'gun',id:'RIFLE'},{x:2.5,y:10.5,type:'perk',id:'JUG',name:'Juggernog',cost:1500},{x:7.5,y:8.5,type:'perk',id:'SPEED',name:'Speed Cola',cost:1200}];
+62: const spawns=[{x:1.5,y:1.5},{x:13.5,y:1.5},{x:1.5,y:11.5},{x:13.5,y:11.5},{x:7.5,y:11.5}];
+63: const state={running:false,paused:false,gameOver:false,wave:1,waveState:'ready',zombies:[],zombiesToSpawn:0,spawnTimer:0,betweenTimer:0,kills:0,points:500,notice:'',noticeTimer:0,powerups:[],active:{insta:0,double:0},player:{x:3.5,y:3.5,a:0,pitch:0,hp:100,maxHp:100,speed:2.35},owned:['M1911'],weapon:'M1911',ammo:{},reloadTimer:0,fireCooldown:0,shots:0,startTime:0,grace:0,damageFlash:0};
+64: Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});
+65: function resize(){W=canvas.width=Math.max(320,innerWidth*devicePixelRatio);H=canvas.height=Math.max(240,innerHeight*devicePixelRatio);ctx.setTransform(1,0,0,1,0,0)} addEventListener('resize',resize);resize();
+66: function rebuildMap(){map=map0.map(r=>r.split(''));doors.forEach(d=>{map[d.y][d.x]=d.open?'0':'D'})}
+67: function reset(){rebuildMap();Object.assign(state,{running:true,paused:false,gameOver:false,wave:1,waveState:'spawning',zombies:[],zombiesToSpawn:4,spawnTimer:.75,betweenTimer:0,kills:0,points:500,notice:'WAVE 1',noticeTimer:2,powerups:[],active:{insta:0,double:0},weapon:'M1911',reloadTimer:0,fireCooldown:0,shots:0,startTime:performance.now()/1000,grace:8,damageFlash:0});state.player={x:7.5,y:7.5,a:-1.57,pitch:0,hp:100,maxHp:100,speed:3.05};state.owned=['M1911'];Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});doors.forEach(d=>d.open=false);rebuildMap();ui.start.style.display='none'}
+68: function tile(x,y){x=Math.floor(x);y=Math.floor(y);return map[y]?.[x]||'1'} function solid(x,y){return tile(x,y)!=='0'}
+69: function moveEnt(e,dx,dy){if(!solid(e.x+dx,e.y))e.x+=dx;if(!solid(e.x,e.y+dy))e.y+=dy}
+70: function zombieAt(x,y,ignore=null,pad=.44){return state.zombies.find(z=>z!==ignore&&!z.dead&&Math.hypot(x-z.x,y-z.y)<(z.r||.38)+pad)}
+71: function bitePlayer(z,force=false){if(!force&&z.atk>0)return;z.atk=.58;if(state.grace>0)return;state.player.hp-=state.owned.includes('JUG')?14:20;state.damageFlash=.58;msg('BITTEN!',.45);beep(90,.04);if(state.player.hp<=0)endGame()}
+72: function movePlayer(dx,dy){const p=state.player,nx=p.x+dx,ny=p.y+dy;let zx=zombieAt(nx,p.y,null,.58);if(!solid(nx,p.y)&&!zx)p.x=nx;else if(zx)bitePlayer(zx,true);let zy=zombieAt(p.x,ny,null,.58);if(!solid(p.x,ny)&&!zy)p.y=ny;else if(zy)bitePlayer(zy,true)}
+73: function pushApart(a,b,min){let dx=a.x-b.x,dy=a.y-b.y,d=Math.hypot(dx,dy)||.001,over=min-d;if(over<=0)return;dx/=d;dy/=d;if(a===state.player){if(!solid(a.x+dx*over*.45,a.y))a.x+=dx*over*.45;if(!solid(a.x,a.y+dy*over*.45))a.y+=dy*over*.45}else{if(!solid(a.x+dx*over*.5,a.y))a.x+=dx*over*.5;if(!solid(a.x,a.y+dy*over*.5))a.y+=dy*over*.5;if(!solid(b.x-dx*over*.5,b.y))b.x-=dx*over*.5;if(!solid(b.x,b.y-dy*over*.5))b.y-=dy*over*.5}}
+74: function msg(t,d=1.5){state.notice=t;state.noticeTimer=d}
+75: function spawnZombie(){const s=spawns[Math.floor(Math.random()*spawns.length)],v=Math.random();state.zombies.push({x:s.x,y:s.y,hp:(58+state.wave*14)*(v>.86?1.75:1),maxHp:58+state.wave*14,speed:(.55+state.wave*.035)*(v>.86?0.82:v<.18?1.28:1),r:.38,atk:.35,hurt:0,dead:false,variant:v>.86?'brute':v<.18?'runner':'walker'});state.zombiesToSpawn--}
+76: function update(dt){if(!state.running||state.paused)return;const p=state.player;if(state.noticeTimer>0)state.noticeTimer-=dt;state.active.insta=Math.max(0,state.active.insta-dt);state.active.double=Math.max(0,state.active.double-dt);state.fireCooldown=Math.max(0,state.fireCooldown-dt);state.gunFlash=Math.max(0,(state.gunFlash||0)-dt);state.damageFlash=Math.max(0,(state.damageFlash||0)-dt);for(const s of shots){s.t-=dt;s.x+=s.vx*dt;s.y+=s.vy*dt}for(let i=shots.length-1;i>=0;i--){if(shots[i].t<=0)shots.splice(i,1)}state.grace=Math.max(0,state.grace-dt);if(state.reloadTimer>0){state.reloadTimer-=dt;if(state.reloadTimer<=0)finishReload()}
+77:  let turn=(keys.ArrowLeft?-1:0)+(keys.ArrowRight?1:0)+touch.look;p.a+=turn*2.6*dt;p.pitch=Math.max(-1.2,Math.min(1.2,p.pitch+touch.pitch*2.2*dt));touch.pitch=0;let f=(keys.w||keys.W||keys.ArrowUp?1:0)+(keys.s||keys.S||keys.ArrowDown?-1:0)+touch.my;let st=(keys.d||keys.D?1:0)+(keys.a||keys.A?-1:0)+touch.mx;let moving=Math.min(1,Math.hypot(f,st));let sp=p.speed*(state.active.insta?1.03:1);let dx=(Math.cos(p.a)*f+Math.cos(p.a+Math.PI/2)*st)*sp*dt,dy=(Math.sin(p.a)*f+Math.sin(p.a+Math.PI/2)*st)*sp*dt;movePlayer(dx,dy);p.moveBob=(p.moveBob||0)+dt*(moving?10.5:4);p.moveAmount=(p.moveAmount||0)+(moving-(p.moveAmount||0))*Math.min(1,dt*8);
+78:  if((touch.fire||keys[' ']||keys.Mouse)&&state.fireCooldown<=0)shoot();
+79:  if(state.waveState==='spawning'){state.spawnTimer-=dt;if(state.zombiesToSpawn>0&&state.spawnTimer<=0){spawnZombie();state.spawnTimer=Math.max(1.05,2.15-state.wave*.07)}if(state.zombiesToSpawn<=0)state.waveState='fighting'}
+80:  for(const z of state.zombies){z.hurt=Math.max(0,z.hurt-dt);const ang=Math.atan2(p.y-z.y,p.x-z.x),dist=Math.hypot(p.x-z.x,p.y-z.y),hitDist=(z.r||.38)+.55;if(dist>hitDist*.86){moveEnt(z,Math.cos(ang)*z.speed*dt,Math.sin(ang)*z.speed*dt)}else{pushApart(p,z,hitDist*.82);z.atk-=dt;const bumping=dist<(z.r||.38)+.68;if(z.atk<=0||bumping)bitePlayer(z,bumping)}}
+81:  state.zombies=state.zombies.filter(z=>!z.dead);
+82:  if(state.waveState==='fighting'&&state.zombies.length===0&&state.zombiesToSpawn<=0){state.waveState='between';state.betweenTimer=4;state.points+=300;msg('WAVE COMPLETE +$300',2);beep(520,.08)}
+83:  if(state.waveState==='between'){state.betweenTimer-=dt;if(state.betweenTimer<=0){state.wave++;state.waveState='spawning';state.zombiesToSpawn=5+state.wave*2;state.spawnTimer=.5;msg('WAVE '+state.wave,2)}}
+84:  for(const pu of state.powerups){if(Math.hypot(p.x-pu.x,p.y-pu.y)<.7){pickup(pu);pu.dead=true}}state.powerups=state.powerups.filter(p=>!p.dead);
+85: }
+86: function shoot(){
+87:   const w=weapons[state.weapon],am=state.ammo[state.weapon];
+88:   state.gunFlash=.09;
+89:   if(state.reloadTimer>0)return;
+90:   if(am.mag<=0){reload();return}
+91:   am.mag--;state.shots++;
+92:   state.fireCooldown=w.rate*(state.owned.includes('SPEED')?0.78:1);
+93:   shots.push({x:state.player.x+Math.cos(state.player.a)*.35,y:state.player.y+Math.sin(state.player.a)*.35,vx:Math.cos(state.player.a)*18,vy:Math.sin(state.player.a)*18,t:.16});
+94:   beep(180+Math.random()*90,.025);
+95:   let best=null,bang=999;
+96:   for(const z of state.zombies){
+97:     const dx=z.x-state.player.x,dy=z.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+98:     let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+99:     let allowance=w.spread+Math.atan2(.36,dist);
+100:     if(Math.abs(da)<allowance&&dist<9&&Math.abs(da)<bang&&!blocked(state.player.x,state.player.y,z.x,z.y)){best=z;bang=Math.abs(da)}
+101:   }
+102:   if(best){
+103:     let dmg=state.active.insta?999:w.dmg*(Math.random()<.12?2.1:1);
+104:     best.hp-=dmg;best.hurt=.12;
+105:     if(best.hp<=0)kill(best);
+106:   }
+107: }
+108: function kill(z){z.dead=true;state.kills++;state.points+=state.active.double?140:70;if(Math.random()<.16)drop(z.x,z.y);beep(360,.035)}
+109: function reload(){const w=weapons[state.weapon],am=state.ammo[state.weapon];if(am.mag>=w.mag)return msg('MAG FULL',.45);if(am.reserve<=0)return msg('NO AMMO',.45);if(state.reloadTimer>0)return;state.reloadTimer=w.reload*(state.owned.includes('SPEED')?0.55:1);msg('RELOADING',.5)}
+110: function finishReload(){const w=weapons[state.weapon],am=state.ammo[state.weapon],need=w.mag-am.mag,take=Math.min(need,am.reserve);am.mag+=take;am.reserve-=take}
+111: function drop(x,y){const types=['MAX AMMO','INSTA KILL','DOUBLE POINTS','NUKE'];state.powerups.push({x,y,type:types[Math.floor(Math.random()*types.length)],t:9})}function pickup(p){msg(p.type,1.3);beep(650,.08);if(p.type==='MAX AMMO')Object.keys(weapons).forEach(k=>state.ammo[k].reserve=Math.max(state.ammo[k].reserve,weapons[k].reserve));if(p.type==='INSTA KILL')state.active.insta=15;if(p.type==='DOUBLE POINTS')state.active.double=15;if(p.type==='NUKE'){state.zombies.forEach(z=>kill(z));state.points+=400}}
+112: function blocked(x1,y1,x2,y2){const n=24;for(let i=1;i<n;i++){let t=i/n;if(solid(x1+(x2-x1)*t,y1+(y2-y1)*t))return true}return false}
+113: function interactable(){let best=null,bd=1.25;for(const b of buys){let d=Math.hypot(state.player.x-b.x,state.player.y-b.y);if(d<bd){best=b;bd=d}}for(const d of doors){let q=Math.hypot(state.player.x-(d.x+.5),state.player.y-(d.y+.5));if(!d.open&&q<bd){best={type:'door',door:d};bd=q}}return best}
+114: function use(){const it=interactable();if(!it)return msg('MOVE CLOSER',.55);if(it.type==='gun'){const w=weapons[it.id];if(state.points<w.price)return msg('NEED $'+w.price);state.points-=w.price;if(!state.owned.includes(it.id))state.owned.push(it.id);state.weapon=it.id;state.ammo[it.id].mag=w.mag;state.ammo[it.id].reserve=w.reserve;msg('BOUGHT '+w.name)}else if(it.type==='perk'){if(state.owned.includes(it.id))return msg('ALREADY OWNED');if(state.points<it.cost)return msg('NEED $'+it.cost);state.points-=it.cost;state.owned.push(it.id);if(it.id==='JUG'){state.player.maxHp=150;state.player.hp=150}msg(it.name)}else if(it.type==='door'){if(state.points<it.door.cost)return msg('NEED $'+it.door.cost...[line truncated]
+115: function endGame(){state.gameOver=true;state.running=false;msg('GAME OVER - WAVE '+state.wave+' · KILLS '+state.kills,99);ui.start.style.display='flex';ui.start.querySelector('h1').textContent='GAME OVER';ui.start.querySelector('p').textContent='Wave '+state.wave+' · '+state.kills+' kills · $'+state.points+'. Tap to restart.'}
+116: function cast(a,pitch=0){let x=state.player.x,y=state.player.y,step=.035,dist=0;while(dist<18){x+=Math.cos(a)*step;y+=Math.sin(a)*step;dist+=step;if(solid(x,y))return{dist,x,y,t:tile(x,y)}}return{dist:18,x,y,t:'0'}}
+117: function render(){
+118:   const hitShake=(state.damageFlash||0)>0?Math.sin(performance.now()/18)*(state.damageFlash*9*devicePixelRatio):0;
+119:   const runBob=Math.sin(state.player.moveBob||0)*(state.player.moveAmount||0)*10*devicePixelRatio;
+120:   const horizon=H/2+(state.player.pitch||0)*H*.35+runBob+hitShake;
+121:   ctx.fillStyle='#0a0908';ctx.fillRect(0,0,W,H);
+122:   let sky=ctx.createLinearGradient(0,0,0,Math.max(1,horizon));sky.addColorStop(0,'#151819');sky.addColorStop(1,'#312014');ctx.fillStyle=sky;ctx.fillRect(0,0,W,Math.max(0,horizon));
+123:   let floor=ctx.createLinearGradient(0,horizon,0,H);floor.addColorStop(0,'#1b1a16');floor.addColorStop(1,'#070706');ctx.fillStyle=floor;ctx.fillRect(0,horizon,W,H-horizon);
+124:   const cols=Math.min(320,Math.floor(W/4)),cw=W/cols,zbuf=[];
+125:   for(let i=0;i<cols;i++){
+126:     let a=state.player.a-FOV/2+FOV*i/cols,r=cast(a),d=r.dist*Math.cos(a-state.player.a);
+127:     zbuf[i]=d;
+128:     let h=Math.min(H*1.8,H/(d+.08)*.82),shade=Math.max(35,210-d*18),x=i*cw;
+129:     ctx.fillStyle=r.t==='D'?`rgb(${shade*.7},${shade*.35},20)`: `rgb(${shade*.45},${shade*.42},${shade*.38})`;
+130:     ctx.fillRect(x,horizon-h/2,cw+1,h);
+131:   }
+132:   const sprites=[];
+133:   for(const z of state.zombies)sprites.push({...z,kind:'z'});
+134:   for(const p of state.powerups)sprites.push({...p,kind:'p'});
+135:   for(const b of buys)sprites.push({...b,kind:'b'});
+136:   sprites.sort((a,b)=>Math.hypot(b.x-state.player.x,b.y-state.player.y)-Math.hypot(a.x-state.player.x,a.y-state.player.y));
+137:   for(const s of sprites)drawSprite(s,zbuf,cols,cw,horizon);
+138:   drawShots();
+139:   drawGun();drawMini();drawDamageOverlay();
+140:   if(state.noticeTimer>0||state.gameOver)ui.msg.textContent=state.notice;else ui.msg.textContent='';
+141:   const it=interactable();
+142:   ui.prompt.style.display=it?'block':'none';
+143:   ui.prompt.textContent=it?(it.type==='gun'?'BUY '+weapons[it.id].name+' $'+weapons[it.id].price:it.type==='perk'?'BUY '+it.name+' $'+it.cost:'OPEN '+it.door.name+' $'+it.door.cost):'';
+144:   const am=state.ammo[state.weapon];
+145:   ui.left.textContent=`WAVE ${state.wave} · ZOMBIES ${state.zombies.length}${state.zombiesToSpawn?` +${state.zombiesToSpawn}`:''}`;
+146:   ui.mid.textContent=`${weapons[state.weapon].name} · ${am.mag}/${am.reserve} · $${state.points}${state.reloadTimer>0?' · RELOAD':''}`;
+147:   ui.right.textContent=`HP ${Math.max(0,Math.ceil(state.player.hp))}`;
+148: }
+149: function drawSprite(s,zbuf,cols,cw,horizon){
+150:   let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+151:   let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+152:   if(Math.abs(da)>FOV*.72||dist<.15)return;
+153:   const sx=(da/FOV+.5)*W,sz=Math.min(H*1.3,(H/(dist+.08))*(s.kind==='z'?1.32:.42));
+154:   const col=Math.max(0,Math.min(cols-1,Math.floor(sx/cw)));
+155:   if(zbuf[col]&&dist>zbuf[col]+.35)return;
+156:   const floorY=horizon+(H/(dist+.05))*(s.kind==='z'?.86:.58);
+157:   let sy=s.kind==='z'?floorY-sz*.5:horizon-sz*.55;
+158:   ctx.save();
+159:   ctx.translate(sx,sy+sz/2);
+160:   if(s.kind==='z'){
+161:     let scale=s.variant==='brute'?1.18:(s.variant==='runner'?0.88:1),w=sz*.7*scale,h=sz*1.08*scale;
+162:     ctx.globalAlpha=1;
+163:     if(zombieImg.complete&&zombieImg.naturalWidth){
+164:       ctx.drawImage(zombieImg,-w/2,-h*.78,w,h);
+165:       if(s.hurt){ctx.globalCompositeOperation='source-atop';ctx.fillStyle=`rgba(255,0,0,${Math.min(.75,.25+s.hurt*3)})`;ctx.fillRect(-w/2,-h*.78,w,h);ctx.globalCompositeOperation='source-over'}
+166:     }else{
+167:       ctx.fillStyle=s.hurt?'#ff2020':(s.variant==='brute'?'#6b1b22':s.variant==='runner'?'#407a35':'#2d6b35');ctx.fillRect(-w/2,-h*.7,w,h);ctx.fillStyle=s.hurt?'#ffaaaa':'#151';ctx.fillRect(-w*.28,-h*.9,w*.56,h*.24);ctx.fillStyle='#ffd86b';ctx.fillRect(-w*.18,-h*.84,w*.08,w*.08);ctx.fillRect(w*.1,-h*.84,w*.08,w*.08)
+168:     }
+169:   }else if(s.kind==='p'){
+170:     ctx.fillStyle='#ffd94b';ctx.fillRect(-sz*.28,-sz*.28,sz*.56,sz*.56);ctx.fillStyle='#000';ctx.font=`${Math.max(9,sz*.18)}px sans-serif`;ctx.textAlign='center';ctx.fillText(s.type[0],0,4);
+171:   }else{
+172:     if(s.type==='gun'&&s.id==='SMG'&&smgBuyImg.complete&&smgBuyImg.naturalWidth){const iw=sz*.95,ih=iw*(smgBuyImg.naturalHeight/smgBuyImg.naturalWidth);ctx.drawImage(smgBuyImg,-iw/2,-ih/2,iw,ih)}else{ctx.fillStyle=s.type==='perk'?'#55d6ff':'#e0d07c';ctx.fillRect(-sz*.35,-sz*.35,sz*.7,sz*.7)}
+173:   }
+174:   ctx.restore();
+175: }
+176: function drawShots(){
+177:   ctx.save();
+178:   ctx.strokeStyle='#ffd86b';ctx.lineWidth=Math.max(2,3*devicePixelRatio);ctx.shadowColor='#ff7a2c';ctx.shadowBlur=10*devicePixelRatio;
+179:   for(const b of shots){
+180:     let dx=b.x-state.player.x,dy=b.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+181:     let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+182:     if(Math.abs(da)>FOV*.55||dist<.05)continue;
+183:     const sx=(da/FOV+.5)*W,sy=H*.54+(state.player.pitch||0)*H*.35+(1/(dist+.2))*12*devicePixelRatio;
+184:     ctx.beginPath();ctx.moveTo(W/2,H*.74);ctx.lineTo(sx,sy);ctx.stroke();
+185:   }
+186:   ctx.restore();
+187: }
+188: function drawDamageOverlay(){
+189:   const f=state.damageFlash||0;
+190:   if(f<=0)return;
+191:   const pulse=.55+.45*Math.sin(performance.now()/32);
+192:   ctx.save();
+193:   ctx.fillStyle=`rgba(255,0,0,${Math.min(.38,.16+f*.42)})`;ctx.fillRect(0,0,W,H);
+194:   ctx.fillStyle=`rgba(255,255,255,${Math.min(.24,.06+f*.3)*pulse})`;ctx.fillRect(0,0,W,H);
+195:   ctx.strokeStyle=`rgba(255,35,25,${Math.min(.8,.35+f*.7)})`;ctx.lineWidth=Math.max(10,32*devicePixelRatio*f);ctx.strokeRect(0,0,W,H);
+196:   ctx.restore();
+197: }
+198: 
+199: function drawGun(){
+200:   const moveAmt=state.player.moveAmount||0;
+201:   const bob=(Math.sin(performance.now()/120)*6+Math.sin(state.player.moveBob||0)*13*moveAmt)*devicePixelRatio;
+202:   const sway=Math.cos(state.player.moveBob||0)*9*moveAmt*devicePixelRatio;
+203:   const smoothing=ctx.imageSmoothingEnabled;
+204:   const isReloading=state.reloadTimer>0;
+205:   const isFiring=touch.fire||keys[' ']||(state.gunFlash||0)>0;
+206:   const isSmg=state.weapon==='SMG';
+207:   const sprite=isSmg&&smgFpsImg.complete&&smgFpsImg.naturalWidth?smgFpsImg:((isReloading&&reloadGunImg.complete&&reloadGunImg.naturalWidth)?reloadGunImg:((isFiring&&fireGunImg.complete&&fireGunImg.naturalWidth)?fireGunImg:gunImg));
+208:   const aspect=(sprite.naturalWidth&&sprite.naturalHeight)?sprite.naturalHeight/sprite.naturalWidth:1.8;
+209:   const gunW=Math.min(W*.48,H*.7),gunH=Math.min(gunW*aspect,H*.55);
+210:   if(sprite.complete&&sprite.naturalWidth){
+211:     ctx.drawImage(sprite,W/2-gunW/2+sway,H-gunH+bob*.9,gunW,gunH);
+212:   }else{
+213:     const r=gunW*.18;
+214:     ctx.fillStyle='#1b1a19';ctx.fillRect(W/2-r,H-r*.8+bob,r*1.4,r*.4);
+215:     ctx.fillStyle='#3b3328';ctx.fillRect(W/2-r*.3,H-r*2.8+bob,r*.6,r*2.2);
+216:     ctx.fillStyle='#e7d2a7';ctx.fillRect(W/2-r*.18,H-r*3.2+bob,r*.36,r*.4);
+217:   }
+218:   ctx.imageSmoothingEnabled=smoothing;
+219: }
+220: function drawMini(){let scale=7*devicePixelRatio,x=10*devicePixelRatio,y=46*devicePixelRatio;ctx.save();ctx.globalAlpha=.8;for(let yy=0;yy<map.length;yy++)for(let xx=0;xx<map[0].length;xx++){ctx.fillStyle=map[yy][xx]==='0'?'rgba(255,255,255,.08)':map[yy][xx]==='D'?'#8d4a1d':'#555';ctx.fillRect(x+xx*scale,y+yy*scale,scale-1,scale-1)}ctx.fillStyle='#66d9ff';ctx.fillRect(x+state.player.x*scale-2,y+state.player.y*scale-2,4,4);ctx.fillStyle='#d53';state.zombies.forEach(z=>ctx.fillRect(x+z.x*scale-1,y+z.y*scale-1,3,3));ctx.restore()}
+221: function loop(t){let now=t/1000,dt=Math.min(.05,now-(last||now));last=now;update(dt);render();publishDebug();raf=requestAnimationFrame(loop)}
+222: function publishDebug(){window.__pocketZombiesDebug={running:state.running,paused:state.paused,gameOver:state.gameOver,wave:state.wave,waveState:state.waveState,zombies:state.zombies.length,zombiesToSpawn:state.zombiesToSpawn,spawnTimer:+state.spawnTimer.toFixed(2),damageFlash:+(state.damageFlash||0).toFixed(3),player:{x:+state.player.x.toFixed(2),y:+state.player.y.toFixed(2),a:+state.player.a.toFixed(3),pitch:+(state.player.pitch||0).toFixed(3),hp:Math.ceil(state.player.hp),maxHp:Math.ceil(state.player.maxHp),health:Math.ceil(state.player.hp),ammo:state.ammo[state.weapon].mag,reserve:state.ammo[state.weapon].reserve},weapon:state.weapon,points:state.points,kills:state.kills,errors:0}}
+223: function beep(f,d){if(muted)return;try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.value=.025;o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+224: function startGame(){ui.start.querySelector('h1').textContent='POCKET ZOMBIES';reset();ui.start.style.display='none';if(audio&&audio.state==='suspended')audio.resume()}
+225: function forceStart(){startGame();console.log('START_TRIGGERED')}
+226: function startClick(e){if(ui.start.style.display==='none')return;if(e){e.preventDefault();e.stopPropagation()}startGame()}
+227: window.__pocketStart=startGame;
+228: window.__pocketForceStart=forceStart;
+229: const startInputs=['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'];
+230: startInputs.forEach(ev=>{if(ui.startBtn)ui.startBtn.addEventListener(ev,startClick,{passive:false});if(ui.start)ui.start.addEventListener(ev,startClick,{passive:false})});
+231: if(ui.startBtn){ui.startBtn.onclick=startClick;ui.startBtn.onpointerdown=startClick;ui.startBtn.onpointerup=startClick;ui.startBtn.ontouchend=startClick}
+232: let stickId=null,lookId=null,lastLookX=0,lastLookY=0,fireLookId=null,lastFireX=0,lastFireY=0;
+233: const stick=document.getElementById('stick'),lookPad=ui.lookPad,fireButton=document.getElementById('fire'),reloadButton=document.getElementById('reload'),useButton=document.getElementById('use');
+234: function releaseStick(e){if(e&&e.pointerId!==stickId)return;touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)';stickId=null}
+235: stick.addEventListener('pointerdown',e=>{if(stickId!==null)return;e.preventDefault();e.stopPropagation();stickId=e.pointerId;try{stick.setPointerCapture(stickId)}catch(_){}},{passive:false});
+236: stick.addEventListener('pointermove',e=>{if(e.pointerId!==stickId)return;e.preventDefault();e.stopPropagation();let r=stick.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=(e.clientX-cx)/(r.width/2),dy=(e.clientY-cy)/(r.height/2),m=Math.max(1,Math.hypot(dx,dy));touch.mx=dx/m;touch.my=-dy/m;ui.knob.style.transform=`translate(${touch.mx*31}px,${-touch.my*31}px)`},{passive:false});
+237: function beginLook(e){if(lookId!==null)return;e.preventDefault();e.stopPropagation();lookId=e.pointerId;lastLookX=e.clientX;lastLookY=e.clientY;try{lookPad.setPointerCapture(lookId)}catch(_){}}
+238: function moveLook(e){if(e.pointerId!==lookId)return;e.preventDefault();e.stopPropagation();const dx=e.clientX-lastLookX,dy=e.clientY-lastLookY;state.player.a+=dx*.0045;state.player.pitch=Math.max(-.9,Math.min(.9,(state.player.pitch||0)-dy*.004));lastLookX=e.clientX;lastLookY=e.clientY}
+239: function releaseLook(e){if(!e||e.pointerId===lookId)lookId=null}
+240: lookPad.addEventListener('pointerdown',beginLook,{passive:false});lookPad.addEventListener('pointermove',moveLook,{passive:false});
+[READ_TRUNCATED] Use start_line:241, num_lines:240 for the next chunk, or full:true only when needed.
+
+.prometheus/models/mobile_sam_encoder.onnx (94750 lines) [window 1-1, truncated]:
+1: pytorch2.0.1:�ɶ
+[READ_TRUNCATED] Use start_line:2, num_lines:240 for the next chunk, or full:true only when needed.
+
+.prometheus/models/mobile_sam_decoder.onnx (55382 lines) [window 1-1, truncated]:
+1: pytorch2.0.1:���
+[READ_TRUNCATED] Use start_line:2, num_lines:240 for the next chunk, or full:true only when needed.
+
+.prometheus/models/lama.onnx (712792 lines) [window 1-1, truncated]:
+1: pytorch2.3.0:���c
+[READ_TRUNCATED] Use start_line:2, num_lines:240 for the next chunk, or full:true only when needed.
+
+.prometheus/models/rmbg.onnx (577677 lines) [window 1-1, truncated]:
+1: pytorch2.1.0:���S
+[READ_TRUNCATED] Use start_line:2, num_lines:240 for the next chunk, or full:true only when needed.

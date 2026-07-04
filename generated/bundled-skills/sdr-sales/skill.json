@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when building SDR workflows, prospect research, target lists, outreach sequences, discovery call prep, objection handling, pipeline management, qualification frameworks, or sales process assets.",
+  "triggers": [
+    "SDR workflow",
+    "prospect research",
+    "target list",
+    "outreach sequence",
+    "discovery call",
+    "objection handling",
+    "pipeline management",
+    "MEDDIC",
+    "qualify leads",
+    "sales cadence",
+    "sales playbook",
+    "cold call script",
+    "lead list",
+    "prospecting plan",
+    "sales development",
+    "book meetings",
+    "account research"
+  ],
+  "categories": [
+    "sales",
+    "sdr",
+    "outreach",
+    "lead-generation"
+  ],
+  "requiredTools": [
+    "web_search",
+    "workspace_write",
+    "skills"
+  ],
+  "lifecycle": "active",
+  "name": "SDR Sales",
+  "id": "sdr-sales"
+}

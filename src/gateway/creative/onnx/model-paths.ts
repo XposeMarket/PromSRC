@@ -43,23 +43,50 @@ export function getCreativeModelsDir(): string {
   return dir;
 }
 
-export function resolveCreativeModelPath(key: CreativeModelKey): string {
+function modelCandidatePaths(key: CreativeModelKey): string[] {
+  const fileName = FILE_NAMES[key];
+  const candidates: string[] = [];
   const override = process.env[ENV_OVERRIDES[key]];
-  if (override && override.trim()) return path.resolve(override.trim());
+  if (override && override.trim()) candidates.push(path.resolve(override.trim()));
+
   const resourcesPath = (process as any).resourcesPath ? String((process as any).resourcesPath) : '';
-  const bundledCandidate = resourcesPath
-    ? toAsarUnpackedPath(path.join(resourcesPath, 'creative-models', FILE_NAMES[key]))
-    : '';
-  if (bundledCandidate && fs.existsSync(bundledCandidate)) return bundledCandidate;
-  return path.join(getCreativeModelsDir(), FILE_NAMES[key]);
+  if (resourcesPath) candidates.push(toAsarUnpackedPath(path.join(resourcesPath, 'creative-models', fileName)));
+
+  const configDir = getConfig().getConfigDir();
+  candidates.push(path.join(getCreativeModelsDir(), fileName));
+
+  const workspacePath = getConfig().getWorkspacePath?.() || '';
+  if (workspacePath) candidates.push(path.join(workspacePath, '.prometheus', 'models', fileName));
+
+  // Compatibility for older/manual installs that ran from the workspace cwd and
+  // wrote model weights to workspace/.prometheus/models while the runtime reads
+  // from the config dir. Keep this after the canonical config-dir path.
+  candidates.push(path.join(configDir, '..', 'workspace', '.prometheus', 'models', fileName));
+
+  return Array.from(new Set(candidates.map((candidate) => path.resolve(candidate))));
+}
+
+function modelFileSize(modelPath: string): number | null {
+  try {
+    return fs.statSync(modelPath).size;
+  } catch {
+    return null;
+  }
+}
+
+function isUsableModelFile(modelPath: string): boolean {
+  const size = modelFileSize(modelPath);
+  return size !== null && size > 1024;
+}
+
+export function resolveCreativeModelPath(key: CreativeModelKey): string {
+  const candidates = modelCandidatePaths(key);
+  const found = candidates.find(isUsableModelFile);
+  return found || candidates[0] || path.join(getCreativeModelsDir(), FILE_NAMES[key]);
 }
 
 export function isCreativeModelAvailable(key: CreativeModelKey): boolean {
-  try {
-    return fs.statSync(resolveCreativeModelPath(key)).size > 1024;
-  } catch {
-    return false;
-  }
+  return isUsableModelFile(resolveCreativeModelPath(key));
 }
 
 export function requireCreativeModel(key: CreativeModelKey): string {
@@ -81,15 +108,19 @@ export function listCreativeModelStatus(): Array<{
   available: boolean;
   sizeBytes: number | null;
   urlHints: string[];
+  candidates: Array<{ path: string; available: boolean; sizeBytes: number | null }>;
 }> {
   return (Object.keys(FILE_NAMES) as CreativeModelKey[]).map((key) => {
     const p = resolveCreativeModelPath(key);
-    let size: number | null = null;
-    try {
-      size = fs.statSync(p).size;
-    } catch {
-      size = null;
-    }
+    const candidates = modelCandidatePaths(key).map((candidate) => {
+      const sizeBytes = modelFileSize(candidate);
+      return {
+        path: candidate,
+        available: sizeBytes !== null && sizeBytes > 1024,
+        sizeBytes,
+      };
+    });
+    const size = modelFileSize(p);
     return {
       key,
       fileName: FILE_NAMES[key],
@@ -97,6 +128,7 @@ export function listCreativeModelStatus(): Array<{
       available: isCreativeModelAvailable(key),
       sizeBytes: size,
       urlHints: CREATIVE_MODEL_URL_HINTS[key],
+      candidates,
     };
   });
 }

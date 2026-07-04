@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "credential-scope-auditor",
+  "name": "Credential Scope Auditor",
+  "description": "Audit connector manifests, OAuth scopes, setup fields, and vault usage before Prometheus installs or trusts an integration.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["audit connector scopes", "credential audit", "oauth scopes", "least privilege", "is this integration safe"],
+  "categories": ["prometheus", "security", "connectors", "credentials"],
+  "requiredTools": ["connector_list", "integration_admin", "workspace_write"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true }
+}

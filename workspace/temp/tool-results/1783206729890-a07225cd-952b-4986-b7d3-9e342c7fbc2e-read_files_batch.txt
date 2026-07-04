@@ -1,0 +1,83 @@
+--- src/gateway/agents-runtime/subagent-executor.ts ---
+src/gateway/agents-runtime/subagent-executor.ts (19720 lines) [window 18256-18335, truncated]:
+18256:             const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
+18257:             if (!status.success) return [];
+18258:             return Array.from(new Set(parsePorcelainPaths(status.output)
+18259:               .map((relPath) => repairSyncPathspec(relPath) || relPath)
+18260:               .filter((relPath) => excludes.some((pattern) => syncExcludeMatchesPath(pattern, relPath)))));
+18261:           };
+18262:           const stashSyncExcludedDirtyPaths = (excludes: string[]) => {
+18263:             const paths = getSyncExcludedDirtyPaths(excludes);
+18264:             if (!paths.length) {
+18265:               return { success: true, didStash: false, paths, output: '', restore: () => ({ success: true, output: '' }) };
+18266:             }
+18267:             const message = `prom_repo_sync excluded local changes ${Date.now()}`;
+18268:             const stash = run(`git stash push -u -m ${quoteArg(message)} -- ${paths.map(quoteArg).join(' ')}`, 60_000);
+18269:             return {
+18270:               success: stash.success,
+18271:               didStash: stash.success,
+18272:               paths,
+18273:               output: stash.output,
+18274:               restore: () => stash.success ? run('git stash pop --index stash@{0}', 60_000) : ({ success: true, output: '' }),
+18275:             };
+18276:           };
+18277:           // File-glob (no-slash) exclude patterns like *.log/*.tmp/*.mp4. Directory patterns
+18278:           // (workspace/oss agents/, .claude/, …) are intentionally NOT included here — we only
+18279:           // auto-untrack disposable per-file noise, never whole tracked trees.
+18280:           const fileGlobExcludes = (excludes: string[]): string[] =>
+18281:             excludes.filter((p) => p && !p.includes('/') && !p.endsWith('/**'));
+18282:           // Root cause of recurring sync conflicts: files matching the exclude list (e.g. *.log,
+18283:           // *.mp4) were committed BEFORE the exclude list existed, so they keep diverging through
+18284:           // history on both machines and conflict on every merge. Excluding them from *staging*
+18285:           // does nothing once they are tracked. This untracks them (git rm --cached, keeps the
+18286:           // working copy) so the removal propagates and they stop being synced for good.
+18287:           const untrackSyncExcludedTrackedFiles = (excludes: string[]) => {
+18288:             const globs = fileGlobExcludes(excludes);
+18289:             if (!globs.length) return { removed: [] as string[], output: '' };
+18290:             const listed = run('git ls-files -z', 30_000);
+18291:             if (!listed.success) return { removed: [] as string[], output: listed.output };
+18292:             const tracked = String(listed.output || '').split(String.fromCharCode(0)).filter(Boolean)
+18293:               .map((p) => p.replace(/\\/g, '/'));
+18294:             const toUntrack = tracked.filter((rel) => globs.some((pat) => syncExcludeMatchesPath(pat, rel)));
+18295:             if (!toUntrack.length) return { removed: [] as string[], output: '' };
+18296:             let combined = '';
+18297:             for (let i = 0; i < toUntrack.length; i += 80) {
+18298:               const batch = toUntrack.slice(i, i + 80);
+18299:               const rm = run(`git rm --cached --ignore-unmatch -- ${batch.map(quoteArg).join(' ')}`, 60_000);
+18300:               if (rm.output) combined += `${combined ? '\n' : ''}${rm.output}`;
+18301:               if (!rm.success) return { removed: toUntrack.slice(0, i), output: combined };
+18302:             }
+18303:             // Keep them ignored so other workflows (manual git add -A) don't re-track them.
+18304:             try {
+18305:               const giPath = path.join(repoRoot, '.gitignore');
+18306:               const existing = fsmod.existsSync(giPath) ? String(fsmod.readFileSync(giPath, 'utf-8')) : '';
+18307:               const lines = new Set(existing.split(/\r?\n/).map((l) => l.trim()));
+18308:               const missing = globs.filter((g) => !lines.has(g));
+18309:               if (missing.length) {
+18310:                 const block = `${existing.endsWith('\n') || !existing ? '' : '\n'}# prom_repo_sync: auto-ignored exclude-matched noise\n${missing.join('\n')}\n`;
+18311:                 fsmod.appendFileSync(giPath, block, 'utf-8');
+18312:                 run('git add -- .gitignore', 15_000);
+18313:               }
+18314:             } catch {}
+18315:             return { removed: toUntrack, output: combined };
+18316:           };
+18317:           // When a pull/merge conflicts only on exclude-matched noise files (the other machine
+18318:           // still tracked a *.log we just untracked → modify/delete; or both appended to a log),
+18319:           // resolve them by removing the file rather than aborting the whole sync.
+18320:           const autoResolveExcludedConflicts = (excludes: string[]): string[] => {
+18321:             const globs = fileGlobExcludes(excludes);
+18322:             if (!globs.length) return [];
+18323:             const unmerged = (run('git diff --name-only --diff-filter=U -z', 30_000).output || '')
+18324:               .split(String.fromCharCode(0)).filter(Boolean).map((p) => p.replace(/\\/g, '/'));
+18325:             const resolvable = unmerged.filter((rel) => globs.some((pat) => syncExcludeMatchesPath(pat, rel)));
+18326:             if (!resolvable.length) return [];
+18327:             for (let i = 0; i < resolvable.length; i += 80) {
+18328:               run(`git rm -f --ignore-unmatch -- ${resolvable.slice(i, i + 80).map(quoteArg).join(' ')}`, 60_000);
+18329:             }
+18330:             return resolvable;
+18331:           };
+18332:           const stageSyncEligibleChanges = () => {
+18333:             const excludes = Array.from(new Set([...readSyncExcludes(), ...findEmbeddedGitRepos()]));
+18334:             const status = run('git status --porcelain=v1 -z --untracked-files=normal', 30_000);
+18335:             if (!status.success) return { add: status, excludes };
+[READ_TRUNCATED] Returned 80 of 19720 lines. Use start_line:18336, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

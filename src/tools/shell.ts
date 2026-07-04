@@ -118,8 +118,36 @@ export function validateShellRequest(args: ShellToolArgs): { ok: true; cwd: stri
   // Determine and resolve working directory
   const cwd = path.resolve(args.cwd ? (path.isAbsolute(args.cwd) ? args.cwd : path.join(workspacePath, args.cwd)) : workspacePath);
 
+  if (isPathInsideAnyDir(blockedPaths, cwd)) {
+    log.warn('[shell] Blocked: cwd inside blocked path:', cwd);
+    return {
+      ok: false,
+      result: {
+        success: false,
+        error: `Security: Command execution inside blocked paths is not allowed. Requested: ${cwd}`
+      }
+    };
+  }
+  if (blockedPaths.length > 0) {
+    const absPathRe = process.platform === 'win32'
+      ? /[A-Za-z]:[/\\][^\s"']+/g
+      : /\/[^\s"']{3,}/g;
+    const matches = args.command.match(absPathRe) || [];
+    if (matches.some((match) => isPathInsideAnyDir(blockedPaths, match))) {
+      log.warn('[shell] Blocked: command references blocked path:', args.command.slice(0, 120));
+      return {
+        ok: false,
+        result: {
+          success: false,
+          error: `Security: Command references a blocked path.`
+        }
+      };
+    }
+  }
+
   // ── FIX HIGH-05: use proper path confinement (not startsWith) ──────────────
-  if (permissions.workspace_only) {
+  const enforceWorkspaceOnly = permissions.workspace_only && permissions.approval_mode !== 'lite';
+  if (enforceWorkspaceOnly) {
     const { sessionId } = getSharedToolExecutionContext();
     if (!isPathInsideAnyDir(allowedPaths, cwd) && !isSessionAllowedPath(sessionId, cwd)) {
       log.warn('[shell] Path approval needed: cwd outside workspace:', cwd);
@@ -129,16 +157,6 @@ export function validateShellRequest(args: ShellToolArgs): { ok: true; cwd: stri
           success: false,
           error: `Path "${cwd}" is outside the allowed workspace paths.`,
           data: { _needsPathApproval: true, requestedPath: cwd },
-        }
-      };
-    }
-    if (isPathInsideAnyDir(blockedPaths, cwd)) {
-      log.warn('[shell] Blocked: cwd inside blocked path:', cwd);
-      return {
-        ok: false,
-        result: {
-          success: false,
-          error: `Security: Command execution inside blocked paths is not allowed. Requested: ${cwd}`
         }
       };
     }
@@ -153,22 +171,6 @@ export function validateShellRequest(args: ShellToolArgs): { ok: true; cwd: stri
           error: `Security: Command references a path outside allowed paths.`
         }
       };
-    }
-    if (blockedPaths.length > 0) {
-      const absPathRe = process.platform === 'win32'
-        ? /[A-Za-z]:[/\\][^\s"']+/g
-        : /\/[^\s"']{3,}/g;
-      const matches = args.command.match(absPathRe) || [];
-      if (matches.some((match) => isPathInsideAnyDir(blockedPaths, match))) {
-        log.warn('[shell] Blocked: command references blocked path:', args.command.slice(0, 120));
-        return {
-          ok: false,
-          result: {
-            success: false,
-            error: `Security: Command references a blocked path.`
-          }
-        };
-      }
     }
   }
 

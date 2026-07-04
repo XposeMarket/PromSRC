@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Use this skill when drafting, replying to, rewriting, polishing, or structuring emails for professional, sales, client, support, personal, follow-up, or announcement use.",
+  "triggers": [
+    "write an email",
+    "draft a reply",
+    "email response",
+    "follow-up email",
+    "client email",
+    "sales email",
+    "support email",
+    "rewrite this email",
+    "make this email better",
+    "professional email",
+    "concise email",
+    "send an email draft",
+    "outreach email",
+    "apology email",
+    "announcement email",
+    "subject line",
+    "email sequence",
+    "polish this email"
+  ],
+  "categories": [
+    "email",
+    "writing",
+    "communication"
+  ],
+  "requiredTools": [
+    "skills"
+  ],
+  "lifecycle": "active",
+  "name": "Email Composer",
+  "id": "email-composer"
+}

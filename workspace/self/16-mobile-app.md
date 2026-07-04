@@ -16,6 +16,9 @@ Canonical mobile source files:
 - `web-ui/src/mobile/mobile-data.js` - static first-pass/mock mobile nav/schedule/team data still used by parts of the shell.
 - `web-ui/src/styles/mobile.css` - isolated mobile styling. It only takes over when `body.pm-mobile-active` is present; mobile themes use `--pm-*` surface tokens and semantic `--pm-accent*` tokens, while legacy `--pm-orange*` variables are compatibility aliases.
 
+
+Mobile canvas/file viewer fullscreen mode: `initMobileCanvasSheet()` in `web-ui/src/mobile/mobile-shell.js` owns the canvas sheet chrome and fullscreen state. The toolbar includes `#pm-canvas-fullscreen`; when active, `.pm-canvas-sheet.is-fullscreen` hides the handle, file tabs/header, filename, Interact/Inspect, Preview, and Save chrome, leaving only `#pm-canvas-fullscreen-exit` as a top-right safe-area-aware X overlay. Styles live in `web-ui/src/styles/mobile.css`; keep source changes synced with `npm run sync:web-ui`. [2026-06-30]
+Mobile canvas live HTML asset linking: workspace HTML files opened in the mobile canvas must iframe through the path-shaped route `/api/canvas/workspace/<workspace-relative-path>` instead of query-style `/api/canvas/inline?path=...`. This preserves the browser URL directory so relative assets like `assets/zombie.png`, local CSS, JS, audio, and images resolve from the HTML file's own subdirectory on mobile. Keep `/api/canvas/inline` for direct media/file previews and downloads. [2026-07-01]
 Mobile background visual rule: `body.pm-mobile-active` and `.pm-app` must use flat theme background colors only. Do not add page-level radial/conic/linear background-image glow layers or pseudo-element glow overlays for any theme/skin; component-local shadows are okay, but the app backdrop itself should have no glow. [2026-06-29]
 
 Root PWA/static entry files:
@@ -195,6 +198,10 @@ Mobile drawer behavior:
 - Drawer chat rows mark the currently open chat with `is-active-session` and `aria-current="page"`. `web-ui/src/mobile/mobile-shell.js` resolves the active row from `window.__pmChat.activeSessionId`, `#mobile/chat/:sessionId`, then `pm_mobile_last_chat_session`, excluding the `mobile_default` draft session.
 - The active chat highlight is styled in `mobile.css` as an orange/gold ring/glow on `.pm-session-row.is-active-session`, and it applies to normal drawer rows and search-result rows while preserving working/unread state labels.
 
+Mobile chat markdown tables and timestamp reveal:
+
+- Assistant bubbles use `renderMd` → `.markdown-body` inside `.pm-bubble` (`web-ui/src/styles/mobile.css`). Wide tables use `width: max-content` with horizontal scroll on `.markdown-body:has(table)` (`overflow-x: scroll`, thin always-visible scrollbar, `touch-action: pan-x pan-y`).
+- iMessage-style swipe-left on the thread to reveal `.pm-reveal-time` is installed in `mobile-pages.js::_installMobileTimestampReveal` on `.pm-chat-thread` (CSS `--pm-time-reveal-x` / `.pm-time-revealing`). Horizontal swipes on markdown that contains a table must not start time reveal: `isInteractiveTarget` treats `.pm-bubble .markdown-body` with a `table` as interactive so table scrolling wins over thread translate.
 
 Mobile chat APIs:
 

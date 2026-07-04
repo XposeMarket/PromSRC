@@ -415,7 +415,7 @@ export function resolveCreativeAssetPath(storage: CreativeAssetStorage, rawSourc
   relativePath: string | null;
 } {
   const source = String(rawSource || '').trim();
-  if (!source) throw new Error('Creative asset source is required.');
+  if (!source) throw new Error('Creative asset source is required. Pass source, path, url, inputs.source, inputs.path, or assetId via creative_image_ops.');
   if (isRemoteSource(source)) {
     return { source, sourceType: 'remote', absPath: null, path: source, relativePath: null };
   }

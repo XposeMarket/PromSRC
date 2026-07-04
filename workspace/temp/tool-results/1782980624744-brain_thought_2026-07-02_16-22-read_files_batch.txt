@@ -1,0 +1,412 @@
+Brain/skill-episodes/2026-07-02/episodes.jsonl (15 lines) [window 1-15]:
+1: {"timestamp":"2026-07-02T06:29:34.329Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"dev-debugging","skillReadIndex":0,"skillContentHash":"8eddd483e236b655","skillExcerpt":"Dev Debugging (dev-debugging) v1.6.0 bundle\nDescription: Use this skill when debugging code, reproducing failures, reading logs, tracing stack errors, isolating regressions, running tests, investigating broken behavior, or repairing a development issue.\nRequired tools: workspace_write\nInstructions:\n---\nname: Dev Debugging\ndescription: Use this skill when User wants Prometheus to hand off a Prometheus development/debugging task to the Codex desktop app. Default han...[line truncated]
+2: {"timestamp":"2026-07-02T06:29:34.329Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"local-file-browser-verification","skillReadIndex":1,"skillContentHash":"45019f6b0bc84902","skillExcerpt":"Local File Browser Verification (local-file-browser-verification) v1.0.0 bundle\nDescription: Use this skill when the user asks Prometheus to test, manually verify, debug, smoke-test, open, inspect, or interact with a local HTML file, web artifact, small browser app, generated page, game, UI prototype, or static file in a real browser. Triggers on requests like: open this HTML and test it, start an HTTP server for this file, check the browser console, ...[line truncated]
+3: {"timestamp":"2026-07-02T06:29:34.329Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"file-surgery","skillReadIndex":2,"skillContentHash":"e152dd05319a9fc0","skillExcerpt":"File Surgery (file-surgery) v3.0.0 bundle\nDescription: Use this skill when the task requires inspecting, editing, patching, or verifying workspace files, markdown, configs, prompts, skills, docs, scripts, UI files, or source-adjacent assets. It is for concrete file mutation and verification work, not for generic mentions of code terms.\nRequired tools: workspace_write, skills\nInstructions:\n---\nname: File Surgery\ndescription: >\n  Codex-style file editing and cautiou...[line truncated]
+4: {"timestamp":"2026-07-02T06:31:43.625Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"file-surgery","skillReadIndex":0,"skillContentHash":"e152dd05319a9fc0","skillExcerpt":"File Surgery (file-surgery) v3.0.0 bundle\nDescription: Use this skill when the task requires inspecting, editing, patching, or verifying workspace files, markdown, configs, prompts, skills, docs, scripts, UI files, or source-adjacent assets. It is for concrete file mutation and verification work, not for generic mentions of code terms.\nRequired tools: workspace_write, skills\nInstructions:\n---\nname: File Surgery\ndescription: >\n  Codex-style file editing and cautiou...[line truncated]
+5: {"timestamp":"2026-07-02T06:31:43.625Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"local-file-browser-verification","skillReadIndex":1,"skillContentHash":"45019f6b0bc84902","skillExcerpt":"Local File Browser Verification (local-file-browser-verification) v1.0.0 bundle\nDescription: Use this skill when the user asks Prometheus to test, manually verify, debug, smoke-test, open, inspect, or interact with a local HTML file, web artifact, small browser app, generated page, game, UI prototype, or static file in a real browser. Triggers on requests like: open this HTML and test it, start an HTTP server for this file, check the browser console, ...[line truncated]
+6: {"timestamp":"2026-07-02T06:43:59.565Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"local-file-browser-verification","skillReadIndex":1,"skillContentHash":"45019f6b0bc84902","skillExcerpt":"Local File Browser Verification (local-file-browser-verification) v1.0.0 bundle\nDescription: Use this skill when the user asks Prometheus to test, manually verify, debug, smoke-test, open, inspect, or interact with a local HTML file, web artifact, small browser app, generated page, game, UI prototype, or static file in a real browser. Triggers on requests like: open this HTML and test it, start an HTTP server for this file, check the browser console, ...[line truncated]
+7: {"timestamp":"2026-07-02T06:49:32.120Z","date":"2026-07-02","sessionId":"mobile_mr355ohw_oj66tk","executionMode":"interactive","skillId":"secret-and-token-ops","skillReadIndex":0,"skillContentHash":"980183701a710f96","skillExcerpt":"Secret and Token Ops (secret-and-token-ops) v1.1.0 bundle\nDescription: Use this skill when the task touches API keys, OAuth tokens, PATs, client secrets, environment credentials, connector secrets, vault references, auth failures caused by credentials, or credential rotation/revocation. It is not for generic API work unless secrets are involved.\nRequired tools: connector_list, external_apps, integration_admin\nInstructions:\n---\nname: secret-and-token-ops\ndes...[line truncated]
+8: {"timestamp":"2026-07-02T06:49:32.120Z","date":"2026-07-02","sessionId":"mobile_mr355ohw_oj66tk","executionMode":"interactive","skillId":"src-edit-proposal-rigor","skillReadIndex":1,"skillContentHash":"78426da4d6ad8f10","skillExcerpt":"Source Edit Proposal Rigor (src-edit-proposal-rigor) v2.1.0 bundle\nDescription: Use this skill when Raul asks Prometheus to change its own src, web-ui, mobile UI, gateway, routes, tool definitions, prompts, or internal behavior. It guides dev-edit/source-edit rigor, evidence, verification, and self-doc updates.\nRequired tools: prometheus_source_read, prometheus_source_write, workspace_write, browser_automation\nInstructions:\n---\nname: src-edit-proposal-rig...[line truncated]
+9: {"timestamp":"2026-07-02T06:49:32.120Z","date":"2026-07-02","sessionId":"mobile_mr355ohw_oj66tk","executionMode":"interactive","skillId":"file-surgery","skillReadIndex":2,"skillContentHash":"e152dd05319a9fc0","skillExcerpt":"File Surgery (file-surgery) v3.0.0 bundle\nDescription: Use this skill when the task requires inspecting, editing, patching, or verifying workspace files, markdown, configs, prompts, skills, docs, scripts, UI files, or source-adjacent assets. It is for concrete file mutation and verification work, not for generic mentions of code terms.\nRequired tools: workspace_write, skills\nInstructions:\n---\nname: File Surgery\ndescription: >\n  Codex-style file editing and cautiou...[line truncated]
+10: {"timestamp":"2026-07-02T06:49:32.120Z","date":"2026-07-02","sessionId":"mobile_mr355ohw_oj66tk","executionMode":"interactive","skillId":"pdf-reader","skillReadIndex":3,"skillContentHash":"08a768c4ddeca151","skillExcerpt":"PDF Reader (pdf-reader) v1.1.0 bundle\nDescription: Use this skill when reading, extracting, summarizing, searching, OCRing, converting, or analyzing PDF files, including scanned PDFs, tables, clauses, forms, reports, and long PDF documents.\nRequired tools: workspace_write, media_assets\nInstructions:\n---\nname: pdf-reader\ndescription: Use this skill when the user provides a PDF and asks to read, extract, summarize, search, parse, OCR, convert to text, pull clauses, ins...[line truncated]
+11: {"timestamp":"2026-07-02T06:49:32.120Z","date":"2026-07-02","sessionId":"mobile_mr355ohw_oj66tk","executionMode":"interactive","skillId":"prometheus-creative-mode","skillReadIndex":4,"skillContentHash":"f8cf95292dd7de30","skillExcerpt":"Prometheus Creative Mode (prometheus-creative-mode) v1.0.0 bundle\nDescription: Use this skill when working in Prometheus Creative Mode for canvas, image, video, design workspace, editable creative artifacts, HyperFrames, HTML Motion, brand kits, mockups, or exports.\nRequired tools: creative_basic, generate_image, generate_video\nInstructions:\n---\nname: prometheus-creative-mode\ndescription: HyperFrames-first Prometheus Creative Mode front door for editabl...[line truncated]
+12: {"timestamp":"2026-07-02T06:54:04.249Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"file-surgery","skillReadIndex":2,"skillContentHash":"e152dd05319a9fc0","skillExcerpt":"File Surgery (file-surgery) v3.0.0 bundle\nDescription: Use this skill when the task requires inspecting, editing, patching, or verifying workspace files, markdown, configs, prompts, skills, docs, scripts, UI files, or source-adjacent assets. It is for concrete file mutation and verification work, not for generic mentions of code terms.\nRequired tools: workspace_write, skills\nInstructions:\n---\nname: File Surgery\ndescription: >\n  Codex-style file editing and cautiou...[line truncated]
+13: {"timestamp":"2026-07-02T06:54:04.249Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"local-file-browser-verification","skillReadIndex":3,"skillContentHash":"45019f6b0bc84902","skillExcerpt":"Local File Browser Verification (local-file-browser-verification) v1.0.0 bundle\nDescription: Use this skill when the user asks Prometheus to test, manually verify, debug, smoke-test, open, inspect, or interact with a local HTML file, web artifact, small browser app, generated page, game, UI prototype, or static file in a real browser. Triggers on requests like: open this HTML and test it, start an HTTP server for this file, check the browser console, ...[line truncated]
+14: {"timestamp":"2026-07-02T06:54:04.249Z","date":"2026-07-02","sessionId":"mobile_mr2ors69_u35dij","executionMode":"interactive","skillId":"codex-frontend-engineer","skillReadIndex":4,"skillContentHash":"8e27c360ddb9ad7b","skillExcerpt":"Codex Frontend Engineer (codex-frontend-engineer) v1.0.0 bundle\nDescription: Use this skill when building, editing, reviewing, or repairing web/mobile UI, responsive layouts, frontend state, dashboards, interaction polish, visual QA, CSS/JS frontend behavior, or Prometheus web-ui surfaces.\nRequired tools: workspace_write, browser_automation, prometheus_source_read, prometheus_source_write\nInstructions:\n---\nname: codex-frontend-engineer\ndescription: Codex...[line truncated]
+15: 
+
+games/mobile-sideways-fps/index.html (231 lines) [window 1-231]:
+1: <!doctype html>
+2: <html lang="en">
+3: <head>
+4: <meta charset="utf-8" />
+5: <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+6: <title>Pocket Zombies FPS</title>
+7: <style>
+8:   html,body{margin:0;height:100%;overflow:hidden;background:#070807;color:#f2ead8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;touch-action:none;user-select:none}
+9:   #game{display:block;width:100vw;height:100vh;background:#111;image-rendering:auto}
+10:   .hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 6px #000;font-weight:800;letter-spacing:.04em}
+11:   .top{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;justify-content:space-between;align-items:flex-start;font-size:13px}
+12:   .pill{background:rgba(0,0,0,.52);border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:7px 10px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+13:   #center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:44px;color:rgba(255,245,220,.75)}
+14:   #msg{position:absolute;left:50%;top:18%;transform:translateX(-50%);text-align:center;font-size:28px;line-height:1.1;color:#ffd36a;max-width:90vw}
+15:   #prompt{position:absolute;left:50%;bottom:25%;transform:translateX(-50%);font-size:16px;background:rgba(0,0,0,.55);padding:10px 14px;border:1px solid rgba(255,211,106,.5);border-radius:12px;display:none}
+16:   .controls{position:fixed;inset:0;pointer-events:none}.btn{pointer-events:auto;position:absolute;border:1px solid rgba(255,255,255,.18);background:rgba(20,20,20,.55);color:#fff;border-radius:999px;font-weight:900;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);touch-action:none;user-select:none}
+17:   #lookPad{pointer-events:auto;position:fixed;left:150px;right:0;top:0;bottom:0;z-index:2;touch-action:none;background:transparent}
+18:   #stick{z-index:4;left:22px;bottom:22px;width:112px;height:112px;background:rgba(255,255,255,.07)}#knob{width:48px;height:48px;background:rgba(255,255,255,.22);border-radius:50%;transform:translate(0,0)}
+19:   #fire{z-index:5;right:24px;bottom:32px;width:112px;height:112px;background:rgba(140,18,18,.72);font-size:17px}#reload{z-index:5;right:154px;bottom:42px;width:70px;height:70px}#use{z-index:5;right:34px;bottom:158px;width:76px;height:76px}#pause{z-index:5;right:12px;top:58px;width:50px;height:38px;border-radius:12px}#mute{z-index:5;right:70px;top:58px;width:50px;height:38px;border-radius:12px}
+20:   #start{pointer-events:auto;position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 42%,rgba(90,16,16,.9),rgba(0,0,0,.96));z-index:5;text-align:center;padding:22px}.card{max-width:560px;border:1px solid rgba(255,255,255,.18);border-radius:22px;background:rgba(0,0,0,.45);padding:24px;box-shadow:0 20px 80px rgba(0,0,0,.5)}h1{font-size:44px;margin:0 0 8px;color:#ffcc63}.card p{color:#d6c7a8}.startbtn{display:inline-block;margin-top:12px;background:#e43b28;color:white;border:0;border-radius:14px;padding:14px 22px;font-weight:1000;font-size:18px}
+21: </style>
+22: </head>
+23: <body>
+24: <canvas id="game"></canvas>
+25: <div class="hud">
+26:   <div class="top"><div class="pill" id="leftHud">WAVE 1 · ZOMBIES 0</div><div class="pill" id="midHud">M1911 · 8/48 · $500</div><div class="pill" id="rightHud">HP 100</div></div>
+27:   <div id="msg"></div><div id="center">+</div><div id="prompt"></div>
+28: <div class="controls"><div id="lookPad"></div><div class="btn" id="stick"><div id="knob"></div></div><div class="btn" id="fire">FIRE</div><div class="btn" id="reload">R</div><div class="btn" id="use">BUY</div><div class="btn" id="pause">Ⅱ</div><div class="btn" id="mute">♪</div></div>
+29: <div id="start"><div class="card"><h1>POCKET ZOMBIES</h1><p>Mobile sideways FPS. Survive waves, earn points, buy guns, open doors, grab perks and power-ups.</p><p>Desktop: WASD move, mouse/arrow look, Space or FIRE button to shoot, R reload, E buy, P pause.</p><button id="startBtn" class="startbtn" type="button" onclick="window.__pocketStart&&window.__pocketStart()">START GAME</button></div></div>
+30: <script>
+31: (()=>{
+32: 'use strict';
+33: const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+34: const ui={start:document.getElementById('start'),startBtn:document.getElementById('startBtn'),left:document.getElementById('leftHud'),mid:document.getElementById('midHud'),right:document.getElementById('rightHud'),msg:document.getElementById('msg'),prompt:document.getElementById('prompt'),knob:document.getElementById('knob'),lookPad:document.getElementById('lookPad')}; const dbg=window.__pocketZombiesDebug||{}; window.__pocketZombiesDebug=dbg;
+35: const zombieImg=new Image();zombieImg.src='assets/zombie.png';
+36: const gunImg=new Image();gunImg.src='assets/zombie-gun-8bit.png';
+37: const fireGunImg=new Image();fireGunImg.src='assets/zombie-gun-8bit-fire.png';
+38: const reloadGunImg=new Image();reloadGunImg.src='assets/zombie-gun-8bit-reload-custom.png';
+39: let W=1,H=1,last=0,raf=0,startClockId=null,audio=false,muted=false;
+40: const TAU=Math.PI*2,FOV=Math.PI/3,keys={},touch={mx:0,my:0,look:0,pitch:0,fire:false};
+41: const shots=[];
+42: const weapons={M1911:{name:'M1911',price:0,dmg:34,rate:.32,mag:8,reserve:48,reload:1.05,spread:.018},SMG:{name:'SMG',price:950,dmg:22,rate:.09,mag:28,reserve:140,reload:1.25,spread:.04},SHOTGUN:{name:'SHOTGUN',price:1250,dmg:92,rate:.72,mag:6,reserve:36,reload:1.45,spread:.085},RIFLE:{name:'RIFLE',price:1800,dmg:58,rate:.18,mag:20,reserve:100,reload:1.35,spread:.012}};
+43: const map0=[
+44: '111111111111111',
+45: '100000010000001',
+46: '100000010000001',
+47: '1000000D0000001',
+48: '100000010000001',
+49: '100000010000001',
+50: '100001000100001',
+51: '100000000000001',
+52: '100000000000001',
+53: '100011101110001',
+54: '100000000000001',
+55: '100000000000001',
+56: '111111111111111'];
+57: let map=[];
+58: const doors=[{x:7,y:3,cost:900,open:false,name:'Courtyard Door'}];
+59: const buys=[{x:2.5,y:2.5,type:'gun',id:'SMG'},{x:12.5,y:2.5,type:'gun',id:'SHOTGUN'},{x:12.5,y:10.5,type:'gun',id:'RIFLE'},{x:2.5,y:10.5,type:'perk',id:'JUG',name:'Juggernog',cost:1500},{x:7.5,y:8.5,type:'perk',id:'SPEED',name:'Speed Cola',cost:1200}];
+60: const spawns=[{x:1.5,y:1.5},{x:13.5,y:1.5},{x:1.5,y:11.5},{x:13.5,y:11.5},{x:7.5,y:11.5}];
+61: const state={running:false,paused:false,gameOver:false,wave:1,waveState:'ready',zombies:[],zombiesToSpawn:0,spawnTimer:0,betweenTimer:0,kills:0,points:500,notice:'',noticeTimer:0,powerups:[],active:{insta:0,double:0},player:{x:3.5,y:3.5,a:0,pitch:0,hp:100,maxHp:100,speed:2.35},owned:['M1911'],weapon:'M1911',ammo:{},reloadTimer:0,fireCooldown:0,shots:0,startTime:0,grace:0};
+62: Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});
+63: function resize(){W=canvas.width=Math.max(320,innerWidth*devicePixelRatio);H=canvas.height=Math.max(240,innerHeight*devicePixelRatio);ctx.setTransform(1,0,0,1,0,0)} addEventListener('resize',resize);resize();
+64: function rebuildMap(){map=map0.map(r=>r.split(''));doors.forEach(d=>{map[d.y][d.x]=d.open?'0':'D'})}
+65: function reset(){rebuildMap();Object.assign(state,{running:true,paused:false,gameOver:false,wave:1,waveState:'spawning',zombies:[],zombiesToSpawn:4,spawnTimer:.75,betweenTimer:0,kills:0,points:500,notice:'WAVE 1',noticeTimer:2,powerups:[],active:{insta:0,double:0},weapon:'M1911',reloadTimer:0,fireCooldown:0,shots:0,startTime:performance.now()/1000,grace:8});state.player={x:7.5,y:7.5,a:-1.57,pitch:0,hp:220,maxHp:220,speed:3.05};state.owned=['M1911'];Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});doors.forEach(d=>d.open=false);rebuildMap();ui.start.style.display='none'}
+66: function tile(x,y){x=Math.floor(x);y=Math.floor(y);return map[y]?.[x]||'1'} function solid(x,y){return tile(x,y)!=='0'}
+67: function moveEnt(e,dx,dy){if(!solid(e.x+dx,e.y))e.x+=dx;if(!solid(e.x,e.y+dy))e.y+=dy}
+68: function zombieAt(x,y,ignore=null){return state.zombies.find(z=>z!==ignore&&!z.dead&&Math.hypot(x-z.x,y-z.y)<(z.r||.24)+.28)}
+69: function movePlayer(dx,dy){const p=state.player,nx=p.x+dx,ny=p.y+dy;if(!solid(nx,p.y)&&!zombieAt(nx,p.y))p.x=nx;if(!solid(p.x,ny)&&!zombieAt(p.x,ny))p.y=ny}
+70: function pushApart(a,b,min){let dx=a.x-b.x,dy=a.y-b.y,d=Math.hypot(dx,dy)||.001,over=min-d;if(over<=0)return;dx/=d;dy/=d;if(a===state.player){if(!solid(a.x+dx*over*.45,a.y))a.x+=dx*over*.45;if(!solid(a.x,a.y+dy*over*.45))a.y+=dy*over*.45}else{if(!solid(a.x+dx*over*.5,a.y))a.x+=dx*over*.5;if(!solid(a.x,a.y+dy*over*.5))a.y+=dy*over*.5;if(!solid(b.x-dx*over*.5,b.y))b.x-=dx*over*.5;if(!solid(b.x,b.y-dy*over*.5))b.y-=dy*over*.5}}
+71: function msg(t,d=1.5){state.notice=t;state.noticeTimer=d}
+72: function spawnZombie(){const s=spawns[Math.floor(Math.random()*spawns.length)],v=Math.random();state.zombies.push({x:s.x,y:s.y,hp:(58+state.wave*14)*(v>.86?1.75:1),maxHp:58+state.wave*14,speed:(.38+state.wave*.025)*(v>.86?0.72:v<.18?1.18:1),r:.32,atk:.9,hurt:0,dead:false,variant:v>.86?'brute':v<.18?'runner':'walker'});state.zombiesToSpawn--}
+73: function update(dt){if(!state.running||state.paused)return;const p=state.player;if(state.noticeTimer>0)state.noticeTimer-=dt;state.active.insta=Math.max(0,state.active.insta-dt);state.active.double=Math.max(0,state.active.double-dt);state.fireCooldown=Math.max(0,state.fireCooldown-dt);state.gunFlash=Math.max(0,(state.gunFlash||0)-dt);for(const s of shots){s.t-=dt;s.x+=s.vx*dt;s.y+=s.vy*dt}for(let i=shots.length-1;i>=0;i--){if(shots[i].t<=0)shots.splice(i,1)}state.grace=Math.max(0,state.grace-dt);if(state.reloadTimer>0){state.reloadTimer-=dt;if(state.reloadTimer<=0)finishReload()}
+74:  let turn=(keys.ArrowLeft?-1:0)+(keys.ArrowRight?1:0)+touch.look;p.a+=turn*2.6*dt;p.pitch=Math.max(-1.2,Math.min(1.2,p.pitch+touch.pitch*2.2*dt));touch.pitch=0;let f=(keys.w||keys.W||keys.ArrowUp?1:0)+(keys.s||keys.S||keys.ArrowDown?-1:0)+touch.my;let st=(keys.d||keys.D?1:0)+(keys.a||keys.A?-1:0)+touch.mx;let sp=p.speed*(state.active.insta?1.03:1);let dx=(Math.cos(p.a)*f+Math.cos(p.a+Math.PI/2)*st)*sp*dt,dy=(Math.sin(p.a)*f+Math.sin(p.a+Math.PI/2)*st)*sp*dt;movePlayer(dx,dy);
+75:  if((touch.fire||keys[' ']||keys.Mouse)&&state.fireCooldown<=0)shoot();
+76:  if(state.waveState==='spawning'){state.spawnTimer-=dt;if(state.zombiesToSpawn>0&&state.spawnTimer<=0){spawnZombie();state.spawnTimer=Math.max(1.05,2.15-state.wave*.07)}if(state.zombiesToSpawn<=0)state.waveState='fighting'}
+77:  for(const z of state.zombies){z.hurt=Math.max(0,z.hurt-dt);const ang=Math.atan2(p.y-z.y,p.x-z.x),dist=Math.hypot(p.x-z.x,p.y-z.y),hitDist=(z.r||.32)+.34;if(dist>hitDist){moveEnt(z,Math.cos(ang)*z.speed*dt,Math.sin(ang)*z.speed*dt)}else{pushApart(p,z,hitDist);z.atk-=dt;if(z.atk<=0){z.atk=1.05;if(state.grace<=0){p.hp-=state.owned.includes('JUG')?5:9;msg('BITTEN!',.45);beep(90,.04);if(p.hp<=0)endGame()}}}}
+78:  state.zombies=state.zombies.filter(z=>!z.dead);
+79:  if(state.waveState==='fighting'&&state.zombies.length===0&&state.zombiesToSpawn<=0){state.waveState='between';state.betweenTimer=4;state.points+=300;msg('WAVE COMPLETE +$300',2);beep(520,.08)}
+80:  if(state.waveState==='between'){state.betweenTimer-=dt;if(state.betweenTimer<=0){state.wave++;state.waveState='spawning';state.zombiesToSpawn=5+state.wave*2;state.spawnTimer=.5;msg('WAVE '+state.wave,2)}}
+81:  for(const pu of state.powerups){if(Math.hypot(p.x-pu.x,p.y-pu.y)<.7){pickup(pu);pu.dead=true}}state.powerups=state.powerups.filter(p=>!p.dead);
+82: }
+83: function shoot(){
+84:   const w=weapons[state.weapon],am=state.ammo[state.weapon];
+85:   state.gunFlash=.09;
+86:   if(state.reloadTimer>0)return;
+87:   if(am.mag<=0){reload();return}
+88:   am.mag--;state.shots++;
+89:   state.fireCooldown=w.rate*(state.owned.includes('SPEED')?0.78:1);
+90:   shots.push({x:state.player.x+Math.cos(state.player.a)*.35,y:state.player.y+Math.sin(state.player.a)*.35,vx:Math.cos(state.player.a)*18,vy:Math.sin(state.player.a)*18,t:.16});
+91:   beep(180+Math.random()*90,.025);
+92:   let best=null,bang=999;
+93:   for(const z of state.zombies){
+94:     const dx=z.x-state.player.x,dy=z.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+95:     let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+96:     let allowance=w.spread+Math.atan2(.36,dist);
+97:     if(Math.abs(da)<allowance&&dist<9&&Math.abs(da)<bang&&!blocked(state.player.x,state.player.y,z.x,z.y)){best=z;bang=Math.abs(da)}
+98:   }
+99:   if(best){
+100:     let dmg=state.active.insta?999:w.dmg*(Math.random()<.12?2.1:1);
+101:     best.hp-=dmg;best.hurt=.12;
+102:     if(best.hp<=0)kill(best);
+103:   }
+104: }
+105: function kill(z){z.dead=true;state.kills++;state.points+=state.active.double?140:70;if(Math.random()<.16)drop(z.x,z.y);beep(360,.035)}
+106: function reload(){const w=weapons[state.weapon],am=state.ammo[state.weapon];if(am.mag>=w.mag)return msg('MAG FULL',.45);if(am.reserve<=0)return msg('NO AMMO',.45);if(state.reloadTimer>0)return;state.reloadTimer=w.reload*(state.owned.includes('SPEED')?0.55:1);msg('RELOADING',.5)}
+107: function finishReload(){const w=weapons[state.weapon],am=state.ammo[state.weapon],need=w.mag-am.mag,take=Math.min(need,am.reserve);am.mag+=take;am.reserve-=take}
+108: function drop(x,y){const types=['MAX AMMO','INSTA KILL','DOUBLE POINTS','NUKE'];state.powerups.push({x,y,type:types[Math.floor(Math.random()*types.length)],t:9})}function pickup(p){msg(p.type,1.3);beep(650,.08);if(p.type==='MAX AMMO')Object.keys(weapons).forEach(k=>state.ammo[k].reserve=Math.max(state.ammo[k].reserve,weapons[k].reserve));if(p.type==='INSTA KILL')state.active.insta=15;if(p.type==='DOUBLE POINTS')state.active.double=15;if(p.type==='NUKE'){state.zombies.forEach(z=>kill(z));state.points+=400}}
+109: function blocked(x1,y1,x2,y2){const n=24;for(let i=1;i<n;i++){let t=i/n;if(solid(x1+(x2-x1)*t,y1+(y2-y1)*t))return true}return false}
+110: function interactable(){let best=null,bd=1.25;for(const b of buys){let d=Math.hypot(state.player.x-b.x,state.player.y-b.y);if(d<bd){best=b;bd=d}}for(const d of doors){let q=Math.hypot(state.player.x-(d.x+.5),state.player.y-(d.y+.5));if(!d.open&&q<bd){best={type:'door',door:d};bd=q}}return best}
+111: function use(){const it=interactable();if(!it)return msg('MOVE CLOSER',.55);if(it.type==='gun'){const w=weapons[it.id];if(state.points<w.price)return msg('NEED $'+w.price);state.points-=w.price;if(!state.owned.includes(it.id))state.owned.push(it.id);state.weapon=it.id;state.ammo[it.id].mag=w.mag;state.ammo[it.id].reserve=w.reserve;msg('BOUGHT '+w.name)}else if(it.type==='perk'){if(state.owned.includes(it.id))return msg('ALREADY OWNED');if(state.points<it.cost)return msg('NEED $'+it.cost);state.points-=it.cost;state.owned.push(it.id);if(it.id==='JUG'){state.player.maxHp=260;state.player.hp=260}msg(it.name)}else if(it.type==='door'){if(state.points<it.door.cost)return msg('NEED $'+it.door.cost...[line truncated]
+112: function endGame(){state.gameOver=true;state.running=false;msg('GAME OVER - WAVE '+state.wave+' · KILLS '+state.kills,99);ui.start.style.display='flex';ui.start.querySelector('h1').textContent='GAME OVER';ui.start.querySelector('p').textContent='Wave '+state.wave+' · '+state.kills+' kills · $'+state.points+'. Tap to restart.'}
+113: function cast(a,pitch=0){let x=state.player.x,y=state.player.y,step=.035,dist=0;while(dist<18){x+=Math.cos(a)*step;y+=Math.sin(a)*step;dist+=step;if(solid(x,y))return{dist,x,y,t:tile(x,y)}}return{dist:18,x,y,t:'0'}}
+114: function render(){
+115:   const horizon=H/2+(state.player.pitch||0)*H*.35;
+116:   ctx.fillStyle='#0a0908';ctx.fillRect(0,0,W,H);
+117:   let sky=ctx.createLinearGradient(0,0,0,Math.max(1,horizon));sky.addColorStop(0,'#151819');sky.addColorStop(1,'#312014');ctx.fillStyle=sky;ctx.fillRect(0,0,W,Math.max(0,horizon));
+118:   let floor=ctx.createLinearGradient(0,horizon,0,H);floor.addColorStop(0,'#1b1a16');floor.addColorStop(1,'#070706');ctx.fillStyle=floor;ctx.fillRect(0,horizon,W,H-horizon);
+119:   const cols=Math.min(320,Math.floor(W/4)),cw=W/cols,zbuf=[];
+120:   for(let i=0;i<cols;i++){
+121:     let a=state.player.a-FOV/2+FOV*i/cols,r=cast(a),d=r.dist*Math.cos(a-state.player.a);
+122:     zbuf[i]=d;
+123:     let h=Math.min(H*1.8,H/(d+.08)*.82),shade=Math.max(35,210-d*18),x=i*cw;
+124:     ctx.fillStyle=r.t==='D'?`rgb(${shade*.7},${shade*.35},20)`: `rgb(${shade*.45},${shade*.42},${shade*.38})`;
+125:     ctx.fillRect(x,horizon-h/2,cw+1,h);
+126:   }
+127:   const sprites=[];
+128:   for(const z of state.zombies)sprites.push({...z,kind:'z'});
+129:   for(const p of state.powerups)sprites.push({...p,kind:'p'});
+130:   for(const b of buys)sprites.push({...b,kind:'b'});
+131:   sprites.sort((a,b)=>Math.hypot(b.x-state.player.x,b.y-state.player.y)-Math.hypot(a.x-state.player.x,a.y-state.player.y));
+132:   for(const s of sprites)drawSprite(s,zbuf,cols,cw,horizon);
+133:   drawShots();
+134:   drawGun();drawMini();
+135:   if(state.noticeTimer>0||state.gameOver)ui.msg.textContent=state.notice;else ui.msg.textContent='';
+136:   const it=interactable();
+137:   ui.prompt.style.display=it?'block':'none';
+138:   ui.prompt.textContent=it?(it.type==='gun'?'BUY '+weapons[it.id].name+' $'+weapons[it.id].price:it.type==='perk'?'BUY '+it.name+' $'+it.cost:'OPEN '+it.door.name+' $'+it.door.cost):'';
+139:   const am=state.ammo[state.weapon];
+140:   ui.left.textContent=`WAVE ${state.wave} · ZOMBIES ${state.zombies.length}${state.zombiesToSpawn?` +${state.zombiesToSpawn}`:''}`;
+141:   ui.mid.textContent=`${weapons[state.weapon].name} · ${am.mag}/${am.reserve} · $${state.points}${state.reloadTimer>0?' · RELOAD':''}`;
+142:   ui.right.textContent=`HP ${Math.max(0,Math.ceil(state.player.hp))}`;
+143: }
+144: function drawSprite(s,zbuf,cols,cw,horizon){
+145:   let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+146:   let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+147:   if(Math.abs(da)>FOV*.72||dist<.15)return;
+148:   const sx=(da/FOV+.5)*W,sz=Math.min(H*1.3,(H/(dist+.08))*(s.kind==='z'?1.32:.42));
+149:   const col=Math.max(0,Math.min(cols-1,Math.floor(sx/cw)));
+150:   if(zbuf[col]&&dist>zbuf[col]+.35)return;
+151:   const floorY=horizon+(H/(dist+.05))*(s.kind==='z'?1.05:.58);
+152:   let sy=s.kind==='z'?floorY-sz*.12:horizon-sz*.55;
+153:   ctx.save();
+154:   ctx.translate(sx,sy+sz/2);
+155:   if(s.kind==='z'){
+156:     let scale=s.variant==='brute'?1.18:(s.variant==='runner'?0.88:1),w=sz*.7*scale,h=sz*1.08*scale;
+157:     ctx.globalAlpha=1;
+158:     if(zombieImg.complete&&zombieImg.naturalWidth){
+159:       ctx.drawImage(zombieImg,-w/2,-h*.78,w,h);
+160:       if(s.hurt){ctx.globalCompositeOperation='source-atop';ctx.fillStyle=`rgba(255,0,0,${Math.min(.75,.25+s.hurt*3)})`;ctx.fillRect(-w/2,-h*.78,w,h);ctx.globalCompositeOperation='source-over'}
+161:     }else{
+162:       ctx.fillStyle=s.hurt?'#ff2020':(s.variant==='brute'?'#6b1b22':s.variant==='runner'?'#407a35':'#2d6b35');ctx.fillRect(-w/2,-h*.7,w,h);ctx.fillStyle=s.hurt?'#ffaaaa':'#151';ctx.fillRect(-w*.28,-h*.9,w*.56,h*.24);ctx.fillStyle='#ffd86b';ctx.fillRect(-w*.18,-h*.84,w*.08,w*.08);ctx.fillRect(w*.1,-h*.84,w*.08,w*.08)
+163:     }
+164:   }else if(s.kind==='p'){
+165:     ctx.fillStyle='#ffd94b';ctx.fillRect(-sz*.28,-sz*.28,sz*.56,sz*.56);ctx.fillStyle='#000';ctx.font=`${Math.max(9,sz*.18)}px sans-serif`;ctx.textAlign='center';ctx.fillText(s.type[0],0,4);
+166:   }else{
+167:     ctx.fillStyle=s.type==='perk'?'#55d6ff':'#e0d07c';ctx.fillRect(-sz*.35,-sz*.35,sz*.7,sz*.7);
+168:   }
+169:   ctx.restore();
+170: }
+171: function drawShots(){
+172:   ctx.save();
+173:   ctx.strokeStyle='#ffd86b';ctx.lineWidth=Math.max(2,3*devicePixelRatio);ctx.shadowColor='#ff7a2c';ctx.shadowBlur=10*devicePixelRatio;
+174:   for(const b of shots){
+175:     let dx=b.x-state.player.x,dy=b.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+176:     let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+177:     if(Math.abs(da)>FOV*.55||dist<.05)continue;
+178:     const sx=(da/FOV+.5)*W,sy=H*.54+(state.player.pitch||0)*H*.35+(1/(dist+.2))*12*devicePixelRatio;
+179:     ctx.beginPath();ctx.moveTo(W/2,H*.74);ctx.lineTo(sx,sy);ctx.stroke();
+180:   }
+181:   ctx.restore();
+182: }
+183: function drawGun(){
+184:   const bob=Math.sin(performance.now()/120)*6*devicePixelRatio;
+185:   const smoothing=ctx.imageSmoothingEnabled;
+186:   const isReloading=state.reloadTimer>0;
+187:   const isFiring=touch.fire||keys[' ']||(state.gunFlash||0)>0;
+188:   const sprite=(isReloading&&reloadGunImg.complete&&reloadGunImg.naturalWidth)?reloadGunImg:((isFiring&&fireGunImg.complete&&fireGunImg.naturalWidth)?fireGunImg:gunImg);
+189:   const aspect=(sprite.naturalWidth&&sprite.naturalHeight)?sprite.naturalHeight/sprite.naturalWidth:1.8;
+190:   const gunW=Math.min(W*.48,H*.7),gunH=Math.min(gunW*aspect,H*.55);
+191:   if(sprite.complete&&sprite.naturalWidth){
+192:     ctx.drawImage(sprite,W/2-gunW/2,H-gunH+bob*.9,gunW,gunH);
+193:   }else{
+194:     const r=gunW*.18;
+195:     ctx.fillStyle='#1b1a19';ctx.fillRect(W/2-r,H-r*.8+bob,r*1.4,r*.4);
+196:     ctx.fillStyle='#3b3328';ctx.fillRect(W/2-r*.3,H-r*2.8+bob,r*.6,r*2.2);
+197:     ctx.fillStyle='#e7d2a7';ctx.fillRect(W/2-r*.18,H-r*3.2+bob,r*.36,r*.4);
+198:   }
+199:   ctx.imageSmoothingEnabled=smoothing;
+200: }
+201: function drawMini(){let scale=7*devicePixelRatio,x=10*devicePixelRatio,y=46*devicePixelRatio;ctx.save();ctx.globalAlpha=.8;for(let yy=0;yy<map.length;yy++)for(let xx=0;xx<map[0].length;xx++){ctx.fillStyle=map[yy][xx]==='0'?'rgba(255,255,255,.08)':map[yy][xx]==='D'?'#8d4a1d':'#555';ctx.fillRect(x+xx*scale,y+yy*scale,scale-1,scale-1)}ctx.fillStyle='#66d9ff';ctx.fillRect(x+state.player.x*scale-2,y+state.player.y*scale-2,4,4);ctx.fillStyle='#d53';state.zombies.forEach(z=>ctx.fillRect(x+z.x*scale-1,y+z.y*scale-1,3,3));ctx.restore()}
+202: function loop(t){let now=t/1000,dt=Math.min(.05,now-(last||now));last=now;update(dt);render();publishDebug();raf=requestAnimationFrame(loop)}
+203: function publishDebug(){window.__pocketZombiesDebug={running:state.running,paused:state.paused,gameOver:state.gameOver,wave:state.wave,waveState:state.waveState,zombies:state.zombies.length,zombiesToSpawn:state.zombiesToSpawn,spawnTimer:+state.spawnTimer.toFixed(2),player:{x:+state.player.x.toFixed(2),y:+state.player.y.toFixed(2),a:+state.player.a.toFixed(3),pitch:+(state.player.pitch||0).toFixed(3),health:Math.ceil(state.player.hp),ammo:state.ammo[state.weapon].mag,reserve:state.ammo[state.weapon].reserve},weapon:state.weapon,points:state.points,kills:state.kills,errors:0}}
+204: function beep(f,d){if(muted)return;try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.value=.025;o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+205: function startGame(){ui.start.querySelector('h1').textContent='POCKET ZOMBIES';reset();ui.start.style.display='none';if(audio&&audio.state==='suspended')audio.resume()}
+206: function forceStart(){startGame();console.log('START_TRIGGERED')}
+207: function startClick(e){if(ui.start.style.display==='none')return;if(e){e.preventDefault();e.stopPropagation()}startGame()}
+208: window.__pocketStart=startGame;
+209: window.__pocketForceStart=forceStart;
+210: const startInputs=['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'];
+211: startInputs.forEach(ev=>{if(ui.startBtn)ui.startBtn.addEventListener(ev,startClick,{passive:false});if(ui.start)ui.start.addEventListener(ev,startClick,{passive:false})});
+212: if(ui.startBtn){ui.startBtn.onclick=startClick;ui.startBtn.onpointerdown=startClick;ui.startBtn.onpointerup=startClick;ui.startBtn.ontouchend=startClick}
+213: let stickId=null,lookId=null,lastLookX=0,lastLookY=0;
+214: const stick=document.getElementById('stick'),lookPad=ui.lookPad,fireButton=document.getElementById('fire'),reloadButton=document.getElementById('reload'),useButton=document.getElementById('use');
+215: function releaseStick(e){if(e&&e.pointerId!==stickId)return;touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)';stickId=null}
+216: stick.addEventListener('pointerdown',e=>{if(stickId!==null)return;e.preventDefault();e.stopPropagation();stickId=e.pointerId;try{stick.setPointerCapture(stickId)}catch(_){}},{passive:false});
+217: stick.addEventListener('pointermove',e=>{if(e.pointerId!==stickId)return;e.preventDefault();e.stopPropagation();let r=stick.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=(e.clientX-cx)/(r.width/2),dy=(e.clientY-cy)/(r.height/2),m=Math.max(1,Math.hypot(dx,dy));touch.mx=dx/m;touch.my=-dy/m;ui.knob.style.transform=`translate(${touch.mx*31}px,${-touch.my*31}px)`},{passive:false});
+218: function beginLook(e){if(lookId!==null)return;e.preventDefault();e.stopPropagation();lookId=e.pointerId;lastLookX=e.clientX;lastLookY=e.clientY;try{lookPad.setPointerCapture(lookId)}catch(_){}}
+219: function moveLook(e){if(e.pointerId!==lookId)return;e.preventDefault();e.stopPropagation();const dx=e.clientX-lastLookX,dy=e.clientY-lastLookY;state.player.a+=dx*.0045;state.player.pitch=Math.max(-.9,Math.min(.9,(state.player.pitch||0)-dy*.004));lastLookX=e.clientX;lastLookY=e.clientY}
+220: function releaseLook(e){if(!e||e.pointerId===lookId)lookId=null}
+221: lookPad.addEventListener('pointerdown',beginLook,{passive:false});lookPad.addEventListener('pointermove',moveLook,{passive:false});
+222: ['pointerup','pointercancel','lostpointercapture'].forEach(ev=>{stick.addEventListener(ev,releaseStick,{passive:false});lookPad.addEventListener(ev,releaseLook,{passive:false});window.addEventListener(ev,e=>{releaseStick(e);releaseLook(e)},{passive:false})});
+223: function setFiring(on,e){if(e){e.preventDefault();e.stopPropagation()}touch.fire=on;keys.Mouse=on;if(on&&state.running&&!state.paused&&state.fireCooldown<=0)shoot()}
+224: ['pointerdown','touchstart','mousedown','click'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(true,e),{passive:false}));
+225: function tapAction(fn,e){if(e){e.preventDefault();e.stopPropagation()}if(state.running&&!state.paused)fn()}
+226: ['pointerdown','touchstart','mousedown','click'].forEach(ev=>{reloadButton.addEventListener(ev,e=>tapAction(reload,e),{passive:false});useButton.addEventListener(ev,e=>tapAction(use,e),{passive:false})});
+227: ['pointerup','pointercancel','pointerleave','touchend','touchcancel','mouseup','mouseleave'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(false,e),{passive:false}));
+228: window.addEventListener('pointerup',()=>setFiring(false));
+229: window.addEventListener('mouseup',()=>setFiring(false));
+230: })();
+231: </script>
+
+games/mobile-sideways-fps/ZOMBIES_ROADMAP.md (165 lines) [window 1-160, truncated]:
+1: # Mobile Sideways FPS — CoD Zombies-Style Roadmap
+2: 
+3: Status: recreated after the broken Sparky pass. `index.html` is now a fresh standalone Pocket Zombies build with a working RAF loop, raycast-style FPS rendering, waves, zombies, points, wall buys, doors, perks, power-ups, mobile controls, desktop controls, audio feedback, pause/mute, restart, and `window.__pocketZombiesDebug` verification hooks. Browser smoke test confirmed START GAME runs, zombies spawn, debug state advances, no JS error is reported, and the player survives initial spawn pressure after balance fixes. Next follow-up: improve aim/combat feel, real sprite-sheet rendering, and automated control-test helpers.
+4: 
+5: ## Phase 0 — Preserve Current Foundation
+6: 
+7: - [x] Keep the existing `index.html` game as the playable base.
+8: - [x] Preserve current mobile touch controls: left thumb movement, right thumb look, fire button.
+9: - [x] Preserve vertical-first loading with rotate-sideways hint.
+10: - [x] Preserve desktop fallback controls for testing.
+11: - [x] Preserve the raycast FPS rendering loop and wall collision basics.
+12: - [x] Add new systems incrementally without breaking the current start/play/restart loop.
+13: 
+14: ## Phase 1 — Zombies Core Loop
+15: 
+16: - [x] Replace generic enemies with zombie-specific enemy data and behavior.
+17: - [x] Add zombie health scaling by wave.
+18: - [x] Add zombie movement speed scaling by wave.
+19: - [x] Add zombie melee attack timing and damage balancing.
+20: - [x] Add zombie spawn pacing instead of spawning the whole wave instantly.
+21: - [x] Add round transition downtime between waves.
+22: - [x] Add clear “Wave Complete” feedback.
+23: - [x] Add game-over summary with wave reached, kills, points earned, and time survived-style stats.
+24: 
+25: ## Phase 2 — Points Economy
+26: 
+27: - [x] Add player points/cash state.
+28: - [x] Award points for zombie hits.
+29: - [x] Award bonus points for zombie kills.
+30: - [x] Award points for wave completion.
+31: - [x] Show points in the HUD.
+32: - [x] Spend points on wall guns.
+33: - [x] Spend points on doors.
+34: - [x] Spend points on perks.
+35: - [x] Prevent purchases when points are insufficient.
+36: - [x] Add purchase feedback text/sound/flash.
+37: 
+38: ## Phase 3 — Multiple Buyable Wall Guns
+39: 
+40: - [x] Define weapon data: name, price, damage, fire rate, range, spread, magazine size, reserve ammo, reload time.
+41: - [x] Add at least three wall-buy guns.
+42: - [x] Add wall-buy locations to the map.
+43: - [x] Render wall-buy prompts when the player looks at or stands near a gun location.
+44: - [x] Add purchase input compatible with mobile and desktop.
+45: - [x] Add weapon switching if multiple owned weapons are supported.
+46: - [x] Add ammo counts for limited-ammo guns.
+47: - [x] Add reload behavior.
+48: - [x] Add out-of-ammo behavior.
+49: - [x] Balance starter weapon vs. purchased weapons.
+50: 
+51: ## Phase 4 — Perks System
+52: 
+53: - [x] Define perk data: name, price, effect, icon/color, purchase location.
+54: - [x] Add Juggernog-style health increase perk.
+55: - [x] Add Speed Cola-style reload/fire handling perk.
+56: - [x] Add Stamin-Up-style movement speed perk.
+57: - [x] Add Double Tap-style damage/fire-rate perk.
+58: - [x] Add perk machine locations to the map.
+59: - [x] Render perk purchase prompts.
+60: - [x] Apply perk effects immediately after purchase.
+61: - [x] Show active perks in the HUD.
+62: 
+63: ## Phase 5 — Unlockable Doors
+64: 
+65: - [x] Add door tiles/entities to the map.
+66: - [x] Give each door a points cost.
+67: - [x] Block movement and line-of-sight through locked doors.
+68: - [x] Render locked-door prompts when nearby.
+69: - [x] Add mobile-friendly purchase interaction.
+70: - [x] Remove/open door after purchase.
+71: - [x] Persist opened doors for the run.
+72: - [x] Connect doors to map expansion sections.
+73: 
+74: ## Phase 6 — Map Expansions
+75: 
+76: - [x] Expand the current small map into distinct rooms/lanes.
+77: - [x] Add a starting room.
+78: - [x] Add at least one unlockable side room.
+79: - [x] Add at least one larger training area.
+80: - [x] Add wall-gun placement in useful but not overpowered spots.
+81: - [x] Add perk-machine placement behind progression gates.
+82: - [x] Add zombie spawn windows/entry points.
+83: - [x] Update minimap to show expanded areas clearly.
+84: - [x] Keep performance safe for mobile screens.
+85: 
+86: ## Phase 7 — Real 3D-Feeling Zombies
+87: 
+88: - [x] Improve zombie sprites from simple shapes into generated asset-backed billboard bodies.
+89: - [x] Add zombie animation states: walking, hurt, attacking, dying, with billboard motion/bob and hit flash.
+90: - [x] Add distance scaling and occlusion that feels more 3D.
+91: - [x] Add simple zombie variants by color/shape/speed.
+92: - [x] Add hit flashes and death effects.
+93: - [x] Add attack windup visual feedback.
+94: - [x] Add generated local sprite sheet assets for zombies, first-person guns, perks, and power-ups.
+95: 
+96: ## Phase 8 — Power-Ups
+97: 
+98: - [x] Define power-up data: name, duration/effect, color/icon, drop chance.
+99: - [x] Add Max Ammo.
+100: - [x] Add Insta-Kill.
+101: - [x] Add Double Points.
+102: - [x] Add Nuke / screen-clear effect.
+103: - [x] Add pickup radius and feedback.
+104: - [x] Show active timed power-ups in the HUD.
+105: 
+106: ## Phase 9 — UI / HUD Updates
+107: 
+108: - [x] Add points display.
+109: - [x] Add current weapon display.
+110: - [x] Add ammo and reload display.
+111: - [x] Add active perk icons.
+112: - [x] Add active power-up timers.
+113: - [x] Add contextual purchase prompt panel.
+114: - [x] Add wave transition text.
+115: - [x] Add low-health feedback.
+116: - [x] Add mobile-safe layout for portrait and landscape.
+117: - [x] Keep HUD readable without blocking touch controls.
+118: 
+119: ## Phase 10 — Interaction Controls
+120: 
+121: - [x] Add a mobile interaction button for buying guns, perks, and doors.
+122: - [x] Add desktop keyboard interaction key.
+123: - [x] Prevent interaction button from interfering with fire/look controls.
+124: - [x] Prioritize nearest/most relevant interactable when multiple prompts overlap.
+125: - [x] Add clear affordance for “hold to buy” vs. tap to buy if needed.
+126: 
+127: ## Phase 11 — Audio / Feedback
+128: 
+129: - [x] Add optional gunshot sound effects.
+130: - [x] Add zombie hit/death sounds.
+131: - [x] Add purchase success/fail sounds.
+132: - [x] Add power-up pickup sounds.
+133: - [x] Add round-start/round-end stingers.
+134: - [x] Ensure mobile browsers unlock audio only after user gesture.
+135: - [x] Add mute toggle if audio becomes annoying during testing.
+136: - [x] Add pause/resume control for testing and survivability.
+137: 
+138: ## Phase 12 — Balancing and Polish
+139: 
+140: - [x] Tune wave difficulty curve.
+141: - [x] Tune zombie count, speed, health, and damage.
+142: - [x] Tune weapon prices and damage.
+143: - [x] Tune perk prices.
+144: - [x] Tune door prices and progression pacing.
+145: - [x] Add pause/restart controls.
+146: - [x] Add save-free replayability with fast restarts.
+147: - [x] Test on mobile-style portrait/launch layout in desktop browser.
+148: - [x] Test sideways/landscape play in desktop browser.
+149: - [x] Test in desktop browser with console open.
+150: 
+151: ## Phase 13 — Future Co-Op Possibilities
+152: 
+153: - [ ] Decide whether co-op is local split-screen, same-network multiplayer, or online multiplayer.
+154: - [ ] Separate game state from rendering so networking could be added later.
+155: - [ ] Define player entities rather than a single hardcoded player only.
+156: - [ ] Add teammate HUD slots if co-op becomes real.
+157: - [ ] Add revive/downed-state mechanics if co-op becomes real.
+158: - [ ] Keep this phase deferred until the single-player zombies loop is fun.
+159: 
+160: ## Implementation Notes
+[READ_TRUNCATED] Use start_line:161, num_lines:240 for the next chunk, or full:true only when needed.

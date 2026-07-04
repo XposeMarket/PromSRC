@@ -1,0 +1,341 @@
+--- web-ui/src/styles/mobile.css via read_webui_source ---
+web-ui/src/styles/mobile.css (11294 lines) [window 8690-8869, truncated]:
+8690: .pm-settings-callout {
+8691:   border: 1px solid rgba(74,130,209,.22);
+8692:   background: rgba(74,130,209,.10);
+8693:   color: #1e4f91;
+8694:   border-radius: var(--pm-radius-md);
+8695:   padding: 10px 12px;
+8696:   font-size: 12px;
+8697:   line-height: 1.45;
+8698:   margin: 8px 0 12px;
+8699: }
+8700: 
+8701: /* ---------- placeholder ---------- */
+8702: .pm-empty {
+8703:   text-align: center;
+8704:   padding: 60px 24px;
+8705:   color: var(--pm-muted);
+8706: }
+8707: .pm-empty .pm-empty-icon {
+8708:   width: 72px; height: 72px; border-radius: 50%;
+8709:   background: var(--pm-orange-soft); color: var(--pm-orange);
+8710:   display: inline-flex; align-items: center; justify-content: center;
+8711:   margin-bottom: 18px;
+8712: }
+8713: .pm-empty .pm-empty-icon svg { width: 32px; height: 32px; }
+8714: .pm-empty h2 { color: var(--pm-text); font-size: 20px; margin: 0 0 6px; }
+8715: .pm-empty p { font-size: 14px; line-height: 1.5; margin: 0; }
+8716: 
+8717: /* ── Mobile Canvas Sheet ─────────────────────────────────────────── */
+8718: .pm-canvas-sheet {
+8719:   position: fixed;
+8720:   inset: 0;
+8721:   z-index: 2000;
+8722:   pointer-events: none;
+8723: }
+8724: .pm-canvas-sheet.open { pointer-events: all; }
+8725: 
+8726: .pm-canvas-sheet-scrim {
+8727:   position: absolute;
+8728:   inset: 0;
+8729:   background: rgba(0, 0, 0, 0.45);
+8730:   opacity: 0;
+8731:   transition: opacity 0.28s ease;
+8732: }
+8733: .pm-canvas-sheet.open .pm-canvas-sheet-scrim { opacity: 1; }
+8734: 
+8735: .pm-canvas-sheet-panel {
+8736:   position: absolute;
+8737:   inset: 0;
+8738:   height: 100%;
+8739:   background: var(--pm-bg);
+8740:   border-radius: 0;
+8741:   display: flex;
+8742:   flex-direction: column;
+8743:   transform: translateY(100%);
+8744:   transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+8745:   box-shadow: 0 -6px 40px rgba(0, 0, 0, 0.22);
+8746:   overflow: hidden;
+8747: }
+8748: .pm-canvas-sheet.open .pm-canvas-sheet-panel { transform: translateY(0); }
+8749: 
+8750: .pm-canvas-sheet-handle-bar {
+8751:   width: 38px; height: 4px;
+8752:   background: var(--pm-border);
+8753:   border-radius: 2px;
+8754:   margin: calc(env(safe-area-inset-top) + 8px) auto 0;
+8755:   flex-shrink: 0;
+8756:   cursor: grab;
+8757:   touch-action: none;
+8758: }
+8759: 
+8760: .pm-canvas-sheet-header {
+8761:   display: flex;
+8762:   align-items: flex-end;
+8763:   padding: 6px 10px 0 14px;
+8764:   gap: 6px;
+8765:   flex-shrink: 0;
+8766:   border-bottom: 1px solid var(--pm-border);
+8767: }
+8768: .pm-canvas-sheet-tabs {
+8769:   display: flex;
+8770:   flex: 1;
+8771:   gap: 2px;
+8772:   overflow-x: auto;
+8773:   scrollbar-width: none;
+8774:   align-items: flex-end;
+8775: }
+8776: .pm-canvas-sheet-tabs::-webkit-scrollbar { display: none; }
+8777: .pm-canvas-sheet-tab {
+8778:   display: inline-flex;
+8779:   align-items: center;
+8780:   gap: 5px;
+8781:   padding: 7px 10px 9px;
+8782:   border: none;
+8783:   border-bottom: 2px solid transparent;
+8784:   background: transparent;
+8785:   font-size: 12px; font-weight: 600;
+8786:   color: var(--pm-muted);
+8787:   white-space: nowrap;
+8788:   cursor: pointer;
+8789:   font-family: inherit;
+8790:   max-width: 160px;
+8791:   flex-shrink: 0;
+8792:   transition: color 0.15s, border-color 0.15s;
+8793: }
+8794: .pm-canvas-sheet-tab.active {
+8795:   color: var(--pm-orange);
+8796:   border-bottom-color: var(--pm-orange);
+8797: }
+8798: .pm-canvas-sheet-tab-name {
+8799:   overflow: hidden;
+8800:   text-overflow: ellipsis;
+8801:   max-width: 110px;
+8802: }
+8803: .pm-canvas-sheet-tab-close {
+8804:   opacity: 0.45;
+8805:   font-size: 16px;
+8806:   line-height: 1;
+8807:   flex-shrink: 0;
+8808: }
+8809: .pm-canvas-sheet-tab-close:hover { opacity: 1; }
+8810: .pm-canvas-sheet-close-btn {
+8811:   flex-shrink: 0;
+8812:   width: 28px; height: 28px;
+8813:   border: none;
+8814:   background: var(--pm-bg-soft);
+8815:   border-radius: 50%;
+8816:   font-size: 15px;
+8817:   cursor: pointer;
+8818:   display: flex;
+8819:   align-items: center;
+8820:   justify-content: center;
+8821:   color: var(--pm-text);
+8822:   font-family: inherit;
+8823:   margin-bottom: 10px;
+8824: }
+8825: 
+8826: .pm-canvas-sheet-toolbar {
+8827:   display: flex;
+8828:   align-items: center;
+8829:   gap: 8px;
+8830:   padding: 8px 14px;
+8831:   border-bottom: 1px solid var(--pm-border);
+8832:   flex-shrink: 0;
+8833:   min-height: 40px;
+8834: }
+8835: .pm-canvas-sheet-file-name {
+8836:   flex: 1;
+8837:   font-size: 12px; font-weight: 600;
+8838:   color: var(--pm-text);
+8839:   overflow: hidden;
+8840:   text-overflow: ellipsis;
+8841:   white-space: nowrap;
+8842: }
+8843: .pm-canvas-sheet-save-btn {
+8844:   flex-shrink: 0;
+8845:   padding: 5px 12px;
+8846:   border-radius: 7px;
+8847:   border: 1px solid var(--pm-border);
+8848:   background: transparent;
+8849:   font-size: 12px; font-weight: 600;
+8850:   color: var(--pm-text);
+8851:   cursor: pointer;
+8852:   font-family: inherit;
+8853:   text-decoration: none;
+8854:   display: inline-flex;
+8855:   align-items: center;
+8856:   gap: 5px;
+8857: }
+8858: .pm-canvas-sheet-save-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+8859: .pm-canvas-interaction-toggle {
+8860:   flex-shrink: 0;
+8861:   align-items: center;
+8862:   border: 1px solid var(--pm-border);
+8863:   border-radius: 7px;
+8864:   overflow: hidden;
+8865:   background: transparent;
+8866: }
+8867: .pm-canvas-interaction-btn {
+8868:   appearance: none;
+8869:   border: 0;
+[READ_TRUNCATED] Returned 180 of 11294 lines. Use start_line:8870, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/styles/mobile.css via read_webui_source ---
+web-ui/src/styles/mobile.css (11294 lines) [window 9000-9059, truncated]:
+9000:   border-radius: 999px;
+9001:   padding: 9px 18px;
+9002:   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+9003:   backdrop-filter: blur(6px);
+9004: }
+9005: .pm-canvas-codebtn:active {
+9006:   transform: scale(0.97);
+9007: }
+9008: :root[data-theme="dark"] .pm-canvas-codebtn {
+9009:   background: rgba(58, 130, 246, 0.95);
+9010: }
+9011: .pm-canvas-sheet-empty {
+9012:   color: var(--pm-muted);
+9013:   font-size: 14px;
+9014:   text-align: center;
+9015:   padding: 40px 20px;
+9016: }
+9017: 
+9018: :root[data-theme="dark"] .pm-canvas-sheet-panel {
+9019:   box-shadow: 0 -6px 40px rgba(0, 0, 0, 0.55);
+9020: }
+9021: :root[data-theme="dark"] .pm-canvas-sheet-body {
+9022:   background: var(--pm-bg);
+9023: }
+9024: :root[data-theme="dark"] .pm-canvas-sheet-body iframe {
+9025:   background: #1a1a1a;
+9026: }
+9027: 
+9028: /* ── Voice page approval card ─────────────────────────────────────── */
+9029: .pm-voice-approval {
+9030:   --va-accent: var(--pm-orange);
+9031:   position: absolute;
+9032:   left: 50%;
+9033:   top: 8px;
+9034:   transform: translateX(-50%) translateY(18px);
+9035:   width: min(92vw, 400px);
+9036:   max-height: min(46vh, 360px);
+9037:   overflow: auto;
+9038:   background: var(--pm-bg);
+9039:   border: 1.5px solid var(--va-accent);
+9040:   border-radius: 18px;
+9041:   box-shadow: 0 8px 40px rgba(0,0,0,0.22), 0 0 0 4px color-mix(in srgb, var(--va-accent) 12%, transparent);
+9042:   padding: 16px;
+9043:   z-index: 120;
+9044:   opacity: 0;
+9045:   transition: opacity 0.25s ease, transform 0.28s cubic-bezier(0.34,1.56,0.64,1);
+9046:   pointer-events: none;
+9047: }
+9048: .pm-voice-approval.pm-va-visible {
+9049:   opacity: 1;
+9050:   transform: translateX(-50%) translateY(0);
+9051:   pointer-events: all;
+9052: }
+9053: .pm-voice-approval.pm-va-running {
+9054:   border-color: color-mix(in srgb, var(--va-accent) 72%, var(--pm-border));
+9055: }
+9056: .pm-voice-approval.pm-va-success {
+9057:   border-color: #2fae66;
+9058:   box-shadow: 0 8px 40px rgba(47,174,102,0.22), 0 0 0 4px rgba(47,174,102,0.14);
+9059: }
+[READ_TRUNCATED] Returned 60 of 11294 lines. Use start_line:9060, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-shell.js via read_webui_source ---
+web-ui/src/mobile/mobile-shell.js (2654 lines) [window 2180-2269, truncated]:
+2180: function isCanvasCodeExt(ext) {
+2181:   return CANVAS_CODE_EXTS.has(String(ext || '').toLowerCase());
+2182: }
+2183: 
+2184: // Self-contained, dependency-free syntax highlighter. Tokenizes a single line of
+2185: // code into spans (comments, strings, numbers, keywords, functions). Good enough
+2186: // to read code at a glance like the Codex app, with zero CDN/offline cost.
+2187: const CANVAS_CODE_KEYWORDS = new Set(('const let var function return if else for while do switch case break continue new class extends super this import from export default async await yield try catch finally throw typeof instanceof in of void delete null undefined true false public private protected static get set interface type enum namespace implements readonly as def elif lambda pass with self None True False and or not func struct map range defer go chan fn mut use pub impl trait match module require end then begin echo local').split(' '));
+2188: 
+2189: // Single-pass tokenizer: scans the RAW line left-to-right, classifying each token,
+2190: // and escapes every emitted segment. Because we never re-scan emitted markup, the
+2191: // keyword/function passes can't corrupt previously injected <span> attributes
+2192: // (the old multi-replace approach wrapped the literal word "class" inside
+2193: // class="tk-s", producing &class=class=... garbage).
+2194: function highlightCodeLine(line, ext) {
+2195:   const src = String(line);
+2196:   const e = String(ext || '').toLowerCase();
+2197:   const isStyle = e === 'css' || e === 'scss' || e === 'less';
+2198:   let out = '';
+2199:   let i = 0;
+2200:   const n = src.length;
+2201:   const wrap = (cls, text) => `<span class="${cls}">${escapeHtml(text)}</span>`;
+2202:   while (i < n) {
+2203:     const ch = src[i];
+2204:     const rest = src.slice(i);
+2205:     // Block comment /* ... */ (may be unterminated on this line)
+2206:     if (ch === '/' && src[i + 1] === '*') {
+2207:       const close = src.indexOf('*/', i + 2);
+2208:       const end = close === -1 ? n : close + 2;
+2209:       out += wrap('tk-c', src.slice(i, end));
+2210:       i = end; continue;
+2211:     }
+2212:     // Line comment // ... (skip CSS where // isn't a comment)
+2213:     if (ch === '/' && src[i + 1] === '/' && !isStyle) {
+2214:       out += wrap('tk-c', src.slice(i)); i = n; continue;
+2215:     }
+2216:     // Hash comment (py/sh/yaml) — but NOT CSS hex colors (#fff)
+2217:     if (ch === '#' && !isStyle) {
+2218:       out += wrap('tk-c', src.slice(i)); i = n; continue;
+2219:     }
+2220:     // Strings: " ' `
+2221:     if (ch === '"' || ch === '\'' || ch === '`') {
+2222:       let j = i + 1;
+2223:       while (j < n) {
+2224:         if (src[j] === '\\') { j += 2; continue; }
+2225:         if (src[j] === ch) { j++; break; }
+2226:         j++;
+2227:       }
+2228:       out += wrap('tk-s', src.slice(i, j));
+2229:       i = j; continue;
+2230:     }
+2231:     // Numbers
+2232:     const numMatch = /^(0x[0-9a-fA-F]+|\d+\.?\d*(?:e[+-]?\d+)?)/.exec(rest);
+2233:     if (numMatch && !/[A-Za-z_$]/.test(src[i - 1] || '')) {
+2234:       out += wrap('tk-n', numMatch[0]); i += numMatch[0].length; continue;
+2235:     }
+2236:     // Identifiers / keywords / function calls
+2237:     const idMatch = /^[A-Za-z_$][\w$]*/.exec(rest);
+2238:     if (idMatch) {
+2239:       const word = idMatch[0];
+2240:       let k = i + word.length;
+2241:       while (k < n && (src[k] === ' ' || src[k] === '\t')) k++;
+2242:       if (CANVAS_CODE_KEYWORDS.has(word)) {
+2243:         out += wrap('tk-k', word);
+2244:       } else if (src[k] === '(') {
+2245:         out += wrap('tk-f', word);
+2246:       } else {
+2247:         out += escapeHtml(word);
+2248:       }
+2249:       i += word.length; continue;
+2250:     }
+2251:     // Plain character
+2252:     out += escapeHtml(ch);
+2253:     i++;
+2254:   }
+2255:   return out;
+2256: }
+2257: 
+2258: // Build a styled, self-contained HTML document for a text/markdown/code file.
+2259: // opts: { changedRanges?: [{start,end}], onlyRanges?: bool, context?: number }
+2260: // - For md: clean marked render (existing behavior).
+2261: // - For code: syntax-highlighted, line-numbered rows, optional changed-line accent,
+2262: //   and optional edited-regions-only collapse with gap markers.
+2263: // - For other text: scrollable escaped <pre>.
+2264: function canvasTextDocHtml(ext, content, opts = {}) {
+2265:   const e = String(ext || '').toLowerCase();
+2266:   const baseStyle = `
+2267:     html,body{margin:0;height:auto}
+2268:     body{font-family:system-ui,-apple-system,sans-serif;line-height:1.7;padding:18px 18px 64px;color:#17243b;-webkit-text-size-adjust:100%;word-wrap:break-word;overflow-wrap:anywhere}
+2269:     h1,h2,h3{font-weight:700;margin:16px 0 8px;line-height:1.3}
+[READ_TRUNCATED] Returned 90 of 2654 lines. Use start_line:2270, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

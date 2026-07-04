@@ -157,6 +157,63 @@ function formatCostMicrosForTelemetry(value: unknown): string {
   return usd.toFixed(7);
 }
 
+function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 10_000) return `${Math.round(value / 1000)}k`;
+  return Math.round(value).toLocaleString('en-US');
+}
+
+function compactLine(value: unknown, maxChars = 180): string {
+  const text = String(value || '').replace(/\r/g, '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 14)).trimEnd()}...[truncated]`;
+}
+
+function uniqueCompact(values: Array<unknown>, maxItems: number, maxChars = 180): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const value = compactLine(raw, maxChars);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function shouldShowObservationInSummary(obs: ToolObservation): boolean {
+  if (obs.status === 'error') return true;
+  if (obs.artifacts?.length || obs.pathsTouched?.length || obs.resultRawRef) return true;
+  if (/(write|edit|delete|rename|copy|mkdir|append|apply_patch|patchset|replace|insert|run|start|build|test|browser_|desktop_)/i.test(obs.toolName)) {
+    return true;
+  }
+  return false;
+}
+
+function summarizeObservationForState(obs: ToolObservation): string {
+  const bits = [
+    `#${obs.stepNum}`,
+    obs.toolName,
+    obs.status === 'error' ? 'ERROR' : 'ok',
+  ];
+  const paths = uniqueCompact(obs.pathsTouched || [], 2, 120);
+  if (paths.length) bits.push(`paths=${paths.join(', ')}`);
+  if (Number.isFinite(Number(obs.exitCode))) bits.push(`exit=${obs.exitCode}`);
+  if (Number.isFinite(Number(obs.durationMs))) bits.push(`${Math.round(Number(obs.durationMs))}ms`);
+  if (obs.artifacts?.length) {
+    const artifacts = uniqueCompact(obs.artifacts.map((a: any) => a?.path || a?.url || a?.id || a), 2, 120);
+    if (artifacts.length) bits.push(`artifacts=${artifacts.join(', ')}`);
+  }
+  if (obs.status === 'error') {
+    const detail = compactLine(obs.resultPreview, 180);
+    if (detail) bits.push(`result=${detail}`);
+  }
+  if (obs.resultRawRef) bits.push(`raw=${obs.resultRawRef}`);
+  return `- ${bits.join(' | ')}`;
+}
+
 export function createToolObservation(input: {
   sessionId: string;
   turnId: string;
@@ -354,6 +411,67 @@ export function formatToolObservationsForContext(observations: ToolObservation[]
   return block.length <= maxChars ? block : `${block.slice(0, maxChars)}\n[...tool observations truncated]`;
 }
 
+export function formatToolStateSummaryForContext(observations: ToolObservation[], opts: ObservationContextOptions = {}): string {
+  if (!observations.length) return '';
+  const includeHeader = opts.includeHeader !== false;
+  const requestedMaxChars = Number.isFinite(Number(opts.maxChars)) && Number(opts.maxChars) > 0 ? Number(opts.maxChars) : 1800;
+  const maxChars = Math.max(800, Math.min(2400, Math.floor(requestedMaxChars)));
+  const maxObservations = Math.max(1, Math.min(16, Math.floor(Number(opts.maxObservations || 10))));
+  const includeTelemetry = opts.includeTelemetry !== false;
+  const sorted = [...observations].sort((a, b) => a.createdAt - b.createdAt);
+  const turnIdCount = new Set(sorted.map((obs) => obs.turnId).filter(Boolean)).size || 1;
+  const errors = sorted.filter((obs) => obs.status === 'error');
+  const rawRefs = sorted.filter((obs) => obs.resultRawRef).length;
+  const artifacts = uniqueCompact(sorted.flatMap((obs) => obs.artifacts || []).map((a: any) => a?.path || a?.url || a?.id || a), 6, 140);
+  const paths = uniqueCompact(sorted.flatMap((obs) => obs.pathsTouched || []).reverse(), 10, 140);
+
+  let totalDurationMs = 0;
+  let totalArgsTokens = 0;
+  let totalResultTokens = 0;
+  let totalContextCostMicros = 0;
+  const toolCounts = new Map<string, { calls: number; errors: number; tokens: number }>();
+  for (const obs of sorted) {
+    if (Number.isFinite(Number(obs.durationMs))) totalDurationMs += Number(obs.durationMs);
+    totalArgsTokens += Number(obs.tokenEstimate?.argsTokens || 0);
+    totalResultTokens += Number(obs.tokenEstimate?.resultTokens || 0);
+    totalContextCostMicros += Number(obs.tokenEstimate?.contextCostMicros || 0);
+    const current = toolCounts.get(obs.toolName) || { calls: 0, errors: 0, tokens: 0 };
+    current.calls += 1;
+    current.errors += obs.status === 'error' ? 1 : 0;
+    current.tokens += Number(obs.tokenEstimate?.totalTokens || 0);
+    toolCounts.set(obs.toolName, current);
+  }
+
+  const topTools = [...toolCounts.entries()]
+    .sort((a, b) => b[1].tokens - a[1].tokens || b[1].calls - a[1].calls || a[0].localeCompare(b[0]))
+    .slice(0, 5)
+    .map(([tool, info]) => `${tool} ${info.calls}x${info.errors ? `/${info.errors}err` : ''}${info.tokens ? ` ${formatCompactNumber(info.tokens)}tok` : ''}`);
+
+  const noteworthy = sorted
+    .filter(shouldShowObservationInSummary)
+    .slice(-maxObservations)
+    .map(summarizeObservationForState);
+
+  const latest = sorted[sorted.length - 1];
+  const lines = [
+    includeHeader ? '[TOOL_STATE_SUMMARY]' : '',
+    `scope: ${formatCompactNumber(sorted.length)} observed call(s) across ${formatCompactNumber(turnIdCount)} turn(s); full raw observations stay out-of-band in tool-observation storage.`,
+    includeTelemetry
+      ? `totals: errors=${errors.length}, elapsed_ms=${Math.round(totalDurationMs)}, context_tokens=${formatCompactNumber(totalArgsTokens + totalResultTokens)}, result_tokens=${formatCompactNumber(totalResultTokens)}, context_cost_est_usd=${formatCostMicrosForTelemetry(totalContextCostMicros)}`
+      : `totals: errors=${errors.length}`,
+    topTools.length ? `top_tools: ${topTools.join('; ')}` : '',
+    paths.length ? `paths_touched: ${paths.join('; ')}` : '',
+    artifacts.length ? `artifacts: ${artifacts.join('; ')}` : '',
+    rawRefs ? `raw_results: ${rawRefs} oversized result(s) saved out-of-band; use raw refs/tool observation API only if exact payload is needed.` : '',
+    latest ? `latest: #${latest.stepNum} ${latest.toolName} ${latest.status}` : '',
+    errors.length ? 'recent_errors:\n' + errors.slice(-4).map(summarizeObservationForState).join('\n') : '',
+    noteworthy.length ? 'noteworthy_recent:\n' + noteworthy.join('\n') : '',
+  ].filter(Boolean);
+
+  const block = lines.join('\n');
+  return block.length <= maxChars ? block : `${block.slice(0, maxChars).trimEnd()}\n[...tool state summary truncated]`;
+}
+
 export function getRecentToolObservationsForContext(sessionId: string, opts: ObservationContextOptions = {}): string {
   const lookbackTurns = Math.max(1, Math.min(20, Math.floor(Number(opts.lookbackTurns || 5))));
   const observations = readToolObservations(sessionId, lookbackTurns * 20);
@@ -361,5 +479,14 @@ export function getRecentToolObservationsForContext(sessionId: string, opts: Obs
   const turnIds = [...new Set(observations.map((obs) => obs.turnId).filter(Boolean))].slice(-lookbackTurns);
   const filtered = observations.filter((obs) => turnIds.includes(obs.turnId));
   return formatToolObservationsForContext(filtered, opts);
+}
+
+export function getRecentToolStateSummaryForContext(sessionId: string, opts: ObservationContextOptions = {}): string {
+  const lookbackTurns = Math.max(1, Math.min(20, Math.floor(Number(opts.lookbackTurns || 3))));
+  const observations = readToolObservations(sessionId, lookbackTurns * 20);
+  if (!observations.length) return '';
+  const turnIds = [...new Set(observations.map((obs) => obs.turnId).filter(Boolean))].slice(-lookbackTurns);
+  const filtered = observations.filter((obs) => turnIds.includes(obs.turnId));
+  return formatToolStateSummaryForContext(filtered, opts);
 }
 

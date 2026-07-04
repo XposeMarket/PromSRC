@@ -1,0 +1,147 @@
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28879 lines) [window 6064-6123, truncated]:
+6064:       if (stablePendingImageBatch) {
+6065:         const nextPending = currentBubble.querySelector('.pm-generated-image-batch--pending');
+6066:         if (nextPending && nextPending !== stablePendingImageBatch) nextPending.replaceWith(stablePendingImageBatch);
+6067:       }
+6068:       if (stableThinkingDots) {
+6069:         const nextDots = currentBubble.querySelector('.pm-thinking-dots');
+6070:         if (nextDots && nextDots !== stableThinkingDots) nextDots.replaceWith(stableThinkingDots);
+6071:       }
+6072:       Object.entries(stableLiveTraceGroups).forEach(([groupKey, stableNode]) => {
+6073:         const selector = `details.pm-trace-tool-group[data-pm-trace-live-current="1"][data-pm-trace-group="${_pmCssEscape(groupKey)}"]`;
+6074:         const nextGroup = currentBubble.querySelector(selector);
+6075:         if (nextGroup && stableNode !== nextGroup) nextGroup.replaceWith(stableNode);
+6076:       });
+6077:     } catch {}
+6078:     const nextActions = nextEl.querySelector('[data-msg-action]') ? nextEl.querySelectorAll('[data-msg-action]') : null;
+6079:     const currentActionsHost = currentEl.querySelector('.pm-msg-actions');
+6080:     const nextActionsHost = nextEl.querySelector('.pm-msg-actions');
+6081:     if (currentActionsHost && nextActionsHost) currentActionsHost.innerHTML = nextActionsHost.innerHTML;
+6082:     else if (!currentActionsHost && nextActionsHost) currentBubble.insertAdjacentElement('afterend', nextActionsHost);
+6083:     void nextActions;
+6084:     try {
+6085:       currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
+6086:         if (closedProc.has(detailIndex)) d.removeAttribute('open');
+6087:         else if (openProc[detailIndex]) {
+6088:           d.setAttribute('open', '');
+6089:           const full = d.querySelector('.pm-process-full');
+6090:           if (full) full.scrollTop = openProc[detailIndex].scrollTop;
+6091:         }
+6092:       });
+6093:       currentEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
+6094:         const key = d.getAttribute('data-pm-trace-group') || String(detailIndex);
+6095:         if (d.closest('.pm-trace-drawer[data-trace-completed="1"]')) {
+6096:           d.removeAttribute('open');
+6097:           return;
+6098:         }
+6099:         if (closedTraceGroups.has(key)) d.removeAttribute('open');
+6100:         else if (openTraceGroups[key]) d.setAttribute('open', '');
+6101:       });
+6102:       _restoreMobileApprovalDetailsState(currentEl, approvalDetails);
+6103:       _restoreMobileQuestionDraftState(currentEl, questionDrafts);
+6104:       Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
+6105:         const nextHost = currentEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
+6106:         if (!nextHost || !snapshot?.host) return;
+6107:         nextHost.replaceWith(snapshot.host);
+6108:         snapshot.host.dataset.terminalOpen = '1';
+6109:         const toggle = snapshot.host.parentElement?.querySelector?.('[data-pm-process-action="load-approval"]');
+6110:         if (toggle) toggle.textContent = snapshot.toggleText || 'Close terminal';
+6111:       });
+6112:     } catch {}
+6113:   }
+6114:   const patchedEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`) || nextEl;
+6115:   patchedEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
+6116:     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
+6117:   });
+6118:   _wireMobileProcessRunActions(patchedEl);
+6119:   _wireMobileChatEnhancements(patchedEl);
+6120:   return true;
+6121: }
+6122: 
+6123: function _patchLatestMobileStreamingMessage(threadEl, bodyEl, key = 'chat') {
+[READ_TRUNCATED] Returned 60 of 28879 lines. Use start_line:6124, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28879 lines) [window 5496-5575, truncated]:
+5496:   if (m.streaming) {
+5497:     const dockedQuestion = _getPendingQuestionForSession(__pmChat.activeSessionId);
+5498:     if (dockedQuestion) inner += `<div class="pm-streaming-question-dock">${_renderMobileQuestionCard(dockedQuestion)}</div>`;
+5499:   }
+5500:   if (b.text) {
+5501:     const liveVoiceHtml = _renderMobileRealtimeVoiceAssistantText(m);
+5502:     inner += liveVoiceHtml || `<div class="markdown-body">${_renderMobileMarkdown(_normalizeMobileTraceProseText(b.text))}</div>`;
+5503:     // rendered above with the shared desktop Markdown renderer
+5504:   }
+5505:   if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');
+5506:   if (b.summary) {
+5507:     inner += `<div class="pm-summary-rows">${b.summary.map(s => `
+5508:       <div class="pm-summary-row">
+5509:         <span class="pm-icon">${ICONS[s.icon] || ICONS.clipboard}</span>
+5510:         <span class="pm-meta"><strong>${escapeHtml(s.title)}</strong><span>${escapeHtml(s.subtitle)}</span></span>
+5511:       </div>`).join('')}</div>`;
+5512:   }
+5513:   if (b.numbered) {
+5514:     inner += `<ol class="pm-numbered">${b.numbered.map((n, i) => `
+5515:       <li><span class="pm-num">${i+1}</span><div><strong>${escapeHtml(n.title)}</strong><span>${escapeHtml(n.subtitle)}</span></div></li>
+5516:     `).join('')}</ol>`;
+5517:   }
+5518:   if (b.teamRows) {
+5519:     inner += `<div class="pm-team-rows">${b.teamRows.map(t => `
+5520:       <div class="pm-team-row"><span class="pm-team-icon">${t.icon}</span><div><strong>${escapeHtml(t.name)}</strong><span>${escapeHtml(t.detail)}</span></div></div>
+5521:     `).join('')}</div>`;
+5522:   }
+5523:   if (b.image?.base64) {
+5524:     inner += _renderMobileMediaGallery([_normalizeMobileMedia({
+5525:       kind: 'image',
+5526:       name: b.image.name || 'Screenshot.png',
+5527:       mimeType: b.image.mimeType || 'image/png',
+5528:       base64: b.image.base64,
+5529:     })].filter(Boolean));
+5530:   }
+5531:   if (Array.isArray(b.actions) && b.actions.length) {
+5532:     inner += `<div class="pm-command-actions">${b.actions.map((action) => `
+5533:       <button type="button" class="pm-command-action ${escapeHtml(action.kind || '')}" data-pm-command-action="${escapeHtml(action.action || '')}" data-pm-command-id="${escapeHtml(action.id || '')}">
+5534:         ${action.icon ? `<span>${ICONS[action.icon] || escapeHtml(action.icon)}</span>` : ''}<strong>${escapeHtml(action.label || action.action || 'Action')}</strong>
+5535:       </button>
+5536:     `).join('')}</div>`;
+5537:   }
+5538:   const activeApprovals = m.streaming
+5539:     ? _getPendingApprovalsForSession(__pmChat.activeSessionId).filter((approval) => {
+5540:         const approvalId = String(approval?.id || '').trim();
+5541:         return !approvalId || !renderedApprovalIds.has(approvalId);
+5542:       })
+5543:     : [];
+5544:   if (activeApprovals.length) {
+5545:     inner += `<div class="pm-chat-approvals-inline">${activeApprovals.map((approval) => _renderMobileApprovalCard(approval, { compact: true })).join('')}</div>`;
+5546:   }
+5547:   if (b.browseState) inner += _renderBrowseCard(b.browseState);
+5548:   inner += _renderMobileRichArtifacts(m);
+5549:   if (!(Array.isArray(m.richArtifacts) && m.richArtifacts.some((a) => a?.type === 'products'))) {
+5550:     inner += _renderMobileProductCarousel(m);
+5551:   }
+5552:   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
+5553:   inner += _renderMobileFileChanges(m.fileChanges);
+5554:   if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
+5555:   return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
+5556:     ${m.workflowLabel ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
+5557:     <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
+5558: }
+5559: 
+5560: function _addMobileMedia(message, key, items, forcedKind = '') {
+5561:   if (!message) return;
+5562:   const normalized = _normalizeMobileMediaList(items).map((media) => forcedKind ? { ...media, kind: forcedKind } : media);
+5563:   if (!normalized.length) return;
+5564:   if (!Array.isArray(message[key])) message[key] = [];
+5565:   const existing = new Set(_normalizeMobileMediaList(message[key]).map((media) => media.dataUrl || media.path || media.name));
+5566:   for (const media of normalized) {
+5567:     const raw = {
+5568:       kind: media.kind,
+5569:       path: media.path,
+5570:       dataUrl: media.dataUrl,
+5571:       name: media.name,
+5572:       file_name: media.name,
+5573:       prompt: media.prompt,
+5574:       provider: media.provider,
+5575:       model: media.model,
+[READ_TRUNCATED] Returned 80 of 28879 lines. Use start_line:5576, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

@@ -2835,6 +2835,8 @@ export async function creativeExtractLayersForGeneration(
     useSam?: boolean;
     inpaintBackground?: boolean;
     vectorTraceShapes?: boolean;
+    saveLayerAssets?: boolean;
+    layerAssetBatchName?: string;
   },
 ): Promise<{ extraction: any; registeredLayers: CreativeGenerationRecord[]; generation: CreativeGenerationRecord; referenceAssets: any[]; startImageCandidates: any[]; backgroundPlate: any | null }> {
   const extraction = await extractCreativeLayers(storage, {
@@ -2852,6 +2854,8 @@ export async function creativeExtractLayersForGeneration(
     useSam: input.useSam !== false,
     inpaintBackground: input.inpaintBackground !== false,
     vectorTraceShapes: input.vectorTraceShapes !== false,
+    saveLayerAssets: input.saveLayerAssets === true,
+    layerAssetBatchName: input.layerAssetBatchName,
   });
   const root = await creativeRegisterGeneration(storage, {
     kind: 'image',
@@ -2865,6 +2869,7 @@ export async function creativeExtractLayersForGeneration(
       extractionId: extraction.id,
       scenePath: extraction.scenePath,
       layerCount: extraction.layers.length,
+      savedLayerAssets: extraction.savedLayerAssets || null,
       diagnostics: extraction.diagnostics,
     },
     tags: ['layer-extraction-scene'],

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Galaxy Drift — Space Explorer</title>
+  <link rel="stylesheet" href="css/game.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="game" tabindex="0"></canvas>
+    <div id="fade" class="fade hidden" aria-hidden="true"></div>
+    <div id="hud" class="hud">
+      <div class="hud-top">
+        <span id="modeLabel">GALAXY</span>
+        <span id="planetHint">Fly into a planet to land</span>
+      </div>
+      <div class="hud-bars">
+        <div class="bar-wrap"><label>Hull</label><div class="bar"><div id="hullBar" class="fill hull"></div></div></div>
+        <div class="bar-wrap"><label>Boost</label><div class="bar"><div id="boostBar" class="fill boost"></div></div></div>
+      </div>
+      <div id="damageFlash" class="damage-flash hidden"></div>
+      <div id="chatBackdrop" class="chat-backdrop hidden" aria-hidden="true"></div>
+      <div id="chatPanel" class="chat-panel hidden">
+        <div id="chatLines"></div>
+        <button type="button" id="chatClose">Close ✕</button>
+      </div>
+      <div id="desktopHelp" class="desktop-help">WASD move · Look up/down to fly vertical · Space climb · Shift boost+glow · FIRE shoots · Planet = FPS</div>
+    </div>
+    <div id="touchLayer" class="touch-layer">
+      <div id="moveStick" class="stick-zone move-zone">
+        <div class="stick-base"><div id="moveKnob" class="stick-knob"></div></div>
+        <span class="stick-label">MOVE</span>
+      </div>
+      <div id="lookPad" class="look-pad" aria-label="Camera look"></div>
+      <button type="button" id="btnJump" class="action-btn jump-btn">JUMP</button>
+      <button type="button" id="btnBoost" class="action-btn boost-btn">BOOST</button>
+      <button type="button" id="btnFire" class="action-btn fire-btn">FIRE</button>
+      <button type="button" id="btnTalk" class="action-btn talk-btn">TALK</button>
+    </div>
+    <div id="startOverlay" class="start-overlay">
+      <h1>Galaxy Drift</h1>
+      <p>Third-person space explorer. Planets hide whole biomes.</p>
+      <button type="button" id="btnStart">START — Galaxy</button>
+    </div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.181.2/+esm",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.2/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

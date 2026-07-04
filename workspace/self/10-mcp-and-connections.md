@@ -217,6 +217,8 @@ Important behavior:
 - Disconnecting `x` should clear X API tokens and X app credentials, leave xAI/Grok credentials intact, and refresh registered xAI/X tools.
 - `x_api_*` tools are not core tools. They belong to the `x` connector in the Social category, even though they are registered by the xAI extension adapter.
 - `x_search` and `xai_live_search` are xAI/Grok search tools; `x_api_*` tools call `https://api.x.com/2`.
+- Composer 2.5 / Grok Composer is exposed through the xAI/Grok OAuth subscription path as curated model id `grok-composer-2.5-fast`. xAI's announcement says Composer 2.5 is selected from Grok Build's `/models` menu and is available to SuperGrok and X Premium+; Hermes Agent mirrors this by adding the id as an OAuth-only curated extra immediately after `grok-build-0.1` in `oss-agents/hermes-agent/hermes_cli/models.py` and regression-testing it in `tests/hermes_cli/test_xai_curated_models.py` (checkout `88d1d62`).
+
 - Write tools such as post, delete, like, repost, follow, block, mute, list mutation, and DM send should be used only when the user explicitly asks.
 - Many X endpoints are scope/tier gated. Prometheus should surface real X API 401/403/429 errors rather than hiding them or falling back to browser automation silently.
 - `x_api_request` is the generic authenticated X API v2 escape hatch for endpoints that X adds before Prometheus gets a dedicated schema.

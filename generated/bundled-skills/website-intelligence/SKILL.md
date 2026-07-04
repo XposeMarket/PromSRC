@@ -1,8 +1,9 @@
 ---
 name: website-intelligence
-description: Full Website Audit
+description: Use this skill when the user asks to audit, analyze, score, or inspect a website for SEO, content, performance heuristics, tech stack, AI/GEO visibility, backlinks/search signals, conversion clarity, or competitor site intelligence. Triggers on phrases like audit this website, analyze site, website score, SEO audit, competitor website, site performance, tech stack, content audit, AI visibility, GEO visibility, and website intelligence. Use it to deploy the website analysis team for full audits or choose quick web_fetch/web_fetch_batch checks for narrow questions.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: audit website, analyze site, website score, SEO audit, competitor website, site performance, tech stack, content audit, AI visibility, GEO visibility, website intelligence, site analysis, conversion audit, homepage audit
 ---
 
 # Website Intelligence
@@ -32,7 +33,7 @@ Use `deploy_analysis_team` when the user asks to:
 - Research a competitor's website
 - Get a site score or full report
 
-For a quick single-question web check (e.g. "does my site have HTTPS?"), use `web_fetch` directly instead.
+For a quick single-question web check (e.g. "does my site have HTTPS?"), use `web_fetch` directly instead. For several known pages or competitor/source URLs, use `web_fetch_batch`.
 
 ---
 
@@ -87,10 +88,15 @@ Keep it direct. Numbers and specifics over adjectives. If data is missing from a
 
 ## API Limitations
 
-The team uses `web_fetch` + `web_search` — no Lighthouse API or PageSpeed Insights API. This means:
+The team uses `web_fetch`, `web_fetch_batch`, and `web_search` — no Lighthouse API or PageSpeed Insights API. This means:
 - **Performance scores** are heuristic, not Lighthouse numbers
 - **Backlink data** is search-signal based, not Ahrefs/Moz level
 - **GEO visibility** is based on web_search sampling, not exhaustive
+
+When doing manual follow-up research after the team report:
+- Use `web_search({ query, fetch_top_k: 2-5 })` for compact source discovery plus reading.
+- Use `web_fetch_batch` for selected competitor pages, review pages, docs, or SERP evidence URLs.
+- Use browser tools only for live interaction, JS-rendered content, screenshots, or visual QA.
 
 For production-grade audits, recommend the user also run Google PageSpeed Insights and Ahrefs manually and share results for a combined analysis.
 

@@ -1,19 +1,18 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when building, editing, reviewing, or repairing web/mobile UI, responsive layouts, frontend state, dashboards, interaction polish, visual QA, CSS/JS frontend behavior, or Prometheus web-ui surfaces.",
   "triggers": [
-    "fix the UI",
+    "fix the ui",
     "update the frontend",
     "build this web page",
     "mobile layout bug",
     "responsive layout",
-    "CSS issue",
-    "JavaScript UI bug",
-    "dashboard UI",
+    "css issue",
+    "javascript ui bug",
+    "dashboard ui",
     "polish this screen",
     "frontend component",
-    "visual QA",
+    "visual qa",
     "web-ui change",
     "mobile drawer",
     "hamburger menu",
@@ -22,20 +21,11 @@
     "fix spacing",
     "fix overflow",
     "frontend engineer",
-    "browser UI bug"
+    "browser ui bug",
+    "mobile markdown table",
+    "pm-md-table-scroll",
+    "sync:web-ui after mobile edit",
+    "generated public-web-ui stale"
   ],
-  "categories": [
-    "frontend",
-    "web-ui",
-    "mobile-ui",
-    "visual-qa"
-  ],
-  "requiredTools": [
-    "workspace_write",
-    "browser_automation",
-    "prometheus_source_read",
-    "prometheus_source_write"
-  ],
-  "lifecycle": "active",
   "id": "codex-frontend-engineer"
 }

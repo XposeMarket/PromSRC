@@ -1,0 +1,91 @@
+audit/chats/compactions/brain_thought_2026-07-03_13-24.md (90 lines) [window 1-90]:
+1: ### [ROLLING_COMPACTION] 2026-07-03T05:33:57.445Z
+2: - Base message count: 1
+3: - reason: projected_context_over_budget
+4: - projected_tokens: 122618
+5: - trigger_tokens: 121356
+6: - input_budget_tokens: 161808
+7: - context_window_tokens: 200000
+8: - provider: xai
+9: - model: grok-composer-2.5-fast
+10: - tool_result_count: 84
+11: - reasoning_trail_chars: 10162
+12: - summary_max_words: 1500
+13: - strategy: mid_workflow_token_budget
+14: - mode: llm
+15: 
+16: 1. Primary Request and Intent:
+17: - Run Prometheus automated **Brain Thought 1 – Observation + Seed Capture** for **Window 2** (activity roughly **2026-07-02 17:24 UTC – 2026-07-03 05:24 UTC**).
+18: - Scan audit/intraday/transcripts; read **Brain/active-work.jsonl** if present; apply rubric; write **Brain/thoughts/2026-07-03/13-24-thought.md**.
+19: - Optionally upsert **Brain/active-work.jsonl** and **Brain/business-candidates/2026-07-03/candidates.jsonl** within approved proposal scope only.
+20: - Session: **brain_thought_2026-07-03_13-24**; compaction is mid-workflow handoff for next model turn.
+21: 
+22: 2. Key Technical Concepts:
+23: - Brain Thought pipeline: observation, seed capture, ledger alignment, business candidates.
+24: - **Approved mutation scope** (proposal): files `Brain/thoughts/2026-07-03/13-24-thought.md`, `Brain/business-candidates/2026-07-03/candidates.jsonl`, `Brain/active-work.jsonl`; dirs `Brain/thoughts/2026-07-03`, `Brain/business-candidates/2026-07-03`.
+25: - **Brain/active-work.jsonl**: JSONL ledger of work items (`id`, `title`, `origin`, `diskPath`, `status`, `lastVerified`, `currentState`, `evidence`, etc.).
+26: - Mobile/canvas workstreams: `mobile-html-canvas-workspace-asset-loading`, `pocket-zombies-mobile-canvas-e2e`, `figure-8-drift-mobile-build`.
+27: - Tooling: `read_files_batch`, `search_files`, `write_file`; large reads spill to **temp/tool-results/** artifacts.
+28: 
+29: 3. Files and Code Sections:
+30: - **Brain/thoughts/2026-07-03/13-24-thought.md** — primary deliverable; `write_file` succeeded earlier in session.
+31: - **Brain/active-work.jsonl** — **currently broken**: after mistaken `write_file`, tool reported **“OK wrote Brain/active-work.jsonl (1 lines)”** — only **`figure-8-drift-mobile-build`** row remains; **~61 prior lines lost on disk**.
+32: - **Pre-loss ledger snapshot** (artifact **temp/tool-results/1783056594503-brain_thought_2026-07-03_13-24-read_files_batch.txt**, 61 lines), including at least:
+33:   - `mobile-html-canvas-workspace-asset-loading` — in_progress, canvas `?pt=` auth, relative asset loading; E2E not re-verified in Thought 1 window.
+34:   - `pocket-zombies-mobile-canvas-e2e` — in_progress, `games/mobile-sideways-fps/index.html`, iframe smoke risk.
+35:   - `mobile-chat-composer-newline-and-voice-polish` — **resolved** (2026-06-12).
+36:   - `x-posting-schedule-memory-path-and-browser-reliability` — **resolved**.
+37:   - Additional rows through line 61 (partial reads referenced pocket-zombies, main-chat-tool-preamble, etc.).
+38: - **Brain/_thought_append_ledger.jsonl** — write **BLOCKED** (outside scope).
+39: - **memory/2026-07-03-intraday-notes.md** — origins for figure-8, pocket zombies, canvas workspace.
+40: - **games/figure-8-drift/index.html** — track library, build UI, drift tuning, `#startBtn` render fix.
+41: - **games/mobile-sideways-fps/index.html**, **web-ui/src/mobile/** (`mobile-shell.js`, `mobile-api.js`, `mobile-pages.js`).
+42: - **src/gateway/routes/canvas.router.ts** — canvas routes.
+43: - Audit refs: `audit/chats/transcripts/mobile_mr4ees3z_ytvzm4.jsonl`, compactions/sessions mentioning `mobile-chat-composer-newline-and-voice-polish`, `brain_thought_2026-07-02_09-44`.
+44: 
+45: 4. Errors, Fixes, and Test Results:
+46: - **write_file → Brain/_thought_append_ledger.jsonl**: BLOCKED — not in approved scope.
+47: - **write_file → Brain/active-work.jsonl** (intended append of `figure-8-drift-mobile-build`): tool message **1 lines written** — **full file overwrite**, not append; **61-line ledger destroyed**.
+48: - **search_files** `figure-8-drift-mobile` in Brain: 0 matches (expected id: `figure-8-drift-mobile-build`).
+49: - **search_files** `mobile-html-canvas-workspace` / `pocket-zombies-mobile-canvas-e2e` in Brain: matched **active-work** lines 1–2 **before** corruption.
+50: - Repo-wide search `mobile-chat-composer-newline-and-voice-polish`: 1694 matches (truncated to 5); confirms resolved item still referenced in audit.
+51: - **grep flipY / games/**: 0 matches in one attempt (path/games availability uncertain in that search).
+52: - **Brain/thoughts/2026-07-02/**: no thoughts dir for that date per prior Dream note.
+53: 
+54: 5. Problem Solving and Decisions:
+55: - Scanned audit, intraday, active-work, game/mobile paths in parallel via `read_files_batch` / `search_files`.
+56: - Thought file written to allowed path; ledger updates attempted for figure-8 and line 1–2 `currentState` refreshes (Thought 13-24, fire/flipY ~05:10) — **blocked by overwrite** before full restore.
+57: - Ruled out `_thought_append_ledger.jsonl` — must not bypass proposal scope.
+58: - **Immediate priority decided**: restore **Brain/active-work.jsonl** from artifact **1783056594503** (strip `N: ` prefixes if needed), then append **`figure-8-drift-mobile-build`** if not duplicate, then targeted line updates — **not yet completed** at compaction.
+59: - Eliminated: using unapproved ledger file; assuming `append:true` worked without verifying line count.
+60: 
+61: 6. Recent User Messages:
+62: - No direct end-user chat in recent slice; implicit task via system: **Brain Thought 1, Window 2**, compaction summary for **brain_thought_2026-07-03_13-24**.
+63: - Assistant (internal): “Restoring `Brain/active-work.jsonl` — append overwrote the file.”
+64: 
+65: 7. Pending Tasks:
+66: - **URGENT**: Restore **Brain/active-work.jsonl** to full 61-line JSONL from artifact; verify with `read_files_batch` (expect ~61–62 lines).
+67: - Re-apply intended upserts: **`figure-8-drift-mobile-build`**; refresh **`mobile-html-canvas-workspace-asset-loading`** and **`pocket-zombies-mobile-canvas-e2e`** `currentState` / evidence for Thought 13-24 window.
+68: - Finish Brain Thought 1 rubric sections if incomplete (observation, seeds, section H ledger note).
+69: - **Brain/business-candidates/2026-07-03/candidates.jsonl** if rubric requires — scope allowed, status unknown.
+70: - Do **not** write **Brain/_thought_append_ledger.jsonl** without revised proposal.
+71: 
+72: 8. Current Work:
+73: - Mid–Brain Thought 1 after thought markdown write; **active-work restoration in progress**.
+74: - Last tools: `read_files_batch` on corrupted **active-work** (1 line) and artifact **1783056809026** / **1783056650418**; `search_files` for `mobile-chat-composer-newline-and-voice-polish` backup hints.
+75: - Assistant was about to rebuild full JSONL from **temp/tool-results/1783056594503-...-read_files_batch.txt** and rewrite **Brain/active-work.jsonl** via single full-content `write_file` (not single-line append).
+76: 
+77: 9. Recovery Artifacts:
+78: - Session JSON: `C:\Users\rafel\PromSRC\.prometheus\sessions\brain_thought_2026-07-03_13-24.json`
+79: - Transcript MD: `C:\Users\rafel\PromSRC\workspace\audit\chats\transcripts\brain_thought_2026-07-03_13-24.md`
+80: - Transcript JSONL: `C:\Users\rafel\PromSRC\workspace\audit\chats\transcripts\brain_thought_2026-07-03_13-24.jsonl`
+81: - Compaction MD: `C:\Users\rafel\PromSRC\workspace\audit\chats\compactions\brain_thought_2026-07-03_13-24.md`
+82: - Compaction JSONL: `C:\Users\rafel\PromSRC\workspace\audit\chats\compactions\brain_thought_2026-07-03_13-24.jsonl`
+83: - **Critical ledger backup**: `temp/tool-results/1783056594503-brain_thought_2026-07-03_13-24-read_files_batch.txt` (61-line formatted dump); also `1783056650418`, `1783056809026` read_files_batch artifacts.
+84: 
+85: 10. Continue From Here:
+86: - Resume **directly** as Prometheus on **Brain Thought 1, Window 2** — **do not** recap this summary to the user; continue the workflow naturally.
+87: - **First action**: Read artifact **1783056594503** (full), extract 61 JSONL records, `write_file` **Brain/active-work.jsonl** with complete content (+ figure-8 line if missing); confirm line count ≠ 1.
+88: - Then apply planned ledger edits only via **full-file rewrite** or verified append semantics; stay inside approved paths.
+89: - Protect any user-owned changes; prioritize
+90: 

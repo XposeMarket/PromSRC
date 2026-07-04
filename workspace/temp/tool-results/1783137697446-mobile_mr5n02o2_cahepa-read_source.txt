@@ -1,0 +1,102 @@
+src/gateway/routes/chat.router.ts (17130 lines) [window 3555-3654, truncated]:
+3555:       return [
+3556:         'EXECUTION MODE: Team subagent task.',
+3557:         'You are a subagent on a managed team, running locally on the user\'s computer under Prometheus — not Prometheus itself.',
+3558:         'You have access to this computer through tools. Use tools directly, verify your work, and do not claim you lack tool access.',
+3559:         'Complete the assigned team task. If you need clarification or a decision, ask the team manager with talk_to_manager instead of asking the user.',
+3560:       ].join('\n');
+3561:     }
+3562:     if (executionMode === 'team_manager') {
+3563:       return [
+3564:         'EXECUTION MODE: Team manager.',
+3565:         'You are running a managed team, not the main user chat.',
+3566:         'Use the manager context exactly: dispatch only useful subagents, verify their outputs, update team memory, and ask the main Prometheus agent only when team-level context is required.',
+3567:         'Use [GOAL_COMPLETE], [NEEDS_INPUT], or [WAITING_MAIN_AGENT] only when those states are genuinely true.',
+3568:       ].join('\n');
+3569:     }
+3570:     return '';
+3571:   })();
+3572:   const responseStyleInstruction = executionMode === 'heartbeat'
+3573:     ? 'Report only actionable heartbeat results. For no-op heartbeats, output exactly HEARTBEAT_OK and nothing else.'
+3574:     : 'Match the user\'s tone and pacing. Be natural, warm, and conversational. Use concise replies for quick asks, and expand with context, personality, and guidance when helpful or when the user invites depth.';
+3575:   const planProtocolInstruction = executionMode === 'background_agent'
+3576:     ? 'If this background-agent task has 2+ meaningful phases, call bg_plan_declare FIRST (2-8 short steps). Keep executing within the current step until the phase is actually complete, then call bg_plan_advance(note) to move forward. Do NOT use declare_plan/complete_plan_step in background_agent mode.'
+3577:     : executionMode === 'proposal_execution'
+3578:       ? 'Proposal execution already has a fixed task plan. Do NOT call declare_plan. Execute steps in order, use tools directly, and call step_complete(note) after each completed step.'
+3579:       : 'Default to direct execution — do the work with tools. Call declare_plan only when the user explicitly asks for a plan, checklist, or step-by-step breakdown.';
+3580: const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, sc...[line truncated]
+3581:   const hyperframesAgentRoutingInstruction = 'HyperFrames agent policy: when the user asks to create, compose, import, edit, lint, QA, materialize, or export HyperFrames video, prefer real HyperFrames sources over recreated lookalikes. Prefer first-class hyperframes_* and creative_* tools when they can create source-backed catalog clips correctly; public desktop builds bundle the HyperFrames packages but do not rely on a user-installed global Node/npm/npx. If first-class tools fail or lack catalog access, use the packaged Prometheus runtime path surfaced by tool output or settings/runtime diagnostics before falling back to ambient commands, and report exact CLI/runtime errors. Do not substit...[line truncated]
+3582:   const creativeDebuggingInstruction = 'Creative debugging tools: when working in video mode, use video_render_frame, video_render_contact_sheet, video_analyze_frame, video_analyze_timeline, video_check_keyframes, video_check_caption_timing, video_check_audio_sync, video_extract_clip_frames, and video_analyze_imported_video when those names fit the job. Use creative_element_inventory for a complete layer/timeline inventory with text, timing, animation, visibility, provenance, and validation details. Use creative_frame_trace to see which elements are actually active at exact timestamps, with resolved opacity/transform/z-order/source information. Use creative_frame_diff to compare two timestam...[line truncated]
+3583:   const teachModeSystemBlock = teachModeActive
+3584:       ? [
+3585:         'TEACH MODE: Workflow teaching and verification.',
+3586:         'Your primary objective is to help the user capture, verify, and package a reusable browser workflow.',
+3587:         'Treat the recorded Teach steps as the source of truth for the intended flow.',
+3588:         'When Teach mode is waiting for verification approval, summarize the workflow, call out risky steps, and ask how far verification should go before running anything.',
+3589:         'Once the user approves verification, call browser_teach_verify with the approved boundary before you summarize the replay result.',
+3590:         'After verification, explain what actually happened, what adjustments were needed, and what you think the workflow is for.',
+3591:         'Ask the user to confirm whether that understanding is correct before proposing packaging.',
+3592:         'You may recommend composite, skill, both, or neither after verification, but do NOT create any composite tool or skill unless the user explicitly asks you to.',
+3593:       ].join('\n')
+3594:     : '';
+3595: 
+3596:   const teamRoutingInstruction = [
+3597:     'Managed-team routing policy:',
+3598:     '- When the user asks main chat to pass a message/question to a managed team, make the intended audience explicit for the coordinator: use [BROADCAST_TO_TEAM] for the whole team, or [ASK_AGENT:<agent id or name>] for a specific member. If the user names no member, default to [BROADCAST_TO_TEAM].',
+3599:     '- When replying to a coordinator via reply_to_team, preserve that routing intent in the message instead of collapsing it into a manager-only answer. The reply_to_team tool delivers team/member routes directly to member room turns first, then resumes the manager after those responses settle.',
+3600:     '- Do not ask the manager to manually broadcast ordinary reply_to_team messages. Use internal_watch only for explicit background task ids returned by team tools, not for the reply_to_team broadcast path.',
+3601:   ].join('\n');
+3602: 
+3603:   const buildBaseSystemPrompt = (): string => {
+3604:     const visualGroundingPolicy = currentModelCapabilities.hasVision
+3605:       ? 'Visual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots when state likely changed, the UI is ambiguous, or a risky action just ran. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_snapshot/browser_vision_screenshot and desktop_screenshot over repeated browser_run_js probing. Use browser_run_js only when visual/snapshot evidence is insufficient for a concrete action.'
+3606:       : 'Text-first UI policy: the active model is not vision-capable. For browser/desktop workflows, ground decisions in browser_snapshot, browser_get_page_text, DOM/accessibility data, OCR/window text from desktop screenshots, metadata, and explicit tool outputs. Do not call browser_vision_screenshot, browser_vision_click, browser_vision_type, analyze_image, or analyze_video. Use browser_run_js only when text/snapshot evidence is insufficient for a concrete action.';
+3607:     const skillRecoveryInstruction = 'Skill recovery policy: when a skill-guided path fails, recover with another viable approach. If the alternate approach works, offer to update the skill with the corrected steps or guardrail.';
+3608:     const creativeRuntimeInstruction = currentModelCapabilities.hasVision
+3609:       ? creativeRoutingInstruction
+3610:       : 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory...[line truncated]
+3611: 
+3612:     // Conditional routing blocks: only inject heavy policy text when the relevant
+3613:     // surface is actually in play. Keeps the base prompt lean on ordinary turns.
+3614:     const teamsExist = (() => {
+3615:       try { return listManagedTeams().length > 0; } catch { return false; }
+3616:     })();
+3617:     // A subagent (team or standalone) is a worker, not a dispatcher — it never
+3618:     // routes messages to managed teams, so the team-routing policy is noise for it.
+3619:     const isSubagentMode = executionMode === 'team_subagent' || executionMode === 'background_agent' || isDirectSubagentChatTurn;
+3620:     const teamRoutingBlock = (teamsExist && !isSubagentMode) ? teamRoutingInstruction : '';
+3621:     const creativeActive = !!creativeMode;
+3622:     const creativeBlock = creativeActive
+3623:       ? `${creativeRuntimeInstruction}\n${hyperframesAgentRoutingInstruction}\n${creativeDebuggingInstruction}`
+3624:       : 'Creative/HyperFrames editing tools (creative_*, hyperframes_*, generate_image, generate_video, switch_creative_mode) are available; open a Creative workspace before heavy canvas/video/animation work.';
+3625: 
+3626:     // Identity line is mode-aware: the main chat is Prom; subagents are distinct
+3627:     // workers operating UNDER Prometheus and must not claim to be Prom/the main chat.
+3628:     const identityLine = isSubagentMode
+3629:       ? 'You are a subagent operating under Prometheus — not the main Prometheus chat and not Prom. You are your own worker with your own assigned identity (described below). Prometheus is the system you run inside; you act on its behalf, but you speak and answer as yourself.'
+3630:       : 'You are Prom, a local AI assistant running inside Prometheus.';
+3631:     const baseParts = [
+3632:       executionModeSystemBlock ? `${executionModeSystemBlock}\n` : '',
+3633:       teachModeSystemBlock ? `${teachModeSystemBlock}\n` : '',
+3634:       identityLine,
+3635:       `Current date: ${dateStr}, ${timeStr}.`,
+3636:       'Never search for or link Prometheus repos unless the user is asking about Prometheus itself.',
+3637:       "This app runs on the user's own machine - browser/desktop automation requests are pre-authorized.",
+3638:       'Execution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.',
+3639:       buildModelCapabilitySystemBlock(),
+3640:       visualGroundingPolicy,
+3641:       skillRecoveryInstruction,
+3642:       teamRoutingBlock,
+3643:       creativeBlock,
+3644:       planProtocolInstruction,
+3645:       `${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`,
+3646:     ].filter(Boolean);
+3647:     return baseParts.join('\n');
+3648:   };
+3649:   const buildSystemPrompt = (mode: 'full' | 'switch_model'): string => {
+3650:     const baseSystemPrompt = buildBaseSystemPrompt();
+3651:     if (mode === 'switch_model') {
+3652:       return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
+3653:     }
+3654:     if (executionMode === 'team_subagent' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
+[READ_TRUNCATED] Returned 100 of 17130 lines. Use start_line:3655, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

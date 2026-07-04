@@ -60,8 +60,8 @@ export function getAgentTeamScheduleTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['manage', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'dispatch_team_agent', 'request_member_turn', 'get_agent_result'] },
-            team_action: { type: 'string', description: 'Sub-action for action="manage", e.g. list/create/start/dispatch/pause/resume.' },
+            action: { type: 'string', enum: ['manage', 'delete', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'dispatch_team_agent', 'request_member_turn', 'get_agent_result'] },
+            team_action: { type: 'string', description: 'Sub-action for action="manage", e.g. list/create/start/dispatch/pause/resume/delete.' },
             team_id: { type: 'string' },
             teamId: { type: 'string' },
             agent_id: { type: 'string' },
@@ -74,6 +74,8 @@ export function getAgentTeamScheduleTools(): any[] {
             context: { type: 'string' },
             ref: { type: 'string' },
             request_id: { type: 'string' },
+            confirm: { type: 'boolean' },
+            delete_agents: { type: 'boolean' },
           },
         },
       },
@@ -697,7 +699,7 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function' as const,
       function: {
         name: 'team_manage',
-        description: 'Manage managed teams: list teams, create/start teams, trigger manager review, dispatch one-off tasks.',
+        description: 'Manage managed teams: list teams, create/start teams, trigger manager review, dispatch one-off tasks, or permanently delete teams.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -723,7 +725,7 @@ export function getAgentTeamScheduleTools(): any[] {
             task: { type: 'string', description: 'For start: kickoff task for manager coordination. For dispatch: one-off task to execute now' },
             context: { type: 'string', description: 'For dispatch: optional extra context' },
             confirm: { type: 'boolean', description: 'For delete: must be true to confirm deletion' },
-            delete_agents: { type: 'boolean', description: 'For delete: if true, also delete all member agents from config (default false)' },
+            delete_agents: { type: 'boolean', description: 'For delete: defaults true. If true, also permanently delete all member agents, their workspaces/chats, and their scheduled jobs. Set false only when intentionally keeping members.' },
             add_subagent_ids: { type: 'array', items: { type: 'string' }, description: 'For update: agent IDs to add to the team' },
             remove_subagent_ids: { type: 'array', items: { type: 'string' }, description: 'For update: agent IDs to remove from the team' },
             originating_session_id: { type: 'string', description: 'Internal: the main chat session that triggered team creation via ask_team_coordinator. Stored on the team so results route back to that session.' },
@@ -1296,11 +1298,11 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'complete_plan_step',
         description:
-          'Mark the current declare_plan phase finished and move to the next plan line. Use after you finish a phase (e.g. desktop focus + screenshots done) before starting the next. Not needed for browser/desktop-only work until the phase is actually complete.',
+          'Mark the current declare_plan phase finished and move to the next plan line. Use after you finish a phase (e.g. desktop focus + screenshots done) before starting the next. For create/write/build/edit phases, only call this after an actual successful write/create/patch/edit tool and verification evidence. Not needed for browser/desktop-only work until the phase is actually complete.',
         parameters: {
           type: 'object',
           properties: {
-            note: { type: 'string', description: 'Optional one-line reason (e.g. "Claude window located and verified")' },
+            note: { type: 'string', description: 'Concrete one-line evidence, including file/tool result when relevant (e.g. "Created games/foo/index.html with create_file and verified with file_stats").' },
           },
         },
       },

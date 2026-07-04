@@ -1,0 +1,82 @@
+games/figure-8-drift/index.html (99 lines) [window 1-80, truncated]:
+1: <!doctype html>
+2: <html lang="en">
+3: <head>
+4: <meta charset="utf-8" />
+5: <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+6: <title>Figure 8 Drift - Three.js</title>
+7: <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307080a'/%3E%3Cpath d='M16 38c10-20 22-20 32 0M16 26c10 20 22 20 32 0' fill='none' stroke='%23ffcf5a' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E" />
+8: <style>
+9:   :root{color-scheme:dark;--gold:#ffcf5a;--red:#ff4b38;--ink:#090a0c;--glass:rgba(8,10,13,.58)}
+10:   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+11:   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#07080a;color:#f8f0dd;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;touch-action:none;user-select:none}
+12:   #game{position:fixed;inset:0;width:100vw;height:100vh;display:block;background:#0c1110}
+13:   .hud{position:fixed;inset:0;pointer-events:none;z-index:5;text-shadow:0 2px 10px #000}
+14:   .top{position:absolute;top:env(safe-area-inset-top,0);left:0;right:0;padding:10px 12px;display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:start}
+15:   .pill{background:linear-gradient(180deg,rgba(14,17,22,.76),rgba(4,5,7,.54));border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 35px rgba(0,0,0,.28),inset 0 1px rgba(255,255,255,.08);border-radius:999px;padding:8px 11px;font-weight:900;letter-spacing:.045em;font-size:12px;white-space:nowrap;backdrop-filter:blur(8px)}
+16:   #speed{text-align:left}.center{text-align:center;color:var(--gold)}#lap{text-align:right}
+17:   #message{position:absolute;left:50%;top:19%;transform:translateX(-50%);width:min(560px,90vw);text-align:center;font-size:clamp(22px,7vw,44px);font-weight:1000;letter-spacing:.05em;color:#fff7d7}.sub{display:block;margin-top:6px;font-size:clamp(12px,3.2vw,16px);font-weight:800;color:#d3c5a7;letter-spacing:.02em}
+18:   .mini{position:absolute;right:10px;top:62px;width:118px;height:82px;border:1px solid rgba(255,255,255,.16);border-radius:16px;background:rgba(0,0,0,.42);overflow:hidden;box-shadow:0 14px 38px rgba(0,0,0,.34)}
+19:   #map{width:100%;height:100%;display:block;opacity:.95}
+20:   .controls{position:fixed;inset:0;pointer-events:none;z-index:10}.touch{position:absolute;pointer-events:auto;touch-action:none;user-select:none}
+21:   #steerPad{left:18px;bottom:calc(18px + env(safe-area-inset-bottom,0));width:142px;height:142px;border-radius:50%;border:1px solid rgba(255,255,255,.16);background:radial-gradient(circle,rgba(255,255,255,.11),rgba(255,255,255,.04));box-shadow:inset 0 0 42px rgba(255,255,255,.04),0 18px 40px rgba(0,0,0,.28)}
+22:   #steerKnob{position:absolute;left:50%;top:50%;width:58px;height:58px;margin:-29px;border-radius:50%;background:linear-gradient(180deg,rgba(255,255,255,.32),rgba(255,255,255,.13));border:1px solid rgba(255,255,255,.24);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+23:   .pedal{right:18px;border-radius:24px;border:1px solid rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-weight:1000;letter-spacing:.05em;color:white;box-shadow:0 16px 36px rgba(0,0,0,.32);backdrop-filter:blur(8px)}
+24:   #gas{bottom:calc(24px + env(safe-area-inset-bottom,0));width:96px;height:124px;background:linear-gradient(180deg,rgba(29,180,95,.72),rgba(13,91,55,.55))}#brake{bottom:calc(158px + env(safe-area-inset-bottom,0));width:88px;height:82px;background:linear-gradient(180deg,rgba(255,79,55,.72),rgba(125,20,20,.55))}
+25:   #handbrake{right:122px;bottom:calc(28px + env(safe-area-inset-bottom,0));width:82px;height:82px;border-radius:50%;background:linear-gradient(180deg,rgba(255,207,90,.82),rgba(179,94,22,.58));font-size:13px}.tinyBtns{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0));transform:translateX(-50%);display:flex;gap:8px;pointer-events:auto}.small{border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.46);color:#fff;border-radius:999px;padding:10px 13px;font-weight:900}
+26:   #start{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;text-align:center;background:radial-gradient(circle at 50% 38%,rgba(48,62,45,.88),rgba(4,5,7,.96));padding:24px;pointer-events:auto}.card{max-width:560px;border:1px solid rgba(255,255,255,.16);border-radius:28px;background:rgba(4,5,7,.55);box-shadow:0 28px 120px rgba(0,0,0,.62);padding:28px}.card h1{margin:0 0 8px;font-size:clamp(38px,12vw,68px);letter-spacing:-.06em;line-height:.86;color:#fff}.card h1 span{color:var(--gold)}.card p{margin:10px auto;color:#d5cab2;font-weight:700;line-height:1.45}.startbtn{margin-top:14px;border:0;border-radius:18px;background:linear-gradient(180deg,#ffdb70,#ff7a...[line truncated]
+27:   @media (min-width:800px){.pill{font-size:14px;padding:10px 14px}.mini{width:150px;height:104px;top:70px}.card{padding:34px}.pedal{right:32px}#steerPad{left:32px}}
+28:   #editor{position:fixed;left:0;right:0;bottom:env(safe-area-inset-bottom,0);z-index:18;padding:8px 10px calc(8px + env(safe-area-inset-bottom,0));background:linear-gradient(0deg,rgba(4,5,7,.92),rgba(4,5,7,.55));border-top:1px solid rgba(255,255,255,.12);display:none;pointer-events:auto}
+29:   #editor.on{display:block}
+30:   #editor .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:center;margin-bottom:6px}
+31:   #editor .row:last-child{margin-bottom:0}
+32:   #editor button,#editor .eb{appearance:none;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;border-radius:12px;padding:8px 11px;font:600 11px/1 system-ui,sans-serif;letter-spacing:.04em}
+33:   #editor button.on{background:rgba(255,207,90,.22);border-color:rgba(255,207,90,.45);color:var(--gold)}
+34:   #editor .lbl{color:rgba(255,255,255,.55);font:600 10px/1 system-ui,sans-serif;margin-right:4px}
+35:   #editor select{appearance:none;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.35);color:#fff;border-radius:10px;padding:7px 8px;font:600 11px system-ui,sans-serif}
+36:   body.drive-mode #editor{display:none!important}
+37:   body.drive-mode .controls{display:flex}
+38:   body.build-mode .controls{display:none!important}
+39:   body.build-mode #editor.on{display:block}
+40: </style>
+41: </head>
+42: <body>
+43: <canvas id="game"></canvas>
+44: <div class="hud"><div class="top"><div class="pill" id="speed">0 MPH</div><div class="pill center" id="score">DRIFT 0</div><div class="pill" id="lap">LAP 0/3</div></div><div class="mini"><canvas id="map" width="236" height="164"></canvas></div><div id="message">FIGURE 8 DRIFT<span class="sub">Hold clean angle through the crossover. Three laps. Don’t leave the road.</span></div></div>
+45: <div id="editor" class="on"><div class="row"><span class="lbl">MODE</span><button type="button" id="modeBuild" class="on">BUILD</button><button type="button" id="modeDrive">DRIVE</button><button type="button" id="presetF8">FIGURE 8</button></div><div class="row"><span class="lbl">STRAIGHT</span><select id="straightLen"><option value="12">12m</option><option value="20" selected>20m</option><option value="32">32m</option><option value="48">48m</option></select><select id="straightDir"><option value="0">N</option><option value="45">NE</option><option value="90" selected>E</option><option value="135">SE</option><option value="180">S</option><option value="225">SW</option><option value="270">W</o...[line truncated]
+46: <div id="start"><div class="card"><h1>FIGURE <span>8</span><br>DRIFT</h1><p>A mobile-first 3/4 topdown Three.js drifting game with a banked figure-8 track, touch steering, gas, brake, handbrake, checkpoints, tire smoke, skid marks and lap scoring.</p><p>Desktop: WASD / arrows, Space handbrake, R reset.</p><button id="startBtn" class="startbtn" type="button">START DRIFTING</button></div></div>
+47: <script type="module">
+48: import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.181.2/+esm';
+49: (()=>{'use strict';
+50: const canvas=document.getElementById('game'),mapCanvas=document.getElementById('map'),mctx=mapCanvas.getContext('2d');
+51: const ui={speed:document.getElementById('speed'),score:document.getElementById('score'),lap:document.getElementById('lap'),msg:document.getElementById('message'),start:document.getElementById('start'),knob:document.getElementById('steerKnob')};
+52: const keys={},touch={steer:0,gas:0,brake:0,hand:0};let W=innerWidth,H=innerHeight,last=0,started=false,paused=false,camMode=0;
+53: const scene=new THREE.Scene();scene.background=new THREE.Color(0x0a0d0b);scene.fog=new THREE.Fog(0x0a0d0b,55,145);
+54: const camera=new THREE.PerspectiveCamera(48,W/H,.1,260);const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(W,H,false);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+55: const sun=new THREE.DirectionalLight(0xfff2d0,3.1);sun.position.set(-35,48,28);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.near=1;sun.shadow.camera.far=120;sun.shadow.camera.left=-70;sun.shadow.camera.right=70;sun.shadow.camera.top=70;sun.shadow.camera.bottom=-70;scene.add(sun,new THREE.HemisphereLight(0xaecbff,0x182010,1.7));
+56: function tex(size,draw){const c=document.createElement('canvas');c.width=c.height=size;const x=c.getContext('2d');draw(x,size);const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;return t}
+57: const grassTex=tex(512,(x,s)=>{x.fillStyle='#182115';x.fillRect(0,0,s,s);for(let i=0;i<900;i++){const g=18+Math.random()*34;x.fillStyle=`rgba(${g},${55+Math.random()*45},${22+Math.random()*20},${.15+Math.random()*.22})`;x.fillRect(Math.random()*s,Math.random()*s,1+Math.random()*3,1+Math.random()*6)}});grassTex.repeat.set(32,32);
+58: const asphaltTex=tex(512,(x,s)=>{x.fillStyle='#23262a';x.fillRect(0,0,s,s);for(let i=0;i<3300;i++){const v=40+Math.random()*42;x.fillStyle=`rgba(${v},${v},${v+3},${.08+Math.random()*.18})`;x.fillRect(Math.random()*s,Math.random()*s,1+Math.random()*3,1+Math.random()*3)}});asphaltTex.repeat.set(1.6,1.6);
+59: scene.add(new THREE.Mesh(new THREE.PlaneGeometry(260,260),new THREE.MeshStandardMaterial({map:grassTex,roughness:.95})).rotateX(-Math.PI/2));
+60: const ROAD=12,HALF=ROAD/2,OUT=HALF+1.15;
+61: const PRESET_F8={type:'preset'};
+62: let segments=[{...PRESET_F8}],trackClosed=true,buildMode=true;
+63: let curve,N=420,center=[],gates=[.005,.255,.505,.755],lapsTotal=3,trackParts=[];
+64: function presetFigure8Points(){const pts=[];for(let i=0;i<360;i++){const t=i/360*Math.PI*2;pts.push(new THREE.Vector3(Math.sin(t)*42,0,Math.sin(t)*Math.cos(t)*34))}return pts}
+65: function isPreset(){return segments.length===1&&segments[0].type==='preset'}
+66: function sampleCustomPath(segs){const pts=[],step=.42;let x=0,z=0,h=Math.PI/2;const push=()=>pts.push(new THREE.Vector3(x,0,z));push();for(const s of segs){if(s.type==='straight'){h=(s.heading??90)*Math.PI/180;const len=+s.len||20,n=Math.max(2,Math.ceil(len/step));for(let i=0;i<n;i++){x+=Math.sin(h)*step;z+=Math.cos(h)*step;push()}}else if(s.type==='turnL'||s.type==='turnR'){const sign=s.type==='turnL'?1:-1,rad=(+s.deg||90)*Math.PI/180,r=+s.r||16,n=Math.max(4,Math.ceil(r*rad/step)),dh=sign*rad/n;for(let i=0;i<n;i++){h+=dh;x+=Math.sin(h)*step;z+=Math.cos(h)*step;push()}}}return pts}
+67: function setGatesForTrack(){if(isPreset()){trackClosed=true;gates=[.005,.255,.505,.755];lapsTotal=3}else{trackClosed=false;gates=[.2,.45,.7,.92];lapsTotal=1}}
+68: function disposeTrackParts(){for(const o of trackParts){scene.remove(o);o.geometry?.dispose?.()}trackParts=[]}
+69: function rebuildTrack(){disposeTrackParts();setGatesForTrack();let points;if(isPreset())points=presetFigure8Points();else if(!segments.length)points=[new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,24)];else points=sampleCustomPath(segments);curve=new THREE.CatmullRomCurve3(points,trackClosed,'catmullrom',trackClosed?.55:.35);const trackGeo=new THREE.BufferGeometry(),verts=[],uvs=[],idx=[];center=[];N=Math.max(80,Math.min(520,Math.floor(curve.getLength()*2.2)));const bankAmp=isPreset()?.32:.08;for(let i=0;i<N;i++){const u=i/(trackClosed?N:N-1||1),p=curve.getPointAt(Math.min(u,1)),tan=curve.getTangentAt(Math.min(u,.999)).normalize(),n=new THREE.Vector3(-tan.z,0,tan.x);center.push(p.clone());co...[line truncated]
+70: 
+71: const car=new THREE.Group();const bodyMat=new THREE.MeshStandardMaterial({color:0xff5138,roughness:.42,metalness:.28}),darkMat=new THREE.MeshStandardMaterial({color:0x101318,roughness:.5}),glassMat=new THREE.MeshStandardMaterial({color:0x8fd7ff,roughness:.18,metalness:.05,transparent:true,opacity:.74});
+72: const body=new THREE.Mesh(new THREE.BoxGeometry(2.35,.58,4.2),bodyMat);body.position.y=.55;body.castShadow=true;car.add(body);const cab=new THREE.Mesh(new THREE.BoxGeometry(1.65,.55,1.75),glassMat);cab.position.set(0,1.05,-.35);cab.castShadow=true;car.add(cab);for(const x of[-1.25,1.25])for(const z of[-1.35,1.35]){const w=new THREE.Mesh(new THREE.CylinderGeometry(.38,.38,.32,16),darkMat);w.rotation.z=Math.PI/2;w.position.set(x,.34,z);w.castShadow=true;car.add(w)}scene.add(car);
+73: const skidMat=new THREE.MeshBasicMaterial({color:0x050505,transparent:true,opacity:.42,depthWrite:false}),skids=[];function addSkid(x,z,yaw){const m=new THREE.Mesh(new THREE.PlaneGeometry(.34,2.1),skidMat);m.position.set(x,.085,z);m.rotation.set(-Math.PI/2,0,yaw);scene.add(m);skids.push({m,life:7});if(skids.length>140){scene.remove(skids.shift().m)}}
+74: const smoke=[];function smokeTex(){return tex(128,(x,s)=>{const g=x.createRadialGradient(s/2,s/2,4,s/2,s/2,s/2);g.addColorStop(0,'rgba(220,220,210,.42)');g.addColorStop(1,'rgba(220,220,210,0)');x.fillStyle=g;x.fillRect(0,0,s,s)})}const sTex=smokeTex(),sMat=new THREE.SpriteMaterial({map:sTex,transparent:true,depthWrite:false,color:0xd9d4c7});function spawnSmoke(x,z){const sp=new THREE.Sprite(sMat.clone());sp.position.set(x,.55,z);sp.scale.set(1.2,1.2,1);scene.add(sp);smoke.push({sp,life:.75})}
+75: let passed=0,carX=0,carZ=1,yaw=Math.PI/2,velX=0,velZ=0,laps=0,score=0,combo=1,bestDrift=0,offroad=0,finished=false;
+76: function syncCarToStart(){if(!center.length)return;const p=center[0],tan=curve.getTangentAt(0).normalize();carX=p.x;carZ=p.z+1;yaw=Math.atan2(tan.x,tan.z)}
+77: function updateSegUI(){const el=document.getElementById('segCount');if(el)el.textContent=isPreset()?'Figure-8 preset':segments.length+' pieces'}
+78: function setBuildMode(on){buildMode=on;document.body.classList.toggle('build-mode',on);document.body.classList.toggle('drive-mode',!on);document.getElementById('modeBuild')?.classList.toggle('on',on);document.getElementById('modeDrive')?.classList.toggle('on',!on)}
+79: function nearestProgress(x,z){let best=1e9,bi=0;for(let i=0;i<N;i+=2){const p=center[i],d=(p.x-x)*(p.x-x)+(p.z-z)*(p.z-z);if(d<best){best=d;bi=i}}return{u:bi/N,dist:Math.sqrt(best),i:bi}}
+80: function reset(){syncCarToStart();velX=velZ=0;laps=0;passed=0;score=0;combo=1;bestDrift=0;offroad=0;finished=false;if(isPreset())ui.msg.innerHTML='FIGURE 8 DRIFT<span class="sub">Gas into the corner, tap DRIFT, countersteer. Three clean laps.</span>';else ui.msg.innerHTML='CUSTOM TRACK<span class="sub">Build in BUILD mode, then DRIVE. Drift for score — no lap limit.</span>'}
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

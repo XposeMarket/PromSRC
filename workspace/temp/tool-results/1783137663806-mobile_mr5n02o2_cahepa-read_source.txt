@@ -1,0 +1,182 @@
+src/gateway/routes/chat.router.ts (17130 lines) [window 13515-13694, truncated]:
+13515:     { id: 'tools_menu', label: '[TOOLS] menu', weight: 5 },
+13516:     { id: 'activated_tool_blocks', label: 'Activated TOOL_BLOCKS.*', weight: 6 },
+13517:     { id: 'skills_hint', label: 'Skills hint / matching skills', weight: 3 },
+13518:     { id: 'retrieved_memory', label: 'Retrieved memory', weight: 1 },
+13519:     { id: 'reference_hints', label: 'Reference hints', weight: 1 },
+13520:   ]);
+13521: }
+13522: 
+13523: function buildProviderUsageGroup(id: string, label: string, usage: any, percentLabel = 'total'): ContextWindowRow | null {
+13524:   const inputTokens = Math.max(0, Number(usage?.inputTokens || 0));
+13525:   const outputTokens = Math.max(0, Number(usage?.outputTokens || 0));
+13526:   const reasoningTokens = Math.max(0, Number(usage?.reasoningTokens || 0));
+13527:   const cacheReadTokens = Math.max(0, Number(usage?.cacheReadTokens || 0));
+13528:   const cacheWriteTokens = Math.max(0, Number(usage?.cacheWriteTokens || 0));
+13529:   const totalTokens = Math.max(0, Number(usage?.totalTokens || 0))
+13530:     || inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens;
+13531:   if (totalTokens <= 0) return null;
+13532:   const children: ContextWindowRow[] = [
+13533:     { id: `${id}_input`, label: 'Input', tokens: inputTokens, active: inputTokens > 0, includedInContext: false, outOfBand: true, percentLabel },
+13534:     { id: `${id}_output`, label: 'Output', tokens: outputTokens, active: outputTokens > 0, includedInContext: false, outOfBand: true, percentLabel },
+13535:     { id: `${id}_reasoning`, label: 'Reasoning', tokens: reasoningTokens, active: reasoningTokens > 0, includedInContext: false, outOfBand: true, percentLabel },
+13536:     { id: `${id}_cache_read`, label: 'Cache read', tokens: cacheReadTokens, active: cacheReadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'saved' },
+13537:     { id: `${id}_cache_write`, label: 'Cache write', tokens: cacheWriteTokens, active: cacheWriteTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13538:   ].filter((row) => row.active);
+13539:   return { id, label, tokens: totalTokens, active: true, includedInContext: false, outOfBand: true, percentLabel, children };
+13540: }
+13541: 
+13542: function buildProviderUsageChildren(modelUsage: any): ContextWindowRow[] {
+13543:   const rows: ContextWindowRow[] = [];
+13544:   const last = buildProviderUsageGroup('provider_last_call', 'Last provider call', modelUsage?.lastContextCall || modelUsage?.lastCall, 'last');
+13545:   const session = buildProviderUsageGroup('provider_session_total', 'Session provider total', modelUsage, 'total');
+13546:   if (last) rows.push(last);
+13547:   if (session) rows.push(session);
+13548:   return rows;
+13549: }
+13550: 
+13551: function formatDurationMsForContextLabel(value: any): string {
+13552:   const durationMs = Number(value);
+13553:   if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
+13554:   if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+13555:   if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(2)}s`;
+13556:   if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
+13557:   const minutes = Math.floor(durationMs / 60_000);
+13558:   const seconds = Math.round((durationMs % 60_000) / 1000);
+13559:   return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
+13560: }
+13561: 
+13562: function formatToolBudgetDurationSuffix(tool: any): string {
+13563:   const max = Number(tool?.durationMsMax || 0);
+13564:   const avg = Number(tool?.durationMsAvg || 0);
+13565:   const total = Number(tool?.durationMsTotal || 0);
+13566:   const value = max || avg || total;
+13567:   const label = formatDurationMsForContextLabel(value);
+13568:   if (!label) return '';
+13569:   return ` · ${label}${max > 0 && Number(tool?.calls || 0) > 1 ? ' max' : ''}`;
+13570: }
+13571: 
+13572: function buildLastTurnUsageRow(turnTelemetry: any): ContextWindowRow | null {
+13573:   const providerUsage = turnTelemetry?.providerUsage || {};
+13574:   const toolBudget = turnTelemetry?.toolResultBudget || {};
+13575:   const providerTokens = Math.max(0, Number(providerUsage.totalTokens || 0));
+13576:   const toolResultTokens = Math.max(0, Number(toolBudget.resultTokens || 0));
+13577:   const tokens = providerTokens || toolResultTokens;
+13578:   if (tokens <= 0) return null;
+13579:   const children: ContextWindowRow[] = [];
+13580:   const provider = buildProviderUsageGroup('last_turn_provider', 'Provider usage', providerUsage, 'last');
+13581:   if (provider) children.push(provider);
+13582:   if (toolResultTokens > 0) {
+13583:     const toolChildren: ContextWindowRow[] = Array.isArray(toolBudget.tools)
+13584:       ? toolBudget.tools.slice(0, 12).map((tool: any, index: number) => ({
+13585:         id: `last_turn_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
+13586:         label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${formatToolBudgetDurationSuffix(tool)}`,
+13587:         tokens: Math.max(0, Number(tool.resultTokens || 0)),
+13588:         active: Number(tool.resultTokens || 0) > 0,
+13589:         includedInContext: false,
+13590:         outOfBand: true,
+13591:         percentLabel: 'tool',
+13592:       }))
+13593:       : [];
+13594:     children.push({
+13595:       id: 'last_turn_tool_outputs',
+13596:       label: `Tool result output${toolBudget.durationMsTotal ? ` · ${formatDurationMsForContextLabel(toolBudget.durationMsTotal)} total` : ''}`,
+13597:       tokens: toolResultTokens,
+13598:       active: true,
+13599:       includedInContext: false,
+13600:       outOfBand: true,
+13601:       percentLabel: 'tool',
+13602:       children: toolChildren,
+13603:     });
+13604:   }
+13605:   return {
+13606:     id: 'last_turn_usage',
+13607:     label: 'Last turn usage',
+13608:     tokens,
+13609:     active: true,
+13610:     includedInContext: false,
+13611:     outOfBand: true,
+13612:     percentLabel: 'last',
+13613:     children,
+13614:   };
+13615: }
+13616: 
+13617: function buildContextWindowCurrentState(input: {
+13618:   sessionId: string;
+13619:   profile: { contextWindowTokens: number; tokenizer: any };
+13620:   currentInputTokens: number;
+13621:   messageTokens: number;
+13622:   recentToolTokens: number;
+13623:   compactionTriggerTokens: number;
+13624:   storedThread: any;
+13625:   modelUsage: any;
+13626:   turnTelemetry?: any;
+13627: }) {
+13628:   const lastCall = input.modelUsage?.lastContextCall || input.modelUsage?.lastCall || {};
+13629:   const latestMessageInputTokens = Math.max(0, Number(lastCall.estimatedMessageInputTokens || 0));
+13630:   const latestSystemPromptTokens = Math.max(0, Number(lastCall.estimatedSystemPromptTokens || 0));
+13631:   const latestToolSchemaTokens = Math.max(
+13632:     0,
+13633:     Number(lastCall.estimatedToolSchemaTokens || 0) || estimateCurrentSystemToolSchemaTokens(input.sessionId, input.profile),
+13634:   );
+13635:   const latestProviderInputTokens = Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0));
+13636:   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
+13637:   const activeSkillTokens = activeSkillEstimate.tokens;
+13638:   const legacySystemPromptEstimate = Math.max(0, latestMessageInputTokens - input.currentInputTokens - activeSkillTokens);
+13639:   const systemPromptTokens = latestSystemPromptTokens > 0
+13640:     ? Math.max(0, latestSystemPromptTokens - activeSkillTokens)
+13641:     : (legacySystemPromptEstimate || estimateCurrentSystemPromptTokens(input.sessionId, input.profile));
+13642:   const storedMessageTokens = Math.max(0, Number(input.storedThread?.visibleChatTokens || 0) + Number(input.storedThread?.attachmentMetadataTokens || 0));
+13643:   const processTokens = Math.max(0, Number(input.storedThread?.processEntryTokens || 0) + Number(input.storedThread?.legacyToolLogTokens || 0));
+13644:   const storedObservationTokens = Math.max(0, Number(input.storedThread?.toolObservationStoredTokens || 0));
+13645:   const rawToolStorageTokens = Math.max(0, Number(input.storedThread?.rawToolResultTokens || 0));
+13646:   const systemToolChildren = buildSystemToolSchemaChildren(input.sessionId, input.profile, latestToolSchemaTokens);
+13647:   const systemPromptChildren = buildSystemPromptChildren(systemPromptTokens);
+13648:   const providerUsageChildren = buildProviderUsageChildren(input.modelUsage);
+13649:   const lastTurnUsageRow = buildLastTurnUsageRow(input.turnTelemetry);
+13650:   const skillChildren = activeSkillEstimate.children;
+13651:   const contextWindowTokens = Math.max(0, Number(input.profile.contextWindowTokens || 0));
+13652:   const compactionTriggerTokens = Math.max(0, Number(input.compactionTriggerTokens || 0));
+13653:   const contextLimitTokens = compactionTriggerTokens > 0 && contextWindowTokens > 0
+13654:     ? Math.min(compactionTriggerTokens, contextWindowTokens)
+13655:     : (compactionTriggerTokens || contextWindowTokens);
+13656:   const inContextRows: ContextWindowRow[] = [
+13657:     { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
+13658:     { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0, children: systemToolChildren },
+13659:     { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0, children: systemPromptChildren },
+13660:     { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0, children: skillChildren, estimated: activeSkillTokens > 0 },
+13661:     { id: 'tool_observations', label: 'Tool observations', tokens: Math.max(0, input.recentToolTokens), active: input.recentToolTokens > 0 },
+13662:     { id: 'mcp_tools', label: 'MCP tools', tokens: 0, active: false },
+13663:     { id: 'mcp_tools_deferred', label: 'MCP tools (deferred)', tokens: 0, active: false },
+13664:   ].map((row) => ({ ...row, includedInContext: true, percentBasis: 'window' }));
+13665:   const inContextRowTotal = inContextRows.reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
+13666:   const runtimeOverheadBasis = latestSystemPromptTokens > 0
+13667:     ? latestMessageInputTokens + latestToolSchemaTokens
+13668:     : inContextRowTotal;
+13669:   const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - runtimeOverheadBasis);
+13670:   const runtimeOverheadRow = runtimeOverheadTokens > 0
+13671:     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
+13672:     : [];
+13673:   const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
+13674:   const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
+13675:   return {
+13676:     currentStateTokens,
+13677:     contextLimitTokens,
+13678:     contextWindowTokens,
+13679:     compactionTriggerTokens,
+13680:     latestProviderInputTokens,
+13681:     nextCallEstimateTokens: input.currentInputTokens,
+13682:     freeSpaceTokens,
+13683:     rows: [
+13684:       ...inContextRows,
+13685:       ...runtimeOverheadRow,
+13686:       { id: 'free_space', label: 'Free before compaction', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
+13687:       { id: 'next_call_estimate', label: 'Next call estimate', tokens: input.currentInputTokens, active: input.currentInputTokens > 0, includedInContext: false, percentLabel: 'next' },
+13688:       { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, percentBasis: 'window', percentLabel: 'limit' },
+13689:       { id: 'model_context_window', label: 'Model context window', tokens: contextWindowTokens, active: false, includedInContext: false, outOfBand: true, percentLabel: 'full' },
+13690:       { id: 'full_stored_thread', label: 'Full stored thread', tokens: Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0)), active: false, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13691:       { id: 'stored_process_logs', label: 'Stored process logs', tokens: processTokens, active: processTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13692:       { id: 'stored_tool_observations', label: 'Stored tool observations', tokens: storedObservationTokens, active: storedObservationTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13693:       { id: 'raw_tool_storage', label: 'Raw tool storage', tokens: rawToolStorageTokens, active: rawToolStorageTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13694:       ...(lastTurnUsageRow ? [lastTurnUsageRow] : []),
+[READ_TRUNCATED] Returned 180 of 17130 lines. Use start_line:13695, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

@@ -1,0 +1,242 @@
+web-ui/src/pages/ChatPage.js (40557 lines) [window 8720-8959, truncated]:
+8720:     }
+8721:     if (isCreativeModeLocked()) {
+8722:       try {
+8723:         await exitCreativeModeForBrowserSwitch({
+8724:           sessionId: getCurrentChatModeSessionId(),
+8725:           mode: window.currentCreativeMode,
+8726:         });
+8727:       } catch (err) {
+8728:         const sid = getCurrentChatModeSessionId();
+8729:         if (sid) applySessionCreativeMode(sid, null);
+8730:         else {
+8731:           window.currentCreativeMode = null;
+8732:           applyCreativeModeUI();
+8733:         }
+8734:       }
+8735:     }
+8736:     await canvasPresentFile(targetPath, targetLabel);
+8737:   } catch (err) {
+8738:     showToast('Could not open image in Canvas', String(err?.message || err || 'Unknown canvas error.'), 'error');
+8739:   }
+8740: }
+8741: 
+8742: async function canvasExtractLayersFromSource(source, promptText = '', overrides = {}) {
+8743:   if (creativeLayerExtractionBusy) return;
+8744:   let targetSource = normalizeCanvasPath(source || '');
+8745:   if (!targetSource) {
+8746:     const selected = getSelectedCreativeElement();
+8747:     if (selected?.type === 'image' && selected.meta?.source) {
+8748:       targetSource = normalizeCanvasPath(selected.meta.source);
+8749:     }
+8750:   }
+8751:   if (!targetSource) {
+8752:     showToast('Choose an image first', 'Select an image layer or use Extract Layers from a generated image card.', 'error');
+8753:     return;
+8754:   }
+8755:   const sid = getCurrentChatModeSessionId() || window.activeChatSessionId || window.agentSessionId || 'default';
+8756:   const requestId = canvasCreateExtractRequestId();
+8757:   creativeLayerExtractionRequestId = requestId;
+8758:   creativeLayerExtractionProgress = null;
+8759:   creativeLayerExtractionBusy = true;
+8760:   renderChatMessages();
+8761:   renderCreativeWorkspace();
+8762:   canvasShowExtractScanOverlay({ requestId, label: 'Preparing extraction', detail: 'Reading source image' });
+8763:   addProcessEntry('info', `Extracting editable layers from ${targetSource.split('/').pop() || targetSource}...`);
+8764:   try {
+8765:     if (normalizeCreativeMode(window.currentCreativeMode) !== 'image') {
+8766:       const savedMode = await persistCreativeMode(sid, 'image');
+8767:       applySessionCreativeMode(sid, savedMode, { autoOpen: true });
+8768:     }
+8769:     ensureCreativeSceneForMode(window.currentCreativeMode);
+8770:     const spriteSheetHandled = await canvasTryExtractSpriteSheetTilesFromSource(targetSource);
+8771:     if (spriteSheetHandled) return;
+8772:     const spriteHandled = await canvasTryExtractSpriteLayersFromSource(targetSource);
+8773:     if (spriteHandled) return;
+8774:     const opts = Object.assign({
+8775:       mode: 'deep',
+8776:       textEditable: true,
+8777:       useOcr: true,
+8778:       extractObjects: true,
+8779:       preserveOriginal: true,
+8780:       useSam: true,
+8781:       inpaintBackground: true,
+8782:       vectorTraceShapes: true,
+8783:       maxTextLayers: 24,
+8784:       maxShapeLayers: 16,
+8785:     }, overrides || {});
+8786:     const res = await fetch('/api/canvas/creative-extract-layers', {
+8787:       method: 'POST',
+8788:       headers: { 'Content-Type': 'application/json' },
+8789:       body: JSON.stringify({
+8790:         sessionId: sid,
+8791:         root: canvasProjectRoot || '',
+8792:         requestId,
+8793:         source: targetSource,
+8794:         prompt: String(promptText || ''),
+8795:         copySource: true,
+8796:         ...opts,
+8797:       }),
+8798:     });
+8799:     const data = await res.json().catch(() => ({}));
+8800:     if (!res.ok || data.success === false) {
+8801:       throw new Error(String(data?.error || `HTTP ${res.status}`));
+8802:     }
+8803:     const nextScene = await materializeCreativeCropCandidateLayers(createSceneDocument(data.scene || {}), targetSource);
+8804:     creativeHtmlMotionClip = null;
+8805:     setCreativeSceneDoc(nextScene, { recordHistory: true, render: false, persist: false });
+8806:     const selectedId = nextScene.selectedId || nextScene.elements.find((element) => element.type === 'text')?.id || nextScene.elements[nextScene.elements.length - 1]?.id || null;
+8807:     setCreativeSelection(selectedId, { render: false, persist: false });
+8808:     creativeInspectorTab = 'layers';
+8809:     renderCreativeWorkspace();
+8810:     persistActiveChat();
+8811:     loadCreativeAssets({ force: true }).catch(() => {});
+8812:     const summary = data.sceneSummary || {};
+8813:     const textCount = Number(summary.textCount || 0);
+8814:     const elementCount = Number(summary.elementCount || nextScene.elements.length || 0);
+8815:     const warnings = Array.isArray(data.diagnostics?.warnings) ? data.diagnostics.warnings : [];
+8816:     canvasApplyExtractProgressEvent({
+8817:       requestId,
+8818:       stage: 'done',
+8819:       label: 'Editable layers ready',
+8820:       detail: `${elementCount} layer${elementCount === 1 ? '' : 's'} assembled`,
+8821:       width: nextScene.width,
+8822:       height: nextScene.height,
+8823:       boxes: (nextScene.elements || [])
+8824:         .filter((element) => element?.id !== 'extracted_background_plate' && element?.id !== 'extracted_original_reference')
+8825:         .slice(0, 18)
+8826:         .map((element) => ({
+8827:           id: element.id,
+8828:           type: element.type,
+8829:           role: element.meta?.role,
+8830:           label: element.meta?.content || element.meta?.label || element.meta?.role || element.type,
+8831:           x: element.x,
+8832:           y: element.y,
+8833:           width: element.width,
+8834:           height: element.height,
+8835:           cutoutPath: element.type === 'image' ? element.meta?.source : '',
+8836:         })),
+8837:     });
+8838:     addProcessEntry('info', `Extracted ${elementCount} layer${elementCount === 1 ? '' : 's'}${textCount ? ` with ${textCount} editable text layer${textCount === 1 ? '' : 's'}` : ''}.`);
+8839:     showToast('Layers extracted', warnings.length ? warnings[0] : `${elementCount} editable layers created.`, warnings.length ? 'info' : 'success');
+8840:   } catch (err) {
+8841:     const message = String(err?.message || err || 'Layer extraction failed.');
+8842:     addProcessEntry('error', `Extract layers failed: ${message}`);
+8843:     showToast('Extract layers failed', message, 'error');
+8844:   } finally {
+8845:     creativeLayerExtractionBusy = false;
+8846:     canvasHideExtractScanOverlay();
+8847:     creativeLayerExtractionRequestId = '';
+8848:     renderChatMessages();
+8849:     renderCreativeWorkspace();
+8850:   }
+8851: }
+8852: 
+8853: function canvasEnsureExtractScanStyles() {
+8854:   if (document.getElementById('creative-extract-scan-style')) return;
+8855:   const style = document.createElement('style');
+8856:   style.id = 'creative-extract-scan-style';
+8857:   style.textContent = `
+8858:     .creative-extract-scan-overlay {
+8859:       position: absolute; inset: 0; pointer-events: none; z-index: 9000;
+8860:       border-radius: inherit; overflow: hidden;
+8861:       background: rgba(8, 10, 18, 0.18);
+8862:       backdrop-filter: saturate(1.05) blur(0.4px);
+8863:       -webkit-backdrop-filter: saturate(1.05) blur(0.4px);
+8864:     }
+8865:     .creative-extract-scan-overlay::before {
+8866:       content: ''; position: absolute; left: 0; right: 0; height: 22%;
+8867:       top: -22%;
+8868:       background: linear-gradient(to bottom,
+8869:         rgba(255, 138, 0, 0) 0%,
+8870:         rgba(255, 168, 60, 0.12) 35%,
+8871:         rgba(255, 196, 110, 0.55) 50%,
+8872:         rgba(255, 168, 60, 0.12) 65%,
+8873:         rgba(255, 138, 0, 0) 100%);
+8874:       box-shadow: 0 0 60px 8px rgba(255, 168, 60, 0.35);
+8875:       animation: creative-extract-scan-sweep 2.4s ease-in-out infinite alternate;
+8876:     }
+8877:     .creative-extract-scan-overlay::after {
+8878:       content: ''; position: absolute; left: 0; right: 0; height: 2px;
+8879:       top: 0;
+8880:       background: linear-gradient(to right,
+8881:         rgba(255, 196, 110, 0) 0%,
+8882:         rgba(255, 220, 150, 0.95) 50%,
+8883:         rgba(255, 196, 110, 0) 100%);
+8884:       box-shadow: 0 0 14px 2px rgba(255, 196, 110, 0.85);
+8885:       animation: creative-extract-scan-line 2.4s ease-in-out infinite alternate;
+8886:     }
+8887:     .creative-extract-scan-grid {
+8888:       position: absolute; inset: 0;
+8889:       background-image:
+8890:         linear-gradient(rgba(255, 168, 60, 0.05) 1px, transparent 1px),
+8891:         linear-gradient(90deg, rgba(255, 168, 60, 0.05) 1px, transparent 1px);
+8892:       background-size: 24px 24px;
+8893:       mix-blend-mode: screen;
+8894:       animation: creative-extract-scan-grid-pulse 2.4s ease-in-out infinite alternate;
+8895:     }
+8896:     .creative-extract-scan-work {
+8897:       position: absolute; inset: 0; pointer-events: none;
+8898:     }
+8899:     .creative-extract-scan-box {
+8900:       position: absolute;
+8901:       border: 1.5px solid rgba(255, 181, 75, 0.95);
+8902:       background: rgba(255, 138, 0, 0.055);
+8903:       box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 24px rgba(255, 138, 0, 0.22);
+8904:       animation: creative-extract-box-arrive 420ms cubic-bezier(.2,.8,.2,1) both, creative-extract-box-breathe 1.7s ease-in-out infinite alternate;
+8905:     }
+8906:     .creative-extract-scan-box[data-kind="text"] {
+8907:       border-color: rgba(96, 165, 250, 0.92);
+8908:       background: rgba(59, 130, 246, 0.065);
+8909:       box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 22px rgba(96, 165, 250, 0.22);
+8910:     }
+8911:     .creative-extract-scan-box[data-kind="shape"] {
+8912:       border-color: rgba(74, 222, 128, 0.9);
+8913:       background: rgba(34, 197, 94, 0.055);
+8914:       box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 22px rgba(74, 222, 128, 0.2);
+8915:     }
+8916:     .creative-extract-scan-box[data-kind="image"][data-cutout="1"] {
+8917:       border-style: dashed;
+8918:       border-color: rgba(251, 146, 60, 0.95);
+8919:       background: rgba(251, 146, 60, 0.08);
+8920:     }
+8921:     .creative-extract-scan-box::before,
+8922:     .creative-extract-scan-box::after {
+8923:       content: ''; position: absolute; width: 8px; height: 8px;
+8924:       border-color: inherit; border-style: solid; opacity: 0.95;
+8925:     }
+8926:     .creative-extract-scan-box::before {
+8927:       left: -4px; top: -4px; border-width: 2px 0 0 2px;
+8928:     }
+8929:     .creative-extract-scan-box::after {
+8930:       right: -4px; bottom: -4px; border-width: 0 2px 2px 0;
+8931:     }
+8932:     .creative-extract-scan-cutout {
+8933:       position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+8934:       opacity: 0.56; filter: drop-shadow(0 0 10px rgba(255, 168, 60, 0.58));
+8935:       mix-blend-mode: screen;
+8936:     }
+8937:     .creative-extract-scan-box-label {
+8938:       position: absolute; left: 0; top: -22px; max-width: 180px;
+8939:       padding: 3px 7px; border-radius: 6px;
+8940:       background: rgba(8, 10, 18, 0.72);
+8941:       color: rgba(255,255,255,0.9);
+8942:       font: 700 10px/1.2 'Inter', system-ui, sans-serif;
+8943:       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+8944:       border: 1px solid rgba(255,255,255,0.12);
+8945:     }
+8946:     .creative-extract-stage-stack {
+8947:       position: absolute; left: 14px; top: 14px; display: flex; flex-direction: column; gap: 7px;
+8948:       width: min(260px, calc(100% - 28px));
+8949:     }
+8950:     .creative-extract-stage-pill {
+8951:       display: flex; align-items: center; gap: 8px;
+8952:       min-height: 28px; padding: 6px 9px; border-radius: 8px;
+8953:       background: rgba(8, 10, 18, 0.68);
+8954:       border: 1px solid rgba(255, 168, 60, 0.2);
+8955:       color: rgba(255,255,255,0.88);
+8956:       box-shadow: 0 10px 34px rgba(0,0,0,0.28);
+8957:       font: 650 11px/1.25 'Inter', system-ui, sans-serif;
+8958:       transform-origin: left center;
+8959:       animation: creative-extract-pill-in 260ms ease-out both;
+[READ_TRUNCATED] Returned 240 of 40557 lines. Use start_line:8960, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

@@ -55,7 +55,7 @@ function letterboxScale(origW: number, origH: number): { scale: number; newW: nu
   };
 }
 
-function preprocessForSam(image: Jimp): { tensor: Float32Array; origWidth: number; origHeight: number } {
+function preprocessForSam(image: Jimp): { image: Jimp; chw: Float32Array; origWidth: number; origHeight: number } {
   const origW = image.bitmap.width;
   const origH = image.bitmap.height;
   const { scale, newW, newH } = letterboxScale(origW, origH);
@@ -64,23 +64,66 @@ function preprocessForSam(image: Jimp): { tensor: Float32Array; origWidth: numbe
   padded.composite(resized, 0, 0);
   void scale;
   return {
-    tensor: jimpToImagenetCHW(padded, SAM_INPUT_SIZE, SAM_INPUT_SIZE),
+    image: padded,
+    chw: jimpToImagenetCHW(padded, SAM_INPUT_SIZE, SAM_INPUT_SIZE),
     origWidth: origW,
     origHeight: origH,
   };
 }
 
+function getInputShape(session: ort.InferenceSession, inputName: string): unknown[] {
+  const metadata = (session as any).inputMetadata;
+  if (Array.isArray(metadata)) {
+    const item = metadata.find((entry: any) => entry?.name === inputName);
+    if (Array.isArray(item?.shape)) return item.shape;
+  }
+  const item = metadata?.[inputName];
+  return Array.isArray(item?.shape) ? item.shape : [];
+}
+
+function imagenetHwcFromPadded(image: Jimp): Float32Array {
+  const out = new Float32Array(SAM_INPUT_SIZE * SAM_INPUT_SIZE * 3);
+  let ptr = 0;
+  for (let y = 0; y < SAM_INPUT_SIZE; y++) {
+    for (let x = 0; x < SAM_INPUT_SIZE; x++) {
+      const idx = (y * SAM_INPUT_SIZE + x) * 4;
+      out[ptr++] = (image.bitmap.data[idx] - 123.675) / 58.395;
+      out[ptr++] = (image.bitmap.data[idx + 1] - 116.28) / 57.12;
+      out[ptr++] = (image.bitmap.data[idx + 2] - 103.53) / 57.375;
+    }
+  }
+  return out;
+}
+
+function buildSamEncoderInput(session: ort.InferenceSession, inputName: string, preprocessed: ReturnType<typeof preprocessForSam>): ort.Tensor {
+  const shape = getInputShape(session, inputName);
+  if (shape.length === 3) {
+    const channelLast = shape[2] === 3 || String(shape[2]).toLowerCase().includes('channel');
+    if (channelLast) {
+      return new ort.Tensor('float32', imagenetHwcFromPadded(preprocessed.image), [SAM_INPUT_SIZE, SAM_INPUT_SIZE, 3]);
+    }
+    return new ort.Tensor('float32', preprocessed.chw, [3, SAM_INPUT_SIZE, SAM_INPUT_SIZE]);
+  }
+  if (shape.length === 4) {
+    const channelLast = shape[3] === 3 || String(shape[3]).toLowerCase().includes('channel');
+    if (channelLast) {
+      return new ort.Tensor('float32', imagenetHwcFromPadded(preprocessed.image), [1, SAM_INPUT_SIZE, SAM_INPUT_SIZE, 3]);
+    }
+  }
+  return new ort.Tensor('float32', preprocessed.chw, [1, 3, SAM_INPUT_SIZE, SAM_INPUT_SIZE]);
+}
+
 export async function encodeImageForSam(absPath: string): Promise<SamImageContext> {
   const session = await getEncoder();
   const image = await loadJimp(absPath);
-  const { tensor, origWidth, origHeight } = preprocessForSam(image);
+  const preprocessed = preprocessForSam(image);
   const inputName = session.inputNames[0] || 'input';
   const outputName = session.outputNames[0] || 'image_embeddings';
-  const inputTensor = new ort.Tensor('float32', tensor, [1, 3, SAM_INPUT_SIZE, SAM_INPUT_SIZE]);
+  const inputTensor = buildSamEncoderInput(session, inputName, preprocessed);
   const outputs = await session.run({ [inputName]: inputTensor });
   const embeddings = outputs[outputName] || outputs[session.outputNames[0]];
   if (!embeddings) throw new Error('SAM encoder produced no embeddings tensor.');
-  return { embeddings: embeddings as ort.Tensor, origWidth, origHeight };
+  return { embeddings: embeddings as ort.Tensor, origWidth: preprocessed.origWidth, origHeight: preprocessed.origHeight };
 }
 
 function buildPromptTensors(prompt: SamPrompt, context: SamImageContext): { coords: Float32Array; labels: Float32Array; nPoints: number } {

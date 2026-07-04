@@ -1,0 +1,115 @@
+games/mobile-sideways-fps/index.html (530 lines) [window 140-189, truncated]:
+140:   ui.right.textContent=`HP ${Math.max(0,Math.ceil(state.player.hp))}`;
+141: }
+142: function drawSprite(s,zbuf,cols,cw){
+143:   let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+144:   let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+145:   if(Math.abs(da)>FOV*.72||dist<.15)return;
+146:   const baseScale=s.kind==='z'?1.35:.42;
+147:   let sx=(da/FOV+.5)*W,sz=H/(dist+.05)*baseScale;
+148:   const floorY=H/2+(H/(dist+.05))*.48;
+149:   let sy=s.kind==='z'?floorY-sz:H/2-sz*.55;
+150:   sy += (state.player.pitch||0) * H * 0.35;
+151:   if(zbuf[Math.max(0,Math.min(cols-1,Math.floor(sx/W*cols)))]<dist-.2)return;
+152:   ctx.save();
+153:   ctx.translate(sx,sy+sz/2);
+154:   if(s.kind==='z'){
+155:     let scale=s.variant==='brute'?1.18:(s.variant==='runner'?0.88:1),w=sz*.7*scale,h=sz*1.08*scale;
+156:     ctx.globalAlpha=1;
+157:     if(zombieImg.complete&&zombieImg.naturalWidth){
+158:       ctx.drawImage(zombieImg,-w/2,-h*.58,w,h);
+159:       if(s.hurt){ctx.globalCompositeOperation='source-atop';ctx.fillStyle=`rgba(255,0,0,${Math.min(.75,.25+s.hurt*3)})`;ctx.fillRect(-w/2,-h*.58,w,h);ctx.globalCompositeOperation='source-over'}
+160:     }else{
+161:       ctx.fillStyle=s.hurt?'#ff2020':(s.variant==='brute'?'#6b1b22':s.variant==='runner'?'#407a35':'#2d6b35');ctx.fillRect(-w/2,-h*.5,w,h);ctx.fillStyle=s.hurt?'#ffaaaa':'#151';ctx.fillRect(-w*.28,-h*.7,w*.56,h*.24);ctx.fillStyle='#ffd86b';ctx.fillRect(-w*.18,-h*.64,w*.08,w*.08);ctx.fillRect(w*.1,-h*.64,w*.08,w*.08)
+162:     }
+163:   }else if(s.kind==='p'){
+164:     ctx.fillStyle='#ffd94b';ctx.fillRect(-sz*.28,-sz*.28,sz*.56,sz*.56);ctx.fillStyle='#000';ctx.font=`${Math.max(9,sz*.18)}px sans-serif`;ctx.textAlign='center';ctx.fillText(s.type[0],0,4);
+165:   }else{
+166:     ctx.fillStyle=s.type==='perk'?'#55d6ff':'#e0d07c';ctx.fillRect(-sz*.35,-sz*.35,sz*.7,sz*.7);
+167:   }
+168:   ctx.restore();
+169: }
+170: function drawShots(){
+171:   ctx.save();
+172:   ctx.strokeStyle='#ffd86b';ctx.lineWidth=Math.max(2,3*devicePixelRatio);ctx.shadowColor='#ff7a2c';ctx.shadowBlur=10*devicePixelRatio;
+173:   for(const b of shots){
+174:     let dx=b.x-state.player.x,dy=b.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+175:     let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+176:     if(Math.abs(da)>FOV*.55||dist<.05)continue;
+177:     const sx=(da/FOV+.5)*W,sy=H*.54+(1/(dist+.2))*12*devicePixelRatio;
+178:     ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx-Math.sin(da)*36*devicePixelRatio,sy+20*devicePixelRatio);ctx.stroke();
+179:   }
+180:   ctx.restore();
+181: }
+182: function drawGun(){
+183:   const bob=Math.sin(performance.now()/120)*6*devicePixelRatio;
+184:   const smoothing=ctx.imageSmoothingEnabled;
+185:   ctx.imageSmoothingEnabled=false;
+186:   const isFiring=touch.fire||keys[' ']||(state.gunFlash||0)>0;
+187:   const sprite=(isFiring&&fireGunImg.complete&&fireGunImg.naturalWidth)?fireGunImg:gunImg;
+188:   const aspect=(sprite.naturalWidth&&sprite.naturalHeight)?sprite.naturalHeight/sprite.naturalWidth:1.8;
+189:   const gunW=Math.min(W*.48,H*.7),gunH=Math.min(gunW*aspect,H*.55);
+[READ_TRUNCATED] Use start_line:190, num_lines:80 for the next chunk, or full:true only when needed.
+
+games/mobile-sideways-fps/index.html (530 lines) [window 200-259, truncated]:
+200: function drawMini(){let scale=7*devicePixelRatio,x=10*devicePixelRatio,y=46*devicePixelRatio;ctx.save();ctx.globalAlpha=.8;for(let yy=0;yy<map.length;yy++)for(let xx=0;xx<map[0].length;xx++){ctx.fillStyle=map[yy][xx]==='0'?'rgba(255,255,255,.08)':map[yy][xx]==='D'?'#8d4a1d':'#555';ctx.fillRect(x+xx*scale,y+yy*scale,scale-1,scale-1)}ctx.fillStyle='#66d9ff';ctx.fillRect(x+state.player.x*scale-2,y+state.player.y*scale-2,4,4);ctx.fillStyle='#d53';state.zombies.forEach(z=>ctx.fillRect(x+z.x*scale-1,y+z.y*scale-1,3,3));ctx.restore()}
+201: function loop(t){let now=t/1000,dt=Math.min(.05,now-(last||now));last=now;update(dt);render();publishDebug();raf=requestAnimationFrame(loop)}
+202: function publishDebug(){window.__pocketZombiesDebug={running:state.running,paused:state.paused,gameOver:state.gameOver,wave:state.wave,waveState:state.waveState,zombies:state.zombies.length,zombiesToSpawn:state.zombiesToSpawn,spawnTimer:+state.spawnTimer.toFixed(2),player:{x:+state.player.x.toFixed(2),y:+state.player.y.toFixed(2),health:Math.ceil(state.player.hp),ammo:state.ammo[state.weapon].mag,reserve:state.ammo[state.weapon].reserve},weapon:state.weapon,points:state.points,kills:state.kills,errors:0}}
+203: function beep(f,d){if(muted)return;try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.value=.025;o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+204: function startGame(){ui.start.querySelector('h1').textContent='POCKET ZOMBIES';reset();ui.start.style.display='none';if(audio&&audio.state==='suspended')audio.resume()}
+205: function forceStart(){startGame();console.log('START_TRIGGERED')}
+206: function startClick(e){if(ui.start.style.display==='none')return;if(e){e.preventDefault();e.stopPropagation()}startGame()}
+207: window.__pocketStart=startGame;
+208: window.__pocketForceStart=forceStart;
+209: const startInputs=['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'];
+210: startInputs.forEach(ev=>{if(ui.startBtn)ui.startBtn.addEventListener(ev,startClick,{passive:false});if(ui.start)ui.start.addEventListener(ev,startClick,{passive:false})});
+211: if(ui.startBtn){ui.startBtn.onclick=startClick;ui.startBtn.onpointerdown=startClick;ui.startBtn.onpointerup=startClick;ui.startBtn.ontouchend=startClick}
+212: let stickId=null;
+213: document.getElementById('stick').addEventListener('pointerdown',e=>{stickId=e.pointerId;e.currentTarget.setPointerCapture(stickId)});
+214: document.getElementById('stick').addEventListener('pointermove',e=>{if(e.pointerId!==stickId)return;let r=e.currentTarget.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=(e.clientX-cx)/(r.width/2),dy=(e.clientY-cy)/(r.height/2),m=Math.max(1,Math.hypot(dx,dy));touch.mx=dx/m;touch.my=-dy/m;ui.knob.style.transform=`translate(${touch.mx*31}px,${-touch.my*31}px)`});
+215: canvas.addEventListener('pointermove',e=>{if(!stickId&&e.buttons){state.player.a+=e.movementX*.004;state.player.pitch=Math.max(-1.2,Math.min(1.2,state.player.pitch+e.movementY*0.0035))}});
+216: document.getElementById('stick').addEventListener('pointercancel',()=>{touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)'});
+217: const fireButton=document.getElementById('fire');
+218: function setFiring(on,e){if(e){e.preventDefault();e.stopPropagation()}touch.fire=on;keys.Mouse=on;if(on&&state.running&&!state.paused&&state.fireCooldown<=0)shoot()}
+219: ['pointerdown','touchstart','mousedown','click'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(true,e),{passive:false}));
+220: const reloadButton=document.getElementById('reload');
+221: const useButton=document.getElementById('use');
+222: function tapAction(fn,e){if(e){e.preventDefault();e.stopPropagation()}if(state.running&&!state.paused)fn()}
+223: ['pointerdown','touchstart','mousedown','click'].forEach(ev=>{
+224:   reloadButton.addEventListener(ev,e=>tapAction(reload,e),{passive:false});
+225:   useButton.addEventListener(ev,e=>tapAction(use,e),{passive:false});
+226: });
+227: ['pointerup','pointercancel','pointerleave','touchend','touchcancel','mouseup','mouseleave'].forEach(ev=>fireButton.addEventListener(ev,e=>setFiring(false,e),{passive:false}));
+228: window.addEventListener('pointerup',()=>setFiring(false));
+229: window.addEventListener('mouseup',()=>setFiring(false));
+230: canvas.addEventListener('pointermove',e=>{if(e.buttons){state.player.a+=e.movementX*.004;state.player.pitch=Math.max(-1.2,Math.min(1.2,state.player.pitch+e.movementY*0.0035))}});addEventListener('keydown',e=>{keys[e.key]=true;if(e.key==='r'||e.key==='R')reload();if(e.key==='e'||e.key==='E')use();if(e.key==='p'||e.key==='P')state.paused=!state.paused;if(e.key==='1')state.weapon=state.owned[0]||state.weapon;if(e.key==='2'&&state.owned[1])state.weapon=state.owned[1];if(e.key==='3'&&state.owned[2])state.weapon=state.owned[2]});addEventListener('keyup',e=>keys[e.key]=false);
+231: window.addEventListener('error',e=>{window.__pocketZombiesLastError=String(e.message||e.error)});rebuildMap();publishDebug();raf=requestAnimationFrame(loop);startClockId=raf;
+232: })();
+233: </script>
+234: </body>
+235: </html>
+236: +w.price);state.points-=w.price;if(!state.owned.includes(it.id))state.owned.push(it.id);state.weapon=it.id;state.ammo[it.id].mag=w.mag;state.ammo[it.id].reserve=w.reserve;msg('BOUGHT '+w.name)}else if(it.type==='perk'){if(state.owned.includes(it.id))return msg('ALREADY OWNED');if(state.points<it.cost)return msg('NEED 
+237: function endGame(){state.gameOver=true;state.running=false;msg('GAME OVER - WAVE '+state.wave+' · KILLS '+state.kills,99);ui.start.style.display='flex';ui.start.querySelector('h1').textContent='GAME OVER';ui.start.querySelector('p').textContent='Wave '+state.wave+' · '+state.kills+' kills · $'+state.points+'. Tap to restart.'}
+238: function cast(a){let x=state.player.x,y=state.player.y,step=.035,dist=0;while(dist<18){x+=Math.cos(a)*step;y+=Math.sin(a)*step;dist+=step;if(solid(x,y))return{dist,x,y,t:tile(x,y)}}return{dist:18,x,y,t:'0'}}
+239: function render(){
+240:   ctx.fillStyle='#0a0908';ctx.fillRect(0,0,W,H);
+241:   let sky=ctx.createLinearGradient(0,0,0,H*.5);sky.addColorStop(0,'#151819');sky.addColorStop(1,'#312014');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H/2);
+242:   let floor=ctx.createLinearGradient(0,H/2,0,H);floor.addColorStop(0,'#1b1a16');floor.addColorStop(1,'#070706');ctx.fillStyle=floor;ctx.fillRect(0,H/2,W,H/2);
+243:   const cols=Math.min(320,Math.floor(W/4)),cw=W/cols,zbuf=[];
+244:   for(let i=0;i<cols;i++){
+245:     let a=state.player.a-FOV/2+FOV*i/cols,r=cast(a),d=r.dist*Math.cos(a-state.player.a);
+246:     zbuf[i]=d;
+247:     let h=Math.min(H,H/(d+.08)*.82),shade=Math.max(35,210-d*18),x=i*cw;
+248:     ctx.fillStyle=r.t==='D'?`rgb(${shade*.7},${shade*.35},20)`: `rgb(${shade*.45},${shade*.42},${shade*.38})`;
+249:     ctx.fillRect(x,H/2-h/2,cw+1,h);
+250:   }
+251:   const sprites=[];
+252:   for(const z of state.zombies)sprites.push({...z,kind:'z'});
+253:   for(const p of state.powerups)sprites.push({...p,kind:'p'});
+254:   for(const b of buys)sprites.push({...b,kind:'b'});
+255:   sprites.sort((a,b)=>Math.hypot(b.x-state.player.x,b.y-state.player.y)-Math.hypot(a.x-state.player.x,a.y-state.player.y));
+256:   for(const s of sprites)drawSprite(s,zbuf,cols,cw);
+257:   drawGun();drawMini();
+258:   if(state.noticeTimer>0||state.gameOver)ui.msg.textContent=state.notice;else ui.msg.textContent='';
+259:   const it=interactable();
+[READ_TRUNCATED] Use start_line:260, num_lines:80 for the next chunk, or full:true only when needed.

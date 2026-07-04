@@ -3,7 +3,8 @@
  *
  * Endpoints:
  *   GET /api/hub/skills/usage?range=day|week|month
- *   GET /api/hub/tools/heatmap?year=YYYY&month=MM   (1-12)
+ *   GET /api/hub/tokens/activity                    (daily token activity from first detected use)
+ *   GET /api/hub/tools/heatmap?year=YYYY&month=MM   (legacy monthly tool calls)
  *   GET /api/hub/skills/:id/content                 (read-only SKILL.md content)
  *   GET /api/hub/achievements                       (stub, returns [])
  */
@@ -301,6 +302,109 @@ function getChatSessionStats(): { sessions: number; messages: number } {
     messages: summaries.reduce((sum, summary) => sum + (Number(summary.messageCount) || 0), 0),
   };
 }
+
+function sessionSummaryTimestamp(summary: any): string {
+  const candidates = [
+    summary?.createdAt,
+    summary?.updatedAt,
+    summary?.lastMessageAt,
+    summary?.lastActivityAt,
+    summary?.timestamp,
+    summary?.mtime,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return new Date(value).toISOString();
+    const text = String(value || '').trim();
+    if (text && Number.isFinite(Date.parse(text))) return text;
+  }
+  return '';
+}
+
+function addTokenBucket(buckets: Record<string, number>, timestamp: string, tokens: number): void {
+  const key = localDateKey(timestamp);
+  const n = Math.max(0, Number(tokens || 0));
+  if (!key || n <= 0) return;
+  buckets[key] = (buckets[key] || 0) + n;
+}
+
+router.get('/api/hub/tokens/activity', (_req: Request, res: Response) => {
+  try {
+    const modelEvents = readModelUsageEvents();
+    const observations = readAllToolObservations(100_000);
+    const auditTimestamps: string[] = [];
+    for (const line of readAuditLinesCached()) {
+      try {
+        const e = JSON.parse(line);
+        if (e?.timestamp) auditTimestamps.push(String(e.timestamp));
+      } catch { /* skip malformed */ }
+    }
+    const sessionTimestamps = listSessionSummaries()
+      .filter(isUserChatSessionSummary)
+      .map((summary: any) => sessionSummaryTimestamp(summary))
+      .filter(Boolean);
+
+    const allTimestamps = [
+      ...modelEvents.map((e) => String(e.timestamp || '')),
+      ...observations.map((obs) => Number(obs.createdAt || 0) > 0 ? new Date(Number(obs.createdAt)).toISOString() : ''),
+      ...auditTimestamps,
+      ...sessionTimestamps,
+    ].filter(Boolean);
+    const window = rangeWindow('all', allTimestamps);
+    const buckets: Record<string, number> = {};
+    let modelTokens = 0;
+    let toolContextTokens = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let reasoningTokens = 0;
+    let cacheTokens = 0;
+
+    for (const e of modelEvents) {
+      const t = Date.parse(e.timestamp || '');
+      if (!Number.isFinite(t) || t < window.sinceMs || t >= window.untilMs) continue;
+      const total = Math.max(0, Number(e.totalTokens || 0));
+      modelTokens += total;
+      inputTokens += Math.max(0, Number(e.inputTokens || 0));
+      outputTokens += Math.max(0, Number(e.outputTokens || 0));
+      reasoningTokens += Math.max(0, Number(e.reasoningTokens || 0));
+      cacheTokens += Math.max(0, Number(e.cacheReadTokens || 0)) + Math.max(0, Number(e.cacheWriteTokens || 0));
+      addTokenBucket(buckets, e.timestamp, total);
+    }
+
+    for (const obs of observations) {
+      const t = Number(obs.createdAt || 0);
+      if (!Number.isFinite(t) || t < window.sinceMs || t >= window.untilMs) continue;
+      const estimate = (obs?.tokenEstimate || {}) as any;
+      const tokens = Math.max(0, Number(estimate.totalTokens || 0))
+        || Math.max(0, Number(estimate.argsTokens || 0)) + Math.max(0, Number(estimate.resultTokens || 0));
+      toolContextTokens += tokens;
+      addTokenBucket(buckets, new Date(t).toISOString(), tokens);
+    }
+
+    const daily = buildDailySeries(window.sinceMs, window.untilMs, buckets).map((row) => ({
+      date: row.date,
+      tokens: row.count,
+      count: row.count,
+    }));
+    const stats = {
+      firstDate: daily[0]?.date || dateKeyFromDate(new Date()),
+      lastDate: daily[daily.length - 1]?.date || dateKeyFromDate(new Date()),
+      totalTokens: modelTokens + toolContextTokens,
+      modelTokens,
+      toolContextTokens,
+      inputTokens,
+      outputTokens,
+      reasoningTokens,
+      cacheTokens,
+      activeDays: daily.filter((row) => row.tokens > 0).length,
+      days: daily.length,
+      peakTokens: daily.reduce((max, row) => Math.max(max, row.tokens), 0),
+      ...streaksFromCounts(buckets),
+    };
+    res.json({ success: true, daily, stats });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
 
 router.get('/api/hub/skills/usage', (req: Request, res: Response) => {
   try {

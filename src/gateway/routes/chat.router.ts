@@ -60,7 +60,7 @@ import { executeWeatherLookup } from '../../tools/weather';
 import { executePolymarketLookup } from '../../tools/polymarket';
 import { executeMapLookup } from '../../tools/mapcard';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
-import { createToolObservationsFromResults, formatToolObservationsForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
+import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -78,6 +78,7 @@ import { getVisualErrorDetector } from '../visual-error-detection';
 import { getErrorAudit } from '../../security/error-audit';
 import { getContextInjectionManager } from '../context-injection';
 import { SkillsManager } from '../skills-runtime/skills-manager';
+import { rankSkillsForQuery } from '../agents-runtime/capabilities/skills-executor';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import {
@@ -389,16 +390,21 @@ type TurnFileChanges = {
 
 const FILE_MUTATION_TOOL_NAMES = new Set([
   'create_file',
+  'write',
   'write_file',
+  'append_file',
   'replace_lines',
   'insert_after',
   'delete_lines',
   'find_replace',
   'apply_patchset',
+  'apply_workspace_patchset',
+  'workspace_edit',
   'rename_file',
   'delete_file',
   'copy_file',
   'move_file',
+  'mkdir',
   'apply_patch',
   'write_source',
   'find_replace_source',
@@ -992,11 +998,26 @@ type FileOpType = 'CHAT' | 'FILE_EDIT' | 'FILE_CREATE' | 'FILE_ANALYSIS' | 'BROW
 class FileOpProgressWatchdog { constructor(_n: number) {} record(_x: any) { return { no_progress: false }; } }
 const classifyFileOpType: any = () => ({ type: 'CHAT' as FileOpType, reason: 'file-op v2 disabled' });
 const resolveFileOpSettings: any = () => ({ enabled: false, watchdog_no_progress_cycles: 3, checkpointing_enabled: false, primary_edit_max_lines: 200, primary_edit_max_chars: 8000, primary_edit_max_files: 3 });
-const isFileMutationTool: any = () => false;
-const isFileCreateTool: any = () => false;
-const isFileEditTool: any = () => false;
-const extractFileToolTarget: any = () => null;
-const estimateFileToolChange: any = () => ({ lines_changed: 0, chars_changed: 0 });
+const FILE_CREATE_TOOL_NAMES = new Set(['create_file', 'write_file', 'write', 'append_file', 'mkdir']);
+const FILE_EDIT_TOOL_NAMES = new Set([
+  'write_file', 'write', 'append_file', 'replace_lines', 'find_replace',
+  'insert_after', 'delete_lines', 'apply_patch', 'apply_patchset',
+  'apply_workspace_patchset', 'workspace_edit', 'prom_apply_dev_changes',
+]);
+const isFileMutationTool: any = (name: unknown) => FILE_MUTATION_TOOL_NAMES.has(String(name || '').trim());
+const isFileCreateTool: any = (name: unknown) => FILE_CREATE_TOOL_NAMES.has(String(name || '').trim());
+const isFileEditTool: any = (name: unknown) => FILE_EDIT_TOOL_NAMES.has(String(name || '').trim());
+const extractFileToolTarget: any = (_name: unknown, args: any) => {
+  if (!args || typeof args !== 'object') return null;
+  return String(args.filename || args.path || args.file || args.name || args.new_path || args.destination || '').trim() || null;
+};
+const estimateFileToolChange: any = (_name: unknown, args: any) => {
+  const content = String(args?.content ?? args?.new_content ?? args?.replace ?? '');
+  return {
+    lines_changed: content ? Math.max(1, content.split('\n').length) : 1,
+    chars_changed: content.length,
+  };
+};
 const canPrimaryApplyFileTool: any = () => ({ allowed: true, reason: '' });
 const shouldVerifyFileTurn: any = () => ({ verify: false, reasons: [] });
 const isSmallSuggestedFix: any = () => false;
@@ -1200,6 +1221,7 @@ import { createServer } from '../core/server';
 import { runStartup } from '../core/startup';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { isProviderStatusChecking, markProviderStatus, readProviderStatusCache } from '../provider-status';
+import { attachWorkspaceCheckpoint, createWorkspaceTurnCheckpoint } from '../../workspace-history';
 
 
 import {
@@ -1394,10 +1416,10 @@ function formatCompactionToolResults(sessionId: string, toolResults: ToolResult[
     `compaction_${Date.now()}`,
     Array.isArray(toolResults) ? toolResults.slice(-Math.max(1, maxResults)) : [],
   );
-  return formatToolObservationsForContext(observations, {
-    includeHeader: false,
-    maxChars: 14000,
-    maxObservations: maxResults,
+  return formatToolStateSummaryForContext(observations, {
+    includeHeader: true,
+    maxChars: 2400,
+    maxObservations: Math.min(12, Math.max(1, maxResults)),
     includeTelemetry: true,
   });
 }
@@ -2028,13 +2050,13 @@ async function handleChat(
       ? rawHistory.slice(0, -1)
       : rawHistory;
   autoActivateToolCategories(sessionId, message, history.length);
-  // Build compact tool observations from recent assistant turns so the model
-  // knows what it recently did even across the short history window.
+  // Build a compact tool-state summary from recent assistant turns. Full raw
+  // observations stay out-of-band for Hub/debugging instead of prompt context.
   const activeContextProfile = resolveActiveModelContextProfile();
   const activeContextBudget = buildContextBudget(activeContextProfile);
-  const recentToolLogMaxChars = Math.max(2500, Math.min(16000, activeContextBudget.toolContextBudgetTokens * 3));
+  const recentToolLogMaxChars = Math.max(1000, Math.min(2200, activeContextBudget.toolContextBudgetTokens * 2));
   htime('before getRecentToolObservationsForContext');
-  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 5, recentToolLogMaxChars);
+  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
   const inferReferenceImageMimeType = (filePath: string): string => {
     const ext = path.extname(filePath).toLowerCase();
@@ -2180,7 +2202,7 @@ async function handleChat(
   const PROPOSAL_CORE_MIN = new Set([
     'run_command',
     'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
-    'list_files', 'list_directory', 'mkdir', 'file_stats', 'grep_file', 'grep_files', 'search_files',
+    'list_files', 'list_directory', 'mkdir', 'file_stats', 'validate_file', 'grep_file', 'grep_files', 'search_files',
     'write_note',
     'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
     'task_control',
@@ -2191,9 +2213,9 @@ async function handleChat(
     'switch_model',
     'set_current_model',
     ...(!isPublicDistributionBuild() ? [
-      'read_source', 'read_dev_sources', 'apply_dev_source_patchset', 'list_source', 'grep_source', 'source_stats', 'src_stats',
-      'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
-      'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',
+      'read_source', 'read_dev_sources', 'apply_dev_source_patchset', 'list_source', 'grep_source', 'source_stats', 'src_stats', 'validate_source',
+      'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats', 'validate_webui_source',
+      'list_prom', 'prom_file_stats', 'validate_prom_file', 'read_prom_file', 'grep_prom',
     ] : []),
   ]);
   const buildCurrentTurnTools = (categoryOverride?: Set<string>): any[] => {
@@ -2710,6 +2732,32 @@ async function handleChat(
   const userRequestedDurableBuildWork = (): boolean => {
     const text = String(message || '').toLowerCase();
     return /\b(build|create|make|implement|generate|design|code|site|website|page|app|tool|component|fix|edit|update|clone|from screenshot|screenshot|continue|resume|proceed|keep going)\b/i.test(text);
+  };
+
+  const PLAN_STEP_WRITE_EVIDENCE_TOOLS = new Set([
+    'create_file', 'write', 'write_file', 'append_file',
+    'replace_lines', 'find_replace', 'insert_after', 'delete_lines',
+    'apply_patch', 'apply_patchset', 'apply_workspace_patchset',
+    'workspace_edit', 'prom_apply_dev_changes',
+  ]);
+  const planStepNeedsWriteEvidence = (stepText: string, note: string): boolean => {
+    const text = `${stepText || ''} ${note || ''}`.toLowerCase();
+    if (!text.trim()) return false;
+    if (/\b(read|inspect|grep|search|list|locate|review|understand|check|confirm|audit)\b/.test(text)
+      && !/\b(write|create|implement|build|edit|patch|replace|insert|delete|update|fix|add|scaffold|generate)\b/.test(text)) {
+      return false;
+    }
+    return /\b(write|create|implement|build|edit|patch|replace|insert|delete|update|fix|add|scaffold|generate|complete)\b/.test(text)
+      && /\b(file|html|index|app|game|page|component|code|script|style|feature|control|button|ui|tool|deliverable)\b/.test(text);
+  };
+  const hasRecentWriteEvidenceForCurrentStep = (): boolean => {
+    const lastBoundary = Math.max(
+      allToolResults.map((r, index) => ['declare_plan', 'complete_plan_step', 'step_complete'].includes(String(r?.name || '').trim()) ? index : -1).reduce((a, b) => Math.max(a, b), -1),
+      -1,
+    );
+    return allToolResults
+      .slice(lastBoundary + 1)
+      .some((r) => r && !r.error && PLAN_STEP_WRITE_EVIDENCE_TOOLS.has(String(r.name || '').trim()));
   };
 
   // Keep legacy round-stats for the checklist-guard and continuation-nudge logic
@@ -3635,6 +3683,40 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     sendSSE('vision_injected', { source: 'creative_references', frames: Array.isArray(creativeReferenceVisionMessage.content) ? creativeReferenceVisionMessage.content.length - 1 : 0 });
     sendSSE('info', { message: 'Creative reference frame vision injected for this turn.' });
   }
+  const shouldUseXaiVisionSidecar =
+    attachments && attachments.length > 0
+    && !currentModelCapabilities.hasVision
+    && String(currentModelCapabilities.provider || '').toLowerCase() === 'xai'
+    && /^grok-composer/i.test(String(currentModelCapabilities.model || ''));
+  let attachmentVisionSidecarBlock = '';
+  if (shouldUseXaiVisionSidecar) {
+    const summaries: string[] = [];
+    for (const attachment of attachments.slice(0, 3)) {
+      const mimeType = String(attachment?.mimeType || 'image/png').trim() || 'image/png';
+      const base64 = String(attachment?.base64 || '').trim();
+      if (!base64 || !mimeType.startsWith('image/')) continue;
+      const name = String(attachment?.name || mimeType || 'image attachment').trim() || 'image attachment';
+      const dataUrl = `data:${mimeType};base64,${base64}`;
+      const result = await executeXaiImageVisionSummary({ dataUrl, name });
+      if (result.success && result.summary) {
+        summaries.push(`- ${name}: ${result.summary}`);
+        sendSSE('vision_injected', {
+          source: 'xai_vision_sidecar',
+          model: result.model,
+          fallbackFrom: result.fallback_from,
+        });
+      } else {
+        summaries.push(`- ${name}: vision sidecar failed (${String(result.error || 'unknown error').slice(0, 220)})`);
+      }
+    }
+    if (summaries.length) {
+      attachmentVisionSidecarBlock = [
+        '[ATTACHMENT_VISION_SUMMARY]',
+        'The active xAI Composer model cannot receive raw image payloads. A vision sidecar inspected the image attachment(s) and produced this summary for the active model:',
+        ...summaries,
+      ].join('\n');
+    }
+  }
   if (attachments && attachments.length > 0 && currentModelCapabilities.hasVision) {
     messages.push({
       role: 'user',
@@ -3651,7 +3733,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       .join(', ');
     messages.push({
       role: 'user',
-      content: `${message}\n\n[ATTACHMENT_NOTICE]\n${attachments.length} image/media attachment(s) were received (${attachmentNames || 'unnamed'}), but the active model is not vision-capable, so raw image payloads were not injected. Continue with filenames, metadata, surrounding text, OCR/tool outputs, or ask for a vision-capable switch only if direct image interpretation is essential.`,
+      content: `${message}${attachmentVisionSidecarBlock ? `\n\n${attachmentVisionSidecarBlock}` : ''}\n\n[ATTACHMENT_NOTICE]\n${attachments.length} image/media attachment(s) were received (${attachmentNames || 'unnamed'}), but the active model is not vision-capable, so raw image payloads were not injected.${attachmentVisionSidecarBlock ? ' Use the sidecar summary above as the visual context for this turn.' : ' Continue with filenames, metadata, surrounding text, OCR/tool outputs, or ask for a vision-capable switch only if direct image interpretation is essential.'}`,
     });
   } else {
     messages.push({ role: 'user', content: message });
@@ -6452,7 +6534,18 @@ RULES:
         const productsArtifact = productCarouselToArtifact(finalProductCarousel);
         if (productsArtifact) finalRichArtifacts.unshift(productsArtifact);
       }
-      const finalFileChanges = collectTurnFileChanges(allToolResults as any[], workspacePath);
+      const rawFileChanges = collectTurnFileChanges(allToolResults as any[], workspacePath);
+      const finalFileChanges = attachWorkspaceCheckpoint(
+        rawFileChanges,
+        rawFileChanges
+          ? createWorkspaceTurnCheckpoint({
+              workspacePath,
+              sessionId,
+              fileChanges: rawFileChanges,
+              toolResults: allToolResults as any[],
+            })
+          : null,
+      );
 
       const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(finalText);
       finalizeBoundTaskRun(/^\s*ERROR:/i.test(finalTextWithSkillOffer) ? 'failed' : 'complete', finalTextWithSkillOffer);
@@ -7019,6 +7112,28 @@ RULES:
           markProgressStepResult(false, toolName);
           resetProgressRoundStats();
           continue;
+        }
+        if (!isTaskSession && progressState.manualStepAdvance) {
+          const currentStep = progressState.items[stepCursor];
+          const currentStepText = String(currentStep?.text || '').trim();
+          if (planStepNeedsWriteEvidence(currentStepText, note) && !hasRecentWriteEvidenceForCurrentStep()) {
+            const failText = [
+              'Plan step completion rejected: this step appears to require creating or editing a file, but no successful write/create/patch/edit tool ran since the step started.',
+              currentStepText ? `Current step: ${currentStepText}` : '',
+              'Do not narrate that you are writing. Call the actual workspace file tool now: workspace_edit action:create/write/patchset, create_file, write_file, replace_lines, find_replace, insert_after, or apply_patchset. Then verify with path_exists/file_stats/read_file before completing the step.',
+            ].filter(Boolean).join('\n');
+            allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
+            sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
+            messages.push({
+              role: 'tool',
+              tool_name: toolName,
+              tool_call_id: toolCallId || undefined,
+              content: failText,
+            });
+            markProgressStepResult(false, toolName);
+            resetProgressRoundStats();
+            continue;
+          }
         }
         let completionSummary = note
           ? `Plan step completed: ${note}`
@@ -7871,7 +7986,9 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         } catch (err: any) {
           const failed = recordMainChatGoalRuntimeFailure(sid, current.id, err?.message || String(err));
           broadcastMainChatGoalState(sid, 'runtime_failure', { error: err?.message || String(err), goal: failed });
-          return;
+          if (!failed || failed.status !== 'active') return;
+          await delayMs(750);
+          continue;
         } finally {
           setModelBusy(false);
           finishLiveRuntime(runtimeId);
@@ -8059,10 +8176,19 @@ async function runInteractiveTurn(
   };
   const upstreamSendSSE = sendSSE;
   sendSSE = (event: string, data: any) => {
+    let streamData = data;
     if (localMainChatStream) {
-      appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, event, data);
+      const frame = appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, event, data);
+      if (frame) {
+        streamData = {
+          ...(data && typeof data === 'object' ? data : {}),
+          seq: frame.seq,
+          streamId: localMainChatStream.streamId,
+          at: frame.at,
+        };
+      }
     }
-    upstreamSendSSE(event, data);
+    upstreamSendSSE(event, streamData);
   };
   const userMsg = {
     role: 'user' as const,
@@ -8120,6 +8246,18 @@ async function runInteractiveTurn(
 
   if (addResult.deferredForCompaction && addResult.compactionPrompt) {
     sendSSE('ui_preflight', { message: 'Compacting the thread before continuing...' });
+    sendSSE('tool_call', {
+      action: CONTEXT_COMPACTION_TOOL_NAME,
+      args: {
+        phase: 'start',
+        mode: 'rolling_window',
+        reason: 'pre_turn_rolling_compaction',
+        estimated_tokens: addResult.estimatedTokens,
+        context_limit_tokens: addResult.contextLimitTokens,
+      },
+      synthetic: true,
+      actor: 'system',
+    });
     console.log(`[v2] Context compaction triggered for session ${sessionId} (${addResult.estimatedTokens}/${addResult.contextLimitTokens} est. tokens)`);
     try {
       const internalCompactionContext = 'CONTEXT: Internal context compaction turn. Summarize prior conversation into compact retained context only.';
@@ -8138,9 +8276,53 @@ async function runInteractiveTurn(
           { disableMemoryFlushCheck: true, disableCompactionCheck: true },
         );
         await maybeRefreshProjectLearning(sessionId, [compactResult.text]);
+        sendSSE('tool_result', {
+          action: CONTEXT_COMPACTION_TOOL_NAME,
+          result: 'Thread compacted before continuing.',
+          error: false,
+          synthetic: true,
+          actor: 'system',
+          extra: {
+            phase: 'result',
+            status: 'compacted',
+            mode: 'rolling_window',
+            summary: compactResult.text,
+            estimated_tokens: addResult.estimatedTokens,
+            context_limit_tokens: addResult.contextLimitTokens,
+          },
+        });
+      } else {
+        sendSSE('tool_result', {
+          action: CONTEXT_COMPACTION_TOOL_NAME,
+          result: 'Thread compaction skipped; continuing with normal flow.',
+          error: false,
+          synthetic: true,
+          actor: 'system',
+          extra: {
+            phase: 'result',
+            status: 'skipped',
+            mode: 'rolling_window',
+            estimated_tokens: addResult.estimatedTokens,
+            context_limit_tokens: addResult.contextLimitTokens,
+          },
+        });
       }
     } catch (compactErr: any) {
       console.warn('[v2] Context compaction turn failed:', compactErr?.message || compactErr);
+      sendSSE('tool_result', {
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        result: `Thread compaction failed: ${String(compactErr?.message || compactErr || '').slice(0, 300)}`,
+        error: true,
+        synthetic: true,
+        actor: 'system',
+        extra: {
+          phase: 'result',
+          status: 'failed',
+          mode: 'rolling_window',
+          estimated_tokens: addResult.estimatedTokens,
+          context_limit_tokens: addResult.contextLimitTokens,
+        },
+      });
     }
     if (abortSignal?.aborted) return { type: 'chat', text: '' };
     addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
@@ -8233,7 +8415,7 @@ async function runInteractiveTurn(
   const turnProviderUsage = diffModelUsage(providerUsageBeforeTurn, providerUsageAfterTurn);
   const toolResultBudget = summarizeTurnToolResultBudget(toolObservations);
   const toolLogText = toolObservations.length > 0
-    ? formatToolObservationsForContext(toolObservations, { includeHeader: false, maxChars: 12000, maxObservations: 40, includeTelemetry: true })
+    ? formatToolStateSummaryForContext(toolObservations, { includeHeader: true, maxChars: 2200, maxObservations: 14, includeTelemetry: true })
     : '';
   const resultFileChanges = result.fileChanges || collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
   if (resultFileChanges && !result.fileChanges) {
@@ -8268,7 +8450,7 @@ async function runInteractiveTurn(
       `In the middle of: ${workSummary}`,
       interruptedText || stepSummary,
       toolLogText
-        ? `Recent tool/process context was preserved for continuation:\n${toolLogText}`
+        ? `Compact tool/process state was preserved for continuation:\n${toolLogText}`
         : 'No tool calls had completed yet.',
       'When the user asks to continue, resume from this checkpoint instead of restarting from scratch.',
     ].filter(Boolean).join('\n\n');
@@ -8277,7 +8459,7 @@ async function runInteractiveTurn(
       '',
       `Interrupted by user while I was working on: ${workSummary.slice(0, 260)}`,
       stepSummary,
-      'Full tool/process context was preserved for continuation. Open Process to inspect the packet.',
+      'Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.',
     ].join('\n');
     addMessage(sessionId, {
       role: 'assistant',
@@ -10770,13 +10952,14 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'skill_list',
-        description: 'Canonical compact skill discovery. Returns IDs/names by default; use query to narrow before skill_read(id). Descriptions are omitted unless include_descriptions:true is needed.',
+        description: 'Canonical compact skill discovery. Natural task-style queries are ranked across id/name/description/triggers/categories/requiredTools with weak candidates instead of brittle exact matching. Descriptions are omitted unless include_descriptions:true is needed.',
         parameters: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: 'Optional filter across id/name/description/triggers/categories/requiredTools.' },
+            query: { type: 'string', description: 'Optional natural language task/query to rank against skill metadata.' },
             limit: { type: 'number', description: 'Maximum skills to return. Default 24, hard cap 80.' },
             include_descriptions: { type: 'boolean', description: 'Include short descriptions. Default false to keep prompt usage low.' },
+            include_match_details: { type: 'boolean', description: 'Include matched terms/fields for trigger debugging. Default false.' },
           },
           additionalProperties: false,
         },
@@ -11430,7 +11613,7 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_generate_image',
-        description: 'Generate one or more raster images from a text prompt using OpenAI GPT image models or xAI Grok Imagine. For separate options/variations set count > 1. Supports reference images for editing/style transfer. Use when the user asks to generate, create, draw, or make an image/picture/photo. Hand off to Worker for creative canvas/HyperFrames/video timeline work.',
+        description: 'Generate one or more raster images from a text prompt using OpenAI GPT image models or xAI Grok Imagine. Use background="transparent" and output_format="png" for true alpha transparency. For separate options/variations set count > 1. Supports reference images for editing/style transfer. Use when the user asks to generate, create, draw, or make an image/picture/photo. Hand off to Worker for creative canvas/HyperFrames/video timeline work.',
         parameters: {
           type: 'object',
           required: ['prompt'],
@@ -11446,6 +11629,9 @@ function buildVoiceToolDefinitions(): any[] {
             count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many separate image outputs to generate (1-4). Use > 1 for options or variations.' },
             provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Provider override. auto picks the best available. Use xai for Grok Imagine.' },
             model: { type: 'string', description: 'Optional model override, e.g. gpt-image-2-medium or grok-imagine-image-quality.' },
+            background: { type: 'string', enum: ['transparent', 'opaque', 'auto'], description: 'Background mode. Use transparent for real alpha; Prometheus also infers this when the prompt asks for a transparent/no background sprite or cutout.' },
+            output_format: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'Output format. Transparency requires png or webp; png is used when transparent is requested.' },
+            quality: { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'Image generation quality.' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/images.' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache.' },
           },
@@ -11527,6 +11713,9 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         count: args.count != null ? Number(args.count) : undefined,
         provider: args.provider != null ? String(args.provider) : undefined,
         model: args.model != null ? String(args.model) : undefined,
+        background: args.background != null ? String(args.background) : undefined,
+        output_format: args.output_format != null ? String(args.output_format) : undefined,
+        quality: args.quality != null ? String(args.quality) : undefined,
         output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
         save_to_workspace: args.save_to_workspace,
       });
@@ -11538,6 +11727,8 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         model: d?.model,
         prompt: d?.prompt,
         image_count: count,
+        background: d?.background,
+        output_format: d?.output_format,
         path: d?.path,
         rel_path: d?.rel_path,
         file_name: d?.file_name,
@@ -11663,29 +11854,20 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       const query = String(args.query || '').trim().toLowerCase();
       const explicitAll = !query || /\b(all|everything|every|list|show|available|installed|current(?:ly)?)\b/i.test(query);
       const limit = Math.min(80, Math.max(1, Number(args.limit || (explicitAll ? 40 : 20)) || (explicitAll ? 40 : 20)));
-      const queryTerms = query
-        .split(/\s+/)
-        .map((part) => part.replace(/[^\p{L}\p{N}_-]+/gu, '').trim())
-        .filter((part) => part.length >= 3 && !['all', 'the', 'and', 'are', 'you', 'can', 'have', 'with', 'for', 'skill', 'skills', 'list', 'show', 'available', 'current', 'currently'].includes(part));
-      const candidates = id
-        ? all.filter((skill: any) => String(skill.id || '') === id)
-        : explicitAll && queryTerms.length === 0
-          ? all
-        : all.filter((skill: any) => {
-            if (!queryTerms.length) return true;
-            const haystack = [
-              skill.id,
-              skill.name,
-              skill.description,
-              ...(Array.isArray(skill.triggers) ? skill.triggers : []),
-              ...(Array.isArray(skill.requiredTools) ? skill.requiredTools : []),
-              ...(Array.isArray(skill.categories) ? skill.categories : []),
-            ].join(' ').toLowerCase();
-            return queryTerms.some((part) => haystack.includes(part));
-          });
-      const skills = candidates.slice(0, limit).map((skill: any) => ({
-        ...summarizeVoiceSkill(skill),
-      }));
+      const ranked = id
+        ? all.filter((skill: any) => String(skill.id || '') === id).map((skill: any) => ({ skill, score: 0, confidence: 'strong' as const }))
+        : explicitAll
+          ? all.map((skill: any) => ({ skill, score: 0, confidence: 'strong' as const }))
+          : rankSkillsForQuery(all, query);
+      const candidates = ranked.map((item: any) => item.skill);
+      const rankById = new Map(ranked.map((item: any) => [String(item.skill?.id || ''), item]));
+      const skills: any[] = candidates.slice(0, limit).map((skill: any) => {
+        const rank = rankById.get(String(skill.id || ''));
+        return {
+          ...summarizeVoiceSkill(skill),
+          ...(query && !explicitAll ? { confidence: rank?.confidence, score: rank?.score } : {}),
+        };
+      });
       const truncated = candidates.length > skills.length;
       const summary = id
         ? (skills.length ? `Found skill "${skills[0].id}".` : `Skill "${id}" was not found.`)
@@ -11701,7 +11883,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         limit,
         note: truncated
           ? `This is a truncated result, not the complete skill list. Call skill_list again with limit up to 80 or a narrower query to see more.`
-          : `This result is complete for the current query.`,
+          : `This result is complete for the current query. Natural queries use weighted token/alias matching across skill metadata.`,
       });
     }
     if (name === 'skill_read' || name === 'voice_skill_read') {
@@ -16687,7 +16869,15 @@ router.post('/api/sessions/:id/history', (req, res) => {
       res.status(400).json({ error: 'Session id required' });
       return;
     }
-    const history = mergeHistoryWithExistingMessageMetadata(id, Array.isArray(req.body?.history) ? req.body.history : []);
+    const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];
+    if (isMobileHistorySyncRequest(req) && wouldDangerouslyReplaceSessionHistory(id, rawHistory)) {
+      res.status(409).json({
+        success: false,
+        error: 'Refusing to overwrite an existing chat with an unrelated shorter mobile history sync.',
+      });
+      return;
+    }
+    const history = mergeHistoryWithExistingMessageMetadata(id, rawHistory);
     replaceHistory(id, history as any, { resetCompaction: req.body?.resetCompaction === true });
     flushSession(id);
     res.json({ success: true });
@@ -16696,6 +16886,41 @@ router.post('/api/sessions/:id/history', (req, res) => {
     res.status(500).json({ error: e.message || 'Failed to replace session history' });
   }
 });
+
+function isMobileHistorySyncRequest(req: express.Request): boolean {
+  const origin = req.body?.origin;
+  return !!req.headers['x-pairing-token']
+    || String(origin?.channel || '').toLowerCase() === 'mobile'
+    || String(origin?.surface || '').toLowerCase() === 'mobile_app';
+}
+
+function timelineHistoryMessages(history: any[]): any[] {
+  return (Array.isArray(history) ? history : [])
+    .filter((msg) => {
+      const role = msg?.role === 'assistant' || msg?.role === 'ai' || msg?.role === 'user' ? msg.role : '';
+      const content = String(msg?.content || '').replace(/\s+/g, ' ').trim();
+      return !!role && !!content;
+    });
+}
+
+function firstUserMessageKey(history: any[]): string {
+  const msg = timelineHistoryMessages(history).find((item) => item?.role === 'user');
+  return String(msg?.content || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 500);
+}
+
+function wouldDangerouslyReplaceSessionHistory(sessionId: string, incomingHistory: any[]): boolean {
+  try {
+    const existing = timelineHistoryMessages(getHistory(sessionId));
+    const incoming = timelineHistoryMessages(incomingHistory);
+    if (existing.length < 2 || incoming.length < 1) return false;
+    if (incoming.length >= existing.length) return false;
+    const existingFirst = firstUserMessageKey(existing);
+    const incomingFirst = firstUserMessageKey(incoming);
+    return !!existingFirst && !!incomingFirst && existingFirst !== incomingFirst;
+  } catch {
+    return false;
+  }
+}
 
 router.post('/api/sessions/:id/edit-rerun-reset', (req, res) => {
   const id = String(req.params.id || '').trim();

@@ -1,0 +1,397 @@
+temp/tool-results/1782915219558-brain_thought_2026-07-01_22-13-read_files_batch.txt (186 lines) [window 80-186]:
+80: 79: _Related task: 2aa0afb8-69d8-4dde-8185-4f0dac74123e_
+81: 80: 
+82: 81: ### [TASK] 2026-07-01T02:49:25.390Z
+83: 82: _Source: Mobile chat session; session: mobile_mr168psd_628snw; origin: Mobile app_
+84: 83: Raul requested deleting Sparky after failed Pocket Zombies supervision. Prom attempted `agent_ops(delete)` but the wrapper mapped to an unavailable delete_agent tool, so Prom manually disabled Sparky by deleting `.prometheus/subagents/sparky_v1/config.json` and `AGENTS.md`, deleted the `Sparky Health Monitor` scheduled job `job_1782866978780_pctvr`, and cancelled latest Pocket Zombies Sparky task `2aa0afb8-69d8-4dde-8185-4f0dac74123e`. `agent_ops(list)` still showed Sparky immediately afterward, likely cached until reload/restart or because registry has another source; next cleanup if needed is find/remove remaining registry references and restart/reload agent config.
+85: 84: _Related task: 2aa0afb8-69d8-4dde-8185-4f0dac74123e_
+86: 85: 
+87: 86: ### [TASK] 2026-07-01T03:00:27.224Z
+88: 87: _Source: Mobile chat session; session: mobile_mr168psd_628snw_
+89: 88: Raul asked Prom to recreate Pocket Zombies after Sparky failure. Prom overwrote `games/mobile-sideways-fps/index.html` with a fresh standalone HTML/JS canvas FPS: raycast-style rendering, zombie wave loop, points, wall buys, doors, perks, powerups, mobile/desktop controls, pause/mute/restart, audio beeps, and `window.__pocketZombiesDebug`. Updated `games/mobile-sideways-fps/ZOMBIES_ROADMAP.md` status. Browser smoke test at `file:///C:/Users/rafel/PromSRC/workspace/games/mobile-sideways-fps/index.html?debug=1&recreate=5` confirmed START GAME works, zombies spawn (`zombies=4`), game remains running after 6s with player health 175, and `lastError=null`. One tool/testing issue observed: a se...[line truncated]
+90: 89: 
+91: 90: ### [TASK] 2026-07-01T03:13:56.514Z
+92: 91: _Source: Mobile chat session; session: mobile_mr168psd_628snw; origin: Mobile app_
+93: 92: Fixed Pocket Zombies mobile firing bug in `games/mobile-sideways-fps/index.html`: removed canvas `pointerdown`/`pointerup` handlers that set `keys.Mouse`, so dragging/turning the camera no longer continuously fires. Shooting now comes from the explicit FIRE button (`touch.fire`) or desktop Space key. Also updated start-screen controls copy to remove click-fire wording.
+94: 93: 
+95: 94: ### [DEV_EDIT_COMPLETE] 2026-07-01T03:58:35.079Z
+96: 95: _Source: Mobile chat session; session: mobile_mr1jhhcq_44pnn0_
+97: 96: Dev edit dev_edit_mr1jkt53_13120eea completed: added mobile canvas fullscreen mode. Changed `web-ui/src/mobile/mobile-shell.js` to add a Fullscreen toolbar button, top-right X fullscreen exit overlay, fullscreen state/reset handling, Escape exit, and visibility for active tabs. Changed `web-ui/src/styles/mobile.css` to hide handle/header/file tabs/toolbar/Interact/Inspect/Preview/Save in `.pm-canvas-sheet.is-fullscreen`, expand canvas body to full viewport, and keep only a safe-area-aware X overlay. Updated `workspace/self/16-mobile-app.md` with the new mobile canvas fullscreen behavior. `prom_apply_dev_changes` succeeded with `npm run sync:web-ui` and desktop reload requested. User also...[line truncated]
+98: 97: 
+99: 98: ### [DEBUG] 2026-07-01T04:07:52.054Z
+100: 99: _Source: Mobile chat session; session: mobile_mr1k0cei_ghsujf; origin: Mobile app_
+101: 100: Tested skill_list with natural multi-term queries and short keyword queries. Natural queries like “browser automation desktop click screenshot”, “Prometheus source edit mobile bug fix”, “shopping product research best gaming laptop under 1500”, “Xpose Market lead generation Google Maps website analysis”, and “create promo video HyperFrames landscape social post” all returned 0, while short keywords like browser, desktop, mobile, shopping, hyperframes, source edit, google maps, website analysis returned relevant skills. Main issue appears to be over-literal/AND-style matching instead of semantic/fuzzy retrieval across descriptions/triggers/categories.
+102: 101: 
+103: 102: ### [DEBUG] 2026-07-01T04:29:22.280Z
+104: 103: _Source: Mobile chat session; session: mobile_mr1k0cei_ghsujf; origin: Mobile app_
+105: 104: Retested skill_list after retrieval changes. Natural multi-term queries now return results instead of 0: browser automation query matched desktop/browser playbooks; Prometheus source/mobile bug query matched src-edit-proposal-rigor and codex-frontend-engineer; shopping gaming laptop query matched product-carousel-builder; Xpose/Google Maps/website analysis matched xpose-lead-outreach-packet, local-lead-hunting, and website-intelligence; HyperFrames promo video query matched HyperFrames skills. New retrieval reports weighted token/alias OR matching with match details. Remaining issue: some broad terms like Prometheus/video still over-promote adjacent creative or generic skills; need rank...[line truncated]
+106: 105: 
+107: 
+108: Brain/active-work.jsonl (59 lines) [window 1-59]:
+109: 1: {"id":"mobile-chat-composer-newline-and-voice-polish","title":"Mobile chat composer newline behavior and voice panel polish","origin":"memory/2026-06-11-intraday-notes.md:2-24","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css; web-ui/src/mobile/mobile-shell.js","status":"resolved","lastVerified":"2026-06-12","currentState":"Prior composer/drawer polish remains resolved from 2026-06-11 checks. Later mobile canvas work did not reopen this exact newline/drawer issue.","research":[],"evidence":["Brain/active-work.jsonl:1","audit/chats/transcripts/mobile_mqadt6ha_vd1bwb.md:9-35"]}
+110: 2: {"id":"x-posting-schedule-memory-path-and-browser-reliability","title":"X posting schedule-memory path and browser reliability","origin":"memory/2026-06-11-intraday-notes.md:31-50; Brain/skill-episodes/2026-06-11/episodes.jsonl:4-5","diskPath":".prometheus/subagents; prometheus-x-posts-memory.md; skills/prometheus-x-posts-workflow","status":"resolved","lastVerified":"2026-06-13","currentState":"RESOLVED. Skill and schedule-owner path were corrected by 2026-06-13; live X scheduled workflows succeeded afterward. No new X credential/path failure was observed in the 2026-06-15 Thought window.","research":[],"evidence":["memory/2026-06-13-intraday-notes.md:111-123","Brain/active-work.jsonl:2"]...[line truncated]
+111: 3: {"id":"x-research-replies-skill-id-drift","title":"X research/replies scheduled prompt has stale skill IDs","origin":"Brain/skill-episodes/2026-06-11/episodes.jsonl:2-3; Brain/skill-gardener/2026-06-11/live-candidates.jsonl:2-3","diskPath":"skills/prometheus-x-research-replies; audit/tasks/state/_index.json","status":"resolved","lastVerified":"2026-06-12","currentState":"Current 2026-06-12 skill episodes showed the active scheduled runs successfully read the correct X research/replies skills. No new evidence reopened this drift in the 2026-06-15 window.","research":[],"evidence":["Brain/skill-episodes/2026-06-12/episodes.jsonl:50-53","Brain/skill-gardener/2026-06-12/workflow-episodes.json...[line truncated]
+112: 4: {"id":"mara-x-account-operator-raulinvests","title":"Mara X account operator for @Raulinvests","origin":"audit/chats/transcripts/99911502-2b14-43d3-8efa-b79dca4f945f.md:1-23","diskPath":".prometheus/subagents/x_account_operator_raulinvests_v1","status":"in_progress","lastVerified":"2026-06-18","currentState":"Mara remains the preferred display name for x_account_operator_raulinvests_v1; the naming correction is durable in USER/MEMORY context. Current reliability watch item is not naming or credentials but browser-run fragility during X/Mara cron workflows, especially `page.waitForTimeout: Target page, context or browser has been closed` plus one empty write_note call. Keep Mara active and...[line truncated]
+113: 5: {"id":"robinhood-trading-mcp-oauth-support","title":"Robinhood Trading MCP OAuth support","origin":"audit/chats/transcripts/mobile_mq9fqk3l_czsequ.md:1-14; audit/chats/transcripts/9d244d0c-5a73-4637-8f7e-a7066f781b9f.md:1-10","diskPath":"src/auth; MCP server config via mcp_server_manage","status":"drafted","lastVerified":"2026-06-15","currentState":"Still drafted. Pending proposal prop_1781240319803_9193f9 exists and was not modified in this Thought window; no source implementation was observed tonight.","research":["https://robinhood.com/us/en/support/articles/agentic-trading-overview/","https://robinhood.com/us/en/agentic-trading"],"evidence":["audit/proposals/state/pending/prop_1781240...[line truncated]
+114: 6: {"id":"x-credentials-restore-review","title":"Review and restore X credentials for @raulinvests","origin":"audit/proposals/state/pending/prop_1781062635011_16ebf4.json:1-56","diskPath":"audit/proposals/state/pending/prop_1781062635011_16ebf4.json; prometheus-x-posts-memory.md","status":"drafted","lastVerified":"2026-06-12","currentState":"A pending review proposal still exists, but subsequent browser-auth X workflows posted successfully. No new X credential blocker appeared in the 2026-06-15 Thought window.","research":[],"evidence":["audit/proposals/state/pending/prop_1781062635011_16ebf4.json","Brain/active-work.jsonl:6"]}
+115: 7: {"id":"dev-source-batch-tools-dispatch-gap","title":"Dev source batch tools are exposed but not executable after approval","origin":"audit/chats/transcripts/mobile_mqafae0u_tsfr1t.md:1-83; Brain/skill-gardener/2026-06-12/workflow-episodes.jsonl:3-4","diskPath":"src/gateway/agents-runtime/subagent-executor.ts; src/gateway/tools/defs/file-web-memory.ts; src/gateway/prompt-context.ts; src/gateway/tool-builder.ts","status":"resolved","lastVerified":"2026-06-12","currentState":"Current source contains executor cases for read_dev_sources and apply_dev_source_patchset; later mobile/source work used read_dev_sources repeatedly. Exact replace/scope drift remains a separate operational issue, not t...[line truncated]
+116: 8: {"id":"xai-grok-credit-usage-tracking","title":"xAI/Grok credit balance tracking for Plan Usage UI","origin":"audit/chats/transcripts/mobile_mqag64sv_5ad1tb.md:1-141","diskPath":"src/providers/provider-usage-limits.ts; src/gateway/routes/settings.router.ts; web-ui/src/pages/SettingsPage.js; web-ui/src/mobile/mobile-settings.js","status":"drafted","lastVerified":"2026-06-15","currentState":"Still drafted. Pending code_change proposal prop_1781322308947_26bdc8 exists and was not modified in this window; current ledger should point to that proposal rather than seed a duplicate.","research":["https://docs.x.ai/developers/rest-api-reference/management/billing"],"evidence":["audit/proposals/sta...[line truncated]
+117: 9: {"id":"mobile-realtime-voice-photo-attachments-doc-gap","title":"Mobile Realtime voice/photo/canvas/recovery docs need full sync","origin":"audit/chats/transcripts/mobile_mqadt6ha_vd1bwb.md:1-54; memory/2026-06-18-intraday-notes.md:2-64","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css; web-ui/service-worker.js; self/16-mobile-app.md","status":"in_progress","lastVerified":"2026-06-18","currentState":"Still documentation debt, though partially improved. self/16-mobile-app.md was updated at 03:16 after the first mobile reconnect recovery dev edit, but later 2026-06-18 mobile changes landed afterward: active-run history-merge guard, cold-open cache/historyLimit red...[line truncated]
+118: 10: {"id":"mobile-tool-stream-vision-preview-twitch","title":"Mobile tool stream twitch tied to vision screenshot preview","origin":"audit/chats/transcripts/mobile_mqad43i6_5lkwy8.md:50-67","diskPath":"web-ui/src/mobile; Codex handoff thread","status":"in_progress","lastVerified":"2026-06-12","currentState":"No source fix was verified in the 2026-06-15 Thought window. Keep pending Codex/source verification separate from the newly fixed mobile canvas file-viewer work.","research":[],"evidence":["audit/chats/transcripts/mobile_mqad43i6_5lkwy8.md:50-67","memory/2026-06-12-intraday-notes.md:30-32"]}
+119: 11: {"id":"claude-realtime-voice-integration-assessment","title":"Claude as Prometheus realtime voice brain, not native speech transport","origin":"audit/chats/transcripts/mobile_mqb0idx0_wwcci4.md:1-140","diskPath":"src/gateway/routes/realtime.router.ts; src/gateway/routes/voice.router.ts; src/gateway/routes/chat.router.ts; web-ui/src/mobile/mobile-api.js","status":"idea","lastVerified":"2026-06-12","currentState":"No new implementation evidence in the 2026-06-15 window. Prior source-grounded conclusion remains: Claude should be integrated as streaming text brain behind existing STT/TTS, not native speech-to-speech.","research":["https://platform.claude.com/docs/en/build-with-claude/streami...[line truncated]
+120: 12: {"id":"mobile-live-screen-vision-native-companion","title":"Mobile Live Screen Vision and native companion app path","origin":"audit/chats/transcripts/mobile_mqb8pofj_hz13kl.jsonl:1-10","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/src/mobile/mobile-api.js; src/gateway/routes/chat.router.ts; src/gateway/routes/realtime.router.ts","status":"idea","lastVerified":"2026-06-12","currentState":"No getDisplayMedia/ReplayKit/MediaProjection screen-share implementation was pursued in the 2026-06-15 window. Remains a product idea, not an active bug.","research":["Chromium/WebKit/Android screen-share feasibility findings from 2026-06-12 transcript"],"evidence":["memory/2026-06-12-intraday-n...[line truncated]
+121: 13: {"id":"grep-tool-contract-and-agent-language","title":"Grep tool contract and agent language correction","origin":"audit/chats/transcripts/mobile_mqb8vbu6_yntz8s.md:1-78; audit/chats/transcripts/mobile_mqb9ap56_zjpfqd.md:1-37","diskPath":"src/gateway/agents-runtime/subagent-executor.ts; workspace grep tools; SOUL.md","status":"resolved","lastVerified":"2026-06-12","currentState":"Resolved in behavior guidance. 2026-06-15 mobile canvas work still had path/regex mistakes, but they were normal tool-use errors around source/webui path selection rather than the old grep-contract issue.","research":[],"evidence":["SOUL.md:21-27","Brain/skill-gardener/2026-06-15/workflow-episodes.jsonl:1,3"]}
+122: 14: {"id":"fleet-skill-metadata-cleanup","title":"Fleet-wide skill metadata cleanup and audit","origin":"audit/chats/transcripts/29316eb0-fce4-4ab7-a891-f5afd8e8fa4a.jsonl:1-2","diskPath":"skills/.manifests; skills/.history/skill-change-ledger.jsonl","status":"in_progress","lastVerified":"2026-06-15","currentState":"Fleet-wide broad repair remains closed, but a focused audit during Thought found codex-frontend-engineer had description_missing_usage_guidance. Thought applied a narrow skill_update_metadata overlay and verified the skill now scores 100. Keep this as ongoing light maintenance, not a broad repair need.","research":[],"evidence":["skill_audit_all scope=codex-frontend-engineer: sco...[line truncated]
+123: 15: {"id":"openai-realtime-codex-oauth-billing-break","title":"OpenAI Realtime Codex OAuth loophole/billing break","origin":"audit/chats/transcripts/mobile_mqbf9830_plotl6.md:1-111","diskPath":"src/gateway/routes/realtime.router.ts; src/gateway/routes/chat.router.ts; self/06-image-voice.md","status":"stalled","lastVerified":"2026-06-12","currentState":"No new fix or renewed key path was verified in the 2026-06-15 window. Current self docs remain last-modified 2026-06-05 and still need sync if this area changes again.","research":[],"evidence":["audit/chats/transcripts/mobile_mqbf9830_plotl6.md:21-110","self/06-image-voice.md file_stats: last_modified 2026-06-05T20:14:37.664Z"]}
+124: 16: {"id":"mobile-image-generation-progress-delivery","title":"Mobile image generation progress delivery for long generations","origin":"audit/chats/transcripts/mobile_mqbg13mw_upuved.md:1-93; audit/chats/transcripts/mobile_mqbfu4qe_z205s5.md:1-68","diskPath":"src/tools/generate-image.ts; src/gateway/agents-runtime/capabilities/web-media-executor.ts; web-ui/src/mobile/mobile-pages.js; generated/images/mobile-chat-backgrounds","status":"resolved","lastVerified":"2026-06-13","currentState":"The long-generation hang/orphaned-delivery bug remains resolved. No image-generation work appeared in the 2026-06-15 window.","research":[],"evidence":["src/gateway/agents-runtime/capabilities/web-media-exe...[line truncated]
+125: 17: {"id":"generate-image-v2-product-surface","title":"Generate Image v2 product surface for Prometheus mobile/Creative","origin":"audit/chats/transcripts/mobile_mqbg13mw_upuved.md:93-215","diskPath":"src/tools/generate-image.ts; src/gateway/agents-runtime/capabilities/web-media-executor.ts; web-ui/src/mobile/mobile-pages.js; web-ui/src/pages/ChatPage.js","status":"in_progress","lastVerified":"2026-06-14","currentState":"Partially advanced on 2026-06-13, unchanged in the 2026-06-15 Thought window. Loading/preview UX is resolved; the first-class Generate Image v2 surface, media registry/history, presets, variations/upscale/edit actions, and provider-status panel remain open product work.","re...[line truncated]
+126: 18: {"id":"mobile-background-spawn-agent-tray","title":"Mobile background_spawn agent tray above composer","origin":"audit/chats/transcripts/mobile_mqbfu4qe_z205s5.md:1-68","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css; generated/images/background-agent-mobile-mockups; uploads/IMG_5332.png","status":"drafted","lastVerified":"2026-06-13","currentState":"No implementation evidence appeared in the 2026-06-15 window. Still drafted: show one-shot background_spawn agents above the chat composer and expand rows to show each background agent tool stream.","research":[],"evidence":["audit/chats/transcripts/mobile_mqbfu4qe_z205s5.md:1-67","Brain/active-work.jsonl:18"]}
+127: 19: {"id":"cat-adoption-center-landing-page","title":"Fictional cat adoption center landing page","origin":"memory/2026-06-12-intraday-notes.md:99-102","diskPath":"cat-adoption-center/index.html","status":"resolved","lastVerified":"2026-06-12","currentState":"Resolved artifact. No new activity in the 2026-06-15 window.","research":[],"evidence":["cat-adoption-center/index.html:6-7","cat-adoption-center/index.html:441-530"]}
+128: 20: {"id":"skill-gardener-business-classifier-false-positives","title":"Skill-gardener business classifier false positives on social/frontend/dev workflows","origin":"Brain/skill-gardener/2026-06-13/workflow-episodes.jsonl:1,3-8; Brain/skill-gardener/2026-06-19/workflow-episodes.jsonl:2-3","diskPath":"Brain/skill-gardener; Brain/skill-episodes; src/gateway/brain/skill-episodes.ts","status":"in_progress","lastVerified":"2026-06-19","currentState":"Still live. 2026-06-19 skill episodes again tagged terminal-tool testing and a skill-maintenance chat as businessContext vendor_research just because tool/terminal/skill language appeared. This confirms the classifier still needs context-aware exclu...[line truncated]
+129: 21: {"id":"self-docs-write-blocked-in-dev-edit-scope","title":"Self docs (workspace/self) write blocked or skipped during Prometheus self-edits","origin":"memory/2026-06-13-intraday-notes.md:139-141; Brain/skill-gardener/2026-06-13/workflow-episodes.jsonl:13","diskPath":"src/gateway (dev-edit scoped tool gating); workspace/self; self/03-execution-and-prompting.md; self/09-providers-and-models.md; self/16-mobile-app.md","status":"in_progress","lastVerified":"2026-06-18","currentState":"Still in progress as doc/tooling debt. First 2026-06-18 mobile reconnect recovery edit updated self/16-mobile-app.md, proving docs can be updated, but the later rapid mobile edits after 04:52 added cold-open ca...[line truncated]
+130: 22: {"id":"hermes-openclaw-prometheus-competitive-landing","title":"Hermes vs OpenClaw vs Prometheus competitive landing page","origin":"memory/2026-06-13-intraday-notes.md:147-150; Brain/skill-gardener/2026-06-13/workflow-episodes.jsonl:16","diskPath":"generated/landing-pages/hermes-openclaw-prometheus-landing.html","status":"in_progress","lastVerified":"2026-06-15","currentState":"Artifact still exists as a 437-line self-contained landing page, but the public-facing research slots remain placeholders. Current grep shows 'Latest updates placeholder' plus Hermes/OpenClaw update-slot placeholders and the footer explicitly says no unverified facts are asserted. Next step remains filling slots ...[line truncated]
+131: 23: {"id":"config-and-workspace-soul-refactor","title":"Config soul + workspace SOUL refactor and injection widening","origin":"audit/chats/transcripts/mobile_mqe3lysx_1mel8s.md:983-1555; audit/chats/transcripts/mobile_mqekusla_4wa17k.md:1-151","diskPath":"src/config/soul.md; src/config/soul-loader.ts; src/gateway/prompt-context.ts; SOUL.md; MEMORY.md","status":"resolved","lastVerified":"2026-06-15","currentState":"Workspace SOUL.md is now lean (61 lines, 6.2k) and config soul includes the new Asking-vs-Deciding rule plus Skills/Memory sections. Current prompt-context source injects [PROMETHEUS_SOUL] into background_agent and team_subagent paths above [SUBAGENT_SOUL], closing the injection-w...[line truncated]
+132: 24: {"id":"dev-edit-completion-note-hot-restart-determinism","title":"Hot-restart recovery messaging and tool availability determinism","origin":"audit/chats/transcripts/mobile_mqkaedwb_jvzvue.md:25-60; audit/chats/transcripts/mobile_mqkatae2_hgpl9a.md:21-63; audit/chats/transcripts/mobile_mqkj7gu6_nmzzp2.md:1-37; audit/chats/transcripts/mobile_mqx9548l_hy3zuc.md:25-61","diskPath":"src/gateway/boot.ts; src/gateway/runtime-recovery.ts; src/gateway/routes/chat.router.ts; web-ui/src/pages/ChatPage.js; web-ui/src/mobile/mobile-pages.js","status":"in_progress","lastVerified":"2026-06-28","currentState":"Improved but not fully closed. Current source now has a plainManualGatewayRestart branch in sr...[line truncated]
+133: 25: {"id":"mobile-canvas-file-and-diff-viewer","title":"Mobile canvas file and end-of-turn diff viewer","origin":"audit/chats/transcripts/mobile_mqeoyhea_vkjbe9.md:21-229","diskPath":"src/gateway/routes/canvas.router.ts; web-ui/src/mobile/mobile-shell.js; web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css; src/config/soul.md; self/16-mobile-app.md","status":"in_progress","lastVerified":"2026-06-18","currentState":"Source-level feature remains shipped, but it is now part of the broader mobile self-doc drift cluster. No 2026-06-18 evidence changed canvas itself; keep one smoke/doc sync item open alongside mobile recovery/tool-stream docs.","research":[],"evidence":["Brain/active-w...[line truncated]
+134: 26: {"id":"ask-prometheus-questions-tool-rule","title":"Use tappable Prometheus question cards instead of prose choices","origin":"audit/chats/transcripts/mobile_mqekusla_4wa17k.md:46-50; audit/chats/transcripts/mobile_mqeoyhea_vkjbe9.md:121-131","diskPath":"src/config/soul.md; USER.md","status":"resolved","lastVerified":"2026-06-15","currentState":"Resolved at config/behavior level. Current src/config/soul.md mandates ask_prometheus_questions for real choices/confirmations and defines the exceptions; USER context also carries the hard rule. Future quality issue is compliance, not missing configuration.","research":[],"evidence":["audit/chats/transcripts/mobile_mqekusla_4wa17k.md:46-50","aud...[line truncated]
+135: 27: {"id":"main-chat-goal-judge-context-and-continuation","title":"/goal interactive loop judge lacks original chat context and rich continuation directive","origin":"audit/chats/transcripts/mobile_mqiga1sf_7j9s8m.md:1-87; Brain/skill-gardener/2026-06-17/workflow-episodes.jsonl:21-22","diskPath":"src/gateway/main-chat-goals.ts; src/gateway/routes/chat.router.ts; self/03-execution-and-prompting.md; self/15-paths-and-sharp-edges.md","status":"in_progress","lastVerified":"2026-06-17","currentState":"Live issue seed verified in source. The /goal worker loop goes through runInteractiveTurn() and has normal interactive stack, but judgeMainChatGoal() still evaluates only goal.goal, progressSummary,...[line truncated]
+136: 28: {"id":"model-default-template-save-and-background-agent-restore","title":"Model default template Save persistence and background_agent startup restore","origin":"audit/chats/transcripts/mobile_mqi5k8a7_gajh23.md:1-111","diskPath":"web-ui/src/pages/SettingsPage.js; src/gateway/core/startup.ts; web-ui/src/mobile/mobile-api.js; web-ui/src/mobile/mobile-pages.js; web-ui/src/mobile/mobile-model-badge.js","status":"resolved","lastVerified":"2026-06-17","currentState":"Resolved by dev edit and source verification. Settings Save now persists model-tab live settings even when another settings tab is active; saving an agent model default template also sets it as startup default; startup default re...[line truncated]
+137: 29: {"id":"mobile-drawer-long-press-session-actions","title":"Mobile drawer long-press session actions: rename, pin, delete","origin":"audit/chats/transcripts/mobile_mqi6g80i_astfmk.md:1-122; memory/2026-06-17-intraday-notes.md:14-28","diskPath":"web-ui/src/mobile/mobile-shell.js; web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css; self/16-mobile-app.md","status":"resolved","lastVerified":"2026-06-17","currentState":"Feature resolved through several rapid mobile dev-edit passes. Long-press on drawer session rows now triggers haptic/context sheet; actions include rename, pin placement above sessions/below divider without duplicates, and delete/remove. Follow-up fixes addressed iO...[line truncated]
+138: 30: {"id":"smokers-paradise-demo-site","title":"Smoker's Paradise demo site with order-online pickup/pay-in-person concept","origin":"audit/chats/transcripts/mobile_mqi88c4i_k8pv3t.md:1-12; memory/2026-06-18-intraday-notes.md:84-98","diskPath":"xpose-demos/smokers-paradise; GitHub XposeMarket/smokers-paradise-demo; Vercel project smokers-paradise-demo","status":"resolved","lastVerified":"2026-06-18","currentState":"Resolved as a real artifact and deployed, replacing the prior empty demos/smokers-paradise state. Current workspace contains xpose-demos/smokers-paradise/index.html (412 lines) and README; the page includes a 21+ age gate, public location/hours/phone details, brand-matched black/g...[line truncated]
+139: 31: {"id":"ai-smoke-test-paused-after-reddit","title":"AI smoke test Reddit + X collection completed after prior pause","origin":"audit/chats/transcripts/mobile_mqie9g04_i4kfx4.md:112-135; memory/2026-06-19-intraday-notes.md:2-8","diskPath":"audit/chats/transcripts/mobile_mqkaedwb_jvzvue.md; audit/chats/transcripts/mobile_mqkatae2_hgpl9a.md; memory/2026-06-19-intraday-notes.md","status":"resolved","lastVerified":"2026-06-19","currentState":"Resolved and repeated successfully. Two 2026-06-19 AI smoke-test runs completed Codex desktop focus/proof delivery, Reddit live collection, X live collection, and browser cleanup for the default `Claude OpenClaw Hermes AI` query; Claude desktop was simply...[line truncated]
+140: 32: {"id":"anthropic-runtime-steer-prefill-fix","title":"Anthropic runtime steer assistant-prefill guard","origin":"audit/chats/transcripts/mobile_mqie9g04_i4kfx4.md:1-109","diskPath":"src/gateway/routes/chat.router.ts; self/03-execution-and-prompting.md; self/09-providers-and-models.md","status":"resolved","lastVerified":"2026-06-17","currentState":"Source now skips the fake assistant acknowledgement when injecting pending runtime steers for Anthropic, while leaving non-Anthropic providers unchanged. Post-fix smoke test confirmed two Anthropic steers worked mid-run. Related self docs do not mention runtime steer/Anthropic prefill behavior, so the code bug is resolved but documentation remai...[line truncated]
+141: 33: {"id":"mobile-reconnect-recovery-full-tool-stream","title":"Mobile reconnect/cold-reopen recovery preserves full tool stream","origin":"memory/2026-06-18-intraday-notes.md:2-32; Brain/skill-gardener/2026-06-18/workflow-episodes.jsonl:1,3-4","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/service-worker.js; self/16-mobile-app.md","status":"resolved","lastVerified":"2026-06-18","currentState":"Resolved through several focused dev edits. Active-run recovery no longer merges server history over the live streaming turn before status.active check; cold reopen now forces seq=0 replay when remembered.disconnected is true; pagehide and visibilitychange→hidden stamp disconnected:true on iOS ...[line truncated]
+142: 34: {"id":"mobile-cold-open-speed-thread-cache","title":"Mobile cold-open speed: history limit, thread skeleton cache, no double fetch","origin":"memory/2026-06-18-intraday-notes.md:22-24; Brain/skill-gardener/2026-06-18/workflow-episodes.jsonl:2","diskPath":"web-ui/src/mobile/mobile-pages.js","status":"resolved","lastVerified":"2026-06-18","currentState":"Resolved. Cold opens fetch 80 messages instead of 300 unless force=true; last 30 non-streaming messages per session are cached in localStorage under pm_mobile_thread_cache_v1 for instant skeleton render, with 24h TTL and max 10 sessions; post-load recovery now uses fullRefresh:false to avoid re-fetching the same session immediately.","rese...[line truncated]
+143: 35: {"id":"mobile-image-gen-pending-false-positive","title":"Mobile image-generation loading card false positive from completed tool results","origin":"memory/2026-06-18-intraday-notes.md:34-36; Brain/skill-gardener/2026-06-18/workflow-episodes.jsonl:5","diskPath":"web-ui/src/mobile/mobile-pages.js","status":"resolved","lastVerified":"2026-06-18","currentState":"Resolved. _mobileHasPendingImageGeneration now positive-matches only active non-result/non-error entries and uses a case-insensitive/all-text completion guard, preventing completed `Generate Image complete` tool_result entries from showing the spinner/loading card.","research":[],"evidence":["memory/2026-06-18-intraday-notes.md:34-36...[line truncated]
+144: 36: {"id":"mobile-worked-for-expandable-trace-drawer","title":"Mobile Worked-for timer expands full tool stream above final response","origin":"memory/2026-06-18-intraday-notes.md:38-64; Brain/skill-gardener/2026-06-18/workflow-episodes.jsonl:6,8-12,14","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css","status":"resolved","lastVerified":"2026-06-18","currentState":"Resolved after UX correction loop. The Process button remains separate at the bottom of the AI bubble. Completed turns store liveTraceEntries and the Worked for Xs timer becomes tappable with a right-aligned chevron, expanding a pm-trace-drawer above the final response with the original TOOL/TOOL RESULT ...[line truncated]
+145: 37: {"id":"mobile-livetraceentries-server-persistence","title":"Mobile liveTraceEntries persist through server save/load for recovered trace drawer","origin":"memory/2026-06-18-intraday-notes.md:58-64; Brain/skill-gardener/2026-06-18/workflow-episodes.jsonl:14","diskPath":"web-ui/src/mobile/mobile-pages.js","status":"resolved","lastVerified":"2026-06-18","currentState":"Resolved. _mapServerMessageToMobile now reads liveTraceEntries back from server messages, and _mobileHistoryForServer bypasses the branch clone that strips liveTraceEntries so saved history preserves finished tool traces. Branch copies still intentionally strip liveTraceEntries.","research":[],"evidence":["memory/2026-06-18-i...[line truncated]
+146: 38: {"id":"cron-scheduler-parallel-dispatch-and-deadlock-recovery","title":"Cron scheduler parallel dispatch and running-job deadlock recovery","origin":"audit/chats/transcripts/mobile_mqi88c4i_k8pv3t.md; Brain/dreams/2026-06-16/04-32-dream.md","diskPath":"src/gateway/scheduling/cron-scheduler.ts","status":"resolved","lastVerified":"2026-06-18","currentState":"Resolved in current source. The scheduler now tracks `runningJobIds`, wraps `executeJob()` with add/try/finally/delete cleanup, and dispatches overdue jobs in parallel from `tick()` while filtering already-running jobs. The 9:25 AM missed-run complaint matched the older single-running-job/deadlock class, but live source already contain...[line truncated]
+147: 39: {"id":"memory-search-sqlite-embedding-performance","title":"Memory search SQLite/embedding performance bottleneck investigation","origin":"Brain/skill-gardener/2026-06-18/workflow-episodes.jsonl:21-23","diskPath":"src/gateway/memory-index/index.ts; src/gateway/memory-index/sqlite-store.ts; src/gateway/memory/embeddings; src/gateway/memory/providers","status":"in_progress","lastVerified":"2026-06-18","currentState":"Live source partially resolves the background-agent suspicion: sqlite-store.ts now has read DB caching and performance indexes for timestamp_ms, durability, updated_at, day, source_path, and embedding provider/model, so the exact missing-index/open-per-call diagnosis is partly...[line truncated]
+148: 40: {"id":"ios-pwa-notifications-codex-handoff","title":"iOS PWA notifications task currently running in Codex","origin":"audit/chats/transcripts/mobile_mqkld62p_sishgp.jsonl:1-4","diskPath":"web-ui/src/mobile/mobile-api.js; web-ui/src/mobile/mobile-pages.js; src/gateway/routes/push.router.ts; src/gateway/comms","status":"in_progress","lastVerified":"2026-06-19","currentState":"Live desktop evidence in the mobile session showed Codex actively Thinking on an iOS PWA notifications task with recent edits/commands and 7 files changed. Current source already contains a mobile push UI/API path: getMobilePushStatus(), enableMobileChatPushNotifications(), disableMobileChatPushNotifications(), bell b...[line truncated]
+149: 41: {"id":"mobile-fullscreen-drawer-close-button","title":"Mobile full-screen hamburger drawer needs header close button beside theme toggle","origin":"audit/chats/transcripts/mobile_mql7ntg8_sl7d2q.md:34-38","diskPath":"web-ui/src/mobile/mobile-shell.js; web-ui/src/styles/mobile.css; self/16-mobile-app.md","status":"drafted","lastVerified":"2026-06-20","currentState":"Still live and now proposal-tracked. Raul requested a close button in the full-screen drawer header to the right of the theme button. Dream re-verified current source: mobile-shell already renders and wires the close button, but mobile.css places `.pm-theme-toggle` at `right:18px` and `.pm-drawer-close` at `right:calc(18px + 4...[line truncated]
+150: 42: {"id":"skill-trigger-fleet-cleanup-2026-06-19","title":"Skill trigger fleet cleanup and lingering goal-mode 429 noise","origin":"audit/chats/transcripts/mobile_mql85i17_u6lapy.md:1-60","diskPath":"skills metadata overlays; Brain/skill-gardener/2026-06-19/live-candidates.jsonl","status":"resolved","lastVerified":"2026-06-19","currentState":"Raul asked for every skill trigger to be cleaned up. The run audited 123 skills, updated high-noise/core trigger sets, verified skill_audit_all returned flagged=0 avgScore=100, and left quarantined api-integration unchanged due to safety scanner. After completion, goal-mode judge retries hit openai_codex 429 until Raul marked the goal done, so the trig...[line truncated]
+151: 43: {"id":"ai-smoke-test-hot-restart-interruptions-2026-06-20","title":"AI smoke test requests are interrupting into restart/context packets instead of completing","origin":"audit/chats/transcripts/mobile_mqlgyb5w_yumtfj.md:1-10; audit/chats/transcripts/mobile_mqli2bj3_f10zka.md:1-10; audit/chats/transcripts/mobile_mqlrak2i_5s6vq3.md:1-10","diskPath":"audit/chats/transcripts/mobile_mqwwwqki_mxg8fo.md; audit/chats/transcripts/mobile_mqwy7y0m_mjem1g.md; skills/ai-surface-smoke-research","status":"resolved","lastVerified":"2026-06-27","currentState":"Resolved in this window. After a gateway restart at 22:09Z, Raul ran the explicit AI Surface Smoke Research workflow and a shorter AI smoke test; ...[line truncated]
+152: 44: {"id":"subagent-chat-composer-and-task-recovery-2026-06-20","title":"Subagent chat composer layout and task-recovery routing polish","origin":"audit/chats/transcripts/mobile_mqlumgv2_q8g8kl.md:1-19","diskPath":"web-ui/src/pages/SubagentsPage.js; web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css; src/gateway/routes/channels.router.ts; src/gateway/tasks/task-router.ts; self/08-tasks-and-agents.md; self/16-mobile-app.md; self/17-desktop-web-ui.md","status":"drafted","lastVerified":"2026-06-21","currentState":"Still live and proposal-tracked. Current source recheck shows channels.router.ts still intercepts subagent chat into blocked task recovery before normal chat at both the ...[line truncated]
+153: 45: {"id":"codex-desktop-recovery-skill-and-restart-loop-2026-06-20","title":"Codex desktop restart requests keep recurring while dedicated recovery skill remains pending","origin":"audit/chats/transcripts/mobile_mqmdmi3b_h7118n.md:1-132; audit/chats/transcripts/mobile_mqv7mgzb_jeajf5.md:1-24; audit/chats/transcripts/mobile_mqv89ra0_kbnqcc.md:1-7; Brain/skill-gardener/2026-06-26/workflow-episodes.jsonl:11; Brain/skill-gardener/2026-06-27/workflow-episodes.jsonl:1-15; Brain/skill-gardener/2026-06-28/workflow-episodes.jsonl:1-3","diskPath":"audit/proposals/state/pending/prop_1781928431681_8013fa.json; skills/desktop-automation-playbook","status":"drafted","lastVerified":"2026-06-28","currentSt...[line truncated]
+154: 46: {"id":"agent-profile-pack-marketplace","title":"Cross-harness Agent Profile Pack marketplace for Prometheus, Hermes, and OpenClaw","origin":"audit/chats/transcripts/mobile_mqmpr75p_nxng27.md:21-27; audit/chats/transcripts/mobile_mqmpr75p_nxng27.md:682-687","diskPath":"oss-agents/marketplace-plan; src/gateway/marketplace/agent-profile-packs.ts; src/gateway/routes/channels.router.ts; self/08-tasks-and-agents.md","status":"drafted","lastVerified":"2026-06-21","currentState":"Current-state recheck in Thought 3 confirms the marketplace plan/importer thread is still live but already proposal-tracked. Source still compiles a full Agent Profile Pack subagent object, then writes workspace config....[line truncated]
+155: 47: {"id":"new-trading-account-clean-slate-2026-06-21","title":"New trading account should start with clean-slate rules","origin":"audit/chats/transcripts/mobile_mqn7uzpg_c8njtq.md:1-18","diskPath":"none","status":"idea","lastVerified":"2026-06-21","currentState":"No new trading-account activity appeared in the 11:27-17:41 UTC window. This remains a live personal/trading operations seed from earlier today: Raul has another trading account, and Monday onboarding could benefit from explicit clean-slate account rules tied to the existing NY-open execution guardrail. The prior Saturday-market-closed correction should be treated as a behavior-quality caution, not a new proposal.","research":[],"e...[line truncated]
+156: 48: {"id":"mobile-theme-token-cleanup-2026-06-26","title":"Mobile theme token cleanup and desktop/mobile theme alignment","origin":"audit/chats/transcripts/mobile_mqul8gcj_3o93h1.md:3-9; audit/chats/transcripts/mobile_mqv6jtuy_wejj8v.md:15-17","diskPath":"web-ui/src/styles/mobile.css; web-ui/src/mobile/mobile-shell.js; web-ui/index.html; self/16-mobile-app.md; self/WEB_UI_THEMES.md; self/24-mobile-liquid-glass.md","status":"resolved","lastVerified":"2026-06-26","currentState":"Current source now has semantic mobile accent tokens `--pm-accent`, `--pm-accent-soft`, and `--pm-accent-dark`; legacy `--pm-orange*` tokens alias to them; blue and purple mobile skins define their own accent values. s...[line truncated]
+157: 49: {"id":"morning-trading-brief-usage-limit-429-2026-06-26","title":"Provider/model quota failures block basic mobile and scheduled work","origin":"memory/2026-06-26-intraday-notes.md:1-2; audit/cron/runs/job_1781533738853_j59oa.jsonl:22-23; audit/chats/transcripts/mobile_mqxg7cp1_xblxbi.md:1-13; audit/chats/transcripts/mobile_mqxgsj03_rh75k9.md:1-6","diskPath":"audit/cron/runs/job_1781533738853_j59oa.jsonl; audit/chats/transcripts/mobile_mqxg7cp1_xblxbi.md; audit/chats/transcripts/mobile_mqxxbpi0_q9q6cd.md; .prometheus/config.json","status":"stalled","lastVerified":"2026-06-28","currentState":"Still live and actively disruptive. Earlier Thought 2 saw simple mobile/model-skill runs fail wit...[line truncated]
+158: 50: {"id":"ios-action-button-prometheus-voice-launch","title":"iPhone Action Button shortcut to Prometheus Mobile voice mode","origin":"audit/chats/transcripts/mobile_mqv7su1t_wl23vo.md:1-191; memory/2026-06-26-intraday-notes.md:9-11","diskPath":"web-ui/src/mobile/mobile-router.js; web-ui/service-worker.js; web-ui/src/mobile/mobile-data.js; self/16-mobile-app.md","status":"idea","lastVerified":"2026-06-26","currentState":"Current mobile source supports `#mobile/voice`, and helper route generation emits `/?source=pwa#mobile/voice`; service-worker precaches `/mobile/voice`. Query route parsing exists for `?mobile`, `?pm_route`, and `?route`, but live verification noted `?pm_route=mobile/voice`...[line truncated]
+159: 51: {"id":"openai-56-model-routing-and-reasoning-rollout","title":"OpenAI GPT-5.6 Sol/Terra/Luna model routing and reasoning setup","origin":"audit/chats/transcripts/mobile_mqva0b9o_h9uuav.md:1-535; audit/chats/transcripts/mobile_mqvp81ei_ntx9vq.md:9-90; Brain/skill-episodes/2026-06-26/episodes.jsonl:2-5","diskPath":"src/providers/openai-codex-adapter.ts; src/gateway/core/server.ts; src/extensions/bundled/providers/openai_codex/prometheus.extension.json; src/extensions/bundled/providers/openai/prometheus.extension.json; src/config/config.ts; self/09-providers-and-models.md; .prometheus/config.json; .prometheus/model-runtime-status.json; .prometheus/model-usage.jsonl; web-ui/src/mobile/mobile...[line truncated]
+160: 52: {"id":"manual-x-post-about-gpt-56-fetch-failed","title":"Manual X post about GPT-5.6 models failed before composer","origin":"audit/chats/transcripts/mobile_mqva0b9o_h9uuav.md:515-535","diskPath":"browser automation/X account flow; skills or future x-posting workflow","status":"stalled","lastVerified":"2026-06-26","currentState":"Raul asked Prometheus to post on X about the new GPT-5.6 models. The first attempt failed with low-level `fetch failed` before any composer was reached; Raul asked what happened, Prometheus correctly said nothing was drafted or posted, then retrying failed with the same `fetch failed`. Skill discovery for X/Twitter posting returned no matching manual-post skill ...[line truncated]
+161: 53: {"id":"inspect-console-load-time-errors","title":"inspect_console misses page-load console/pageerror events","origin":"audit/chats/transcripts/mobile_mqv6jtuy_wejj8v.md:322-340; audit/chats/transcripts/brain_dream_2026-06-26.md:6-12; memory/2026-06-27-intraday-notes.md:6-8","diskPath":"src/gateway/browser-tools.ts; src/gateway/agents-runtime/subagent-executor.ts; self/04-browser.md; audit/proposals/state/pending/prop_1782532523924_6faefc.json","status":"drafted","lastVerified":"2026-06-27","currentState":"Pending proposal prop_1782532523924_6faefc exists and remains pending, so no source edits were applied. Current source still implements inspect_console by injecting globalThis.__promCon...[line truncated]
+162: 54: {"id":"switch-model-low-default-missing-active-config-2026-06-27","title":"switch_model low tier fails despite templates defining a low model","origin":"Brain/skill-gardener/2026-06-27/workflow-episodes.jsonl:14; audit/chats/transcripts/mobile_mqwyjvpb_fnj9bp.md:1-9","diskPath":".prometheus/config.json; settings model defaults UI; proposals/pending/prop_1782532304594_8605b7.json","status":"drafted","lastVerified":"2026-06-27 23:34 Dream","currentState":"Still live but already covered by pending model-routing action proposal prop_1782532304594_8605b7. Fresh config read shows active agent_model_defaults still only has main_chat/proposal_executor_high_risk/proposal_executor_low_risk, while ...[line truncated]
+163: 55: {"id":"sparky-chat-with-subagent-test-2026-06-28","title":"Quick Sparky conversation using chat_with_subagent","origin":"audit/chats/transcripts/f34f9b80-9e26-417a-ac09-86279e3fcba7.md:25-78","diskPath":"src/gateway/agents-runtime/subagent-executor.ts; src/gateway/tools/defs/agent-team-schedule.ts; .prometheus/agent-chats/sparky_v1.json","status":"stalled","lastVerified":"2026-06-28","currentState":"Raul asked for a normal 2-3 turn conversation with Sparky to exercise newly added Prometheus <-> subagent chat tools. The run first hit an openai_codex no-activity timeout, then began to use message_subagent before Raul corrected that the actual chat tool should be used. Current source confir...[line truncated]
+164: 56: {"id":"source-edit-proposal-rigor-skill-test-blocked-2026-06-28","title":"Source Edit Proposal Rigor skill test was blocked by model quota","origin":"audit/chats/transcripts/mobile_mqxg7cp1_xblxbi.md:7-13","diskPath":"skills catalog; audit/chats/transcripts/mobile_mqxg7cp1_xblxbi.md; .prometheus/config.json","status":"stalled","lastVerified":"2026-06-28","currentState":"Raul explicitly tried to test `Source Edit Proposal Rigor` as a skill/workflow, but the run never reached skill discovery because OpenAI Codex returned a usage-limit 429. A current skill search for `source edit proposal rigor Prometheus dev source edit proposal` returned zero matching installed skills, so there is still n...[line truncated]
+165: 57: {"id":"pocket-zombies-mobile-fps-build-2026-06-28","title":"Pocket Zombies mobile FPS build and verification","origin":"audit/chats/transcripts/mobile_mqxxbpi0_q9q6cd.md:1-56; audit/chats/transcripts/mobile_mqxxbpi0_q9q6cd.md:323-335; audit/chats/transcripts/mobile_mqxxbpi0_q9q6cd.md:479-608","diskPath":"games/mobile-sideways-fps/index.html; games/mobile-sideways-fps/ZOMBIES_ROADMAP.md; games/mobile-sideways-fps/ASSET_NOTES.md","status":"stalled","lastVerified":"2026-06-28","currentState":"Current files show a substantial asset-backed standalone Pocket Zombies build exists: index.html has wall guns/perks/doors/power-ups/sprite-sheet rendering and debug hook; ZOMBIES_ROADMAP.md is mostly ...[line truncated]
+166: 58: {"id":"browser-desktop-tool-latency-optimization-2026-06-29","title":"Browser and desktop tool latency optimization loop","origin":"audit/chats/transcripts/mobile_mqyg7gew_ibgg6s.md:1-64","diskPath":"browser-tool-bench/browser-latency-results-2026-06-28.md; src/gateway/browser-tools.ts; src/gateway/desktop-tools.ts; src/gateway/agents-runtime/subagent-executor.ts; self/04-browser.md","status":"in_progress","lastVerified":"2026-06-29","currentState":"Current benchmark file exists and records baseline browser/desktop latency. A goal-mode dev edit completed after Raul requested optimization, touching browser-tools, desktop-tools, subagent-executor, and self/04-browser.md; self docs now stat...[line truncated]
+167: 59: {"id":"main-chat-tool-preamble-memory-cleanup-2026-06-29","title":"Main-chat pre-tool/preamble rule cleanup","origin":"audit/chats/transcripts/mobile_mqyg7tmj_x86zuf.md:1-35","diskPath":"USER.md; SOUL.md; src/gateway/routes/chat.router.ts; web-ui/src/mobile/mobile-pages.js","status":"resolved","lastVerified":"2026-06-29","currentState":"Resolved for the requested memory cleanup. Current USER.md grep no longer finds the prior foreground/pre-tool correction entry; only unrelated short/shortcut/desktop/trading entries match. Source search still shows only voice-specific 24-word narration and UI/provider uses of preamble, not a main-chat forced 20-word pre-tool instruction. SOUL still keeps ...[line truncated]
+168: 
+169: Brain/skill-episodes/2026-07-01/episodes.jsonl (7 lines) [window 1-7]:
+170: 1: {"timestamp":"2026-07-01T04:08:08.035Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","skillId":"operations-manager","skillReadIndex":0,"skillContentHash":"f69a5bb720ee0a4e","skillExcerpt":"Operations Manager (operations-manager) v1.1.0 bundle\nDescription: Use this skill when organizing operations, SOPs, recurring workflows, checklists, task ownership, process improvements, team coordination, scheduling, or business/admin execution systems.\nRequired tools: workspace_write, automations\nInstructions:\n---\nname: operations-manager\ndescription: Use this skill when the user asks to design operations, SOPs, process audits, bottleneck fixes, meeting ...[line truncated]
+171: 2: {"timestamp":"2026-07-01T04:29:39.193Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","skillId":"knowledge-import-pipeline","skillReadIndex":0,"skillContentHash":"5209822f187cdd81","skillExcerpt":"Knowledge Import Pipeline (knowledge-import-pipeline) v1.0.0 bundle\nDescription: Use this skill when the user asks to import, ingest, organize, summarize, or convert external knowledge into Prometheus memory, skills, resources, docs, entity files, or workspace notes. It focuses on preserving source provenance and making knowledge reusable.\nRequired tools: memory_search, write_note, file_ops, skills\nInstructions:\n# Knowledge Import Pipeline\nUse this s...[line truncated]
+172: 3: {"timestamp":"2026-07-01T04:29:39.193Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","skillId":"hyperframes-registry","skillReadIndex":1,"skillContentHash":"658a8f70a9295683","skillExcerpt":"HyperFrames Registry (hyperframes-registry) v1.0.0 bundle\nDescription: Use this skill when registering, indexing, finding, updating, or maintaining reusable HyperFrames templates, clips, scenes, assets, project metadata, or export records.\nRequired tools: creative_hyperframes, workspace_write\nInstructions:\n---\nname: hyperframes-registry\ndescription: Install and wire registry blocks and components into HyperFrames compositions. Use when running hyperframe...[line truncated]
+173: 4: {"timestamp":"2026-07-01T04:29:39.193Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","skillId":"artifact-registry","skillReadIndex":2,"skillContentHash":"35654d96bf4a128b","skillExcerpt":"Artifact Registry (artifact-registry) v1.1.0 bundle\nDescription: Use this skill when finding, indexing, normalizing, retrieving, deduplicating, or reasoning about generated artifacts from chats, tasks, teams, Brain runs, proposals, creative exports, reports, or tool outputs.\nRequired tools: advanced_memory, workspace_write, automations\nInstructions:\n---\nname: artifact-registry\ndescription: Use this skill when Prometheus needs to find, index, normalize, retr...[line truncated]
+174: 5: {"timestamp":"2026-07-01T04:29:39.193Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","skillId":"local-file-browser-verification","skillReadIndex":3,"skillContentHash":"45019f6b0bc84902","skillExcerpt":"Local File Browser Verification (local-file-browser-verification) v1.0.0 bundle\nDescription: Use this skill when the user asks Prometheus to test, manually verify, debug, smoke-test, open, inspect, or interact with a local HTML file, web artifact, small browser app, generated page, game, UI prototype, or static file in a real browser. Triggers on requests like: open this HTML and test it, start an HTTP server for this file, check the browser consol...[line truncated]
+175: 6: {"timestamp":"2026-07-01T04:29:39.193Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","skillId":"market-research","skillReadIndex":4,"skillContentHash":"85d48dddf5e9b341","skillExcerpt":"market-research (market-research) v1.0.0 bundle\nDescription: Use this skill when researching a market, audience, industry, customer segment, demand, competitors, trends, pricing, TAM/SAM/SOM, category dynamics, or go-to-market context.\nRequired tools: web_search, web_fetch\nInstructions:\n---\nname: Market Research\ndescription: Structured process for sizing markets, defining who to target, collecting customer intelligence, and synthesizing raw research into deci...[line truncated]
+176: 7: 
+177: 
+178: Brain/skill-gardener/2026-07-01/live-candidates.jsonl (3 lines) [window 1-3]:
+179: 1: {"id":"sg_11dcea08ea50e4a8","timestamp":"2026-07-01T04:08:08.035Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","status":"captured","requestExcerpt":"Pls test the skill list tool\nRun some queries and see what comes up etc and then lets talk abt how we can makenit better, i feel like s lot of times you search things up wnd no matching skills come up","finalResponseExcerpt":"Yeah, you’re right. I tested it and the failure mode is pretty clear:\nThe tool works for **short exact keywords**, but falls over on **natural task-style queries**.\nExamples:\n- `browser automation desktop click screenshot` → **0 results**\n  - But `browser` returns `browser-...[line truncated]
+180: 2: {"id":"sg_19de65c08a09d4fa","timestamp":"2026-07-01T04:29:39.193Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","status":"captured","requestExcerpt":"Try again now and see","finalResponseExcerpt":"Much better. The exact queries that returned **0 before** now all return strong matches.\nWhat changed in behavior:\n- `browser automation desktop click screenshot`\n  - Now returns `desktop-automation-playbook`, `browser-automation-playbook`, `voice-browser-desktop-smoke-test`, `local-file-browser-verification`, etc.\n  - Good.\n- `Prometheus source edit mobile bug fix`\n  - Now returns `src-edit-proposal-rigor` first, then `codex-frontend-engineer`, `d...[line truncated]
+181: 3: 
+182: 
+183: Brain/skill-gardener/2026-07-01/workflow-episodes.jsonl (3 lines) [window 1-3]:
+184: 1: {"id":"sg_d2bf7a6b0de3ea6c","timestamp":"2026-07-01T04:08:08.035Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","requestExcerpt":"Pls test the skill list tool\nRun some queries and see what comes up etc and then lets talk abt how we can makenit better, i feel like s lot of times you search things up wnd no matching skills come up","finalResponseExcerpt":"Yeah, you’re right. I tested it and the failure mode is pretty clear:\nThe tool works for **short exact keywords**, but falls over on **natural task-style queries**.\nExamples:\n- `browser automation desktop click screenshot` → **0 results**\n  - But `browser` returns `browser-automation-playbook`...[line truncated]
+185: 2: {"id":"sg_fffd9ee34e80f94a","timestamp":"2026-07-01T04:29:39.193Z","date":"2026-07-01","sessionId":"mobile_mr1k0cei_ghsujf","executionMode":"interactive","requestExcerpt":"Try again now and see","finalResponseExcerpt":"Much better. The exact queries that returned **0 before** now all return strong matches.\nWhat changed in behavior:\n- `browser automation desktop click screenshot`\n  - Now returns `desktop-automation-playbook`, `browser-automation-playbook`, `voice-browser-desktop-smoke-test`, `local-file-browser-verification`, etc.\n  - Good.\n- `Prometheus source edit mobile bug fix`\n  - Now returns `src-edit-proposal-rigor` first, then `codex-frontend-engineer`, `dev-debugging`, etc.\...[line truncated]
+186: 3: 
+
+games/mobile-sideways-fps/index.html (100 lines) [window 100-100]:
+100: 
+
+games/mobile-sideways-fps/ZOMBIES_ROADMAP.md (165 lines) [window 1-160, truncated]:
+1: # Mobile Sideways FPS — CoD Zombies-Style Roadmap
+2: 
+3: Status: recreated after the broken Sparky pass. `index.html` is now a fresh standalone Pocket Zombies build with a working RAF loop, raycast-style FPS rendering, waves, zombies, points, wall buys, doors, perks, power-ups, mobile controls, desktop controls, audio feedback, pause/mute, restart, and `window.__pocketZombiesDebug` verification hooks. Browser smoke test confirmed START GAME runs, zombies spawn, debug state advances, no JS error is reported, and the player survives initial spawn pressure after balance fixes. Next follow-up: improve aim/combat feel, real sprite-sheet rendering, and automated control-test helpers.
+4: 
+5: ## Phase 0 — Preserve Current Foundation
+6: 
+7: - [x] Keep the existing `index.html` game as the playable base.
+8: - [x] Preserve current mobile touch controls: left thumb movement, right thumb look, fire button.
+9: - [x] Preserve vertical-first loading with rotate-sideways hint.
+10: - [x] Preserve desktop fallback controls for testing.
+11: - [x] Preserve the raycast FPS rendering loop and wall collision basics.
+12: - [x] Add new systems incrementally without breaking the current start/play/restart loop.
+13: 
+14: ## Phase 1 — Zombies Core Loop
+15: 
+16: - [x] Replace generic enemies with zombie-specific enemy data and behavior.
+17: - [x] Add zombie health scaling by wave.
+18: - [x] Add zombie movement speed scaling by wave.
+19: - [x] Add zombie melee attack timing and damage balancing.
+20: - [x] Add zombie spawn pacing instead of spawning the whole wave instantly.
+21: - [x] Add round transition downtime between waves.
+22: - [x] Add clear “Wave Complete” feedback.
+23: - [x] Add game-over summary with wave reached, kills, points earned, and time survived-style stats.
+24: 
+25: ## Phase 2 — Points Economy
+26: 
+27: - [x] Add player points/cash state.
+28: - [x] Award points for zombie hits.
+29: - [x] Award bonus points for zombie kills.
+30: - [x] Award points for wave completion.
+31: - [x] Show points in the HUD.
+32: - [x] Spend points on wall guns.
+33: - [x] Spend points on doors.
+34: - [x] Spend points on perks.
+35: - [x] Prevent purchases when points are insufficient.
+36: - [x] Add purchase feedback text/sound/flash.
+37: 
+38: ## Phase 3 — Multiple Buyable Wall Guns
+39: 
+40: - [x] Define weapon data: name, price, damage, fire rate, range, spread, magazine size, reserve ammo, reload time.
+41: - [x] Add at least three wall-buy guns.
+42: - [x] Add wall-buy locations to the map.
+43: - [x] Render wall-buy prompts when the player looks at or stands near a gun location.
+44: - [x] Add purchase input compatible with mobile and desktop.
+45: - [x] Add weapon switching if multiple owned weapons are supported.
+46: - [x] Add ammo counts for limited-ammo guns.
+47: - [x] Add reload behavior.
+48: - [x] Add out-of-ammo behavior.
+49: - [x] Balance starter weapon vs. purchased weapons.
+50: 
+51: ## Phase 4 — Perks System
+52: 
+53: - [x] Define perk data: name, price, effect, icon/color, purchase location.
+54: - [x] Add Juggernog-style health increase perk.
+55: - [x] Add Speed Cola-style reload/fire handling perk.
+56: - [x] Add Stamin-Up-style movement speed perk.
+57: - [x] Add Double Tap-style damage/fire-rate perk.
+58: - [x] Add perk machine locations to the map.
+59: - [x] Render perk purchase prompts.
+60: - [x] Apply perk effects immediately after purchase.
+61: - [x] Show active perks in the HUD.
+62: 
+63: ## Phase 5 — Unlockable Doors
+64: 
+65: - [x] Add door tiles/entities to the map.
+66: - [x] Give each door a points cost.
+67: - [x] Block movement and line-of-sight through locked doors.
+68: - [x] Render locked-door prompts when nearby.
+69: - [x] Add mobile-friendly purchase interaction.
+70: - [x] Remove/open door after purchase.
+71: - [x] Persist opened doors for the run.
+72: - [x] Connect doors to map expansion sections.
+73: 
+74: ## Phase 6 — Map Expansions
+75: 
+76: - [x] Expand the current small map into distinct rooms/lanes.
+77: - [x] Add a starting room.
+78: - [x] Add at least one unlockable side room.
+79: - [x] Add at least one larger training area.
+80: - [x] Add wall-gun placement in useful but not overpowered spots.
+81: - [x] Add perk-machine placement behind progression gates.
+82: - [x] Add zombie spawn windows/entry points.
+83: - [x] Update minimap to show expanded areas clearly.
+84: - [x] Keep performance safe for mobile screens.
+85: 
+86: ## Phase 7 — Real 3D-Feeling Zombies
+87: 
+88: - [x] Improve zombie sprites from simple shapes into generated asset-backed billboard bodies.
+89: - [x] Add zombie animation states: walking, hurt, attacking, dying, with billboard motion/bob and hit flash.
+90: - [x] Add distance scaling and occlusion that feels more 3D.
+91: - [x] Add simple zombie variants by color/shape/speed.
+92: - [x] Add hit flashes and death effects.
+93: - [x] Add attack windup visual feedback.
+94: - [x] Add generated local sprite sheet assets for zombies, first-person guns, perks, and power-ups.
+95: 
+96: ## Phase 8 — Power-Ups
+97: 
+98: - [x] Define power-up data: name, duration/effect, color/icon, drop chance.
+99: - [x] Add Max Ammo.
+100: - [x] Add Insta-Kill.
+101: - [x] Add Double Points.
+102: - [x] Add Nuke / screen-clear effect.
+103: - [x] Add pickup radius and feedback.
+104: - [x] Show active timed power-ups in the HUD.
+105: 
+106: ## Phase 9 — UI / HUD Updates
+107: 
+108: - [x] Add points display.
+109: - [x] Add current weapon display.
+110: - [x] Add ammo and reload display.
+111: - [x] Add active perk icons.
+112: - [x] Add active power-up timers.
+113: - [x] Add contextual purchase prompt panel.
+114: - [x] Add wave transition text.
+115: - [x] Add low-health feedback.
+116: - [x] Add mobile-safe layout for portrait and landscape.
+117: - [x] Keep HUD readable without blocking touch controls.
+118: 
+119: ## Phase 10 — Interaction Controls
+120: 
+121: - [x] Add a mobile interaction button for buying guns, perks, and doors.
+122: - [x] Add desktop keyboard interaction key.
+123: - [x] Prevent interaction button from interfering with fire/look controls.
+124: - [x] Prioritize nearest/most relevant interactable when multiple prompts overlap.
+125: - [x] Add clear affordance for “hold to buy” vs. tap to buy if needed.
+126: 
+127: ## Phase 11 — Audio / Feedback
+128: 
+129: - [x] Add optional gunshot sound effects.
+130: - [x] Add zombie hit/death sounds.
+131: - [x] Add purchase success/fail sounds.
+132: - [x] Add power-up pickup sounds.
+133: - [x] Add round-start/round-end stingers.
+134: - [x] Ensure mobile browsers unlock audio only after user gesture.
+135: - [x] Add mute toggle if audio becomes annoying during testing.
+136: - [x] Add pause/resume control for testing and survivability.
+137: 
+138: ## Phase 12 — Balancing and Polish
+139: 
+140: - [x] Tune wave difficulty curve.
+141: - [x] Tune zombie count, speed, health, and damage.
+142: - [x] Tune weapon prices and damage.
+143: - [x] Tune perk prices.
+144: - [x] Tune door prices and progression pacing.
+145: - [x] Add pause/restart controls.
+146: - [x] Add save-free replayability with fast restarts.
+147: - [x] Test on mobile-style portrait/launch layout in desktop browser.
+148: - [x] Test sideways/landscape play in desktop browser.
+149: - [x] Test in desktop browser with console open.
+150: 
+151: ## Phase 13 — Future Co-Op Possibilities
+152: 
+153: - [ ] Decide whether co-op is local split-screen, same-network multiplayer, or online multiplayer.
+154: - [ ] Separate game state from rendering so networking could be added later.
+155: - [ ] Define player entities rather than a single hardcoded player only.
+156: - [ ] Add teammate HUD slots if co-op becomes real.
+157: - [ ] Add revive/downed-state mechanics if co-op becomes real.
+158: - [ ] Keep this phase deferred until the single-player zombies loop is fun.
+159: 
+160: ## Implementation Notes
+[READ_TRUNCATED] Use start_line:161, num_lines:220 for the next chunk, or full:true only when needed.
+
+reports/nebulax-trading-platform-analysis.md (385 lines) [window 1-120, truncated]:
+1: # NebulaX Trading Platform Analysis
+2: 
+3: _Date: 2026-07-01_  
+4: _Analyst: Sparky (`sparky_v1`)_
+5: 
+6: ## Executive Summary
+7: 
+8: NebulaX is a static, browser-first Solana trading/arcade platform prototype. The main repo (`repos/nebulax-test/`) contains a multi-page HTML/CSS/JS app with Phantom wallet connection, Jupiter swap attempts, token discovery pages, portfolio/watchlist/store/game surfaces, Supabase schema planning, and Vercel deployment scaffolding. The companion repo (`repos/nebulax-exchange/`) is a small landing/custom-domain site pointing at `www.nebulax.exchange`.
+9: 
+10: The strongest parts already built are the UI breadth, Solana/Phantom connection work, GeckoTerminal/DexScreener data feeds, Jupiter quote/swap code, game/store prototypes, and an initial Supabase database schema. The biggest launch blockers are security and production architecture: exposed API/RPC keys, direct browser-side trading calls, no real backend/session/auth layer, many features stored only in `localStorage`, no package/build/test system, fragmented duplicated scripts, and a failing included integration check.
+11: 
+12: Bottom line: this is a promising visual/product prototype, not production-ready trading infrastructure yet. P0 work should focus on key rotation, backend proxy hardening, wallet/trade safety, deployment sanity, and consolidating duplicated code before any public relaunch.
+13: 
+14: ## Repo Inventory
+15: 
+16: ### `repos/nebulax-test/` — main platform
+17: 
+18: Observed structure:
+19: 
+20: - Static entry/login page: `repos/nebulax-test/index.html`.
+21: - Main app shell/dashboard: `repos/nebulax-test/NebulaX.html`.
+22: - Trading/token pages:
+23:   - `repos/nebulax-test/Trending.html`
+24:   - `repos/nebulax-test/NewPairs-official.html`
+25:   - `repos/nebulax-test/Coinpage-Official.html`
+26:   - `repos/nebulax-test/Adrenaline-official.html`
+27:   - `repos/nebulax-test/portfolio_official_v_2_fixed.html`
+28:   - `repos/nebulax-test/watchlist_official_v_2.html`
+29: - Store/arcade surfaces:
+30:   - `repos/nebulax-test/nebula_x_store_official.html`
+31:   - `repos/nebulax-test/Arcadegamepanel.html`
+32:   - `repos/nebulax-test/NEBX-Arcade.html`
+33:   - `repos/nebulax-test/games/` with several standalone games.
+34: - Shared scripts:
+35:   - `repos/nebulax-test/assets/nx-wallet.js`
+36:   - `repos/nebulax-test/assets/jupiter-swap-engine.js`
+37:   - `repos/nebulax-test/assets/js/nx-jupiter.js`
+38:   - `repos/nebulax-test/assets/js/nx-search.js`
+39:   - `repos/nebulax-test/trending-engine.js`
+40:   - `repos/nebulax-test/adrenaline-engine.js`
+41: - Serverless API:
+42:   - `repos/nebulax-test/api/jupiter.js`
+43: - Database plan:
+44:   - `repos/nebulax-test/supabase/migrations/001_init.sql`
+45:   - `repos/nebulax-test/supabase/README.md`
+46: - Vercel config:
+47:   - `repos/nebulax-test/vercel.json` contains only `{ "version": 2 }`.
+48: - Docs/status files:
+49:   - `COMPREHENSIVE_ANALYSIS.md`, `DEPLOYMENT_READY.md`, `NEBULAX_CURRENT_SPECS.md`, `JUPITER_*`, `MOBILE_PHANTOM_UX.md`, etc.
+50: 
+51: No `package.json` exists in `repos/nebulax-test/`; a safe check returned `NO_PACKAGE_JSON`. That means there are no npm scripts, dependency locking, lint/build pipeline, or standard test runner in the repo root.
+52: 
+53: ### `repos/nebulax-exchange/` — landing/custom-domain repo
+54: 
+55: Observed files:
+56: 
+57: - `repos/nebulax-exchange/index.html`
+58: - `repos/nebulax-exchange/Shortdocs.html`
+59: - `repos/nebulax-exchange/NebulaX-logo.png`
+60: - `repos/nebulax-exchange/CNAME`
+61: 
+62: `repos/nebulax-exchange/CNAME:1` points to `www.nebulax.exchange`. This appears to be a lightweight static landing/custom-domain repo rather than the core app.
+63: 
+64: ## Product/Feature Map
+65: 
+66: Built/prototyped features found in code and docs:
+67: 
+68: - **Wallet gate/login**: `index.html` is a “Connect Phantom” page. It uses `sessionStorage` key `nebula:wallet:session` at `index.html:74-84`, connects Phantom via `window.phantom?.solana` / `window.solana` at `index.html:101+`, and redirects into the app after connection.
+69: - **Main trading dashboard/app shell**: `NebulaX.html` is the primary app surface and defines global RPC config (`NebulaX.html:141`).
+70: - **Token discovery/trending**: `trending-engine.js` polls GeckoTerminal trending pools and enriches with DexScreener. Evidence: `trending-engine.js:1-5`, `trending-engine.js:88-99`, `trending-engine.js:161+`.
+71: - **New pairs/adrenaline scanner**: `adrenaline-engine.js` fetches Solana new pools from GeckoTerminal (`adrenaline-engine.js:33-42`) and classifies new/migrating/migrated tokens using mcap, age, and DEX heuristics (`adrenaline-engine.js:1-17`, `adrenaline-engine.js:274-285`).
+72: - **Coin detail/trading page**: `Coinpage-Official.html` contains Jupiter swap UI logic and token metric panels. It reads mint from URL/localStorage/window globals (`Coinpage-Official.html:1041-1075`).
+73: - **Jupiter swaps**: two implementations exist:
+74:   - Browser-side V6 engine in `assets/jupiter-swap-engine.js` with quote/swap endpoints (`assets/jupiter-swap-engine.js:18-26`, `assets/jupiter-swap-engine.js:68-147`) and transaction signing/sending (`assets/jupiter-swap-engine.js:248-356`).
+75:   - Inline Jupiter V1-ish implementation in `Coinpage-Official.html:975-988`, including a hardcoded API key.
+76: - **Portfolio/watchlist/store/game panels**: local app pages and Supabase schema include watchlists, trades, orders, positions, PnL, games, leaderboards, store items, purchases, launchpad projects, LP locks, and vesting (`supabase/migrations/001_init.sql:58-145`, `146-210`, `212-240`).
+77: - **Mobile Phantom UX**: `assets/nx-wallet.js` includes mobile detection and Phantom universal/deep-link builders (`assets/nx-wallet.js:21-43`, `75-87`, `135-160`).
+78: 
+79: ## Architecture and Tech Stack
+80: 
+81: Current architecture is mostly static frontend:
+82: 
+83: - Plain HTML files with large inline CSS/JS sections.
+84: - Tailwind CDN on the login page (`index.html:10`) and external browser CDNs on pages such as Solana Web3 (`Adrenaline-official.html:13`).
+85: - Browser-global JavaScript modules under `assets/` and many page-specific inline scripts.
+86: - Vercel serverless function only for Jupiter proxying (`api/jupiter.js`).
+87: - Supabase schema exists, but the live app appears to rely heavily on `localStorage`/`sessionStorage`, not a wired backend database.
+88: - No package/build system: no root `package.json`, no dependency lock, no lint/test/build scripts.
+89: 
+90: Important architecture evidence:
+91: 
+92: - `vercel.json` is only 4 lines and declares version 2; it does not define routing, headers, rewrites, clean URLs, env requirements, or security headers (`repos/nebulax-test/vercel.json:1-4`).
+93: - `api/jupiter.js` is an ESM Vercel function importing Node `https` and proxying to `public.jupiter-ag.workers.dev` (`api/jupiter.js:1-4`, `23-37`).
+94: - Supabase schema is aspirational/comprehensive but not enough alone: `supabase/README.md:36-40` explicitly lists next steps such as adding granular migrations, RLS SQL, seed scripts, and a Supabase client.
+95: 
+96: ## Trading/Data Integrations
+97: 
+98: ### GeckoTerminal
+99: 
+100: - Trending engine fetches `https://api.geckoterminal.com/api/v2/networks/solana/trending_pools...` (`trending-engine.js:96-99`).
+101: - Adrenaline/new-pairs engine fetches `https://api.geckoterminal.com/api/v2/networks/solana/new_pools...` (`adrenaline-engine.js:41-42`).
+102: 
+103: ### DexScreener
+104: 
+105: - Adrenaline engine fetches `https://api.dexscreener.com/latest/dex/tokens/${mint}` (`adrenaline-engine.js:180`).
+106: - Trending engine docs/code describe DexScreener enrichment and scoring (`trending-engine.js:1-5`, `DEPLOYMENT_READY.md:11-17`).
+107: 
+108: ### Jupiter
+109: 
+110: - `assets/jupiter-swap-engine.js` uses public `quote-api.jup.ag/v6/quote` and `/swap` (`assets/jupiter-swap-engine.js:18-20`). It signs and sends transactions in-browser after Phantom signs (`assets/jupiter-swap-engine.js:282-309`).
+111: - `api/jupiter.js` proxies `/v6/:endpoint` to `public.jupiter-ag.workers.dev` and allows CORS from `*` (`api/jupiter.js:5-8`, `23-36`).
+112: - `Coinpage-Official.html` uses `https://api.jup.ag/swap/v1/quote` and `/swap` with a hardcoded `JUP_API_KEY` (`Coinpage-Official.html:982-988`).
+113: 
+114: ### Solana / Phantom / Helius
+115: 
+116: - Many pages set `window.NX_RPC` to a Helius URL with a visible key. Example: `NebulaX.html:141`, `Trending.html:15`, `Coinpage-Official.html:18`, `portfolio_official_v_2_fixed.html:18`.
+117: - `assets/nx-wallet.js` resolves RPC from `window.NX_RPC`, `localStorage.NX_RPC`, or Solana public RPC (`assets/nx-wallet.js:112-121`) and creates `solanaWeb3.Connection` instances (`assets/nx-wallet.js:124-130`).
+118: - Phantom connection and mobile deep linking are present (`assets/nx-wallet.js:63-87`, `135-160`).
+119: 
+120: ### Token/trade data flow
+[READ_TRUNCATED] Use start_line:121, num_lines:220 for the next chunk, or full:true only when needed.

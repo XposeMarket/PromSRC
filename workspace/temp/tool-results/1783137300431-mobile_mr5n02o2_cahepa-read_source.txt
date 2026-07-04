@@ -1,0 +1,183 @@
+src/gateway/context/model-context.ts (241 lines) [window 1-180, truncated]:
+1: import { getConfig } from '../../config/config';
+2: import { getProviderRuntimeOptions } from '../../providers/provider-registry.js';
+3: import type { ModelInfo } from '../../providers/LLMProvider';
+4: 
+5: export type TokenizerFamily = 'openai' | 'anthropic' | 'gemini' | 'llama' | 'qwen' | 'heuristic';
+6: 
+7: export interface ModelContextProfile {
+8:   providerId: string;
+9:   model: string;
+10:   contextWindowTokens: number;
+11:   maxOutputTokens: number;
+12:   tokenizer: TokenizerFamily;
+13:   supportsReasoningTokens: boolean;
+14:   reasoningBudgetTokens: number;
+15:   source: 'config_override' | 'provider_metadata' | 'known_table' | 'ollama_num_ctx' | 'fallback';
+16: }
+17: 
+18: export interface ContextBudget {
+19:   contextWindowTokens: number;
+20:   reservedOutputTokens: number;
+21:   reservedReasoningTokens: number;
+22:   safetyHeadroomTokens: number;
+23:   inputBudgetTokens: number;
+24:   compactionTriggerTokens: number;
+25:   toolContextBudgetTokens: number;
+26:   summaryBudgetTokens: number;
+27: }
+28: 
+29: type KnownModelProfile = Partial<Omit<ModelContextProfile, 'providerId' | 'model' | 'source'>>;
+30: 
+31: const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: KnownModelProfile }> = [
+32:   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5(?:\.\d+)?-chat/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: false } },
+33:   { provider: /^openai_codex$/i, model: /^gpt-5\.3-codex-spark$/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+34:   { provider: /^openai_codex$/i, model: /^gpt-5/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+35:   { provider: /^openai$/i, model: /^gpt-5\.(?:5|4)(?:-pro)?(?:-\d{4}-\d{2}-\d{2})?$/i, profile: { contextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+36:   { provider: /^openai$/i, model: /^gpt-5\.4-(?:mini|nano)(?:-|$)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+37:   { provider: /^openai$/i, model: /^gpt-5\.\d+(?:-|$)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+38:   { provider: /^openai$/i, model: /^gpt-5-(?:mini|nano|pro)(?:-|$)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+39:   { provider: /^openai$/i, model: /^gpt-5(?:$|-)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+40:   { provider: /^(openai|openai_codex)$/i, model: /codex/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+41:   { provider: /^(openai|openai_codex)$/i, model: /^gpt-4\.1/i, profile: { contextWindowTokens: 1047576, maxOutputTokens: 32768, tokenizer: 'openai', supportsReasoningTokens: false } },
+42:   { provider: /^(openai|openai_codex)$/i, model: /^(gpt-4o|o[134])/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: true } },
+43:   { provider: /^(anthropic)$/i, model: /^(claude-fable-5|claude-opus-4-(?:6|7|8)|claude-sonnet-(?:5|4-6))(?:\b|[-_])/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 128000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
+44:   { provider: /^(anthropic)$/i, model: /^claude-haiku-4-5(?:\b|[-_])/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 64000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
+45:   { provider: /^(anthropic)$/i, model: /^claude-/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 8192, tokenizer: 'anthropic', supportsReasoningTokens: true } },
+46:   { provider: /^(gemini)$/i, model: /^gemini-2\.5-pro/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'gemini', supportsReasoningTokens: true } },
+47:   { provider: /^(gemini)$/i, model: /^gemini-/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'gemini', supportsReasoningTokens: false } },
+48:   { provider: /^(perplexity)$/i, model: /^sonar-(reasoning|deep-research)/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+49:   { provider: /^(perplexity)$/i, model: /^sonar/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
+50:   { provider: /^(xai)$/i, model: /^grok-composer/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+51:   { provider: /^(xai)$/i, model: /^(grok-build-0\.1|grok-code-fast(?:-1)?(?:-\d{4})?)$/i, profile: { contextWindowTokens: 256000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+52:   { provider: /^(xai)$/i, model: /^(grok-4\.3(?:-latest)?|grok-latest)$/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+53:   { provider: /^(xai)$/i, model: /^grok-4\.20-(?:.*non-reasoning)/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
+54:   { provider: /^(xai)$/i, model: /^grok-4\.20(?:$|-)/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+55:   { provider: /^(xai)$/i, model: /^grok/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
+56: ];
+57: 
+58: function readActiveProviderAndModel(): { providerId: string; model: string } {
+59:   const raw: any = getConfig().getConfig();
+60:   const providerId = String(raw?.llm?.provider || 'ollama').trim() || 'ollama';
+61:   const providerCfg = raw?.llm?.providers?.[providerId] || {};
+62:   const model = String(providerCfg?.model || raw?.models?.primary || getProviderRuntimeOptions(providerId)?.staticModels?.[0] || 'qwen3:4b').trim();
+63:   return { providerId, model };
+64: }
+65: 
+66: function configuredContextOverride(providerId: string): Partial<ModelContextProfile> {
+67:   const raw: any = getConfig().getConfig();
+68:   const providerCfg = raw?.llm?.providers?.[providerId] || {};
+69:   const sessionCfg = raw?.session || {};
+70:   const out: Partial<ModelContextProfile> = {};
+71:   const contextRaw = providerCfg.context_window ?? providerCfg.contextWindowTokens ?? sessionCfg.contextWindowTokens;
+72:   const outputRaw = providerCfg.max_output_tokens ?? providerCfg.maxOutputTokens ?? sessionCfg.maxOutputTokens;
+73:   const reasoningRaw = providerCfg.reasoning_budget_tokens ?? providerCfg.thinking_budget ?? sessionCfg.reasoningBudgetTokens;
+74:   if (Number.isFinite(Number(contextRaw)) && Number(contextRaw) > 512) out.contextWindowTokens = Math.floor(Number(contextRaw));
+75:   if (Number.isFinite(Number(outputRaw)) && Number(outputRaw) > 0) out.maxOutputTokens = Math.floor(Number(outputRaw));
+76:   if (Number.isFinite(Number(reasoningRaw)) && Number(reasoningRaw) > 0) out.reasoningBudgetTokens = Math.floor(Number(reasoningRaw));
+77:   if (typeof providerCfg.tokenizer === 'string') out.tokenizer = providerCfg.tokenizer as TokenizerFamily;
+78:   return out;
+79: }
+80: 
+81: function resolveOllamaNumCtx(): number | null {
+82:   const raw: any = getConfig().getConfig();
+83:   const candidates = [
+84:     raw?.llm?.providers?.ollama?.num_ctx,
+85:     raw?.llm?.num_ctx,
+86:     raw?.ollama?.num_ctx,
+87:     process.env.LOCALCLAW_SESSION_NUM_CTX,
+88:     process.env.LOCALCLAW_CHAT_NUM_CTX,
+89:   ];
+90:   for (const value of candidates) {
+91:     const n = Number(value);
+92:     if (Number.isFinite(n) && n > 512) return Math.floor(n);
+93:   }
+94:   return null;
+95: }
+96: 
+97: function inferTokenizer(providerId: string, model: string): TokenizerFamily {
+98:   if (/anthropic/i.test(providerId) || /^claude-/i.test(model)) return 'anthropic';
+99:   if (/gemini/i.test(providerId) || /^gemini-/i.test(model)) return 'gemini';
+100:   if (/qwen/i.test(model)) return 'qwen';
+101:   if (/ollama|llama|lm_studio|llama_cpp/i.test(providerId) || /llama|mistral|deepseek/i.test(model)) return 'llama';
+102:   if (/openai|codex|xai|perplexity/i.test(providerId) || /^(gpt|o\d|grok|sonar)/i.test(model)) return 'openai';
+103:   return 'heuristic';
+104: }
+105: 
+106: function normalizeTokenizer(value: unknown): TokenizerFamily | undefined {
+107:   const raw = String(value || '').trim();
+108:   if (raw === 'openai' || raw === 'anthropic' || raw === 'gemini' || raw === 'llama' || raw === 'qwen' || raw === 'heuristic') return raw;
+109:   return undefined;
+110: }
+111: 
+112: export function estimateTextTokensForModel(text: unknown, tokenizer: TokenizerFamily = 'heuristic'): number {
+113:   const value = String(text || '');
+114:   if (!value) return 0;
+115:   const codeOrLogDensity = /[{}[\]();]|(^|\n)(stdout|stderr|error|at\s+\w+|diff --git|@@|\d+:\s)/i.test(value);
+116:   const divisor = codeOrLogDensity ? 3.1 : tokenizer === 'qwen' || tokenizer === 'llama' ? 3.4 : 4;
+117:   return Math.max(1, Math.ceil(value.length / divisor));
+118: }
+119: 
+120: export function estimateMessagesTokensForModel(messages: Array<any> | undefined, profile: Pick<ModelContextProfile, 'tokenizer'>): number {
+121:   if (!Array.isArray(messages)) return 0;
+122:   return messages.reduce((sum, msg: any) => {
+123:     const role = estimateTextTokensForModel(msg?.role || '', profile.tokenizer);
+124:     const content = Array.isArray(msg?.content)
+125:       ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n')
+126:       : String(msg?.content || '');
+127:     const toolCalls = Array.isArray(msg?.tool_calls) ? JSON.stringify(msg.tool_calls) : '';
+128:     return sum + role + estimateTextTokensForModel(content, profile.tokenizer) + estimateTextTokensForModel(toolCalls, profile.tokenizer) + 6;
+129:   }, 0);
+130: }
+131: 
+132: export function estimateMessageTokenBreakdownForModel(
+133:   messages: Array<any> | undefined,
+134:   profile: Pick<ModelContextProfile, 'tokenizer'>,
+135: ): {
+136:   totalTokens: number;
+137:   messageCount: number;
+138:   byRole: Record<string, number>;
+139:   largestMessages: Array<{ index: number; role: string; tokens: number; chars: number; toolName?: string }>;
+140: } {
+141:   if (!Array.isArray(messages)) return { totalTokens: 0, messageCount: 0, byRole: {}, largestMessages: [] };
+142:   const byRole: Record<string, number> = {};
+143:   const largestMessages: Array<{ index: number; role: string; tokens: number; chars: number; toolName?: string }> = [];
+144:   let totalTokens = 0;
+145:   messages.forEach((msg: any, index) => {
+146:     const roleText = String(msg?.role || 'unknown');
+147:     const content = Array.isArray(msg?.content)
+148:       ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n')
+149:       : String(msg?.content || '');
+150:     const toolCalls = Array.isArray(msg?.tool_calls) ? JSON.stringify(msg.tool_calls) : '';
+151:     const tokens = estimateTextTokensForModel(roleText, profile.tokenizer)
+152:       + estimateTextTokensForModel(content, profile.tokenizer)
+153:       + estimateTextTokensForModel(toolCalls, profile.tokenizer)
+154:       + 6;
+155:     totalTokens += tokens;
+156:     byRole[roleText] = (byRole[roleText] || 0) + tokens;
+157:     largestMessages.push({
+158:       index,
+159:       role: roleText,
+160:       tokens,
+161:       chars: content.length + toolCalls.length,
+162:       toolName: msg?.tool_name ? String(msg.tool_name).slice(0, 80) : undefined,
+163:     });
+164:   });
+165:   largestMessages.sort((a, b) => b.tokens - a.tokens);
+166:   return {
+167:     totalTokens,
+168:     messageCount: messages.length,
+169:     byRole,
+170:     largestMessages: largestMessages.slice(0, 5),
+171:   };
+172: }
+173: 
+174: export function selectModelInfoForContextProfile(models: ModelInfo[] | undefined, model: string): ModelInfo | undefined {
+175:   if (!Array.isArray(models) || !models.length) return undefined;
+176:   const wanted = String(model || '').trim().toLowerCase();
+177:   if (!wanted) return undefined;
+178:   return models.find((m) => String(m?.name || '').trim().toLowerCase() === wanted);
+179: }
+180: 
+[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.
+[READ_TRUNCATED] Returned 180 of 241 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

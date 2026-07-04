@@ -203,29 +203,212 @@ function stripSkillEmojiFrontmatter(content: string): string {
   return frontmatter + raw.slice(end);
 }
 
-function formatCompactSkillList(skills: any[], args: any): string {
+const SKILL_QUERY_STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'best', 'by', 'can', 'create', 'do', 'does', 'for', 'from',
+  'get', 'how', 'i', 'in', 'into', 'is', 'it', 'list', 'me', 'my', 'of', 'on', 'or', 'please',
+  'show', 'skill', 'skills', 'the', 'this', 'to', 'under', 'use', 'using', 'want', 'with',
+]);
+
+const SKILL_QUERY_ALIASES: Record<string, string[]> = {
+  bug: ['debug', 'fix', 'repair', 'issue', 'broken', 'error', 'troubleshoot', 'regression'],
+  fix: ['debug', 'repair', 'issue', 'broken', 'error', 'troubleshoot', 'bug'],
+  debug: ['bug', 'fix', 'repair', 'issue', 'troubleshoot', 'error'],
+  repair: ['fix', 'debug', 'issue', 'broken', 'regression'],
+  issue: ['bug', 'fix', 'debug', 'problem', 'broken'],
+  lead: ['lead-generation', 'leadgeneration', 'prospect', 'prospecting', 'outreach', 'local-lead', 'b2b'],
+  generation: ['lead-generation', 'leadgeneration', 'prospecting', 'outreach'],
+  leadgeneration: ['lead', 'lead-generation', 'prospecting', 'outreach', 'local-lead'],
+  maps: ['map', 'google-maps', 'googlemaps', 'local', 'places'],
+  google: ['google-maps', 'googlemaps', 'maps', 'local'],
+  website: ['site', 'web', 'domain', 'landing-page', 'homepage'],
+  analysis: ['analyze', 'audit', 'intelligence', 'research', 'inspect'],
+  analyze: ['analysis', 'audit', 'intelligence', 'inspect'],
+  source: ['src', 'code', 'self-edit', 'dev-source', 'repository'],
+  src: ['source', 'code', 'self-edit', 'dev-source'],
+  edit: ['editing', 'modify', 'change', 'patch', 'update'],
+  mobile: ['web-ui', 'frontend', 'responsive', 'ios', 'app'],
+  browser: ['web', 'page', 'dom', 'automation', 'click', 'screenshot'],
+  desktop: ['window', 'app', 'screen', 'automation', 'click', 'screenshot'],
+  automation: ['automate', 'workflow', 'playbook', 'browser', 'desktop'],
+  screenshot: ['capture', 'screen', 'vision'],
+  shopping: ['shop', 'buying', 'product', 'deal', 'price', 'commerce'],
+  product: ['shopping', 'deal', 'price', 'buying', 'commerce'],
+  research: ['analysis', 'analyze', 'investigate', 'compare', 'intelligence'],
+  laptop: ['computer', 'pc', 'notebook'],
+  gaming: ['game', 'gpu', 'performance'],
+  video: ['creative', 'promo', 'social', 'motion', 'remotion', 'hyperframes'],
+  promo: ['promotional', 'marketing', 'social', 'video'],
+  hyperframes: ['hyperframe', 'hyper-frames', 'hyper', 'frames', 'video', 'creative'],
+  hyperframe: ['hyperframes', 'hyper-frames', 'video', 'creative'],
+  xpose: ['xpose-market', 'market', 'lead-generation', 'website-analysis'],
+};
+
+function normalizeSkillSearchText(value: any): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[\-_./]+/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function skillSearchTokens(value: any, opts: { expand?: boolean } = {}): Set<string> {
+  const normalized = normalizeSkillSearchText(value);
+  const rawTokens = normalized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2 && !SKILL_QUERY_STOPWORDS.has(token));
+  const tokens = new Set<string>();
+  const add = (token: string) => {
+    const clean = normalizeSkillSearchText(token).replace(/\s+/g, '');
+    if (clean.length >= 2 && !SKILL_QUERY_STOPWORDS.has(clean)) tokens.add(clean);
+  };
+  for (const token of rawTokens) {
+    add(token);
+    if (opts.expand) {
+      for (const alias of SKILL_QUERY_ALIASES[token] || []) add(alias);
+    }
+  }
+  for (let i = 0; i < rawTokens.length - 1; i++) {
+    const joined = `${rawTokens[i]}${rawTokens[i + 1]}`;
+    add(joined);
+    if (opts.expand) {
+      for (const alias of SKILL_QUERY_ALIASES[joined] || []) add(alias);
+    }
+  }
+  const compact = normalized.replace(/\s+/g, '');
+  if (compact.length >= 4) add(compact);
+  return tokens;
+}
+
+function skillTokenMatches(queryToken: string, fieldTokens: Set<string>): boolean {
+  if (fieldTokens.has(queryToken)) return true;
+  if (queryToken.length < 4) return false;
+  for (const fieldToken of fieldTokens) {
+    if (fieldToken.length < 4) continue;
+    if (fieldToken.includes(queryToken) || queryToken.includes(fieldToken)) return true;
+  }
+  return false;
+}
+
+function charNgrams(value: string, size = 3): Set<string> {
+  const compact = normalizeSkillSearchText(value).replace(/\s+/g, '');
+  const grams = new Set<string>();
+  if (compact.length < size) {
+    if (compact) grams.add(compact);
+    return grams;
+  }
+  for (let i = 0; i <= compact.length - size; i++) grams.add(compact.slice(i, i + size));
+  return grams;
+}
+
+function ngramSimilarity(left: string, right: string): number {
+  const a = charNgrams(left);
+  const b = charNgrams(right);
+  if (!a.size || !b.size) return 0;
+  let intersection = 0;
+  for (const gram of a) if (b.has(gram)) intersection += 1;
+  return intersection / Math.max(a.size, b.size);
+}
+
+type RankedSkill = {
+  skill: any;
+  score: number;
+  confidence: 'strong' | 'weak';
+  matchedTerms: string[];
+  matchedFields: string[];
+};
+
+const SKILL_STRONG_MATCH_SCORE = 8;
+
+function rankSkillForQuery(skill: any, query: string): RankedSkill {
+  const queryTokens = skillSearchTokens(query, { expand: true });
+  const queryNorm = normalizeSkillSearchText(query);
+  const fields: Array<{ name: string; weight: number; values: any[] }> = [
+    { name: 'id', weight: 12, values: [skill?.id] },
+    { name: 'name', weight: 10, values: [skill?.name] },
+    { name: 'triggers', weight: 8, values: Array.isArray(skill?.triggers) ? skill.triggers : [] },
+    { name: 'categories', weight: 8, values: Array.isArray(skill?.categories) ? skill.categories : [] },
+    { name: 'requiredTools', weight: 5, values: Array.isArray(skill?.requiredTools) ? skill.requiredTools : [] },
+    { name: 'description', weight: 3, values: [skill?.description] },
+  ];
+  let score = 0;
+  const matchedTerms = new Set<string>();
+  const matchedFields = new Set<string>();
+  const allFieldText: string[] = [];
+
+  for (const field of fields) {
+    const text = field.values.map((value) => String(value || '')).filter(Boolean).join(' ');
+    if (!text) continue;
+    allFieldText.push(text);
+    const fieldNorm = normalizeSkillSearchText(text);
+    const fieldTokens = skillSearchTokens(text);
+    for (const queryToken of queryTokens) {
+      if (skillTokenMatches(queryToken, fieldTokens)) {
+        score += field.weight;
+        matchedTerms.add(queryToken);
+        matchedFields.add(field.name);
+      }
+    }
+    if (queryNorm && fieldNorm.includes(queryNorm)) {
+      score += field.weight * 4;
+      matchedFields.add(field.name);
+    }
+  }
+
+  if (queryNorm) {
+    const fuzzy = ngramSimilarity(queryNorm, allFieldText.join(' '));
+    if (fuzzy >= 0.08) score += Math.round(fuzzy * 20);
+  }
+
+  return {
+    skill,
+    score,
+    confidence: score >= SKILL_STRONG_MATCH_SCORE ? 'strong' : 'weak',
+    matchedTerms: Array.from(matchedTerms).slice(0, 8),
+    matchedFields: Array.from(matchedFields).slice(0, 6),
+  };
+}
+
+export function rankSkillsForQuery(skills: any[], query: string): RankedSkill[] {
+  const q = String(query || '').trim();
+  if (!q) {
+    return skills.map((skill) => ({ skill, score: 0, confidence: 'strong', matchedTerms: [], matchedFields: [] }));
+  }
+  return skills
+    .map((skill) => rankSkillForQuery(skill, q))
+    .filter((ranked) => ranked.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return String(a.skill?.id || '').localeCompare(String(b.skill?.id || ''));
+    });
+}
+
+export function formatCompactSkillList(skills: any[], args: any): string {
   const query = String(args?.query || args?.q || '').trim().toLowerCase();
   const includeDescriptions = args?.include_descriptions === true || args?.includeDescriptions === true;
+  const includeMatchDetails = args?.include_match_details === true || args?.includeMatchDetails === true;
   const requestedLimit = Math.floor(Number(args?.limit) || 24);
   const limit = Math.max(1, Math.min(80, requestedLimit));
-  const haystackFor = (s: any): string => [
-    s?.id,
-    s?.name,
-    s?.description,
-    ...(Array.isArray(s?.triggers) ? s.triggers : []),
-    ...(Array.isArray(s?.categories) ? s.categories : []),
-    ...(Array.isArray(s?.requiredTools) ? s.requiredTools : []),
-  ].map((v) => String(v || '')).join(' ').toLowerCase();
-  const matched = query ? skills.filter((s: any) => haystackFor(s).includes(query)) : skills;
-  const rows = matched.slice(0, limit).map((s: any) => {
+  const ranked = query ? rankSkillsForQuery(skills, query) : skills.map((skill) => ({ skill, score: 0, confidence: 'strong' as const, matchedTerms: [], matchedFields: [] }));
+  const strongCount = query ? ranked.filter((item) => item.confidence === 'strong').length : ranked.length;
+  const weakCount = query ? ranked.length - strongCount : 0;
+  const matched = ranked.map((item) => item.skill);
+  const rows = ranked.slice(0, limit).map((rankedSkill) => {
+    const s = rankedSkill.skill;
     const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
     const base = {
       id: String(s.id || ''),
       name: String(s.name || s.id || ''),
       status: status ? String(s.eligibility.status || '') : undefined,
+      confidence: query ? rankedSkill.confidence : undefined,
+      score: query ? rankedSkill.score : undefined,
       categories: Array.isArray(s.categories) ? s.categories.slice(0, 4) : undefined,
       requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools.slice(0, 6) : undefined,
       description: includeDescriptions ? String(s.description || '').slice(0, 180) : undefined,
+      matchedTerms: includeMatchDetails ? rankedSkill.matchedTerms : undefined,
+      matchedFields: includeMatchDetails ? rankedSkill.matchedFields : undefined,
     };
     return Object.fromEntries(Object.entries(base).filter(([, value]) =>
       value !== undefined && (!Array.isArray(value) || value.length > 0)
@@ -235,10 +418,15 @@ function formatCompactSkillList(skills: any[], args: any): string {
     totalInstalled: skills.length,
     query: query || undefined,
     matchedCount: matched.length,
+    strongMatchCount: query ? strongCount : undefined,
+    weakMatchCount: query ? weakCount : undefined,
     returnedCount: rows.length,
     truncated: matched.length > rows.length,
     compact: !includeDescriptions,
-    note: 'Compact skill discovery. Use query to narrow, include_descriptions:true only when descriptions are needed, then call skill_read(id) for one relevant skill.',
+    retrieval: query ? 'weighted token/alias OR match with weak candidates instead of exact full-query substring matching' : undefined,
+    note: query && strongCount === 0 && weakCount > 0
+      ? 'No strong matches. Returning weak candidates; try a shorter query or call skill_read on the most plausible candidate.'
+      : 'Compact skill discovery. Natural task queries are matched across id/name/description/triggers/categories/requiredTools. Call skill_read(id) for one relevant skill.',
     skills: rows,
   }, null, 2);
 }

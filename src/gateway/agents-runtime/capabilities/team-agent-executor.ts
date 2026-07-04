@@ -54,6 +54,7 @@ import {
 import { claimAgentForTeamWorkspace } from '../../teams/team-workspace';
 import { notifyMainAgent } from '../../teams/notify-bridge';
 import { SubagentManager } from '../subagent-manager';
+import { deleteAgentCompletely, deleteTeamCompletely } from '../entity-delete';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 import {
@@ -67,6 +68,7 @@ const TEAM_AGENT_TOOL_NAMES = new Set([
   'agent_list',
   'agent_info',
   'agent_update',
+  'delete_agent',
   'dispatch_to_agent',
   'message_subagent',
   'get_agent_result',
@@ -371,6 +373,24 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           };
         } catch (err: any) {
           return { name, args, result: `agent_update error: ${err.message}`, error: true };
+        }
+      }
+
+      case 'delete_agent': {
+        try {
+          const agentId = String(args.agent_id || args.agentId || args.id || '').trim();
+          if (!agentId) return { name, args, result: 'delete_agent requires agent_id. Call agent_list first to get IDs.', error: true };
+          if (args.confirm !== true) {
+            return { name, args, result: 'delete_agent requires confirm=true because this permanently deletes the subagent, workspace files, stored chat, schedules, and team membership.', error: true };
+          }
+          const result = deleteAgentCompletely({
+            agentId,
+            cronScheduler: deps.cronScheduler,
+            broadcastTeamEvent: deps.broadcastTeamEvent,
+          });
+          return { name, args, result: JSON.stringify(result, null, 2), error: result.success !== true };
+        } catch (err: any) {
+          return { name, args, result: `delete_agent error: ${err.message}`, error: true };
         }
       }
 
@@ -1707,6 +1727,21 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
               result: JSON.stringify({ success: true, action: 'list', count: teams.length, teams }, null, 2),
               error: false,
             };
+          }
+
+          if (action === 'delete') {
+            const teamId = String(args.team_id || args.teamId || '').trim();
+            if (!teamId) return { name, args, result: 'team_manage(delete) requires team_id', error: true };
+            if (args.confirm !== true) {
+              return { name, args, result: 'team_manage(delete) requires confirm=true because this permanently deletes the managed team, team workspace files, and member agents by default.', error: true };
+            }
+            const result = deleteTeamCompletely({
+              teamId,
+              cronScheduler: deps.cronScheduler,
+              broadcastTeamEvent: deps.broadcastTeamEvent,
+              deleteAgents: args.delete_agents !== false && args.deleteAgents !== false,
+            });
+            return { name, args, result: JSON.stringify(result, null, 2), error: result.success !== true };
           }
 
           if (action === 'create') {

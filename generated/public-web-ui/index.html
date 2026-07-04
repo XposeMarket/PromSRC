@@ -8,6 +8,33 @@
 <link rel="stylesheet" href="vendor/codemirror/theme/material-darker.min.css">
 <script>
   (() => {
+    if (typeof window.__PROM_SHOULD_BOOT_MOBILE === 'function') return;
+    function shouldBootMobile() {
+      try {
+        const hash = String(window.location.hash || '').replace(/^#/, '');
+        const path = String(window.location.pathname || '');
+        const params = new URLSearchParams(window.location.search || '');
+        const forceDesktop = params.get('desktop') === '1' || params.get('mode') === 'desktop';
+        if (forceDesktop) return false;
+        return (
+          hash.startsWith('mobile') ||
+          path === '/mobile' ||
+          path.startsWith('/mobile/') ||
+          !!params.get('pair') ||
+          params.get('source') === 'pwa' ||
+          localStorage.getItem('pm_force_mobile') === '1' ||
+          !!localStorage.getItem('pm_device_token')
+        );
+      } catch {
+        return false;
+      }
+    }
+    window.__PROM_SHOULD_BOOT_MOBILE = shouldBootMobile;
+    window.__PROM_MOBILE_ROUTER_READY = Promise.resolve(null);
+  })();
+</script>
+<script>
+  (() => {
     const loadExternalScript = (src, attrs = {}) => new Promise((resolve) => {
       const script = document.createElement('script');
       script.src = src;
@@ -17,6 +44,19 @@
       script.onerror = () => resolve({ src, ok: false });
       document.head.appendChild(script);
     });
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const creativeRenderWorker = params.get('creativeRenderWorker') === '1';
+      if (!creativeRenderWorker && window.__PROM_SHOULD_BOOT_MOBILE?.()) {
+        const markedReady = loadExternalScript('vendor/marked/marked.min.js')
+          .then((result) => {
+            try { window.dispatchEvent(new CustomEvent('prometheus:markdown-ready', { detail: result })); } catch {}
+            return result;
+          });
+        window.__PROM_EXTERNAL_LIBS_READY = Promise.allSettled([markedReady]);
+        return;
+      }
+    } catch {}
     const codeMirrorReady = loadExternalScript('vendor/codemirror/codemirror.min.js')
       .then(() => Promise.all([
         'xml',
@@ -68,12 +108,12 @@
 <link rel="stylesheet" href="static/styles/pages.css?v=generated-image-modal-v3">
 <link rel="stylesheet" href="static/styles/projects.css">
 <link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="static/styles/mobile.css?v=voice-mic-restore-v1">
+<link rel="stylesheet" href="static/styles/mobile.css?v=slash-command-style-align-v1">
 <link rel="stylesheet" href="static/styles/themes.css?v=blue-theme-1">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="theme-color" content="#1d150e">
+<meta name="theme-color" content="#101112">
 <meta name="color-scheme" content="dark light">
 <meta name="application-name" content="Prometheus">
 <meta name="mobile-web-app-capable" content="yes">
@@ -127,22 +167,15 @@
 </head>
 <body class="auth-pending">
 <canvas id="ember-canvas" aria-hidden="true"></canvas>
+<div id="mobile-root" hidden></div>
 <script>
   (() => {
     try {
       const hash = String(window.location.hash || '').replace(/^#/, '');
-      const path = String(window.location.pathname || '');
       const params = new URLSearchParams(window.location.search || '');
-      const forceDesktop = params.get('desktop') === '1' || params.get('mode') === 'desktop';
-      const shouldBootMobile = !forceDesktop && (
-        hash.startsWith('mobile') ||
-        path === '/mobile' ||
-        path.startsWith('/mobile/') ||
-        !!params.get('pair') ||
-        params.get('source') === 'pwa' ||
-        localStorage.getItem('pm_force_mobile') === '1' ||
-        !!localStorage.getItem('pm_device_token')
-      );
+      const shouldBootMobile = typeof window.__PROM_SHOULD_BOOT_MOBILE === 'function'
+        ? window.__PROM_SHOULD_BOOT_MOBILE()
+        : false;
 
       if (shouldBootMobile) {
         document.body.classList.add('pm-mobile-active');
@@ -2526,6 +2559,7 @@
               <button class="hub-stats-range-btn active" data-range="all" type="button">All</button>
               <button class="hub-stats-range-btn" data-range="30d" type="button">30d</button>
               <button class="hub-stats-range-btn" data-range="7d" type="button">7d</button>
+              <button class="hub-stats-range-btn" data-range="1d" type="button">1d</button>
             </div>
           </div>
           <div class="hub-stats-tiles" id="hub-stats-tiles"></div>
@@ -2536,9 +2570,7 @@
         <div class="hub-heatmap-header">
           <div class="hub-section-title">Tool Usage</div>
           <div class="hub-heatmap-nav">
-            <button class="hub-heatmap-arrow" id="hub-heatmap-prev" type="button">‹</button>
-            <span class="hub-heatmap-label" id="hub-heatmap-label"></span>
-            <button class="hub-heatmap-arrow" id="hub-heatmap-next" type="button">›</button>
+            <span class="hub-heatmap-label" id="hub-heatmap-label">Token activity</span>
           </div>
         </div>
         <div class="hub-daily-summary" id="hub-daily-summary"></div>
@@ -3609,7 +3641,6 @@
             <div class="right-section-title" style="margin-bottom:4px">Terminal Permissions</div>
             <div style="font-size:12px;color:var(--muted);line-height:1.45">Choose how Prometheus handles command approvals after hard blocks and path checks pass.</div>
           </div>
-          <button class="btn btn-sm" onclick="saveSecuritySettings({showStatus:true})" style="background:#fff;border:1px solid var(--line);color:var(--text);flex-shrink:0">Save</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
           <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
@@ -3727,7 +3758,17 @@
             <input id="settings-openai-key" type="password" placeholder="sk-..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
             <select id="settings-openai-model" class="settings-input" style="font-size:13px">
-              <option value="gpt-4.1">gpt-4.1 (latest)</option>
+              <option value="gpt-5.5">gpt-5.5 (flagship)</option>
+              <option value="gpt-5.4-pro">gpt-5.4-pro</option>
+              <option value="gpt-5.4">gpt-5.4</option>
+              <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+              <option value="gpt-5.4-nano">gpt-5.4-nano</option>
+              <option value="gpt-5-pro">gpt-5-pro</option>
+              <option value="gpt-5">gpt-5</option>
+              <option value="gpt-5-mini">gpt-5-mini</option>
+              <option value="gpt-5-nano">gpt-5-nano</option>
+              <option value="gpt-5-chat-latest">gpt-5-chat-latest</option>
+              <option value="gpt-4.1">gpt-4.1</option>
               <option value="gpt-4.1-mini">gpt-4.1-mini</option>
               <option value="gpt-4o">gpt-4o</option>
               <option value="gpt-4o-mini">gpt-4o-mini</option>
@@ -3825,9 +3866,11 @@
               </div>
 	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
 	              <select id="settings-anthropic-model" class="settings-input" style="font-size:13px" onchange="syncAnthropicReasoningControls()">
-	                <option value="claude-opus-4-8">claude-opus-4-8 (flagship)</option>
+	                <option value="claude-fable-5">claude-fable-5</option>
+	                <option value="claude-opus-4-8">claude-opus-4-8</option>
 	                <option value="claude-opus-4-7">claude-opus-4-7</option>
 	                <option value="claude-opus-4-6">claude-opus-4-6</option>
+	                <option value="claude-sonnet-5">claude-sonnet-5</option>
 	                <option value="claude-sonnet-4-6">claude-sonnet-4-6 (balanced)</option>
 	                <option value="claude-sonnet-4-5-20250514">claude-sonnet-4-5</option>
 	                <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fast)</option>
@@ -5764,7 +5807,7 @@ function updateTokenCount() {
 let _modelSwitcherOpen = false;
 
 const LOCAL_PROVIDERS = new Set(['ollama', 'llama_cpp', 'lm_studio']);
-const EFFORT_CAPABLE_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity']);
+const EFFORT_CAPABLE_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']);
 const THINKING_CAPABLE_PROVIDERS = new Set(['anthropic']);
 
 function _activeModelForProvider(provider, llm) {
@@ -5806,6 +5849,24 @@ function _effortLevelsForProvider(provider, model) {
       { v: 'xhigh',   label: 'Extra High',     desc: 'Maximum effort' },
     ];
   }
+  if (provider === 'xai') {
+    if (/^grok-4\.20-multi-agent(?:-|$)/i.test(String(model || '').trim())) {
+      return [
+        { v: '',       label: 'Provider Default', desc: 'Use xAI default agent count' },
+        { v: 'low',    label: 'Low',              desc: 'Fewer collaborating agents' },
+        { v: 'medium', label: 'Medium',           desc: 'More agents for research work' },
+        { v: 'high',   label: 'High',             desc: 'Deep multi-agent work' },
+        { v: 'xhigh',  label: 'Extra High',       desc: 'Maximum multi-agent effort' },
+      ];
+    }
+    return [
+      { v: '',       label: 'Provider Default', desc: 'Use xAI default (Grok 4.3 defaults to low)' },
+      { v: 'none',   label: 'None',             desc: 'Disable reasoning' },
+      { v: 'low',    label: 'Low',              desc: 'Fast tool use and general agent work' },
+      { v: 'medium', label: 'Medium',           desc: 'More thinking for complex work' },
+      { v: 'high',   label: 'High',             desc: 'Deep reasoning' },
+    ];
+  }
   return [
     { v: '',        label: 'None',           desc: 'No reasoning' },
     { v: 'minimal', label: 'Minimal (fast)', desc: 'Snappy replies' },
@@ -5821,6 +5882,7 @@ function _getProviderReasoningControlId(provider) {
     openai_codex: 'settings-codex-effort',
     anthropic: 'settings-anthropic-effort',
     perplexity: 'settings-perplexity-effort',
+    xai: 'provider-field-xai-reasoning_effort',
   }[provider] || '';
 }
 
@@ -6496,9 +6558,9 @@ const AMD_SLOTS = {
 
 // Static model fallbacks (mirrors what loadAgentModelOptions uses)
 const AMD_STATIC_MODELS = {
-  openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai:       ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
@@ -7147,8 +7209,12 @@ window.setupChatMessageScrollbarFade = window.setupChatMessageScrollbarFade || f
 };
 
 window.addEventListener('DOMContentLoaded', () => {
-  // Delay to ensure all <script type="module"> have executed and registered window.* exports
-  setTimeout(() => {
+  if (document.body.classList.contains('pm-mobile-active') && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled) return;
+  Promise.resolve(window.__PROM_DESKTOP_MODULES_READY || true).catch((err) => {
+    console.warn('[boot] desktop module preload failed:', err);
+  }).finally(() => {
+    // Delay to ensure all <script type="module"> have executed and registered window.* exports
+    setTimeout(() => {
     const isRenderWorker = window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled === true;
     if (!isRenderWorker && typeof loadChatSessions === 'function') loadChatSessions().catch(() => {});
     if (!isRenderWorker && typeof loadInstalledSkills === 'function') loadInstalledSkills().catch(() => {});
@@ -7167,7 +7233,8 @@ window.addEventListener('DOMContentLoaded', () => {
     if (typeof canvasInitDrop === 'function') canvasInitDrop();
     if (typeof chatFileUploadInit === 'function') chatFileUploadInit();
     if (typeof setupChatMessageScrollbarFade === 'function') setupChatMessageScrollbarFade();
-  }, 200);
+    }, 200);
+  });
 });
 // --- Integrations Tab ---------------------------------------------------------
 // ═══ Integrations (Webhooks + MCP) — EXTRACTED to SettingsPage.js ═══
@@ -7466,23 +7533,24 @@ let _errBackdrop = null;
 </div>
 
 <!-- F1 Scaffold: ES Module system (coexists with inline <script> during migration) -->
-<script type="module" src="static/state.js"></script>
-<script type="module" src="static/api.js"></script>
-<script type="module" src="static/utils.js"></script>
-<script type="module" src="static/ws.js"></script>
-<script type="module" src="static/app.js?v=sidebar-width-reset"></script>
-<script type="module" src="static/pages/ChatPage.js?v=generated-image-modal-v3"></script>
-<script type="module" src="static/pages/AuditPage.js"></script>
-<script type="module" src="static/pages/HubPage.js?v=skill-hover-actions"></script>
-<script type="module" src="static/pages/MemoryPage.js"></script>
-<script type="module" src="static/pages/ProposalsPage.js"></script>
-<script type="module" src="static/pages/SchedulePage.js"></script>
-<script type="module" src="static/pages/TasksPage.js"></script>
-<script type="module" src="static/pages/TeamsPage.js"></script>
-<script type="module" src="static/pages/SubagentsPage.js"></script>
-<script type="module" src="static/pages/ConnectionsPage.js"></script>
-<script type="module" src="static/pages/SettingsPage.js"></script>
-<script type="module" src="static/pages/ProjectsPage.js"></script>
+<script type="module">
+  const desktopModuleSpecs = [
+    './static/state.js',
+    './static/api.js',
+    './static/utils.js',
+    './static/ws.js',
+    './static/app.js?v=sidebar-width-reset',
+    './static/pages/ChatPage.js?v=slash-command-style-align-v1',
+    './static/pages/ConnectionsPage.js',
+    './static/pages/SettingsPage.js',
+    './static/pages/ProjectsPage.js',
+  ];
+  const mobileSurface = document.body.classList.contains('pm-mobile-active')
+    && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled;
+  window.__PROM_DESKTOP_MODULES_READY = mobileSurface
+    ? Promise.resolve([])
+    : Promise.all(desktopModuleSpecs.map((src) => import(src)));
+</script>
 <script type="module">
   import { checkSessionDetailed, mountLoginScreen, getAccount, getPersistedAccount } from './static/auth/account.js';
 
@@ -7497,6 +7565,10 @@ let _errBackdrop = null;
   async function bootWithAuth() {
     if (window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled) {
       document.body.classList.add('creative-render-worker');
+      unlockApp();
+      return;
+    }
+    if (document.body.classList.contains('pm-mobile-active')) {
       unlockApp();
       return;
     }
@@ -7663,7 +7735,6 @@ let _errBackdrop = null;
 </div><!-- end .app -->
 
 <!-- Prometheus Mobile (hash-routed, activates on #mobile/*) -->
-<div id="mobile-root" hidden></div>
 <script>
   (() => {
     if (!document.body.classList.contains('pm-mobile-active')) return;
@@ -7675,7 +7746,20 @@ let _errBackdrop = null;
     }
   })();
 </script>
-<script type="module" src="static/mobile/mobile-router.js?v=liquid-glass-v20"></script>
+<script type="module">
+  const shouldBootMobile = typeof window.__PROM_SHOULD_BOOT_MOBILE === 'function'
+    ? window.__PROM_SHOULD_BOOT_MOBILE()
+    : document.body.classList.contains('pm-mobile-active');
+  if (shouldBootMobile) {
+    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=slash-command-style-align-v1')
+      .catch((err) => {
+        console.error('[mobile] router import failed:', err);
+        throw err;
+      });
+  } else {
+    window.__PROM_MOBILE_ROUTER_READY = Promise.resolve(null);
+  }
+</script>
 <script>
   // ── Prometheus Mobile: PWA bootstrap ──
   // 1. Capture beforeinstallprompt early so we can offer "Install" from the drawer.

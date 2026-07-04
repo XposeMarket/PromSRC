@@ -1,52 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "typegpu",
-  "name": "typegpu",
-  "description": "TypeGPU and raw WebGPU adapter patterns for HyperFrames. Use when creating GPU-rendered compositions with TypeGPU, raw WebGPU, WGSL fragment shaders, compute pipelines, liquid glass effects, particle systems, or any canvas layer driven by navigator.gpu that responds to HyperFrames hf-seek events.",
-  "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when working with TypeGPU, WebGPU, GPU pipelines, shader compute/render experiments, high-performance browser graphics, or GPU-backed creative visuals.",
   "triggers": [
-    "typegpu"
+    "TypeGPU",
+    "WebGPU",
+    "GPU pipeline",
+    "compute shader",
+    "render shader",
+    "browser GPU graphics",
+    "GPU-backed visuals",
+    "high-performance canvas",
+    "WebGPU experiment",
+    "shader compute",
+    "GPU render pipeline",
+    "TypeGPU docs",
+    "graphics pipeline",
+    "GPU creative visual"
   ],
   "categories": [
-    "generic",
-    "imported"
+    "creative",
+    "webgpu",
+    "graphics"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "desktop"
-    ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": false,
-    "browser": false,
-    "desktop": true,
-    "externalSideEffects": false
-  },
-  "resources": [],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium"
+  "requiredTools": [
+    "creative_basic",
+    "workspace_write",
+    "browser_automation"
+  ],
+  "lifecycle": "active",
+  "id": "typegpu"
 }

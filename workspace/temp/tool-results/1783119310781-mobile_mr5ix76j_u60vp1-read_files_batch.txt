@@ -1,0 +1,165 @@
+games/mobile-space-explorer/js/scenes/galaxy.js (104 lines) [window 1-80, truncated]:
+1: import * as THREE from 'three';
+2: import { GALAXY, PLANETS } from '../config.js';
+3: 
+4: function seededRandom(seed) {
+5:   let s = seed;
+6:   return () => {
+7:     s = (s * 16807) % 2147483647;
+8:     return (s - 1) / 2147483646;
+9:   };
+10: }
+11: 
+12: export function buildGalaxyScene() {
+13:   const scene = new THREE.Scene();
+14:   scene.background = new THREE.Color(0x020208);
+15:   scene.fog = new THREE.FogExp2(0x020208, 0.00035);
+16: 
+17:   const amb = new THREE.AmbientLight(0x4466aa, 0.35);
+18:   const sun = new THREE.DirectionalLight(0xfff5e6, 1.1);
+19:   sun.position.set(200, 300, 100);
+20:   scene.add(amb, sun);
+21: 
+22:   const starGeo = new THREE.BufferGeometry();
+23:   const positions = new Float32Array(GALAXY.starCount * 3);
+24:   const colors = new Float32Array(GALAXY.starCount * 3);
+25:   const rnd = seededRandom(42);
+26:   for (let i = 0; i < GALAXY.starCount; i++) {
+27:     const r = GALAXY.bounds * (0.3 + rnd() * 0.7);
+28:     const theta = rnd() * Math.PI * 2;
+29:     const phi = Math.acos(2 * rnd() - 1);
+30:     positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+31:     positions[i * 3 + 1] = (rnd() - 0.5) * r * 0.4;
+32:     positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+33:     const tint = 0.7 + rnd() * 0.3;
+34:     colors[i * 3] = tint;
+35:     colors[i * 3 + 1] = tint * (0.85 + rnd() * 0.15);
+36:     colors[i * 3 + 2] = 1;
+37:   }
+38:   starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+39:   starGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+40:   const stars = new THREE.Points(
+41:     starGeo,
+42:     new THREE.PointsMaterial({ size: 1.8, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.95 }),
+43:   );
+44:   scene.add(stars);
+45: 
+46:   const nebula = new THREE.Mesh(
+47:     new THREE.SphereGeometry(GALAXY.bounds * 0.85, 32, 32),
+48:     new THREE.MeshBasicMaterial({ color: 0x1a1040, transparent: true, opacity: 0.08, side: THREE.BackSide }),
+49:   );
+50:   scene.add(nebula);
+51: 
+52:   const planets = [];
+53:   for (const p of PLANETS) {
+54:     const mesh = new THREE.Mesh(
+55:       new THREE.SphereGeometry(p.radius, 32, 32),
+56:       new THREE.MeshStandardMaterial({
+57:         color: p.color,
+58:         roughness: 0.85,
+59:         metalness: 0.05,
+60:         emissive: new THREE.Color(p.color).multiplyScalar(0.08),
+61:       }),
+62:     );
+63:     mesh.position.set(...p.position);
+64:     mesh.userData.planet = p;
+65:     const ring = new THREE.Mesh(
+66:       new THREE.RingGeometry(p.radius * 1.15, p.radius * 1.35, 48),
+67:       new THREE.MeshBasicMaterial({ color: p.color, transparent: true, opacity: 0.25, side: THREE.DoubleSide }),
+68:     );
+69:     ring.rotation.x = Math.PI / 2.2;
+70:     mesh.add(ring);
+71:     scene.add(mesh);
+72:     planets.push(mesh);
+73:   }
+74: 
+75:   const asteroids = [];
+76:   const astGeo = new THREE.IcosahedronGeometry(1, 0);
+77:   const astMat = new THREE.MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.95, flatShading: true });
+78:   const ar = seededRandom(99);
+79:   for (let i = 0; i < GALAXY.asteroidCount; i++) {
+80:     const mesh = new THREE.Mesh(astGeo, astMat);
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.
+
+games/mobile-space-explorer/js/main.js (353 lines) [window 1-80, truncated]:
+1: import * as THREE from 'three';
+2: import { GALAXY, SHIP, BIOME_SIZE } from './config.js';
+3: import { buildGalaxyScene, updateGalaxyAmbient } from './scenes/galaxy.js';
+4: import { buildBiomeScene } from './scenes/biome.js';
+5: import { createShip, createShipState } from './entities/ship.js';
+6: import { spawnBiomeNpcs, updateNpcs, findNearestFriendlyNpc } from './entities/npcs.js';
+7: import { createOrbitCamera } from './systems/camera.js';
+8: import { bindTouchInput, createInputState } from './input/touch.js';
+9: import { bindDesktopInput, extendDesktopState } from './input/desktop.js';
+10: 
+11: const canvas = document.getElementById('game');
+12: const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+13: renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+14: renderer.shadowMap.enabled = false;
+15: 
+16: const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 5000);
+17: const clock = new THREE.Clock();
+18: 
+19: let mode = 'galaxy';
+20: let transitioning = false;
+21: let activePlanet = null;
+22: 
+23: const ship = createShip();
+24: const shipState = createShipState();
+25: ship.position.set(0, 0, 120);
+26: 
+27: const galaxyData = buildGalaxyScene();
+28: let activeScene = galaxyData.scene;
+29: activeScene.add(ship);
+30: 
+31: let biomeScene = null;
+32: let biomeNpcs = [];
+33: 
+34: const inputState = createInputState();
+35: const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches;
+36: let input;
+37: if (isCoarsePointer) {
+38:   input = bindTouchInput(inputState);
+39: } else {
+40:   extendDesktopState(inputState);
+41:   input = bindDesktopInput(inputState);
+42: }
+43: 
+44: const orbitCam = createOrbitCamera(camera, ship);
+45: const fadeEl = document.getElementById('fade');
+46: const hullBar = document.getElementById('hullBar');
+47: const boostBar = document.getElementById('boostBar');
+48: const damageFlash = document.getElementById('damageFlash');
+49: const modeLabel = document.getElementById('modeLabel');
+50: const planetHint = document.getElementById('planetHint');
+51: const chatPanel = document.getElementById('chatPanel');
+52: const chatLines = document.getElementById('chatLines');
+53: document.getElementById('chatClose')?.addEventListener('click', () => chatPanel.classList.add('hidden'));
+54: 
+55: function resize() {
+56:   const w = canvas.clientWidth;
+57:   const h = canvas.clientHeight;
+58:   renderer.setSize(w, h, false);
+59:   camera.aspect = w / h;
+60:   camera.updateProjectionMatrix();
+61: }
+62: window.addEventListener('resize', resize);
+63: resize();
+64: 
+65: function setHud() {
+66:   hullBar.style.width = `${(shipState.hull / SHIP.maxHull) * 100}%`;
+67:   boostBar.style.width = `${(shipState.boost / SHIP.maxBoost) * 100}%`;
+68:   if (mode === 'galaxy') {
+69:     modeLabel.textContent = 'GALAXY';
+70:     planetHint.textContent = 'Fly into a planet to land';
+71:   } else if (activePlanet) {
+72:     modeLabel.textContent = activePlanet.name.toUpperCase();
+73:     planetHint.textContent = `${activePlanet.biome} biome · fly up to leave`;
+74:   }
+75: }
+76: 
+77: function flashDamage() {
+78:   damageFlash.classList.remove('hidden');
+79:   damageFlash.classList.add('hit');
+80:   setTimeout(() => damageFlash.classList.remove('hit'), 120);
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

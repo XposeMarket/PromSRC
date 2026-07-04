@@ -32,19 +32,21 @@ const BUILTIN_LABELS = {
 };
 
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai: ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+  anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
-  xai: ['grok-build-0.1', 'grok-4.3', 'grok-4.20-multi-agent-0309', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning'],
+  xai: ['grok-build-0.1', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent'],
 };
 
 // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
-const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity']);
+const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
 const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
 const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const PERPLEXITY_EFFORT_OPTIONS = ['', 'low', 'medium', 'high'];
+const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
+const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
 const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 // ── Caches ───────────────────────────────────────────────────────────────────
@@ -59,24 +61,47 @@ function _esc(s) {
 }
 
 // ── Friendly model-name truncation ───────────────────────────────────────────
-// claude-haiku-4-5-20251001 → "haiku 4.5"   ·   claude-opus-4-7 → "opus 4.7"
-// gpt-5.5 → "gpt 5.5"   ·   grok-4.20-reasoning → "grok 4.20"
+// claude-haiku-4-5-20251001 → "Claude Haiku 4.5"
+// gpt-5.5 → "GPT 5.5"   ·   grok-4.20-reasoning → "Grok 4.20"
 export function prettifyModelName(model, provider) {
-  let s = String(model || '').trim();
-  if (!s) return BUILTIN_LABELS[provider] ? String(provider) : (provider || 'model');
-  s = s.toLowerCase();
+  const raw = String(model || '').trim();
+  const providerId = String(provider || '').trim().toLowerCase();
+  if (!raw) return _providerLabel(providerId) || 'Model';
+  let s = raw.toLowerCase();
   // Drop date stamps like -20251001 / 20250514.
   s = s.replace(/-?20\d{6}\b/g, '');
   // Drop trailing qualifier words that add noise on a tiny badge.
-  s = s.replace(/-(reasoning|latest|preview|exp|instruct|thinking|online)\b/g, '');
+  s = s.replace(/-(reasoning|non-reasoning|latest|preview|exp|instruct|thinking|online)\b/g, '');
+  s = s.replace(/-\d{4}\b/g, '');
   // Strip the redundant "claude-" family prefix (anthropic).
   s = s.replace(/^claude-/, '');
   // Version dashes between digits become dots: 4-5 → 4.5.
   s = s.replace(/(\d)-(\d)/g, '$1.$2');
   // Remaining separators → spaces.
   s = s.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!s) s = String(model).toLowerCase();
-  if (s.length > 20) s = s.slice(0, 19).trim() + '…';
+  if (!s) s = raw;
+
+  if (/^gpt\b/.test(s)) {
+    s = s.replace(/^gpt\b/i, 'GPT');
+  } else if (/^o\d\b/.test(s)) {
+    s = s.toUpperCase();
+  } else if (providerId === 'anthropic' || /^(opus|sonnet|haiku)\b/.test(s)) {
+    s = s.replace(/^(opus|sonnet|haiku)\b/i, 'Claude $1');
+  } else if (providerId === 'gemini' || /^gemini\b/.test(s)) {
+    s = s.replace(/^gemini\b/i, 'Gemini');
+  } else if (providerId === 'xai' || /^grok\b/.test(s)) {
+    s = s.replace(/^grok\b/i, 'Grok');
+  } else if (providerId === 'perplexity' || /^sonar\b/.test(s)) {
+    s = s.replace(/^sonar\b/i, 'Sonar');
+  } else {
+    s = s.replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
+  }
+
+  s = s.replace(/\bmini\b/gi, 'mini')
+    .replace(/\b(Pro|Flash|Lite|Build|Codex|Max|Haiku|Opus|Sonnet|Deep|Research|Multi|Agent)\b/gi, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (s.length > 24) s = s.slice(0, 23).trim() + '…';
   return s;
 }
 
@@ -334,6 +359,10 @@ function _renderReasoningBody(provider, cfg) {
   if (provider === 'openai') options = EFFORT_OPTIONS;
   else if (provider === 'openai_codex') options = CODEX_EFFORT_OPTIONS;
   else if (provider === 'perplexity') options = PERPLEXITY_EFFORT_OPTIONS;
+  else if (provider === 'xai') {
+    const model = String(cfg.model || '').trim();
+    options = /^grok-4\.20-multi-agent(?:-|$)/i.test(model) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS;
+  }
   else if (provider === 'anthropic') options = ANTHROPIC_EFFORT_OPTIONS;
 
   if (!options) {
@@ -343,7 +372,7 @@ function _renderReasoningBody(provider, cfg) {
 
   const current = String(cfg.reasoning_effort || '').trim();
   const labelFor = (v) => {
-    if (!v) return provider === 'anthropic' ? 'Provider default' : 'None';
+    if (!v) return (provider === 'anthropic' || provider === 'xai') ? 'Provider default' : 'None';
     if (v === 'xhigh') return 'Extra high';
     return v.charAt(0).toUpperCase() + v.slice(1);
   };
@@ -456,7 +485,6 @@ function _renderModelList(provider) {
     const isActive = provider === activeProvider && m === activeModel;
     return `<button type="button" class="pm-msheet-row" data-model="${_esc(m)}">
       <span class="pm-msheet-row-label">${_esc(prettifyModelName(m, provider))}</span>
-      <span class="pm-msheet-row-raw">${_esc(m)}</span>
       ${isActive ? '<span class="pm-msheet-check">✓</span>' : ''}
     </button>`;
   }).join('');

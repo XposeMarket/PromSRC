@@ -1,0 +1,44 @@
+Brain/active-work.jsonl (8 lines) [window 1-8]:
+1: {"id":"figure-8-drift-mobile-build","title":"Figure 8 Drift mobile track builder and drift physics","origin":"audit/chats/transcripts/mobile_mr4ees3z_ytvzm4.jsonl; memory/2026-07-03-intraday-notes.md:38-44","diskPath":"games/figure-8-drift/index.html","status":"stalled","lastVerified":"2026-07-04","currentState":"Thought 2 window (07:17-13:29 UTC) had no user activity. Disk verified tonight: index.html 162 lines, unchanged; ready for device playtest.","research":[],"evidence":["games/figure-8-drift/index.html","Brain/thoughts/2026-07-04/03-17-thought.md"]}
+2: {"id":"pocket-zombies-mobile-fps","title":"Pocket Zombies 3D mobile FPS","origin":"mobile_mr2ors69_u35dij; memory/2026-07-03-intraday-notes.md:58-88","diskPath":"games/mobile-sideways-fps/index.html","status":"in_progress","lastVerified":"2026-07-04","currentState":"84-line minified HTML on disk; no edits in Thought 2 window; perks/sprites phone playtest still open.","research":[],"evidence":["games/mobile-sideways-fps/index.html","Brain/thoughts/2026-07-04/03-17-thought.md"]}
+3: {"id":"mobile-html-canvas-workspace-asset-loading","title":"Mobile canvas HTML games workspace asset URLs","origin":"dev_edit_mr4b73nv_03640271; memory/2026-07-03-intraday-notes.md:14-16","diskPath":"src/gateway/routes/canvas.router.ts","status":"in_progress","lastVerified":"2026-07-04","currentState":"Paired-phone E2E for canvas ?pt= URLs still pending; no gateway work in quiet window.","research":[],"evidence":["Brain/thoughts/2026-07-04/03-17-thought.md"]}
+4: {"id":"galaxy-drift-space-explorer","title":"Galaxy Drift Three.js space explorer","origin":"audit/chats/transcripts/mobile_mr5ix76j_u60vp1.jsonl; memory/2026-07-03-intraday-notes.md:102-116","diskPath":"games/mobile-space-explorer","status":"in_progress","lastVerified":"2026-07-04","currentState":"README + modular js on disk; open chat UI/NPC/humanoid assets from 2026-07-03; no new commits in window.","research":[],"evidence":["games/mobile-space-explorer/README.md","Brain/thoughts/2026-07-04/03-17-thought.md"]}
+5: {"id":"x-url-extraction-benchmark","title":"X/Twitter extraction tool benchmark (latency/tokens)","origin":"audit/chats/transcripts/mobile_mr5k2xqv_82sm2j.jsonl; memory/2026-07-04-intraday-notes.md:2-4","diskPath":"","status":"in_progress","lastVerified":"2026-07-04","currentState":"Timings in intraday DISCOVERY only; no browser-tool-bench markdown artifact for 2026-07-04 yet.","research":["memory/2026-07-04-intraday-notes.md:2-4"],"evidence":["Brain/thoughts/2026-07-04/03-17-thought.md"]}
+6: {"id":"mobile-markdown-table-ui","title":"Mobile chat markdown table rendering and scroll","origin":"memory/2026-07-04-intraday-notes.md:6-16; mobile_mr5nxwer_k2cnon","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css","status":"resolved","lastVerified":"2026-07-04","currentState":"_wrapMobileMarkdownTables at mobile-pages.js:1837 verified on disk; three dev edits synced per intraday notes.","research":[],"evidence":["web-ui/src/mobile/mobile-pages.js:1837","Brain/thoughts/2026-07-04/03-17-thought.md"]}
+7: {"id":"memory-md-full-injection","title":"Uncapped MEMORY.md in runtime prompt assembly","origin":"dev_edit_mr5tihqn; memory/2026-07-04-intraday-notes.md:22-24","diskPath":"src/gateway/prompt-context.ts","status":"resolved","lastVerified":"2026-07-04","currentState":"loadFullMemoryProfile for USER/SOUL/MEMORY on chat assembly paths without 8000-char cap verified in prompt-context.ts tonight.","research":[],"evidence":["src/gateway/prompt-context.ts","Brain/thoughts/2026-07-04/03-17-thought.md"]}
+8: {"id":"context-window-measured-sections","title":"Measured context-window section tokens (not weight EST)","origin":"audit/chats/transcripts/mobile_mr5n02o2_cahepa.md ~04:00-04:02","diskPath":"src/gateway/routes/chat.router.ts; src/gateway/prompt-context.ts","status":"idea","lastVerified":"2026-07-04","currentState":"Gardener live-candidate captured plan; no implementation in Thought 2 quiet window; still top self-edit seed.","research":["Brain/skill-gardener/2026-07-04/live-candidates.jsonl"],"evidence":["Brain/thoughts/2026-07-04/03-17-thought.md"]}
+
+memory/2026-07-04-intraday-notes.md (33 lines) [window 1-33]:
+1: 
+2: ### [DISCOVERY] 2026-07-04T00:45:04.838Z
+3: _Source: Mobile chat session; session: mobile_mr5n02o2_cahepa; origin: Mobile app_
+4: X URL extraction benchmark 2026-07-03 (mobile_mr5n02o2): URLs karpathy/TIME/USMC status. web_fetch: karpathy 11.5s/12 tweets/1318 tok/$0.00168; TIME 2.4s/1 tweet; USMC 2.3s/12 tweets. browser scroll_collect karpathy: 4.67s/12 items/5070 tok/$0.00637. browser page_text: 93ms/1981 tok. browser run_js: 1.1s/12 articles. scroll_collect_v2 failed (schema error misroute). extract_structured x_tweet: no saved schema.
+5: 
+6: ### [DEV_EDIT_COMPLETE] 2026-07-04T01:13:52.555Z
+7: _Source: Mobile chat session; session: mobile_mr5nxwer_k2cnon; origin: Mobile app_
+8: dev_edit_mr5o4i9q: Fixed mobile .pm-bubble markdown tables in web-ui/src/styles/mobile.css — removed display:block on table (broke layout), added borders/padding/header/zebra + scroll on .markdown-body wrapper. sync:web-ui + apply_live mobile ok.
+9: 
+10: ### [DEV_EDIT_COMPLETE] 2026-07-04T02:52:06.421Z
+11: _Source: Mobile chat session; session: mobile_mr5nxwer_k2cnon; origin: Mobile app_
+12: dev_edit_mr5rn6lv: Mobile md tables — skip iMessage time-reveal gesture inside .markdown-body with tables (mobile-pages.js isInteractiveTarget); :has(table) uses overflow-x:scroll, touch-action pan-x pan-y, always-visible thin scrollbar (mobile.css). sync+reload done.
+13: 
+14: ### [DEV_EDIT_COMPLETE] 2026-07-04T03:00:45.774Z
+15: _Source: Mobile chat session; session: mobile_mr5nxwer_k2cnon; origin: Mobile app_
+16: dev_edit_mr5rn6lv: Mobile md tables — wrap each <table> in .pm-md-table-scroll (mobile-pages.js _wrapMobileMarkdownTables); scroll/scrollbar CSS on wrapper only, not whole .markdown-body; isInteractiveTarget uses .pm-md-table-scroll for timestamp swipe skip. sync+mobile reload ok.
+17: 
+18: ### [TASK] 2026-07-04T03:38:08.938Z
+19: _Source: Background agent; session: brain_dream_2026-07-03_
+20: Brain Dream 2026-07-03 DONE: Evidence — 6 thoughts (12-04,13-24,14-06,02-12,08-23 + one more in dir); active-work 5 rows; episodes 85; gardener 124; no business-candidates dir. Live verify: pocket-zombies 84 lines, one </html> L83, DOM lookPad+fire+reload; perks in __check.js state init. Thoughts C2 applied: mobile-canvas-iframe checklist, yaw-movement-fire, post-menu guard, minified optional chaining recovery. Proposals: prop_1783136282031_f41d88 (duplicate-script recovery doc), prop_1783136282176_299d40 (paired-phone smoke action). Deferred: html-canvas-mobile-game new skill (aggregate gardener), Galaxy open items (chat UI/NPC), stale pending sweep (33 files). Tool friction: search_files f...[line truncated]
+21: 
+22: ### [DEV_EDIT_COMPLETE] 2026-07-04T03:44:57.921Z
+23: _Source: Background agent; session: brain_thought_restart_build_deploy_1783136688409_mobile_mr5n02o2_cahepa_0_
+24: dev_edit_mr5tihqn: Uncapped MEMORY.md injection in src/gateway/prompt-context.ts — removed 8000-char limits on loadFullMemoryProfile('MEMORY.md') (6 sites); MEMORY now full-file like USER/SOUL (proposal_execution exclusion unchanged). Verified: npm run build:backend; gateway hot-restart succeeded.
+25: 
+26: ### [DISCOVERY] 2026-07-04T05:12:48.366Z
+27: _Source: Mobile chat session; session: mobile_mr5wgwt3_uutwxk; origin: Mobile app_
+28: AI smoke test 2026-07-04 (mobile_mr5wgwt3): Codex focused OK + screenshot to mobile. Claude native app absent; only Chrome tab titled X search. browser_doctor PASS 9222. Reddit search collected ~6k chars (Hermes/OpenClaw/Claude compare threads). X live search 24 tweets (agent stack discourse + spam). browser_close after.
+29: 
+30: ### [TASK] 2026-07-04T07:17:41.709Z
+31: _Source: Background agent; session: brain_thought_2026-07-04_21-02_
+32: Brain Thought 1 Window 2 (2026-07-04 01:02-07:14 UTC) DONE: wrote Brain/thoughts/2026-07-04/21-02-thought.md; upserted Brain/active-work.jsonl to 8 rows (mobile tables resolved, MEMORY uncap resolved, context-window measured sections idea, refreshed game/benchmark rows).
+33: 

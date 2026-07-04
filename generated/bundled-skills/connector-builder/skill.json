@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "connector-builder",
+  "name": "Connector & Plugin Builder",
+  "description": "Use this skill when the user asks Prometheus to integrate, connect to, or build a plugin for a service Prometheus doesn't already support (e.g. \"connect to Airtable\", \"add my company's REST API\", \"hook up Shopify\", \"make an MCP for X\", \"add a custom connector\"). Prometheus researches the API, writes a manifest (+ index.js for REST APIs, or an MCP preset for services with an MCP server) into the user data dir, installs it via the extensions API, hot-reloads, and verifies — no source access or restart needed. The user then enters credentials in the Connections panel.",
+  "emoji": "🧩",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "add connector",
+    "build connector",
+    "connect to",
+    "integrate",
+    "make a plugin",
+    "add mcp",
+    "custom api",
+    "hook up"
+  ],
+  "categories": [
+    "integrations",
+    "connectors",
+    "prometheus"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch",
+    "web_fetch_batch",
+    "terminal",
+    "connector_list"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  },
+  "resources": [
+    {
+      "path": "references/manifest-schema.md",
+      "type": "doc",
+      "description": "Every manifest field for prometheus.extension.json, with a full REST connector example."
+    },
+    {
+      "path": "references/index-js-pattern.md",
+      "type": "doc",
+      "description": "The CommonJS index.js runtime module contract (register/registerTool/execute/ctx.getCredential) with a full worked Airtable example."
+    },
+    {
+      "path": "references/mcp-preset.md",
+      "type": "doc",
+      "description": "Zero-code MCP server connectors via kind=mcp_preset manifests with credential env templating."
+    },
+    {
+      "path": "references/workflows/connector-builder-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to connector-builder"
+    }
+  ]
+}

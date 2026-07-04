@@ -1,6 +1,6 @@
 ---
 name: three
-description: Three.js and WebGL adapter patterns for HyperFrames. Use when creating deterministic Three.js scenes, WebGL canvas layers, AnimationMixer timelines, camera motion, shader-driven visuals, or canvas renders that respond to HyperFrames hf-seek events.
+description: Three.js and WebGL adapter patterns for HyperFrames and mobile WebGL. Use when creating deterministic Three.js scenes, WebGL canvas layers, AnimationMixer timelines, camera motion, shader-driven visuals, canvas renders that respond to HyperFrames hf-seek events, or debugging Three.js scenes that work on desktop but fail on iOS/mobile Safari with missing textures, sprites, transparent PNG assets, or WebGL canvas rendering differences.
 ---
 
 # Three.js for HyperFrames
@@ -98,6 +98,10 @@ After editing a Three.js composition:
 npx hyperframes lint
 npx hyperframes validate
 ```
+
+## Mobile Safari Texture Bugs
+
+When a Three.js scene works on desktop but iPhone/iPad/mobile Safari drops sprites, transparent PNGs, billboards, HUD-like planes, or other texture assets while geometry still renders, read [references/ios-mobile-textures.md](references/ios-mobile-textures.md) before chasing file paths. This often indicates an iOS WebGL texture upload/completeness issue rather than an asset route issue.
 
 ## Credits And References
 

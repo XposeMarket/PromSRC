@@ -1,0 +1,182 @@
+src/gateway/prompt-context.ts (1592 lines) [window 960-1139, truncated]:
+960:     ['proposal_admin', 'proposal_admin (edit pending proposals before approval)'],
+961:     ['mcp_server_tools', 'mcp_server_tools (dynamic mcp__server__tool functions from connected servers)'],
+962:     ['composite_tools', 'composite_tools (saved multi-step tools and composite management)'],
+963:     ['creative_basic', 'creative_basic (creative_project + creative_scene wrappers)'],
+964:     ['creative_image', 'creative_image (creative_image_ops wrapper)'],
+965:     ['creative_video', 'creative_video (creative_video_ops wrapper)'],
+966:     ['creative_hyperframes', 'creative_hyperframes (creative_hyperframes_ops wrapper)'],
+967:     ['skills', 'skills (skill authoring, packaging, import/export, and resource maintenance)'],
+968:     ['model_management', 'model_management (agent fleet model administration and templates)'],
+969:     ['business', 'business (structured business entity lifecycle administration)'],
+970:   ];
+971:   const allowedCategoryIds: Set<string> = new Set(getPublicBuildAllowedCategories([
+972:     'browser_automation',
+973:     'desktop_automation',
+974:     'agents_and_teams',
+975:     'workspace_write',
+976:     'prometheus_source_read',
+977:     'prometheus_source_write',
+978:     'advanced_memory',
+979:     'media_assets',
+980:     'creative_quality',
+981:     'automations',
+982:     'external_apps',
+983:     'integration_admin',
+984:     'social_intelligence',
+985:     'proposal_admin',
+986:     'mcp_server_tools',
+987:     'composite_tools',
+988:     'creative_basic',
+989:     'creative_image',
+990:     'creative_video',
+991:     'creative_hyperframes',
+992:     'skills',
+993:     'model_management',
+994:     'business',
+995:   ] as const));
+996:   const categoryMenu = runtimeCategoryDefs
+997:     .filter(([id]) => allowedCategoryIds.has(id))
+998:     .map(([, label]) => label)
+999:     .join(' | ');
+1000: 
+1001:   const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill tools including skill_list/skill_read/skill_resource_*/skill_inspect/skill_update_metadata/skill_manifest_write/skill_import_bundle/skill_create_bundle, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
+1002:   ${categoryMenu}
+1003:   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
+1004:   Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
+1005: 
+1006: [FILE EDIT ROUTING] For workspace edits, activate/use workspace_write/file_ops. Use workspace_read(action:"grep"/"search"/"stats"/"read") when locating or understanding the target; if an exact file plus exact snippet/line range is already known, use workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"patchset") directly. For obvious small single-file edits or bug fixes, do not call skill_list/skill_read just because broad file/frontend skills match; read a skill only when the user explicitly asks, the workflow is unfamiliar/high-risk, or the skill is needed for a specific non-obvious procedure. Edit tools fail safely and return post-edit context. Do not use wo...[line truncated]
+1007: 
+1008: [RUN COMMAND ROUTING] For shell/dev-server/process work, activate workspace_write. Use workspace_run(action:"run", command) for bounded commands; use workspace_run(action:"start", command) for long-running or interactive commands; manage runIds with workspace_run(action:"status"|"log"|"wait"|"kill"|"submit").
+1009: 
+1010: [PROPOSAL LANES] When using write_proposal, set execution_mode explicitly:
+1011: - code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings. Do not use code_change for prom-root/config/build scripts unless the proposal lane explicitly supports that scope.
+1012: - action: approve and perform/trigger/create something exactly once. Use for team starts, scheduled runs, artifacts, and bounded workflows. Include 3-7 execution_steps and requires_build=false.
+1013: - review: read-mostly verification/audit/report. Do not mutate unless the proposal explicitly approves that exact mutation. Include evidence/resource refs and 3-7 execution_steps.
+1014: 
+1015: [SEARCH] Providers: ${searchProviders}.
+1016: WHEN: freshness (today/latest/current/price), high-stakes facts, named entity lookup, uncertainty ("not sure if…"). Skip for timeless well-known facts.
+1017: SHOPPING: for products, shopping comparisons, prices, ratings, or product carousels, call shopping_search_products first. It uses the existing web search/fetch stack and emits carousel-ready product cards without requiring shopping API keys. Use browser tools only to fill missing fields, inspect a JS-heavy page, or verify a specific product visually.
+1018: HOW: complex topics → call web_search 2–3× with different angles (not the same query twice). Scan snippets → web_fetch the 1–3 most relevant URLs. Add site:domain.com to target a source.
+1019: FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
+1020: ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.
+1021: For broad coverage use web_search(..., provider:"multi") or web_search(..., multi_engine:true). For provider checks use web_search(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg"|"xai") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
+1022: 
+1023: [WRITE NOTE] write_note(content, tag?) is always available — use it to preserve context between sessions.
+1024: WHEN TO WRITE: something was discussed, decided, or discovered that future sessions should know about; a file/task/plan step completed; data gathered from browser/desktop/API mid-task.
+1025: SKIP: casual chat, greetings, simple Q&A, turns where nothing actionable happened.
+1026: SPEED RULE: if write_note is the only action in your turn, call switch_model('low') first — it reverts automatically after.
+1027: DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered data, intermediate results, or blockers keeps context recoverable if the task is interrupted.
+1028: 
+1029: [MEMORY CONTINUITY] Memory search is Prometheus' long-term recall. Use memory_search before answering from memory when the user asks about previous discussions, decisions, recurring preferences, project history, older tasks, "what did we decide", "what happened before", or any answer that depends on continuity. Use memory_read_record for important hits and memory_get_related to expand useful context. Use memory_search_timeline when chronology matters.
+1030: 
+1031: [BUSINESS CONTEXT] BUSINESS.md is available but not auto-injected by default. Use business_context_mode({"action":"enable"}) when ongoing work needs persistent business/company context across this session. Use "status" to check the mode and "disable" to turn it back off. Enabling returns the current BUSINESS.md snapshot immediately so you can use it in the same turn. Business entity tools are core: list_entities(type?), read_entity(type,id), write_entity(type,id,content), append_entity_event(type,id,event,display_name?,source?,confidence?). Use entities for clients, contacts, projects, vendors, and social accounts; use BUSINESS.md for company-level profile, offers, policies, and priorities.
+1032: 
+1033: [TEAMS & AGENTS] Agent/task routes — pick the right one:
+1034:   → chat_with_subagent(id,message) — core normal persistent chat/check-in with a known standalone non-team agent.
+1035:   → agent_run_ops(action:"list"|"get"|"recover"|"resume"|"rerun",...) — core existing subagent/team-agent run inspection and task recovery chat. Use recover to talk in recovery mode; do not use Home chat for paused runs.
+1036:   → spawn_subagent('id', task, ...) — create/run one standalone non-team agent. message_subagent(id,message) — background handoff; returns task_id and keeps the conversation/result in the subagent task panel. agent_message_send/agent_turn_request/agent_reply_wait — lower-level mailbox/reply workflows. These require agents_and_teams/team_ops category.
+1037:   → ask_team_coordinator(goal) — always available (core). Multi-agent teams with roles. Use when: parallel workstreams, multiple specializations needed, or task is too large for one agent context.
+1038: Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct team call — use only when a coordinator is waiting on your reply.
+1039: 
+1040: [MODEL ROUTING] Default: primary model (powerful, for complex work). Call switch_model(tier, reason) EARLY when the task is clearly lighter.
+1041:   → If the user asks to change the AI's current/live primary model, call set_current_model("provider/model"). Do not use set_agent_model for that; set_agent_model is only for future-agent defaults/routes.
+1042:   → 'low' (speed): single command, file read/summary, write_note only, quick lookups.
+1043:   → 'medium' (careful): multi-step analysis or structured work that doesn't need full primary model power.
+1044:   → Stay on primary: ${isPublicDistributionBuild() ? 'proposal work, deep reasoning, auth/security/build, anything expensive if wrong.' : 'src/ edits, proposals, deep reasoning, auth/security/build, anything expensive if wrong.'}
+1045:   → Mixed intent rule: if a turn contains BOTH memory work (memory_write/write_note) and a separate actionable task, prefer background_spawn for the memory sidecar so primary execution continues in parallel.
+1046:   → If you choose not to spawn and you used switch_model for a memory side action, continue executing the user's remaining task in the same turn (do not stop after memory).
+1047:   Auto-reverts after turn end — never switch back manually.
+1048: 
+1049: ${BG_AGENT_RUNTIME_HINT}`;
+1050:   const activeCategoryList = Array.from(activatedCategories)
+1051:     .map((category) => String(category || '').trim())
+1052:     .filter(Boolean);
+1053:   const activeCategoryHint = activeCategoryList.length > 0
+1054:     ? `\n\n[ACTIVE_TOOL_CATEGORIES] Already active for this session: ${activeCategoryList.join(', ')}. Do not request these categories again; use their tools directly when relevant.`
+1055:     : '';
+1056:   const baseMenu = `${menu}${activeCategoryHint}\n\n${TOOL_BLOCKS.skills}`;
+1057: 
+1058:   if (activatedCategories.size === 0) return baseMenu;
+1059: 
+1060:   const activePolicies: string[] = [];
+1061:   for (const cat of activatedCategories) {
+1062:     if (CATEGORY_POLICIES[cat]) activePolicies.push(CATEGORY_POLICIES[cat]);
+1063:   }
+1064: 
+1065:   if (activePolicies.length === 0) return baseMenu;
+1066:   return baseMenu + '\n\n' + activePolicies.join('\n\n');
+1067: }
+1068: 
+1069: function stripSkillEmojiFrontmatter(content: string): string {
+1070:   const raw = String(content || '');
+1071:   if (!raw.startsWith('---')) return raw;
+1072:   const end = raw.indexOf('\n---', 3);
+1073:   if (end < 0) return raw;
+1074:   const frontmatter = raw.slice(0, end)
+1075:     .split('\n')
+1076:     .filter((line) => !/^\s*emoji\s*:/i.test(line))
+1077:     .join('\n');
+1078:   return frontmatter + raw.slice(end);
+1079: }
+1080: 
+1081: function buildActiveSkillsContext(sessionId: string, skillsManager: SkillsManager): string {
+1082:   const skillIds = Array.from(getActivatedSkillIds(sessionId));
+1083:   if (!skillIds.length) return '';
+1084: 
+1085:   const lines: string[] = ['[ACTIVE_SKILLS]'];
+1086:   for (const skillId of skillIds) {
+1087:     const skill = skillsManager.get(skillId);
+1088:     if (!skill) continue;
+1089:     lines.push(`Recently used: ${skill.id}.`);
+1090:     if (skill.description) lines.push(`Skill Description: ${skill.description}`);
+1091:     if (skill.kind === 'bundle') {
+1092:       const readResources = getActivatedSkillResources(sessionId, skillId);
+1093:       if (readResources.length) {
+1094:         lines.push(`Resources read: ${readResources.join(', ')}.`);
+1095:       }
+1096:     }
+1097:     lines.push(`Re-read with skill_read("${skill.id}") if you need the full instructions.`);
+1098:   }
+1099: 
+1100:   return lines.join('\n');
+1101: }
+1102: 
+1103: // ─── buildPersonalityContext ──────────────────────────────────────────────────────
+1104: // Takes skillsManager and getSessionSkillWindowsFn as dependencies to avoid
+1105: // circular imports with server-v2.
+1106: export async function buildPersonalityContext(
+1107:   sessionId: string,
+1108:   workspacePath: string,
+1109:   messageText: string,
+1110:   executionMode: string,
+1111:   historyLength: number,
+1112:   skillsManager: SkillsManager,
+1113:   getSessionSkillWindowsFn: (sessionId: string) => Map<string, SkillWindow>,
+1114:   setCurrentTurn: (sessionId: string, turn: number) => void,
+1115:   extraCats?: Set<string>,
+1116:   options?: BuildPersonalityContextOptions,
+1117: ): Promise<string> {
+1118:   if ((getSessionSkillWindowsFn as unknown) instanceof Set || getSessionSkillWindowsFn == null) {
+1119:     options = (setCurrentTurn && typeof setCurrentTurn === 'object' && !((setCurrentTurn as unknown) instanceof Set))
+1120:       ? (setCurrentTurn as unknown as BuildPersonalityContextOptions)
+1121:       : options;
+1122:     extraCats = (getSessionSkillWindowsFn as unknown) instanceof Set ? getSessionSkillWindowsFn as unknown as Set<string> : extraCats;
+1123:     getSessionSkillWindowsFn = (() => new Map<string, SkillWindow>()) as any;
+1124:     setCurrentTurn = (() => {}) as any;
+1125:   } else if (typeof setCurrentTurn !== 'function') {
+1126:     setCurrentTurn = (() => {}) as any;
+1127:   }
+1128:   const profile = options?.profile || 'default';
+1129:   const skillContextOptions = (options?.excludedSkillIds?.length || options?.forcedSkillIds?.length)
+1130:     ? { excludedSkillIds: options?.excludedSkillIds || [], forcedSkillIds: options?.forcedSkillIds || [] }
+1131:     : undefined;
+1132: 
+1133:   // ── Path LOCAL_LLM: tiny prompt for small local model primaries ───────────────
+1134:   // Activated only when isLocalPrimary() is true in chat.router.ts.
+1135:   // Returns a minimal personality context — time + condensed USER.md +
+1136:   // delegation instructions. No SOUL.md, no intraday notes, no tool blocks.
+1137:   // All existing paths below are completely untouched.
+1138:   if (profile === 'local_llm') {
+1139:     const { buildLocalModelPersonalityCtx, loadCondensedMemoryProfile, formatLocalModelTime } =
+[READ_TRUNCATED] Returned 180 of 1592 lines. Use start_line:1140, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

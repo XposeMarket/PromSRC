@@ -15,6 +15,7 @@ Asset tools include:
 - `creative_attach_audio_from_url`
 - `creative_attach_audio_from_file`
 - `creative_extract_layers`
+- `creative_image_ops(action: "model_status")`
 - `creative_render_ascii_asset`
 
 Additional creative asset/model routes now expose:
@@ -68,6 +69,15 @@ Layer asset extraction/export facts from 2026-05-13:
 - Layer asset metadata includes `metadata.layerAsset` with source element id/type, source scene id, source mode, dimensions, and export timestamp.
 - In the UI, saved layer PNGs appear under `Saved assets -> Layer assets`; image layer assets can be placed back onto the Image canvas as editable `image` elements.
 - This complements `creative_extract_layers`: extraction turns flat/source images into editable scene layers, while layer asset saving turns those scene layers into reusable PNG assets for later apps, websites, videos, or other Creative scenes.
+- 2026-07-01 update: `creative_extract_layers` now accepts `saveLayerAssets: true` (or `autoSaveLayerAssets: true`) plus optional `layerAssetBatchName`. In that mode, extraction automatically copies each extracted image/cutout layer into `prometheus-creative/assets/layers/<batch>/`, indexes the PNGs as `extracted-layer`, `layer-asset`, `sprite-asset`, and returns `savedLayerAssets` with `count`, `directory`, and `assets`. This is the agent/tool path for turning a flat image into separate sprite-ready assets without manually pressing the Image Studio `Save layer PNGs` button.
+
+Creative model weight facts from 2026-07-02:
+
+- The canonical writable model cache is `<PromSRC>/.prometheus/models/`, matching `getConfig().getConfigDir()/models`.
+- `scripts/download-creative-models.mjs` resolves the PromSRC project root from the script location, not from the shell current working directory, so running it from `workspace/` still writes to the canonical cache unless `PROMETHEUS_DATA_DIR` is set or the script-only `PROMETHEUS_CONFIG_DIR` override is used.
+- The runtime resolver checks env overrides, packaged `resources/creative-models/`, canonical config-dir models, then compatibility fallbacks under `workspace/.prometheus/models/`.
+- `creative_image_ops(action: "model_status")` and `GET /api/canvas/creative-model-status` return each model's selected path plus all checked candidates, availability, and file sizes. Use this before layer extraction if model placement is unclear.
+- 2026-07-02 MobileSAM fix: the bundled/downloaded `mobile_sam_encoder.onnx` may expose `input_image` as rank-3 HWC (`[image_height, image_width, 3]`), while other exports use rank-4 NCHW/NHWC. `src/gateway/creative/onnx/sam.ts` now reads encoder input metadata and builds HWC/CHW/NHWC/NCHW tensors accordingly. If `Invalid rank for input: input_image Got: 4 Expected: 3` returns, check this path first.
 
 Upload routes in `canvas.router.ts` save files into `workspace/uploads/`.
 Telegram and Web UI attachment issues should be debugged against this shared upload path first, not per-channel assumptions.

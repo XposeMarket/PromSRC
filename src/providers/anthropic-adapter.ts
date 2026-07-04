@@ -34,9 +34,11 @@ const ANTHROPIC_MIN_CACHE_CHARS = 3500;
 
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
+  'claude-fable-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
   'claude-opus-4-6',
+  'claude-sonnet-5',
   'claude-sonnet-4-6',
   'claude-sonnet-4-5-20250514',
   'claude-haiku-4-5-20251001',
@@ -68,7 +70,9 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private isAdaptiveThinkingCapableModel(model: string): boolean {
-    return /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model)
+    return /^claude-fable-5(?:\b|[-_])/.test(model)
+      || /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model)
+      || /^claude-sonnet-5(?:\b|[-_])/.test(model)
       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model);
   }
 
@@ -84,7 +88,9 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private supportsEffort(model: string): boolean {
-    return /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(model)
+    return /^claude-fable-5(?:\b|[-_])/.test(model)
+      || /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(model)
+      || /^claude-sonnet-5(?:\b|[-_])/.test(model)
       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model)
       || /^claude-mythos-preview(?:\b|[-_])/.test(model);
   }
@@ -102,10 +108,18 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private getKnownModelInfo(name: string): Partial<ModelInfo> {
-    if (name === 'claude-opus-4-8') {
+    if (/^(claude-fable-5|claude-opus-4-(?:6|7|8)|claude-sonnet-(?:5|4-6))(?:\b|[-_])/.test(name)) {
       return {
         contextWindowTokens: 1_000_000,
         maxOutputTokens: 128_000,
+        tokenizer: 'anthropic',
+        supportsReasoningTokens: true,
+      };
+    }
+    if (/^claude-haiku-4-5(?:\b|[-_])/.test(name)) {
+      return {
+        contextWindowTokens: 200_000,
+        maxOutputTokens: 64_000,
         tokenizer: 'anthropic',
         supportsReasoningTokens: true,
       };

@@ -1,0 +1,140 @@
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28879 lines) [window 3865-3944, truncated]:
+3865:     const type = String(entry?.type || '').toLowerCase();
+3866:     if (type !== 'result' && type !== 'error') return false;
+3867:     const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+3868:     return _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
+3869:   });
+3870:   return hasActiveGenerateImageTool && !hasTerminalGenerateImageResult;
+3871: }
+3872: 
+3873: function _isMobileImageGenerationStreamEntry(entry) {
+3874:   const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
+3875:   if (!text) return false;
+3876:   if (/\b(preparing generate image|prepared generate image|generate_image)\b/.test(text)) return true;
+3877:   if (/^generate image\s*(?:[:(]|complete\b|failed\b)/.test(text)) return true;
+3878:   if (/^generating image\s*(?:[:(]|$)/.test(text)) return true;
+3879:   return false;
+3880: }
+3881: 
+3882: function _renderMobileGeneratedImageLoadingCard() {
+3883:   return `<div class="pm-generated-image-batch pm-generated-image-batch--pending" aria-live="polite">
+3884:     <div class="pm-generated-image-loading-panel">
+3885:       <span class="pm-generated-image-particles" aria-hidden="true"></span>
+3886:       <span class="pm-generated-image-orb" aria-hidden="true"></span>
+3887:       <i aria-hidden="true"></i>
+3888:     </div>
+3889:   </div>`;
+3890: }
+3891: 
+3892: function _renderMobileMediaGallery(mediaList) {
+3893:   const list = Array.isArray(mediaList) ? mediaList : [];
+3894:   if (!list.length) return '';
+3895:   const generatedImages = list.filter((media) => media.kind === 'image' && media.generated);
+3896:   const rest = list.filter((media) => !(media.kind === 'image' && media.generated));
+3897:   const generatedHtml = generatedImages.length ? _renderMobileGeneratedImageBatch(generatedImages) : '';
+3898:   const restHtml = rest.length ? `<div class="pm-media-gallery">${rest.map((media, idx) => {
+3899:     const src = _mobileMediaUrl(media, 'inline');
+3900:     const download = _mobileMediaUrl(media, 'download');
+3901:     const ext = _mobileFileExt(media.name || media.path).toUpperCase() || 'FILE';
+3902:     const meta = [media.provider, media.model, media.bytes ? _formatBytes(media.bytes) : ''].filter(Boolean).join(' · ');
+3903:     const attrs = `data-pm-media data-kind="${escapeHtml(media.kind)}" data-src="${escapeHtml(src)}" data-download="${escapeHtml(download)}" data-name="${escapeHtml(media.name)}" data-path="${escapeHtml(media.path || '')}" data-index="${idx}"`;
+3904:     if (media.kind === 'image') {
+3905:       return `<button type="button" class="pm-media-card image" ${attrs}><img src="${escapeHtml(src)}" alt="${escapeHtml(media.name)}" loading="lazy"><span><strong>${escapeHtml(media.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}</span></button>`;
+3906:     }
+3907:     if (media.kind === 'video') {
+3908:       return `<button type="button" class="pm-media-card video" ${attrs}><video src="${escapeHtml(src)}" muted playsinline preload="metadata"></video><span class="pm-media-play">${ICONS.play}</span><span><strong>${escapeHtml(media.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}</span></button>`;
+3909:     }
+3910:     return `<button type="button" class="pm-generated-file" ${attrs}><span class="pm-generated-file-icon">${ICONS.clipboard}</span><span class="pm-generated-file-info"><strong>${escapeHtml(media.name)}</strong><em>${escapeHtml(ext)} file${meta ? ` · ${escapeHtml(meta)}` : ''}</em></span></button>`;
+3911:   }).join('')}</div>` : '';
+3912:   return `${generatedHtml}${restHtml}`;
+3913: }
+3914: 
+3915: function _browseFileIcon(kind) {
+3916:   if (kind === 'image') return ICONS.image;
+3917:   if (kind === 'video') return ICONS.video;
+3918:   if (kind === 'audio') return ICONS.volume;
+3919:   return ICONS.doc;
+3920: }
+3921: 
+3922: function _browseFolderIcon() {
+3923:   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4l2 2.2h7A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>';
+3924: }
+3925: 
+3926: function _browseViewIcon(view) {
+3927:   if (view === 'grid') {
+3928:     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
+3929:   }
+3930:   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
+3931: }
+3932: 
+3933: function _formatBrowseDate(value) {
+3934:   const raw = value || 0;
+3935:   const date = typeof raw === 'number' ? new Date(raw) : new Date(String(raw));
+3936:   if (!Number.isFinite(date.getTime())) return '';
+3937:   try {
+3938:     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+3939:   } catch {
+3940:     return '';
+3941:   }
+3942: }
+3943: 
+3944: function _formatBrowseSize(bytes) {
+[READ_TRUNCATED] Returned 80 of 28879 lines. Use start_line:3945, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28879 lines) [window 1805-1854, truncated]:
+1805: }
+1806: 
+1807: function _mobileAssistantWorkStartedAt(msg) {
+1808:   const explicit = Number(msg?.workStartedAt || msg?.startedAt || 0);
+1809:   if (Number.isFinite(explicit) && explicit > 0) return explicit;
+1810:   const ts = Number(msg?.timestamp || 0);
+1811:   return Number.isFinite(ts) && ts > 0 ? ts : 0;
+1812: }
+1813: 
+1814: function _renderMobileWorkTimer(msg, opts = {}) {
+1815:   if (!_isMobileAssistantMessage(msg)) return '';
+1816:   const startedAt = _mobileAssistantWorkStartedAt(msg);
+1817:   if (!startedAt) return '';
+1818:   const active = msg?.streaming === true;
+1819:   const endedAt = Number(msg?.workEndedAt || 0);
+1820:   const duration = active
+1821:     ? Date.now() - startedAt
+1822:     : (Number.isFinite(Number(msg?.workDurationMs)) && Number(msg.workDurationMs) >= 0
+1823:       ? Number(msg.workDurationMs)
+1824:       : ((Number.isFinite(endedAt) && endedAt > 0 ? endedAt : Number(msg?.timestamp || Date.now())) - startedAt));
+1825:   const label = `${active ? 'Working for' : 'Worked for'} ${escapeHtml(_formatMobileWorkDuration(duration))}`;
+1826:   const hasTrace = !active && _mobileTraceHasToolGroup(_mobileWorkflowTraceEntriesForMessage(msg));
+1827:   if (hasTrace) {
+1828:     const expanded = opts.expanded ? ' expanded' : '';
+1829:     return `<div class="pm-work-timer pm-work-timer--expandable${expanded}" data-expandable="trace">
+1830:       ${label}
+1831:       <svg class="pm-work-timer-chevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+1832:     </div>`;
+1833:   }
+1834:   return `<div class="pm-work-timer">${label}</div>`;
+1835: }
+1836: 
+1837: function _wrapMobileMarkdownTables(html) {
+1838:   const src = String(html || '');
+1839:   if (!src || !/<table\b/i.test(src)) return src;
+1840:   return src.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (tableHtml) => {
+1841:     return `<div class="pm-md-table-scroll">${tableHtml}</div>`;
+1842:   });
+1843: }
+1844: 
+1845: function _renderMobileMarkdown(text) {
+1846:   const raw = String(text || '');
+1847:   if (!raw.trim()) return '';
+1848:   if (typeof window !== 'undefined' && (!window.marked || typeof window.marked.parse !== 'function')) {
+1849:     Promise.resolve(window.__PROM_EXTERNAL_LIBS_READY || null)
+1850:       .then(() => {
+1851:         if (window.marked && typeof window.marked.parse === 'function') {
+1852:           try { renderThreadNow(); } catch {}
+1853:         }
+1854:       })
+[READ_TRUNCATED] Returned 50 of 28879 lines. Use start_line:1855, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- [batch truncated] ---
+Only first 2 files read. Re-run with remaining files if needed.

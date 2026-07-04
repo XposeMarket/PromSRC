@@ -42,6 +42,15 @@ type PwContext = any;
 type PwPage = any;
 export type BrowserProfileKind = 'prometheus' | 'user' | 'inhouse';
 
+type BrowserConsoleEntry = {
+  source: 'playwright_console' | 'playwright_pageerror' | 'playwright_crash' | 'in_page';
+  level: string;
+  message: string;
+  ts: number;
+  url?: string;
+  location?: any;
+};
+
 interface BrowserSession {
   sessionId: string;
   browser: PwBrowser;
@@ -57,6 +66,7 @@ interface BrowserSession {
   lastSnapshotAt: number;  // epoch ms when lastSnapshot was captured; 0 = never
   lastPageUrl: string;
   lastPageTitle: string;
+  consoleEntries: BrowserConsoleEntry[];
   injectedStaticContext: Partial<Record<'shortcuts' | 'knowledge' | 'control', {
     key: string;
     hash: string;
@@ -658,7 +668,80 @@ const browserSessionMetadata: Map<string, BrowserSessionMetadata> = new Map();
 const browserInteractionStates: Map<string, BrowserInteractionState> = new Map();
 const browserControlWaiters: Map<string, Array<() => void>> = new Map();
 const browserTeachSessions: Map<string, BrowserTeachSessionSnapshot> = new Map();
+const browserConsolePageSessions: WeakMap<any, Set<BrowserSession>> = new WeakMap();
+const browserConsoleAttachedPages: WeakSet<any> = new WeakSet();
 let browserSessionRegistryCache: Map<string, PersistedBrowserSessionRecord> | null = null;
+
+function safeBrowserPageUrl(page: any): string {
+  try {
+    return String(page?.url?.() || '');
+  } catch {
+    return '';
+  }
+}
+
+function pushBrowserConsoleEntry(session: BrowserSession, entry: Omit<BrowserConsoleEntry, 'ts'> & { ts?: number }): void {
+  const entries = session.consoleEntries || (session.consoleEntries = []);
+  entries.push({
+    source: entry.source,
+    level: String(entry.level || 'log'),
+    message: String(entry.message || '').slice(0, 8000),
+    ts: Number(entry.ts || Date.now()),
+    url: entry.url || safeBrowserPageUrl(session.page),
+    location: entry.location,
+  });
+  if (entries.length > 1000) entries.splice(0, entries.length - 1000);
+}
+
+function attachBrowserConsoleCollector(session: BrowserSession, page: any): void {
+  if (!page) return;
+  let sessionSet = browserConsolePageSessions.get(page);
+  if (!sessionSet) {
+    sessionSet = new Set<BrowserSession>();
+    browserConsolePageSessions.set(page, sessionSet);
+  }
+  sessionSet.add(session);
+  if (browserConsoleAttachedPages.has(page)) return;
+  browserConsoleAttachedPages.add(page);
+
+  const pushToSessions = (entry: Omit<BrowserConsoleEntry, 'ts'> & { ts?: number }) => {
+    const targets = browserConsolePageSessions.get(page) || new Set<BrowserSession>([session]);
+    for (const target of targets) pushBrowserConsoleEntry(target, entry);
+  };
+
+  page.on?.('console', (msg: any) => {
+    try {
+      pushToSessions({
+        source: 'playwright_console',
+        level: String(msg?.type?.() || 'log'),
+        message: String(msg?.text?.() || ''),
+        url: safeBrowserPageUrl(page),
+        location: msg?.location?.(),
+      });
+    } catch {}
+  });
+  page.on?.('pageerror', (err: any) => {
+    try {
+      pushToSessions({
+        source: 'playwright_pageerror',
+        level: 'error',
+        message: String(err?.stack || err?.message || err || 'page error'),
+        url: safeBrowserPageUrl(page),
+      });
+    } catch {}
+  });
+  page.on?.('crash', () => {
+    pushToSessions({
+      source: 'playwright_crash',
+      level: 'error',
+      message: 'Page crashed.',
+      url: safeBrowserPageUrl(page),
+    });
+  });
+  page.on?.('close', () => {
+    try { browserConsolePageSessions.get(page)?.clear(); } catch {}
+  });
+}
 
 function inferBrowserOwnerType(sessionId: string): BrowserSessionMetadata['ownerType'] {
   const sid = String(sessionId || '').trim();
@@ -2655,10 +2738,12 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     lastSnapshotAt: 0,
     lastPageUrl: '',
     lastPageTitle: '',
+    consoleEntries: [],
     injectedStaticContext: {},
     createdAt: Date.now(),
   };
   sessions.set(sessionId, session);
+  for (const trackedPage of context.pages()) attachBrowserConsoleCollector(session, trackedPage);
   console.log(`[Browser] Session created for ${sessionId}`);
   if (!restoredPage && persistedRecord && isRestorableBrowserUrl(persistedRecord.url)) {
     try {
@@ -2681,6 +2766,7 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
   // We click the primary confirm button automatically so the agent doesn't get stuck.
   context.on('page', async (popup: any) => {
     try {
+      attachBrowserConsoleCollector(session, popup);
       await popup.waitForLoadState('domcontentloaded').catch(() => {});
       const popupUrl = popup.url();
       console.log(`[Browser] Popup opened: ${popupUrl}`);
@@ -2740,10 +2826,12 @@ async function replaceDetachedBrowserSession(parentSessionId: string, suffix: st
     lastSnapshotAt: 0,
     lastPageUrl: '',
     lastPageTitle: '',
+    consoleEntries: [],
     injectedStaticContext: {},
     createdAt: Date.now(),
   };
   sessions.set(detachedSessionId, detached);
+  attachBrowserConsoleCollector(detached, page);
   return { sessionId: detachedSessionId, session: detached };
 }
 
@@ -4326,6 +4414,7 @@ export async function browserSelectTab(sessionId: string, index: number): Promis
   const page = pages[idx];
   if (!page) return `ERROR: No browser tab at index ${index}.`;
   session.page = page;
+  attachBrowserConsoleCollector(session, page);
   await syncPageMetadata(session).catch(() => {});
   await Promise.resolve(page.bringToFront?.()).catch(() => {});
   persistBrowserSessionRecord(session);
@@ -4336,6 +4425,7 @@ export async function browserNewTab(sessionId: string, url?: string): Promise<st
   const session = await getOrCreateSession(resolveSessionId(sessionId));
   const page = await session.context.newPage();
   session.page = page;
+  attachBrowserConsoleCollector(session, page);
   const targetUrl = String(url || '').trim();
   if (targetUrl) {
     const normalizedUrl = /^[a-z][a-z0-9+.-]*:/i.test(targetUrl) ? targetUrl : `https://${targetUrl}`;
@@ -4364,6 +4454,7 @@ export async function browserCloseTab(sessionId: string, index?: number): Promis
     return 'Closed the last browser tab; browser session is now inactive.';
   }
   session.page = remaining[Math.max(0, Math.min(idx, remaining.length - 1))];
+  attachBrowserConsoleCollector(session, session.page);
   await syncPageMetadata(session).catch(() => {});
   persistBrowserSessionRecord(session);
   return `Closed browser tab [${idx}].\n${formatBrowserTabs(session)}`;
@@ -4589,9 +4680,9 @@ async function browserRunJsInHouse(sessionId: string, code: string): Promise<str
   if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
   if (!String(code || '').trim()) return 'ERROR: code parameter is required.';
   try {
-    const result = await callInHouseBrowser('run-js', { sessionId: resolved, code: `(async () => { ${code} })()` });
+    const result = await callInHouseBrowser('run-js', { sessionId: resolved, code: buildBrowserRunJsEnvelopeSource(code) });
     broadcastInHouseBrowserStatus(resolved, 'browser_run_js', 'Ran JavaScript in Prometheus in-house browser.', { active: true });
-    return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+    return formatBrowserRunJsEnvelope(result);
   } catch (err: any) {
     return `ERROR: In-house browser run-js failed: ${err.message}`;
   }
@@ -6865,7 +6956,7 @@ export function getBrowserToolDefinitions(): any[] {
         name: 'browser_run_js',
         description:
           'Execute arbitrary JavaScript in the current page context and return the result. ' +
-          'Top-level await is supported. Use this to: read React/Vue component state, trigger programmatic events, ' +
+          'Expression-only probes and top-level await are supported, so `document.title`, `({title: document.title})`, and explicit `return ...` all work. Use this to: read React/Vue component state, trigger programmatic events, ' +
           'inspect hidden variables, extract data not visible in the DOM, run browser APIs. ' +
           'Return value is JSON-serialized. Example: `return document.cookie` or `return window.__STORE__.getState()`. ' +
           'WARNING: treat this as a fallback tool. Prefer browser_snapshot/browser_vision_screenshot + browser_click/browser_fill first, and only use browser_run_js when visual/DOM refs are insufficient. ' +
@@ -6919,7 +7010,7 @@ export function getBrowserToolDefinitions(): any[] {
       function: {
         name: 'inspect_console',
         description:
-          'Inspect browser console health for the current page. Installs a lightweight in-page console/error collector on first call, then returns captured logs, errors, warnings, unhandled rejections, URL, and title.',
+          'Inspect browser console health for the current page. Returns controller-side Playwright console/pageerror events, including page parse errors caught before in-page scripts initialize, plus lightweight in-page error/rejection diagnostics.',
         parameters: {
           type: 'object',
           properties: {
@@ -7245,6 +7336,222 @@ export async function browserGetPageText(
 
 export { INTERACTIVE_SELECTOR };
 
+function buildBrowserRunJsEnvelopeSource(code: string): string {
+  return `
+    (async () => {
+      const source = ${JSON.stringify(String(code || ''))};
+      const typeOfValue = (value) => {
+        if (value === null) return 'null';
+        if (value === undefined) return 'undefined';
+        if (Array.isArray(value)) return 'array';
+        return typeof value;
+      };
+      const normalize = (value, depth = 0, seen = new WeakSet()) => {
+        if (value === undefined) return '[undefined]';
+        if (value === null) return null;
+        const kind = typeof value;
+        if (kind === 'string' || kind === 'number' || kind === 'boolean') return value;
+        if (kind === 'bigint') return value.toString() + 'n';
+        if (kind === 'function') return '[Function ' + (value.name || 'anonymous') + ']';
+        if (kind !== 'object') return String(value);
+        if (seen.has(value)) return '[Circular]';
+        if (depth >= 5) return '[MaxDepth]';
+        seen.add(value);
+        if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
+        if (typeof Element !== 'undefined' && value instanceof Element) {
+          return {
+            tagName: value.tagName,
+            id: value.id || undefined,
+            className: typeof value.className === 'string' ? value.className : undefined,
+            text: (value.textContent || '').trim().slice(0, 500),
+          };
+        }
+        if (value instanceof Map) return Array.from(value.entries()).map(([key, val]) => [normalize(key, depth + 1, seen), normalize(val, depth + 1, seen)]);
+        if (value instanceof Set) return Array.from(value.values()).map((val) => normalize(val, depth + 1, seen));
+        if (Array.isArray(value)) return value.slice(0, 200).map((item) => normalize(item, depth + 1, seen));
+        const out = {};
+        for (const key of Object.keys(value).slice(0, 200)) {
+          try { out[key] = normalize(value[key], depth + 1, seen); }
+          catch (err) { out[key] = '[Thrown while reading property: ' + (err && err.message || err) + ']'; }
+        }
+        return out;
+      };
+      const serialize = (value) => {
+        const valueType = typeOfValue(value);
+        if (value === undefined) return { valueType, isUndefined: true, text: 'undefined' };
+        if (typeof value === 'string') return { valueType, isUndefined: false, text: value };
+        try { return { valueType, isUndefined: false, text: JSON.stringify(normalize(value), null, 2) }; }
+        catch (err) { return { valueType, isUndefined: false, text: String(value) }; }
+      };
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const trimmed = String(source || '').trim();
+      if (!trimmed) return { ok: false, mode: 'empty', error: 'code parameter is required.' };
+
+      let expressionCompileError = '';
+      const expressionSource = trimmed.replace(/;\\s*$/, '');
+      if (expressionSource) {
+        let expressionFn = null;
+        try {
+          expressionFn = new AsyncFunction('return (' + expressionSource + ');');
+        } catch (err) {
+          expressionCompileError = String((err && err.message) || err || '');
+        }
+        if (expressionFn) {
+          try {
+            const value = await expressionFn();
+            return { ok: true, mode: 'expression', ...serialize(value) };
+          } catch (err) {
+            return { ok: false, mode: 'expression', error: String((err && (err.stack || err.message)) || err || 'JS expression failed') };
+          }
+        }
+      }
+
+      try {
+        const bodyFn = new AsyncFunction(source);
+        const value = await bodyFn();
+        return { ok: true, mode: 'function-body', expressionCompileError, ...serialize(value) };
+      } catch (err) {
+        return {
+          ok: false,
+          mode: 'function-body',
+          expressionCompileError,
+          error: String((err && (err.stack || err.message)) || err || 'JS execution failed'),
+        };
+      }
+    })()
+  `;
+}
+
+function formatBrowserRunJsEnvelope(envelope: any): string {
+  if (typeof envelope === 'string') {
+    try {
+      const parsed = JSON.parse(envelope);
+      return formatBrowserRunJsEnvelope(parsed);
+    } catch {
+      return envelope;
+    }
+  }
+  if (!envelope || typeof envelope !== 'object' || typeof envelope.ok !== 'boolean') {
+    return envelope === undefined || envelope === null
+      ? 'JS executed successfully (returned: null/undefined).'
+      : (typeof envelope === 'object' ? JSON.stringify(envelope, null, 2) : String(envelope));
+  }
+  if (!envelope.ok) {
+    const expressionNote = envelope.expressionCompileError
+      ? `\nExpression parse fallback: ${String(envelope.expressionCompileError).split('\n')[0]}`
+      : '';
+    return `ERROR: JS execution failed (${envelope.mode || 'unknown'}): ${envelope.error || 'unknown error'}${expressionNote}`;
+  }
+  if (envelope.isUndefined) {
+    return `JS executed successfully (${envelope.mode || 'unknown'}; returned undefined).`;
+  }
+  return [
+    `JS result (${envelope.mode || 'unknown'}, ${envelope.valueType || 'value'}):`,
+    String(envelope.text ?? ''),
+  ].join('\n');
+}
+
+async function readInPageBrowserEventLog(page: any, action: 'read' | 'clear'): Promise<BrowserConsoleEntry[]> {
+  const result = await page.evaluate((requestedAction: 'read' | 'clear') => {
+    const g = globalThis as any;
+    const ensure = () => {
+      if (!g.__promBrowserEventLog) {
+        g.__promBrowserEventLog = [];
+        const push = (entry: any) => {
+          try {
+            g.__promBrowserEventLog.push({
+              source: 'in_page',
+              level: String(entry?.level || 'error'),
+              message: String(entry?.message || ''),
+              ts: Date.now(),
+              url: String(g.location?.href || ''),
+              location: entry?.location || undefined,
+            });
+            if (g.__promBrowserEventLog.length > 1000) {
+              g.__promBrowserEventLog.splice(0, g.__promBrowserEventLog.length - 1000);
+            }
+          } catch {}
+        };
+        g.addEventListener('error', (event: any) => push({
+          level: 'error',
+          message: event?.message || 'window error',
+          location: {
+            source: event?.filename,
+            lineNumber: event?.lineno,
+            columnNumber: event?.colno,
+          },
+        }));
+        g.addEventListener('unhandledrejection', (event: any) => push({
+          level: 'error',
+          message: 'unhandledrejection: ' + (event?.reason?.stack || event?.reason?.message || event?.reason || ''),
+        }));
+      }
+    };
+    ensure();
+    if (requestedAction === 'clear') {
+      g.__promBrowserEventLog = [];
+      return [];
+    }
+    return Array.isArray(g.__promBrowserEventLog) ? g.__promBrowserEventLog.slice(-1000) : [];
+  }, action);
+  return Array.isArray(result) ? result as BrowserConsoleEntry[] : [];
+}
+
+export async function browserInspectConsole(
+  sessionId: string,
+  options: { action?: 'read' | 'clear' | string; maxEntries?: number } = {},
+): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const session = sessions.get(resolved);
+  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  const action = String(options.action || 'read').toLowerCase() === 'clear' ? 'clear' : 'read';
+  const maxEntries = Math.max(1, Math.min(500, Math.floor(Number(options.maxEntries || 100))));
+  attachBrowserConsoleCollector(session, session.page);
+  if (action === 'clear') {
+    session.consoleEntries = [];
+    await readInPageBrowserEventLog(session.page, 'clear').catch(() => []);
+    const title = await session.page.title().catch(() => '');
+    return JSON.stringify({
+      cleared: true,
+      url: safeBrowserPageUrl(session.page),
+      title,
+      controller_entries: 0,
+      in_page_entries: 0,
+    }, null, 2);
+  }
+
+  const inPageEntries = await readInPageBrowserEventLog(session.page, 'read').catch(() => []);
+  const controllerEntries = Array.isArray(session.consoleEntries) ? session.consoleEntries : [];
+  const allEntries = [...controllerEntries, ...inPageEntries]
+    .filter((entry) => entry && String(entry.message || '').trim())
+    .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+  const entries = allEntries.slice(-maxEntries).map((entry) => ({
+    ts: entry.ts ? new Date(Number(entry.ts)).toISOString() : undefined,
+    source: entry.source,
+    level: entry.level,
+    message: entry.message,
+    url: entry.url,
+    location: entry.location,
+  }));
+  const counts = entries.reduce((acc: Record<string, number>, entry: any) => {
+    const key = String(entry.level || 'log');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const title = await session.page.title().catch(() => '');
+  return JSON.stringify({
+    url: safeBrowserPageUrl(session.page),
+    title,
+    count: allEntries.length,
+    returned: entries.length,
+    controller_entries: controllerEntries.length,
+    in_page_entries: inPageEntries.length,
+    counts,
+    entries,
+    note: 'controller_entries come from Playwright console/pageerror listeners attached to the browser session, so page parse errors can appear even when in-page scripts fail.',
+  }, null, 2);
+}
+
 // ─── browser_run_js ───────────────────────────────────────────────────────────
 
 /**
@@ -7266,12 +7573,8 @@ export async function browserRunJs(
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
-    // Wrap in async IIFE so `await` works at top level
-    const wrapped = `(async () => { ${code} })()`;
-    const result = await session.page.evaluate(wrapped);
-    const resultText = result === undefined || result === null
-      ? 'JS executed successfully (returned: null/undefined).'
-      : (typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result));
+    const result = await session.page.evaluate(buildBrowserRunJsEnvelopeSource(code));
+    const resultText = formatBrowserRunJsEnvelope(result);
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await takeSnapshot(session.page);
       rememberSnapshot(session, snapshot);

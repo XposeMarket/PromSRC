@@ -1,0 +1,182 @@
+Brain/skill-curator/suggestions.json (10634 lines) [window 1-180, truncated]:
+1: [
+2:   {
+3:     "id": "sc_9f68d0083ce3bc3e",
+4:     "createdAt": "2026-07-03T03:46:24.466Z",
+5:     "updatedAt": "2026-07-03T03:46:24.466Z",
+6:     "status": "pending",
+7:     "skillId": "file-surgery",
+8:     "title": "Review skill change: file-surgery resource_delete",
+9:     "reason": "Skill change has no evidence links, so the curator should verify the reason before treating it as trusted. Changed paths: references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-01.md, skill.json.",
+10:     "lessonType": "instruction_patch",
+11:     "futureTrigger": "Use during the daily self-improvement audit whenever Prometheus, Thought, Dream, or tooling changed skills directly.",
+12:     "learnedBehavior": "Review the actual skill mutation ledger before trusting the day's self-improvement as good memory.",
+13:     "whyUseful": "Keeps Prometheus self-editing honest by checking normal chat, Thought, Dream, curator, and manual skill changes in one daily pass.",
+14:     "approvePreview": "Approve marks this daily skill-change audit as accepted. It does not mutate skill files.",
+15:     "qualityScore": 80,
+16:     "autoApplyEligible": false,
+17:     "autoDecisionReason": "Review-only ledger audit items are never auto-applied.",
+18:     "evidence": [
+19:       "workspace/skills/.history/skill-change-ledger.jsonl"
+20:     ],
+21:     "risk": "medium",
+22:     "change": {
+23:       "kind": "review_only",
+24:       "content": "# Daily Skill Change Audit\n\nSkill: file-surgery\nChange type: resource_delete\nApplied by: skill_manager\nTimestamp: 2026-07-03T01:30:40.113Z\nRisk: medium\n\n## Why Review\nSkill change has no evidence links, so the curator should verify the reason before treating it as trusted.\n\n## Changed Paths\n- references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-01.md\n- skill.json\n\n## Evidence\n- (none recorded)\n\n## Reason\n(none recorded)\n"
+25:     },
+26:     "scan": {
+27:       "verdict": "safe",
+28:       "findings": [],
+29:       "scannedAt": "2026-07-03T03:46:24.466Z",
+30:       "contentHash": "33213e4209cf3f62"
+31:     }
+32:   },
+33:   {
+34:     "id": "sc_9d65cf66861ccab4",
+35:     "createdAt": "2026-07-03T03:46:24.466Z",
+36:     "updatedAt": "2026-07-03T03:46:24.466Z",
+37:     "status": "pending",
+38:     "skillId": "file-surgery",
+39:     "title": "Review skill change: file-surgery resource_delete",
+40:     "reason": "Skill change has no evidence links, so the curator should verify the reason before treating it as trusted. Changed paths: references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-02.md, skill.json.",
+41:     "lessonType": "instruction_patch",
+42:     "futureTrigger": "Use during the daily self-improvement audit whenever Prometheus, Thought, Dream, or tooling changed skills directly.",
+43:     "learnedBehavior": "Review the actual skill mutation ledger before trusting the day's self-improvement as good memory.",
+44:     "whyUseful": "Keeps Prometheus self-editing honest by checking normal chat, Thought, Dream, curator, and manual skill changes in one daily pass.",
+45:     "approvePreview": "Approve marks this daily skill-change audit as accepted. It does not mutate skill files.",
+46:     "qualityScore": 80,
+47:     "autoApplyEligible": false,
+48:     "autoDecisionReason": "Review-only ledger audit items are never auto-applied.",
+49:     "evidence": [
+50:       "workspace/skills/.history/skill-change-ledger.jsonl"
+51:     ],
+52:     "risk": "medium",
+53:     "change": {
+54:       "kind": "review_only",
+55:       "content": "# Daily Skill Change Audit\n\nSkill: file-surgery\nChange type: resource_delete\nApplied by: skill_manager\nTimestamp: 2026-07-03T01:30:39.596Z\nRisk: medium\n\n## Why Review\nSkill change has no evidence links, so the curator should verify the reason before treating it as trusted.\n\n## Changed Paths\n- references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-02.md\n- skill.json\n\n## Evidence\n- (none recorded)\n\n## Reason\n(none recorded)\n"
+56:     },
+57:     "scan": {
+58:       "verdict": "safe",
+59:       "findings": [],
+60:       "scannedAt": "2026-07-03T03:46:24.466Z",
+61:       "contentHash": "58d1e509930d469c"
+62:     }
+63:   },
+64:   {
+65:     "id": "sc_7fbf5a27e98a5774",
+66:     "createdAt": "2026-07-02T03:41:43.818Z",
+67:     "updatedAt": "2026-07-02T03:41:46.371Z",
+68:     "status": "applied",
+69:     "skillId": "file-surgery",
+70:     "title": "Add recovery to file-surgery",
+71:     "reason": "Skill \"file-surgery\" was used in a run with errors, blockers, or rework signals.",
+72:     "lessonType": "recovery",
+73:     "futureTrigger": "Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely intended locations: 1) same text with normalized whitespace, lines 81-81: 79: if(state.waveState==='between'){",
+74:     "learnedBehavior": "After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.",
+75:     "whyUseful": "Prevents Prometheus from rerendering, abandoning a valid result, or wandering into unrelated fixes when a known recovery path exists.",
+76:     "approvePreview": "Approve will add references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-02.md to file-surgery.",
+77:     "qualityScore": 86,
+78:     "autoApplyEligible": true,
+79:     "autoDecisionReason": "Low-risk recovery note with an explicit failure/workaround signal.",
+80:     "evidence": [
+81:       "Brain/skill-gardener/2026-07-01/workflow-episodes.jsonl",
+82:       "Brain/skill-episodes/2026-07-01/episodes.jsonl"
+83:     ],
+84:     "risk": "low",
+85:     "change": {
+86:       "kind": "write_resource",
+87:       "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-02.md",
+88:       "content": "# Recovery note: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely\n\nSource candidate: sg_c17fdb348d3050fe\nCaptured: 2026-07-02T03:33:42.319Z\nLesson type: recovery\nConfidence: medium\n\n## Future Trigger\nUse this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely intended locations: 1) same text with normalized whitespace, lines 81-81: 79: if(state.waveState==='between'){\n\n## Learned Behavior\nAfter patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continui...[line truncated]
+89:     },
+90:     "scan": {
+91:       "verdict": "safe",
+92:       "findings": [],
+93:       "scannedAt": "2026-07-02T03:41:43.818Z",
+94:       "contentHash": "de0932e86b709824"
+95:     },
+96:     "appliedAt": "2026-07-02T03:41:46.371Z"
+97:   },
+98:   {
+99:     "id": "sc_efb876d58d824e2e",
+100:     "createdAt": "2026-07-02T03:41:43.820Z",
+101:     "updatedAt": "2026-07-02T03:41:45.716Z",
+102:     "status": "applied",
+103:     "skillId": "file-surgery",
+104:     "title": "Add recovery to file-surgery",
+105:     "reason": "Skill \"file-surgery\" was used in a run with errors, blockers, or rework signals.",
+106:     "lessonType": "recovery",
+107:     "futureTrigger": "Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely intended locations: 1) closest token block, lines 99-102: 97: function startClick(e){if(ui.start.style.display",
+108:     "learnedBehavior": "After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.",
+109:     "whyUseful": "Prevents Prometheus from rerendering, abandoning a valid result, or wandering into unrelated fixes when a known recovery path exists.",
+110:     "approvePreview": "Approve will add references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-02.md to file-surgery.",
+111:     "qualityScore": 86,
+112:     "autoApplyEligible": true,
+113:     "autoDecisionReason": "Low-risk recovery note with an explicit failure/workaround signal.",
+114:     "evidence": [
+115:       "Brain/skill-gardener/2026-07-01/workflow-episodes.jsonl",
+116:       "Brain/skill-episodes/2026-07-01/episodes.jsonl"
+117:     ],
+118:     "risk": "low",
+119:     "change": {
+120:       "kind": "write_resource",
+121:       "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-02.md",
+122:       "content": "# Recovery note: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely\n\nSource candidate: sg_f6d01492aef4eb5c\nCaptured: 2026-07-02T00:47:35.616Z\nLesson type: recovery\nConfidence: medium\n\n## Future Trigger\nUse this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely intended locations: 1) closest token block, lines 99-102: 97: function startClick(e){if(ui.start.style.display\n\n## Learned Behavior\nAfter patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continui...[line truncated]
+123:     },
+124:     "scan": {
+125:       "verdict": "safe",
+126:       "findings": [],
+127:       "scannedAt": "2026-07-02T03:41:43.820Z",
+128:       "contentHash": "2de44ede0cd01160"
+129:     },
+130:     "appliedAt": "2026-07-02T03:41:45.716Z"
+131:   },
+132:   {
+133:     "id": "sc_ef9de76a9ee3ba17",
+134:     "createdAt": "2026-07-02T03:41:43.821Z",
+135:     "updatedAt": "2026-07-02T03:41:45.118Z",
+136:     "status": "applied",
+137:     "skillId": "file-surgery",
+138:     "title": "Add recovery to file-surgery",
+139:     "reason": "Skill \"local-file-browser-verification\" was used in a run with errors, blockers, or rework signals.",
+140:     "lessonType": "recovery",
+141:     "futureTrigger": "Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely intended locations: 1) same text with normalized whitespace, lines 29-29: 27: </div> 28: <div class=\"controls\"",
+142:     "learnedBehavior": "After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.",
+143:     "whyUseful": "Prevents Prometheus from rerendering, abandoning a valid result, or wandering into unrelated fixes when a known recovery path exists.",
+144:     "approvePreview": "Approve will add references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-01.md to file-surgery.",
+145:     "qualityScore": 86,
+146:     "autoApplyEligible": true,
+147:     "autoDecisionReason": "Low-risk recovery note with an explicit failure/workaround signal.",
+148:     "evidence": [
+149:       "Brain/skill-gardener/2026-07-01/workflow-episodes.jsonl",
+150:       "Brain/skill-episodes/2026-07-01/episodes.jsonl"
+151:     ],
+152:     "risk": "low",
+153:     "change": {
+154:       "kind": "write_resource",
+155:       "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-01.md",
+156:       "content": "# Recovery note: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely\n\nSource candidate: sg_ea587d6f7e600b32\nCaptured: 2026-07-01T23:54:34.538Z\nLesson type: recovery\nConfidence: medium\n\n## Future Trigger\nUse this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. Likely intended locations: 1) same text with normalized whitespace, lines 29-29: 27: </div> 28: <div class=\"controls\"\n\n## Learned Behavior\nAfter patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before contin...[line truncated]
+157:     },
+158:     "scan": {
+159:       "verdict": "safe",
+160:       "findings": [],
+161:       "scannedAt": "2026-07-02T03:41:43.821Z",
+162:       "contentHash": "876c6def2ce38e53"
+163:     },
+164:     "appliedAt": "2026-07-02T03:41:45.118Z"
+165:   },
+166:   {
+167:     "id": "sc_4c3ad624a2518b37",
+168:     "createdAt": "2026-07-02T03:41:43.821Z",
+169:     "updatedAt": "2026-07-02T03:41:44.525Z",
+170:     "status": "applied",
+171:     "skillId": "file-surgery",
+172:     "title": "Add recovery to file-surgery",
+173:     "reason": "Skill \"local-file-browser-verification\" was used in a run with errors, blockers, or rework signals.",
+174:     "lessonType": "recovery",
+175:     "futureTrigger": "Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in games/mobile-sideways-fps/index.html. No close candidate found. Use read_file to confirm exact text including whitespace.",
+176:     "learnedBehavior": "After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.",
+177:     "whyUseful": "Prevents Prometheus from rerendering, abandoning a valid result, or wandering into unrelated fixes when a known recovery path exists.",
+178:     "approvePreview": "Approve will add references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-07-02.md to file-surgery.",
+179:     "qualityScore": 86,
+180:     "autoApplyEligible": true,
+[READ_TRUNCATED] Returned 180 of 10634 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

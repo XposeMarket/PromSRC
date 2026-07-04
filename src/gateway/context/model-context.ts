@@ -29,18 +29,29 @@ export interface ContextBudget {
 type KnownModelProfile = Partial<Omit<ModelContextProfile, 'providerId' | 'model' | 'source'>>;
 
 const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: KnownModelProfile }> = [
-  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
-  { provider: /^(openai|openai_codex)$/i, model: /codex/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-5(?:\.\d+)?-chat/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: false } },
+  { provider: /^openai_codex$/i, model: /^gpt-5\.3-codex-spark$/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai_codex$/i, model: /^gpt-5/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai$/i, model: /^gpt-5\.(?:5|4)(?:-pro)?(?:-\d{4}-\d{2}-\d{2})?$/i, profile: { contextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai$/i, model: /^gpt-5\.4-(?:mini|nano)(?:-|$)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai$/i, model: /^gpt-5\.\d+(?:-|$)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai$/i, model: /^gpt-5-(?:mini|nano|pro)(?:-|$)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai$/i, model: /^gpt-5(?:$|-)/i, profile: { contextWindowTokens: 400000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^(openai|openai_codex)$/i, model: /codex/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-4\.1/i, profile: { contextWindowTokens: 1047576, maxOutputTokens: 32768, tokenizer: 'openai', supportsReasoningTokens: false } },
   { provider: /^(openai|openai_codex)$/i, model: /^(gpt-4o|o[134])/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: true } },
-  { provider: /^(anthropic)$/i, model: /^claude-opus-4-8$/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 128000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
+  { provider: /^(anthropic)$/i, model: /^(claude-fable-5|claude-opus-4-(?:6|7|8)|claude-sonnet-(?:5|4-6))(?:\b|[-_])/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 128000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
+  { provider: /^(anthropic)$/i, model: /^claude-haiku-4-5(?:\b|[-_])/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 64000, tokenizer: 'anthropic', supportsReasoningTokens: true } },
   { provider: /^(anthropic)$/i, model: /^claude-/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 8192, tokenizer: 'anthropic', supportsReasoningTokens: true } },
   { provider: /^(gemini)$/i, model: /^gemini-2\.5-pro/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'gemini', supportsReasoningTokens: true } },
   { provider: /^(gemini)$/i, model: /^gemini-/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'gemini', supportsReasoningTokens: false } },
   { provider: /^(perplexity)$/i, model: /^sonar-(reasoning|deep-research)/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(perplexity)$/i, model: /^sonar/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
-  { provider: /^(xai)$/i, model: /^grok-build-0\.1$/i, profile: { contextWindowTokens: 256000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
-  { provider: /^(xai)$/i, model: /^(grok-4\.3|grok-4\.20-)/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
+  { provider: /^(xai)$/i, model: /^grok-composer/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^(xai)$/i, model: /^(grok-build-0\.1|grok-code-fast(?:-1)?(?:-\d{4})?)$/i, profile: { contextWindowTokens: 256000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^(xai)$/i, model: /^(grok-4\.3(?:-latest)?|grok-latest)$/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^(xai)$/i, model: /^grok-4\.20-(?:.*non-reasoning)/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
+  { provider: /^(xai)$/i, model: /^grok-4\.20(?:$|-)/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(xai)$/i, model: /^grok/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
 ];
 
@@ -195,7 +206,9 @@ export function resolveActiveModelContextProfile(providerModelInfo?: Partial<Mod
     || known.maxOutputTokens
     || Math.min(8192, Math.max(1024, Math.floor(contextWindowTokens * 0.15)));
   const tokenizer = override.tokenizer || normalizeTokenizer(providerModelInfo?.tokenizer) || known.tokenizer || inferTokenizer(providerId, model);
-  const supportsReasoningTokens = Boolean(known.supportsReasoningTokens || /^(openai|openai_codex|anthropic)$/i.test(providerId));
+  const supportsReasoningTokens = typeof known.supportsReasoningTokens === 'boolean'
+    ? known.supportsReasoningTokens
+    : /^(openai|openai_codex|anthropic|xai)$/i.test(providerId);
   const reasoningBudgetTokens = override.reasoningBudgetTokens || (supportsReasoningTokens ? Math.min(10000, Math.floor(contextWindowTokens * 0.08)) : 0);
   return {
     providerId,

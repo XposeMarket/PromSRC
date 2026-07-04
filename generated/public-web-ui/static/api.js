@@ -231,6 +231,8 @@ export const ENDPOINTS = {
 
   // Canvas
   CANVAS_FILE: '/api/canvas/file',
+  CANVAS_HISTORY: '/api/canvas/history',
+  CANVAS_HISTORY_RESTORE: '/api/canvas/history/restore',
   CANVAS_UPLOAD: '/api/canvas/upload',
   CANVAS_FILES: '/api/canvas/files',
 

@@ -1,0 +1,142 @@
+games/mobile-space-explorer/index.html (58 lines) [window 1-58]:
+1: <!DOCTYPE html>
+2: <html lang="en">
+3: <head>
+4:   <meta charset="UTF-8" />
+5:   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+6:   <meta name="apple-mobile-web-app-capable" content="yes" />
+7:   <title>Galaxy Drift — Space Explorer</title>
+8:   <link rel="stylesheet" href="css/game.css" />
+9: </head>
+10: <body>
+11:   <div id="app">
+12:     <canvas id="game" tabindex="0"></canvas>
+13:     <div id="fade" class="fade hidden" aria-hidden="true"></div>
+14:     <div id="hud" class="hud">
+15:       <div class="hud-top">
+16:         <span id="modeLabel">GALAXY</span>
+17:         <span id="planetHint">Fly into a planet to land</span>
+18:       </div>
+19:       <div class="hud-bars">
+20:         <div class="bar-wrap"><label>Hull</label><div class="bar"><div id="hullBar" class="fill hull"></div></div></div>
+21:         <div class="bar-wrap"><label>Boost</label><div class="bar"><div id="boostBar" class="fill boost"></div></div></div>
+22:       </div>
+23:       <div id="damageFlash" class="damage-flash hidden"></div>
+24:       <div id="chatBackdrop" class="chat-backdrop hidden" aria-hidden="true"></div>
+25:       <div id="chatPanel" class="chat-panel hidden">
+26:         <div id="chatLines"></div>
+27:         <button type="button" id="chatClose">Close ✕</button>
+28:       </div>
+29:       <div id="desktopHelp" class="desktop-help">WASD move · Look up/down to fly vertical · Space climb · Shift boost+glow · FIRE shoots · Planet = FPS</div>
+30:     </div>
+31:     <div id="touchLayer" class="touch-layer">
+32:       <div id="moveStick" class="stick-zone move-zone">
+33:         <div class="stick-base"><div id="moveKnob" class="stick-knob"></div></div>
+34:         <span class="stick-label">MOVE</span>
+35:       </div>
+36:       <div id="lookPad" class="look-pad" aria-label="Camera look"></div>
+37:       <button type="button" id="btnJump" class="action-btn jump-btn">JUMP</button>
+38:       <button type="button" id="btnBoost" class="action-btn boost-btn">BOOST</button>
+39:       <button type="button" id="btnFire" class="action-btn fire-btn">FIRE</button>
+40:       <button type="button" id="btnTalk" class="action-btn talk-btn">TALK</button>
+41:     </div>
+42:     <div id="startOverlay" class="start-overlay">
+43:       <h1>Galaxy Drift</h1>
+44:       <p>Third-person space explorer. Planets hide whole biomes.</p>
+45:       <button type="button" id="btnStart">START — Galaxy</button>
+46:     </div>
+47:   </div>
+48:   <script type="importmap">
+49:   {
+50:     "imports": {
+51:       "three": "https://cdn.jsdelivr.net/npm/three@0.181.2/+esm",
+52:       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.2/examples/jsm/"
+53:     }
+54:   }
+55:   </script>
+56:   <script type="module" src="js/main.js"></script>
+57: </body>
+58: </html>
+
+games/mobile-space-explorer/js/main.js (565 lines) [window 400-479, truncated]:
+400:   }
+401: 
+402:   ship.position.y = groundY;
+403:   if (buttons.jump) ship.position.y = groundY + Math.sin(clock.elapsedTime * 8) * 0.4 + 0.6;
+404: 
+405:   const edge = BIOME_SIZE * 0.92;
+406:   if (Math.hypot(ship.position.x, ship.position.z) > edge) leavePlanet();
+407: 
+408:   updateNpcs(biomeNpcs, ship.position, dt, (dmg) => applyDamage(dmg), (origin, aim) => {
+409:     if (biomeProjectiles) biomeProjectiles.spawn(origin, aim, 55, 'enemy');
+410:   });
+411: 
+412:   if (talkJustPressed(buttons)) {
+413:     const friend = findNearestFriendlyNpc(biomeNpcs, ship.position);
+414:     if (friend) {
+415:       const line = friend.lines[Math.floor(Math.random() * friend.lines.length)];
+416:       openChat(`<strong>${friend.name}</strong>: ${line}`);
+417:     }
+418:   }
+419: 
+420:   shipState.fireCooldown = Math.max(0, shipState.fireCooldown - dt);
+421:   if (buttons.fire && biomeProjectiles && shipState.fireCooldown <= 0) {
+422:     shipState.fireCooldown = 0.12;
+423:     const eye = ship.position.clone().add(new THREE.Vector3(0, 1.65, 0).applyEuler(euler));
+424:     const aim = new THREE.Vector3(0, 0, -1).applyEuler(euler).normalize();
+425:     biomeProjectiles.spawn(eye, aim, 95);
+426:     playBlaster();
+427:   }
+428: 
+429:   if (biomeProjectiles) {
+430:     biomeProjectiles.update(dt, null, ship.position, (dmg) => applyDamage(dmg));
+431:     for (const b of [...biomeProjectiles.bullets]) {
+432:       for (let j = biomeNpcs.length - 1; j >= 0; j--) {
+433:         const n = biomeNpcs[j];
+434:         const d = n.userData.npc;
+435:         if (!d?.hostile) continue;
+436:         if (b.position.distanceTo(n.position) < 2.2) {
+437:           d.hp -= 22;
+438:           biomeScene.remove(b);
+439:           const bi = biomeProjectiles.bullets.indexOf(b);
+440:           if (bi >= 0) biomeProjectiles.bullets.splice(bi, 1);
+441:           if (d.hp <= 0) {
+442:             biomeScene.remove(n);
+443:             biomeNpcs.splice(j, 1);
+444:           }
+445:           break;
+446:         }
+447:       }
+448:     }
+449:   }
+450: }
+451: 
+452: function updateShipInterior(dt, move, buttons) {
+453:   const yaw = shipState.yaw;
+454:   const pitch = shipState.pitch;
+455:   const euler = new THREE.Euler(pitch, yaw, 0, 'YXZ');
+456:   const forward = new THREE.Vector3(0, 0, -1).applyEuler(euler);
+457:   forward.y = 0;
+458:   if (forward.lengthSq() < 0.01) forward.set(0, 0, -1);
+459:   forward.normalize();
+460:   const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+461: 
+462:   const wish = new THREE.Vector3()
+463:     .addScaledVector(forward, move.y)
+464:     .addScaledVector(right, move.x);
+465:   const speed = 14;
+466:   if (wish.lengthSq() > 0.01) {
+467:     wish.normalize();
+468:     ship.position.x += wish.x * speed * dt;
+469:     ship.position.z += wish.z * speed * dt;
+470:   }
+471:   ship.position.y = 2;
+472: 
+473:   const edge = interiorData?.size ?? 36;
+474:   if (ship.position.x > edge - 2) leaveMothership();
+475: 
+476:   if (talkJustPressed(buttons)) {
+477:     const crew = interiorData?.crewNpc;
+478:     if (crew && ship.position.distanceTo(crew.position) < 10) {
+479:       const c = crew.userData.crew;
+[READ_TRUNCATED] Use start_line:480, num_lines:80 for the next chunk, or full:true only when needed.

@@ -1,0 +1,111 @@
+games/mobile-sideways-fps/index.html (110 lines) [window 1-110]:
+1: <!doctype html>
+2: <html lang="en">
+3: <head>
+4: <meta charset="utf-8" />
+5: <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+6: <title>Pocket Zombies FPS</title>
+7: <style>
+8:   html,body{margin:0;height:100%;overflow:hidden;background:#070807;color:#f2ead8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;touch-action:none;user-select:none}
+9:   #game{display:block;width:100vw;height:100vh;background:#111;image-rendering:auto}
+10:   .hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 6px #000;font-weight:800;letter-spacing:.04em}
+11:   .top{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;justify-content:space-between;align-items:flex-start;font-size:13px}
+12:   .pill{background:rgba(0,0,0,.52);border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:7px 10px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+13:   #center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:44px;color:rgba(255,245,220,.75)}
+14:   #msg{position:absolute;left:50%;top:18%;transform:translateX(-50%);text-align:center;font-size:28px;line-height:1.1;color:#ffd36a;max-width:90vw}
+15:   #prompt{position:absolute;left:50%;bottom:25%;transform:translateX(-50%);font-size:16px;background:rgba(0,0,0,.55);padding:10px 14px;border:1px solid rgba(255,211,106,.5);border-radius:12px;display:none}
+16:   .controls{position:fixed;inset:0;pointer-events:none}.btn{pointer-events:auto;position:absolute;border:1px solid rgba(255,255,255,.18);background:rgba(20,20,20,.55);color:#fff;border-radius:999px;font-weight:900;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+17:   #stick{left:22px;bottom:22px;width:112px;height:112px;background:rgba(255,255,255,.07)}#knob{width:48px;height:48px;background:rgba(255,255,255,.22);border-radius:50%;transform:translate(0,0)}
+18:   #fire{right:24px;bottom:32px;width:112px;height:112px;background:rgba(140,18,18,.72);font-size:17px}#reload{right:154px;bottom:42px;width:70px;height:70px}#use{right:34px;bottom:158px;width:76px;height:76px}#pause{right:12px;top:58px;width:50px;height:38px;border-radius:12px}#mute{right:70px;top:58px;width:50px;height:38px;border-radius:12px}
+19:   #start{pointer-events:auto;position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 42%,rgba(90,16,16,.9),rgba(0,0,0,.96));z-index:5;text-align:center;padding:22px}.card{max-width:560px;border:1px solid rgba(255,255,255,.18);border-radius:22px;background:rgba(0,0,0,.45);padding:24px;box-shadow:0 20px 80px rgba(0,0,0,.5)}h1{font-size:44px;margin:0 0 8px;color:#ffcc63}.card p{color:#d6c7a8}.startbtn{display:inline-block;margin-top:12px;background:#e43b28;color:white;border:0;border-radius:14px;padding:14px 22px;font-weight:1000;font-size:18px}
+20: </style>
+21: </head>
+22: <body>
+23: <canvas id="game"></canvas>
+24: <div class="hud">
+25:   <div class="top"><div class="pill" id="leftHud">WAVE 1 · ZOMBIES 0</div><div class="pill" id="midHud">M1911 · 8/48 · $500</div><div class="pill" id="rightHud">HP 100</div></div>
+26:   <div id="msg"></div><div id="center">+</div><div id="prompt"></div>
+27: </div>
+28: <div class="controls"><div class="btn" id="stick"><div id="knob"></div></div><div class="btn" id="fire">FIRE</div><div class="btn" id="reload">R</div><div class="btn" id="use">BUY</div><div class="btn" id="pause">Ⅱ</div><div class="btn" id="mute">♪</div></div>
+29: <div id="start"><div class="card"><h1>POCKET ZOMBIES</h1><p>Mobile sideways FPS. Survive waves, earn points, buy guns, open doors, grab perks and power-ups.</p><p>Desktop: WASD move, mouse/arrow look, Space or FIRE button to shoot, R reload, E buy, P pause.</p><button id="startBtn" class="startbtn" type="button" onclick="window.__pocketStart&&window.__pocketStart()">START GAME</button></div></div>
+30: <script>
+31: (()=>{
+32: 'use strict';
+33: const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+34: const ui={start:document.getElementById('start'),startBtn:document.getElementById('startBtn'),left:document.getElementById('leftHud'),mid:document.getElementById('midHud'),right:document.getElementById('rightHud'),msg:document.getElementById('msg'),prompt:document.getElementById('prompt'),knob:document.getElementById('knob')}; const dbg=window.__pocketZombiesDebug||{}; window.__pocketZombiesDebug=dbg;;
+35: const zombieImg=new Image();zombieImg.src='assets/zombie.png';
+36: const gunImg=new Image();gunImg.src='assets/zombie-gun-8bit.png';
+37: const fireGunImg=new Image();fireGunImg.src='assets/zombie-gun-8bit-fire.png';
+38: let W=1,H=1,last=0,raf=0,startClockId=null,audio=false,muted=false;
+39: const TAU=Math.PI*2,FOV=Math.PI/3,keys={},touch={mx:0,my:0,look:0,fire:false};
+40: const weapons={M1911:{name:'M1911',price:0,dmg:34,rate:.32,mag:8,reserve:48,reload:1.05,spread:.018},SMG:{name:'SMG',price:950,dmg:22,rate:.09,mag:28,reserve:140,reload:1.25,spread:.04},SHOTGUN:{name:'SHOTGUN',price:1250,dmg:92,rate:.72,mag:6,reserve:36,reload:1.45,spread:.085},RIFLE:{name:'RIFLE',price:1800,dmg:58,rate:.18,mag:20,reserve:100,reload:1.35,spread:.012}};
+41: const map0=[
+42: '111111111111111',
+43: '100000010000001',
+44: '100000010000001',
+45: '1000000D0000001',
+46: '100000010000001',
+47: '100000010000001',
+48: '100001000100001',
+49: '100000000000001',
+50: '100000000000001',
+51: '100011101110001',
+52: '100000000000001',
+53: '100000000000001',
+54: '111111111111111'];
+55: let map=[];
+56: const doors=[{x:7,y:3,cost:900,open:false,name:'Courtyard Door'}];
+57: const buys=[{x:2.5,y:2.5,type:'gun',id:'SMG'},{x:12.5,y:2.5,type:'gun',id:'SHOTGUN'},{x:12.5,y:10.5,type:'gun',id:'RIFLE'},{x:2.5,y:10.5,type:'perk',id:'JUG',name:'Juggernog',cost:1500},{x:7.5,y:8.5,type:'perk',id:'SPEED',name:'Speed Cola',cost:1200}];
+58: const spawns=[{x:1.5,y:1.5},{x:13.5,y:1.5},{x:1.5,y:11.5},{x:13.5,y:11.5},{x:7.5,y:11.5}];
+59: const state={running:false,paused:false,gameOver:false,wave:1,waveState:'ready',zombies:[],zombiesToSpawn:0,spawnTimer:0,betweenTimer:0,kills:0,points:500,notice:'',noticeTimer:0,powerups:[],active:{insta:0,double:0},player:{x:3.5,y:3.5,a:0,hp:100,maxHp:100,speed:2.35},owned:['M1911'],weapon:'M1911',ammo:{},reloadTimer:0,fireCooldown:0,shots:0,startTime:0,grace:0};
+60: Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});
+61: function resize(){W=canvas.width=Math.max(320,innerWidth*devicePixelRatio);H=canvas.height=Math.max(240,innerHeight*devicePixelRatio);ctx.setTransform(1,0,0,1,0,0)} addEventListener('resize',resize);resize();
+62: function rebuildMap(){map=map0.map(r=>r.split(''));doors.forEach(d=>{map[d.y][d.x]=d.open?'0':'D'})}
+63: function reset(){rebuildMap();Object.assign(state,{running:true,paused:false,gameOver:false,wave:1,waveState:'spawning',zombies:[],zombiesToSpawn:4,spawnTimer:.75,betweenTimer:0,kills:0,points:500,notice:'WAVE 1',noticeTimer:2,powerups:[],active:{insta:0,double:0},weapon:'M1911',reloadTimer:0,fireCooldown:0,shots:0,startTime:performance.now()/1000,grace:8});state.player={x:7.5,y:7.5,a:-1.57,hp:220,maxHp:220,speed:3.05};state.owned=['M1911'];Object.keys(weapons).forEach(k=>state.ammo[k]={mag:weapons[k].mag,reserve:weapons[k].reserve});doors.forEach(d=>d.open=false);rebuildMap();ui.start.style.display='none'}
+64: function tile(x,y){x=Math.floor(x);y=Math.floor(y);return map[y]?.[x]||'1'} function solid(x,y){return tile(x,y)!=='0'}
+65: function moveEnt(e,dx,dy){if(!solid(e.x+dx,e.y))e.x+=dx;if(!solid(e.x,e.y+dy))e.y+=dy}
+66: function msg(t,d=1.5){state.notice=t;state.noticeTimer=d}
+67: function spawnZombie(){const s=spawns[Math.floor(Math.random()*spawns.length)],v=Math.random();state.zombies.push({x:s.x,y:s.y,hp:(58+state.wave*14)*(v>.86?1.75:1),maxHp:58+state.wave*14,speed:(.38+state.wave*.025)*(v>.86?0.72:v<.18?1.18:1),r:.24,atk:.9,hurt:0,dead:false,variant:v>.86?'brute':v<.18?'runner':'walker'});state.zombiesToSpawn--}
+68: function update(dt){if(!state.running||state.paused)return;const p=state.player;if(state.noticeTimer>0)state.noticeTimer-=dt;state.active.insta=Math.max(0,state.active.insta-dt);state.active.double=Math.max(0,state.active.double-dt);state.fireCooldown=Math.max(0,state.fireCooldown-dt);state.grace=Math.max(0,state.grace-dt);if(state.reloadTimer>0){state.reloadTimer-=dt;if(state.reloadTimer<=0)finishReload()}
+69:  let turn=(keys.ArrowLeft?-1:0)+(keys.ArrowRight?1:0)+touch.look;p.a+=turn*2.6*dt;let f=(keys.w||keys.W||keys.ArrowUp?1:0)+(keys.s||keys.S||keys.ArrowDown?-1:0)+touch.my;let st=(keys.d||keys.D?1:0)+(keys.a||keys.A?-1:0)+touch.mx;let sp=p.speed*(state.active.insta?1.03:1);let dx=(Math.cos(p.a)*f+Math.cos(p.a+Math.PI/2)*st)*sp*dt,dy=(Math.sin(p.a)*f+Math.sin(p.a+Math.PI/2)*st)*sp*dt;moveEnt(p,dx,dy);
+70:  if((touch.fire||keys[' ']||keys.Mouse)&&state.fireCooldown<=0)shoot();
+71:  if(state.waveState==='spawning'){state.spawnTimer-=dt;if(state.zombiesToSpawn>0&&state.spawnTimer<=0){spawnZombie();state.spawnTimer=Math.max(1.05,2.15-state.wave*.07)}if(state.zombiesToSpawn<=0)state.waveState='fighting'}
+72:  for(const z of state.zombies){z.hurt=Math.max(0,z.hurt-dt);const ang=Math.atan2(p.y-z.y,p.x-z.x),dist=Math.hypot(p.x-z.x,p.y-z.y);if(dist>.55){moveEnt(z,Math.cos(ang)*z.speed*dt,Math.sin(ang)*z.speed*dt)}else{z.atk-=dt;if(z.atk<=0){z.atk=1.15;if(state.grace<=0){p.hp-=state.owned.includes('JUG')?5:9;msg('BITTEN!',.45);beep(90,.04);if(p.hp<=0)endGame()}}}}
+73:  state.zombies=state.zombies.filter(z=>!z.dead);
+74:  if(state.waveState==='fighting'&&state.zombies.length===0&&state.zombiesToSpawn<=0){state.waveState='between';state.betweenTimer=4;state.points+=300;msg('WAVE COMPLETE +$300',2);beep(520,.08)}
+75:  if(state.waveState==='between'){state.betweenTimer-=dt;if(state.betweenTimer<=0){state.wave++;state.waveState='spawning';state.zombiesToSpawn=5+state.wave*2;state.spawnTimer=.5;msg('WAVE '+state.wave,2)}}
+76:  for(const pu of state.powerups){if(Math.hypot(p.x-pu.x,p.y-pu.y)<.7){pickup(pu);pu.dead=true}}state.powerups=state.powerups.filter(p=>!p.dead);
+77: }
+78: function shoot(){const w=weapons[state.weapon],am=state.ammo[state.weapon];if(state.reloadTimer>0)return;if(am.mag<=0){reload();return}am.mag--;state.shots++;state.fireCooldown=w.rate*(state.owned.includes('SPEED')?0.78:1);beep(180+Math.random()*90,.025);let best=null,bang=999;for(const z of state.zombies){const dx=z.x-state.player.x,dy=z.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));let allowance=w.spread+Math.atan2(.36,dist);if(Math.abs(da)<allowance&&dist<9&&Math.abs(da)<bang&&!blocked(state.player.x,state.player.y,z.x,z.y)){best=z;bang=Math.abs(da)}}if(best){let dmg=state.active.insta?999:w.dmg*(...[line truncated]
+79: function kill(z){z.dead=true;state.kills++;state.points+=state.active.double?140:70;if(Math.random()<.16)drop(z.x,z.y);beep(360,.035)}
+80: function reload(){const w=weapons[state.weapon],am=state.ammo[state.weapon];if(am.mag>=w.mag||am.reserve<=0||state.reloadTimer>0)return;state.reloadTimer=w.reload*(state.owned.includes('SPEED')?0.55:1);msg('RELOADING',.5)}function finishReload(){const w=weapons[state.weapon],am=state.ammo[state.weapon],need=w.mag-am.mag,take=Math.min(need,am.reserve);am.mag+=take;am.reserve-=take}
+81: function drop(x,y){const types=['MAX AMMO','INSTA KILL','DOUBLE POINTS','NUKE'];state.powerups.push({x,y,type:types[Math.floor(Math.random()*types.length)],t:9})}function pickup(p){msg(p.type,1.3);beep(650,.08);if(p.type==='MAX AMMO')Object.keys(weapons).forEach(k=>state.ammo[k].reserve=Math.max(state.ammo[k].reserve,weapons[k].reserve));if(p.type==='INSTA KILL')state.active.insta=15;if(p.type==='DOUBLE POINTS')state.active.double=15;if(p.type==='NUKE'){state.zombies.forEach(z=>kill(z));state.points+=400}}
+82: function blocked(x1,y1,x2,y2){const n=24;for(let i=1;i<n;i++){let t=i/n;if(solid(x1+(x2-x1)*t,y1+(y2-y1)*t))return true}return false}
+83: function interactable(){let best=null,bd=1.25;for(const b of buys){let d=Math.hypot(state.player.x-b.x,state.player.y-b.y);if(d<bd){best=b;bd=d}}for(const d of doors){let q=Math.hypot(state.player.x-(d.x+.5),state.player.y-(d.y+.5));if(!d.open&&q<bd){best={type:'door',door:d};bd=q}}return best}function use(){const it=interactable();if(!it)return;if(it.type==='gun'){const w=weapons[it.id];if(state.points<w.price)return msg('NEED $'+w.price);state.points-=w.price;if(!state.owned.includes(it.id))state.owned.push(it.id);state.weapon=it.id;state.ammo[it.id].mag=w.mag;state.ammo[it.id].reserve=w.reserve;msg('BOUGHT '+w.name)}else if(it.type==='perk'){if(state.owned.includes(it.id))return msg('ALRE...[line truncated]
+84: function endGame(){state.gameOver=true;state.running=false;msg('GAME OVER - WAVE '+state.wave+' · KILLS '+state.kills,99);ui.start.style.display='flex';ui.start.querySelector('h1').textContent='GAME OVER';ui.start.querySelector('p').textContent='Wave '+state.wave+' · '+state.kills+' kills · $'+state.points+'. Tap to restart.'}
+85: function cast(a){let x=state.player.x,y=state.player.y,step=.035,dist=0;while(dist<18){x+=Math.cos(a)*step;y+=Math.sin(a)*step;dist+=step;if(solid(x,y))return{dist,x,y,t:tile(x,y)}}return{dist:18,x,y,t:'0'}}
+86: function render(){ctx.fillStyle='#0a0908';ctx.fillRect(0,0,W,H);let sky=ctx.createLinearGradient(0,0,0,H*.5);sky.addColorStop(0,'#151819');sky.addColorStop(1,'#312014');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H/2);let floor=ctx.createLinearGradient(0,H/2,0,H);floor.addColorStop(0,'#1b1a16');floor.addColorStop(1,'#070706');ctx.fillStyle=floor;ctx.fillRect(0,H/2,W,H/2);const cols=Math.min(320,Math.floor(W/4)),cw=W/cols,zbuf=[];for(let i=0;i<cols;i++){let a=state.player.a-FOV/2+FOV*i/cols,r=cast(a),d=r.dist*Math.cos(a-state.player.a);zbuf[i]=d;let h=Math.min(H,H/(d+.08)*.82),shade=Math.max(35,210-d*18),x=i*cw;ctx.fillStyle=r.t==='D'?`rgb(${shade*.7},${shade*.35},20)`: `rgb(${shade*.45},${shade*.42...[line truncated]
+87:  const sprites=[];for(const z of state.zombies)sprites.push({...z,kind:'z'});for(const p of state.powerups)sprites.push({...p,kind:'p'});for(const b of buys)sprites.push({...b,kind:'b'});sprites.sort((a,b)=>Math.hypot(b.x-state.player.x,b.y-state.player.y)-Math.hypot(a.x-state.player.x,a.y-state.player.y));for(const s of sprites)drawSprite(s,zbuf,cols,cw);
+88:  drawGun();drawMini();if(state.noticeTimer>0||state.gameOver)ui.msg.textContent=state.notice;else ui.msg.textContent='';const it=interactable();ui.prompt.style.display=it?'block':'none';ui.prompt.textContent=it?(it.type==='gun'?'BUY '+weapons[it.id].name+' $'+weapons[it.id].price:it.type==='perk'?'BUY '+it.name+' $'+it.cost:'OPEN '+it.door.name+' $'+it.door.cost):'';const am=state.ammo[state.weapon];ui.left.textContent=`WAVE ${state.wave} · ZOMBIES ${state.zombies.length}${state.zombiesToSpawn?` +${state.zombiesToSpawn}`:''}`;ui.mid.textContent=`${weapons[state.weapon].name} · ${am.mag}/${am.reserve} · $${state.points}${state.reloadTimer>0?' · RELOAD':''}`;ui.right.textContent=`HP ${Math.max...[line truncated]
+89: function drawSprite(s,zbuf,cols,cw){let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx),da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));if(Math.abs(da)>FOV*.72||dist<.15)return;let sx=(da/FOV+.5)*W,sz=H/(dist+.05)*(s.kind==='z'?1.35:.42),sy=H/2-sz*.55;if(zbuf[Math.max(0,Math.min(cols-1,Math.floor(sx/W*cols)))]<dist-.2)return;ctx.save();ctx.translate(sx,sy+sz/2);if(s.kind==='z'){let scale=s.variant==='brute'?1.18:(s.variant==='runner'?0.88:1),w=sz*.7*scale,h=sz*1.08*scale;ctx.globalAlpha=s.hurt?.72:1;if(zombieImg.complete&&zombieImg.naturalWidth){ctx.drawImage(zombieImg,-w/2,-h*.58,w,h)}else{ctx.fillStyle=s.hurt?'#fff':s.varian...[line truncated]
+90: function drawGun(){const bob=Math.sin(performance.now()/120)*6*devicePixelRatio;const s=ctx.imageSmoothingEnabled;ctx.imageSmoothingEnabled=false;const isFiring=touch.fire||keys[' '];const drawGunSprite=(isFiring&&fireGunImg.complete&&fireGunImg.naturalWidth?fireGunImg:gunImg);const aspect=drawGunSprite.naturalWidth&&drawGunSprite.naturalHeight?drawGunSprite.naturalHeight/drawGunSprite.naturalWidth:1.8;const gunW=Math.min(W*.48,H*.7);const gunH=Math.min(gunW*aspect,H*.55);if(drawGunSprite.complete&&drawGunSprite.naturalWidth){ctx.drawImage(drawGunSprite,W/2-gunW/2,H-gunH+bob*0.9,gunW,gunH)}else{const r=gunW*.18;ctx.fillStyle='#1b1a19';ctx.fillRect(W/2-r,H-r*.8+bob,r*1.4,r*0.4);ctx.fillStyle=...[line truncated]
+91: function drawMini(){let scale=7*devicePixelRatio,x=10*devicePixelRatio,y=46*devicePixelRatio;ctx.save();ctx.globalAlpha=.8;for(let yy=0;yy<map.length;yy++)for(let xx=0;xx<map[0].length;xx++){ctx.fillStyle=map[yy][xx]==='0'?'rgba(255,255,255,.08)':map[yy][xx]==='D'?'#8d4a1d':'#555';ctx.fillRect(x+xx*scale,y+yy*scale,scale-1,scale-1)}ctx.fillStyle='#66d9ff';ctx.fillRect(x+state.player.x*scale-2,y+state.player.y*scale-2,4,4);ctx.fillStyle='#d53';state.zombies.forEach(z=>ctx.fillRect(x+z.x*scale-1,y+z.y*scale-1,3,3));ctx.restore()}
+92: function loop(t){let now=t/1000,dt=Math.min(.05,now-(last||now));last=now;update(dt);render();publishDebug();raf=requestAnimationFrame(loop)}
+93: function publishDebug(){window.__pocketZombiesDebug={running:state.running,paused:state.paused,gameOver:state.gameOver,wave:state.wave,waveState:state.waveState,zombies:state.zombies.length,zombiesToSpawn:state.zombiesToSpawn,spawnTimer:+state.spawnTimer.toFixed(2),player:{x:+state.player.x.toFixed(2),y:+state.player.y.toFixed(2),health:Math.ceil(state.player.hp),ammo:state.ammo[state.weapon].mag,reserve:state.ammo[state.weapon].reserve},weapon:state.weapon,points:state.points,kills:state.kills,errors:0}}
+94: function beep(f,d){if(muted)return;try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.value=.025;o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+95: function startGame(){ui.start.querySelector('h1').textContent='POCKET ZOMBIES';reset();ui.start.style.display='none';if(audio&&audio.state==='suspended')audio.resume()}
+96: function forceStart(){startGame();console.log('START_TRIGGERED')}
+97: function startClick(e){if(ui.start.style.display==='none')return;if(e){e.preventDefault();e.stopPropagation()}startGame()}
+98: window.__pocketStart=startGame;
+99: window.__pocketForceStart=forceStart;
+100: const startInputs=['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'];
+101: startInputs.forEach(ev=>{if(ui.startBtn)ui.startBtn.addEventListener(ev,startClick,{passive:false});if(ui.start)ui.start.addEventListener(ev,startClick,{passive:false})});
+102: if(ui.startBtn){ui.startBtn.onclick=startClick;ui.startBtn.onpointerdown=startClick;ui.startBtn.onpointerup=startClick;ui.startBtn.ontouchend=startClick}
+103: let stickId=null;document.getElementById('stick').addEventListener('pointerdown',e=>{stickId=e.pointerId;e.currentTarget.setPointerCapture(stickId)});document.getElementById('stick').addEventListener('pointermove',e=>{if(e.pointerId!==stickId)return;let r=e.currentTarget.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=(e.clientX-cx)/(r.width/2),dy=(e.clientY-cy)/(r.height/2),m=Math.max(1,Math.hypot(dx,dy));touch.mx=dx/m;touch.my=-dy/m;ui.knob.style.transform=`translate(${touch.mx*31}px,${-touch.my*31}px)`});document.getElementById('stick').addEventListener('pointerup',()=>{touch.mx=touch.my=0;ui.knob.style.transform='translate(0,0)'});
+104: canvas.addEventListener('pointermove',e=>{if(e.buttons)state.player.a+=e.movementX*.004});addEventListener('keydown',e=>{keys[e.key]=true;if(e.key==='r'||e.key==='R')reload();if(e.key==='e'||e.key==='E')use();if(e.key==='p'||e.key==='P')state.paused=!state.paused;if(e.key==='1')state.weapon=state.owned[0]||state.weapon;if(e.key==='2'&&state.owned[1])state.weapon=state.owned[1];if(e.key==='3'&&state.owned[2])state.weapon=state.owned[2]});addEventListener('keyup',e=>keys[e.key]=false);
+105: window.addEventListener('error',e=>{window.__pocketZombiesLastError=String(e.message||e.error)});rebuildMap();publishDebug();raf=requestAnimationFrame(loop);startClockId=raf;
+106: })();
+107: </script>
+108: </body>
+109: </html>
+110: 

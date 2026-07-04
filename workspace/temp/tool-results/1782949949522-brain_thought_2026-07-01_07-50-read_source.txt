@@ -1,0 +1,222 @@
+src/gateway/routes/chat.router.ts (16898 lines) [window 6500-6719, truncated]:
+6500:             stepNum: allToolResults.length,
+6501:           });
+6502:           messages.push({
+6503:             role: 'tool',
+6504:             tool_name: toolName,
+6505:             tool_call_id: toolCallId || undefined,
+6506:             content: blockMsg,
+6507:           });
+6508:           continue;
+6509:         }
+6510: 
+6511:         if (typeof toolArgs?.modifier === 'string') {
+6512:           const requestedModifier = String(toolArgs.modifier || '').toLowerCase().trim();
+6513:           if (requestedModifier === 'none' || requestedModifier === '') {
+6514:             delete (toolArgs as any).modifier;
+6515:           } else {
+6516:             const hasValidModifier =
+6517:               requestedModifier === 'shift' || requestedModifier === 'ctrl' || requestedModifier === 'alt';
+6518:             const userAskedForModifier = /\b(ctrl|control|shift|alt|modifier|cmd\+|command\+)\b/i.test(String(message || ''));
+6519:             if (hasValidModifier && !userAskedForModifier) {
+6520:               if (toolArgs && typeof toolArgs === 'object') {
+6521:                 delete (toolArgs as any).modifier;
+6522:               }
+6523:             }
+6524:           }
+6525:         }
+6526:       }
+6527: 
+6528:       // ── Scroll-before-act gate ────────────────────────────────────────────────
+6529:       // Block PageDown / browser_scroll on interactive pages when the model hasn't
+6530:       // filled or clicked anything yet. This is the #1 cause of the scroll loop bug
+6531:       // where the AI scrolls past the X.com composer instead of filling it.
+6532:       // Feed/search pages (x_feed, search_results) are exempt — they need scrolling.
+6533:       const isScrollAttempt =
+6534:         (toolName === 'browser_press_key' && String(toolArgs?.key || '').toLowerCase() === 'pagedown')
+6535:         || toolName === 'browser_scroll';
+6536:       if (isScrollAttempt && !browserFillOrClickDoneThisTurn) {
+6537:         const sessionInfo = getBrowserSessionInfo(sessionId);
+6538:         const currentPacket = sessionInfo.active
+6539:           ? await getBrowserAdvisorPacket(sessionId, { maxItems: 0, snapshotElements: 10 }).catch(() => null)
+6540:           : null;
+6541:         const pageType = currentPacket?.page?.pageType || 'generic';
+6542:         const isFeedPage = pageType === 'x_feed' || pageType === 'search_results';
+6543:         if (!isFeedPage) {
+6544:           browserScrollBeforeActCount++;
+6545:           if (browserScrollBeforeActCount > SCROLL_BEFORE_ACT_MAX) {
+6546:             const lastSnap = currentPacket?.snapshot || '';
+6547:             const blockMsg = [
+6548:               `SCROLL BLOCKED: You scrolled ${browserScrollBeforeActCount} time(s) without filling or clicking anything.`,
+6549:               `This is the scroll-before-act loop bug. The page already shows actionable elements — stop scrolling and act on them.`,
+6550:               lastSnap ? `\nCurrent page snapshot (act on these @ref elements NOW):\n${lastSnap.slice(0, 2000)}` : '',
+6551:               `\nRequired next action: find the input or button you need and call browser_fill(ref, text) or browser_click(ref) immediately.`,
+6552:               `Do NOT call browser_press_key(PageDown), browser_scroll, or browser_snapshot. Act on the snapshot above.`,
+6553:             ].filter(Boolean).join(' ');
+6554:             console.warn(`[v2] SCROLL-BEFORE-ACT BLOCKED (${browserScrollBeforeActCount}x): ${toolName} on ${pageType} page before any fill/click`);
+6555:             sendSSE('info', { message: `Scroll-before-act gate: blocked ${toolName} on non-feed page (${browserScrollBeforeActCount}/${SCROLL_BEFORE_ACT_MAX} allowed before act required).` });
+6556:             const blockedResult: ToolResult = makeInstrumentedToolResult(toolName, toolArgs, blockMsg, true);
+6557:             allToolResults.push(blockedResult);
+6558:             logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
+6559:             markProgressStepStart(toolName);
+6560:             markProgressStepResult(false);
+6561:             sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length });
+6562:             sendSSE('tool_result', { action: toolName, result: blockMsg.slice(0, 300), error: true, stepNum: allToolResults.length });
+6563:             messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: blockMsg });
+6564:             messages.push({ role: 'user', content: `Scroll blocked. You must call browser_fill or browser_click on a @ref from the snapshot above before scrolling. Stop planning and act now.` });
+6565:             continue;
+6566:           }
+6567:         }
+6568:       }
+6569:       // Track fills and clicks so the gate knows when it's safe to scroll
+6570:       if (toolName === 'browser_fill' || toolName === 'browser_click') {
+6571:         browserFillOrClickDoneThisTurn = true;
+6572:         browserScrollBeforeActCount = 0;
+6573:       }
+6574:       // ── End scroll-before-act gate ────────────────────────────────────────────
+6575: 
+6576:       if (toolName === 'tool_loop_continue') {
+6577:         const targetToolName = String(toolArgs?.tool_name || toolArgs?.toolName || '').trim();
+6578:         const targetArgs = toolArgs?.args && typeof toolArgs.args === 'object' ? toolArgs.args : {};
+6579:         const reason = String(toolArgs?.reason || '').trim();
+6580:         const targetSig = targetToolName ? `${targetToolName}:${hashArgs(targetArgs)}` : '';
+6581:         const ok = !!targetToolName && reason.length >= 12;
+6582:         const resultText = ok
+6583:           ? `Loop gate acknowledged. Continuing is allowed for ${targetToolName} with the provided arguments for the rest of this turn.`
+6584:           : 'Loop gate was not acknowledged. Provide tool_name, the exact args object, and a concrete reason explaining why repeated use is required.';
+6585:         if (ok) {
+6586:           loopContinueAllowed.add(targetSig);
+6587:           loopGateToolActive = false;
+6588:           loopWarnNudged.delete(targetSig);
+6589:           loopBlockNudged.delete(targetSig);
+6590:           const argsHash = hashArgs(targetArgs);
+6591:           for (let i = recentToolCalls.length - 1; i >= 0; i--) {
+6592:             if (recentToolCalls[i]?.name === targetToolName && recentToolCalls[i]?.argsHash === argsHash) {
+6593:               recentToolCalls.splice(i, 1);
+6594:             }
+6595:           }
+6596:         }
+6597:         const gateResult: ToolResult = makeInstrumentedToolResult(toolName, toolArgs, resultText, !ok);
+6598:         allToolResults.push(gateResult);
+6599:         logToolCall(workspacePath, toolName, toolArgs, resultText, !ok);
+6600:         markProgressStepStart(toolName);
+6601:         markProgressStepResult(ok);
+6602:         sendSSE('tool_result', {
+6603:           action: toolName,
+6604:           result: resultText,
+6605:           error: !ok,
+6606:           stepNum: allToolResults.length,
+6607:         });
+6608:         messages.push({
+6609:           role: 'tool',
+6610:           tool_name: toolName,
+6611:           tool_call_id: toolCallId || undefined,
+6612:           content: resultText,
+6613:         });
+6614:         continue;
+6615:       }
+6616: 
+6617:       const loopSig = `${toolName}:${hashArgs(toolArgs)}`;
+6618:       const loopPivotNudge = 'Loop detector: repeated identical tool use detected. Either pivot to a different approach, or call tool_loop_continue with the exact tool_name/args and a reason if the task truly requires continuing.';
+6619:       const loopCheck = checkLoopDetection(toolName, toolArgs);
+6620:       if (loopCheck.state === 'block') {
+6621:         loopGateToolActive = true;
+6622:         const blockMsg = `${loopPivotNudge} Gate raised: ${toolName} with identical arguments has run ${loopCheck.repeats} times (critical threshold ${loopCriticalThreshold}). To continue intentionally, call tool_loop_continue with tool_name="${toolName}", args equal to the exact arguments you still need to repeat, and a concrete reason.`;
+6623:         console.warn(`[v2] LOOP BLOCK: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
+6624:         const blockedResult: ToolResult = {
+6625:           name: toolName,
+6626:           args: toolArgs,
+6627:           result: blockMsg,
+6628:           error: true,
+6629:         };
+6630:         allToolResults.push(blockedResult);
+6631:         logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
+6632:         markProgressStepStart(toolName);
+6633:         markProgressStepResult(false);
+6634:         sendSSE('info', { message: blockMsg });
+6635:         sendSSE('tool_result', {
+6636:           action: toolName,
+6637:           result: blockMsg,
+6638:           error: true,
+6639:           stepNum: allToolResults.length,
+6640:         });
+6641:         messages.push({
+6642:           role: 'tool',
+6643:           tool_name: toolName,
+6644:           tool_call_id: toolCallId || undefined,
+6645:           content: blockMsg,
+6646:         });
+6647:         if (!loopBlockNudged.has(loopSig)) {
+6648:           loopBlockNudged.add(loopSig);
+6649:           messages.push({
+6650:             role: 'user',
+6651:             content: `${loopPivotNudge} If this is required for the user's request, acknowledge it with tool_loop_continue, then retry ${toolName}.`,
+6652:           });
+6653:         }
+6654:         continue;
+6655:       }
+6656:       if (loopCheck.state === 'warn') {
+6657:         loopGateToolActive = true;
+6658:         const warnMsg = `${loopPivotNudge} Warning: ${toolName} with identical arguments repeated ${loopCheck.repeats} times (warning threshold ${loopWarningThreshold}).`;
+6659:         console.warn(`[v2] LOOP WARN: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
+6660:         sendSSE('info', { message: warnMsg });
+6661:         if (!loopWarnNudged.has(loopSig)) {
+6662:           loopWarnNudged.add(loopSig);
+6663:           messages.push({
+6664:             role: 'user',
+6665:             content: warnMsg,
+6666:           });
+6667:         }
+6668:       }
+6669: 
+6670:       if (isBootStartupTurn && !bootAllowedTools.has(toolName)) {
+6671:         const blockMsg = `BOOT mode: "${toolName}" is disabled. Use only list_files and read_file, then provide the startup summary.`;
+6672:         console.log(`[v2] BOOT TOOL BLOCKED: ${toolName}`);
+6673:         const blockedResult: ToolResult = {
+6674:           name: toolName,
+6675:           args: toolArgs,
+6676:           result: blockMsg,
+6677:           error: false,
+6678:         };
+6679:         allToolResults.push(blockedResult);
+6680:         roundHadProgress = true;
+6681:         logToolCall(workspacePath, toolName, toolArgs, blockMsg, false);
+6682:         markProgressStepStart(toolName);
+6683:         markProgressStepResult(true);
+6684:         sendSSE('tool_result', {
+6685:           action: toolName,
+6686:           result: blockMsg,
+6687:           error: false,
+6688:           stepNum: allToolResults.length,
+6689:         });
+6690:         messages.push({
+6691:           role: 'tool',
+6692:           tool_name: toolName,
+6693:           tool_call_id: toolCallId || undefined,
+6694:           content: blockMsg,
+6695:         });
+6696:         continue;
+6697: 	      }
+6698: 
+6699: 	      const isDevEditHotRestartFollowup = isHotRestartTurn
+6700: 	        && /\[DEV EDIT CONTINUATION\]|\bHOT RESTART DEV-EDIT FOLLOW-UP\b/i.test(String(callerContext || ''));
+6701: 	      const isAllowedDevEditRestartWriteNote = isDevEditHotRestartFollowup && toolName === 'write_note';
+6702: 	      if (isHotRestartTurn && !isAllowedDevEditRestartWriteNote) {
+6703: 	        const blockMsg = `HOT RESTART mode: "${toolName}" is disabled. Provide the restart follow-up only.`;
+6704: 	        console.log(`[v2] HOT RESTART TOOL BLOCKED: ${toolName}`);
+6705: 	        const blockedResult: ToolResult = {
+6706: 	          name: toolName,
+6707: 	          args: toolArgs,
+6708: 	          result: blockMsg,
+6709: 	          error: false,
+6710: 	        };
+6711: 	        allToolResults.push(blockedResult);
+6712: 	        roundHadProgress = true;
+6713: 	        logToolCall(workspacePath, toolName, toolArgs, blockMsg, false);
+6714: 	        markProgressStepStart(toolName);
+6715: 	        markProgressStepResult(true);
+6716: 	        sendSSE('tool_result', {
+6717: 	          action: toolName,
+6718: 	          result: blockMsg,
+6719: 	          error: false,
+[READ_TRUNCATED] Returned 220 of 16898 lines. Use start_line:6720, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

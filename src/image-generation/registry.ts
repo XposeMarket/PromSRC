@@ -12,7 +12,10 @@ import {
   buildImageGenerationError,
   getImageGenerationConfig,
   normalizeImageAspectRatio,
+  normalizeImageBackground,
   normalizeImageCount,
+  normalizeImageOutputFormat,
+  normalizeImageQuality,
   normalizeReferenceImages,
 } from './utils.js';
 
@@ -76,6 +79,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
   const aspectRatio = normalizeImageAspectRatio(request.aspect_ratio);
   const count = normalizeImageCount(request.count);
   const referenceImages = normalizeReferenceImages(request.reference_images);
+  const background = normalizeImageBackground(request.background, prompt);
+  const outputFormat = normalizeImageOutputFormat(request.output_format, background);
+  const quality = normalizeImageQuality(request.quality);
   const imageCfg = getImageGenerationConfig();
   const saveToWorkspace = request.save_to_workspace ?? imageCfg.save_to_workspace;
   const outputDir = request.output_dir || imageCfg.default_output_dir;
@@ -90,6 +96,8 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       model: request.model,
       prompt,
       aspectRatio,
+      background,
+      outputFormat,
       error: 'Prompt is required and must be a non-empty string.',
       errorType: 'invalid_argument',
     });
@@ -109,6 +117,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
           reference_images: referenceImages,
           count,
           model: request.model,
+          background,
+          output_format: outputFormat,
+          quality,
           output_dir: outputDir,
           output_run_dir: outputRunDir,
           save_to_workspace: saveToWorkspace,
@@ -122,6 +133,8 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       model: request.model,
       prompt,
       aspectRatio,
+      background,
+      outputFormat,
       error: sawKnownProvider
         ? `Image generation provider "${primaryProviderId}" is not available.`
         : `Unknown image generation provider "${primaryProviderId}".`,
@@ -140,6 +153,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
         reference_images: referenceImages,
         count,
         model: request.model,
+        background,
+        output_format: outputFormat,
+        quality,
         output_dir: outputDir,
         output_run_dir: outputRunDir,
         save_to_workspace: saveToWorkspace,
@@ -153,6 +169,8 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     model: request.model,
     prompt,
     aspectRatio,
+    background,
+    outputFormat,
     error: 'No image generation provider is available. Configure xAI/OpenAI API access or connect OpenAI Codex OAuth.',
     errorType: 'provider_unavailable',
   });

@@ -1,0 +1,179 @@
+audit/chats/compactions/brain_dream_2026-07-02.md (178 lines) [window 1-178]:
+1: ### [ROLLING_COMPACTION] 2026-07-03T03:35:47.100Z
+2: - Base message count: 1
+3: - reason: projected_context_over_budget
+4: - projected_tokens: 83360
+5: - trigger_tokens: 80256
+6: - input_budget_tokens: 107008
+7: - context_window_tokens: 128000
+8: - provider: xai
+9: - model: grok-composer-2.5-fast
+10: - tool_result_count: 26
+11: - reasoning_trail_chars: 1366
+12: - summary_max_words: 1500
+13: - strategy: mid_workflow_token_budget
+14: - mode: llm
+15: 
+16: 1. Primary Request and Intent:
+17: - Prometheus automated **Brain Dream – Nightly Synthesis** for **2026-07-02** (session `brain_dream_2026-07-02`).
+18: - Multi-phase run (prior `brain_dream_2026-07-01` reported **8 phases executed in order**, no stale proposals, ready for 2026-07-02).
+19: - **0 thoughts** for 2026-07-02 (`Brain/thoughts` search: no `2026-07-02`); run is **episode/gardener/ledger-driven**.
+20: - Intent: load artifacts, synthesize carryover, verify disk state, skill-gardener/curator alignment, proposals, active-work updates—without recapping to user mid-run.
+21: 
+22: 2. Key Technical Concepts:
+23: - **Brain Dream** phases: thoughts → USER/SOUL/MEMORY/BUSINESS → proposals → business-candidates → skill-episodes → skill-gardener live-candidates → `proposals/pending` → `Brain/active-work.jsonl`.
+24: - **Skill bundles** in play: `local-file-browser-verification` (HTTP serve, browser smoke/DOM/console), `file-surgery` v3 (read-before-edit, minimal patch, verify; Prometheus web-ui vanilla JS, `sync:web-ui`).
+25: - **Pocket Zombies / mobile game**: session `mobile_mr2ors69_u35dij`; compressed one-file HTML/JS; camera vs UI drag conflicts; surgical patches broke file—recovery = replace clean known block + browser verify.
+26: - **Ledger**: `Brain/active-work.jsonl` JSONL entries with `status`, `diskPath`, `lastVerified`, `currentState`.
+27: 
+28: 3. Files and Code Sections:
+29: - `Brain/skill-gardener/2026-07-02/live-candidates.jsonl` — exists, **556061 bytes**, **155** lines with `suggestedAction`; dominant session `mobile_mr2ors69_u35dij`.
+30: - `Brain/skill-episodes/2026-07-02/episodes.jsonl` — exists, **426218 bytes**, **110** episodes; skills: `dev-debugging`, `local-file-browser-verification`, `file-surgery`, `secret-and-token-ops`, `codex-frontend-engineer`.
+31: - `Brain/business-candidates/2026-07-02/candidates.jsonl` — **does not exist**.
+32: - `Brain/active-work.jsonl` — **59** entries read in full; grep for `"status":"(in_progress|...)"` returned **0** (literal/regex mismatch—statuses still visible in full read).
+33: - `proposals/pending/` — **34** files; sample `prop_1779598003074_116857.json` (screenshot preview events: `delivery-router.ts`, `delivery-screenshot.ts`, `chat.router.ts`, `web-ui/src/mobile/mobile-pages.js`).
+34: - `audit/chats/transcripts/mobile_mr2ors69_u35dij.md` — creative-projects paths under `creative-projects/mobile_mr2ors69_u35dij/prometheus-creative/...`.
+35: - `Brain/dreams/2026-07-01/23-40-dream.md` — prior dream complete; `21-29-cleanup.md` — USER.md dedupe, file-surgery recovery note revert.
+36: - `audit/chats/transcripts/brain_dream_2026-07-02.md` — current session: “Nightly synthesis for 2026-07-02 — 0 thought(s)”.
+37: - Recovery/compaction storage: `C:\Users\rafel\PromSRC\.prometheus\sessions\brain_dream_2026-07-02.json`, `workspace\audit\chats\transcripts\brain_dream_2026-07-02.md|.jsonl`, compactions under `workspace\audit\chats\compactions\`.
+38: 
+39: 4. Errors, Fixes, and Test Results:
+40: - `workspace_read` on path `"Brain"` → **ERROR: "Brain" is not a file** (need directory listing or specific paths).
+41: - `grep_file` on `live-candidates.jsonl` pattern `create_new_skill_candidate|update_existing_skill|high` → **0 matches**.
+42: - `grep_file` on `active-work.jsonl` status regex → **0 matches** (use full JSONL read or adjusted pattern).
+43: - Large tool outputs truncated to raw refs: `toolobs_mr4drr4z_2a9d45bc.txt`, `toolobs_mr4drr50_216e06e1.txt`, skill_read raw refs.
+44: - **No test/build commands run** in this compaction window; verification pending for game paths and non-resolved ledger items.
+45: 
+46: 5. Problem Solving and Decisions:
+47: - **Decision**: Proceed without thoughts; anchor on **2026-07-02** gardener (155) + episodes (110) + **59** active-work rows.
+48: - **Hypothesis**: Main 2026-07-02 signal = **Pocket Zombies / mobile_mr2ors69** (camera lock, wrong drag targets, HTML monolith patch risk)—aligns with `auto_boot_1783018531291` (Sparky mess, direct rebuild, mobile firing, zombie PNG).
+49: - **Ruled out / not yet done**: Full parse of all 155 gardener `suggestedAction` values; non-resolved ledger filter; read `mobile_mr2ors69` transcript slices; verify `games/mobile-sideways-fps` (active-work line ~57 mentions stalled state, `ZOMBIES_ROADMAP.md`, `ASSET_NOTES.md`).
+50: - **Prior cleanup**: Duplicate file-surgery recovery note deleted; `skill_curator` was unavailable in cleanup session.
+51: - **Skills loaded** for upcoming file/browser work: `file-surgery`, `local-file-browser-verification`.
+52: 
+53: 6. Recent User Messages:
+54: - Synthetic Brain Dream kickoff: **“[Brain Dream] Nightly synthesis for 2026-07-02 — 0 thought(s)”** (no end-user chat in this window).
+55: - Carryover context (from `auto_boot`): Sparky disable/delete, Pocket Zombies rebuild, mobile firing, uploaded zombie sprite.
+56: 
+57: 7. Pending Tasks:
+58: - Complete **Brain Dream phases** not yet executed post-Phase-1 recon (synthesis doc, MEMORY/USER updates if warranted, proposal hygiene, gardener actions, active-work `lastVerified`/status refresh for 2026-07-02).
+59: - **Grep/filter** `active-work.jsonl` for `in_progress`, `stalled`, `drafted` (fix grep or scan full file).
+60: - **Read** targeted `audit/chats/transcripts/mobile_mr2ors69_u35dij.md` (and related 2026-07-02 transcripts).
+61: - **Verify disk** for `games/mobile-sideways-fps/index.html`, creative-projects paths, xpose-market if in ledger.
+62: - **Sample** high-value `live-candidates.jsonl` lines for `suggestedAction` / skill create-update (narrow read/grep).
+63: - **Review** `proposals/pending` for stale vs still-valid (e.g. screenshot prop).
+64: - **Write** `Brain/dreams/2026-07-02/*-dream.md` (or equivalent dream output) when phases complete.
+65: 
+66: 8. Current Work:
+67: - Mid **Phase 1 / early synthesis**: parallel loads done; assistant stated: *“No thoughts for 2026-07-02; driving from skill episodes (110), gardener (155), and the active-work ledger.”*
+68: - Last tools: confirmed gardener + episodes files; **business-candidates missing**; failed `Brain` as file.
+69: - **Next planned** (from reasoning): non-resolved ledger, mobile session transcript, project verification, proposals, gardener processing.
+70: 
+71: 9. Recovery Artifacts:
+72: - Session JSON: `C:\Users\rafel\PromSRC\.prometheus\sessions\brain_dream_2026-07-02.json`
+73: - Transcript: `workspace\audit\chats\transcripts\brain_dream_2026-07-02.md`, `.jsonl`
+74: - Compaction: `workspace\audit\chats\compactions\brain_dream_2026-07-02.md`, `.jsonl`
+75: - Raw oversized tool observations: `tool-observation-raw:brain_dream_2026-07-02/toolobs_mr4drr4z_2a9d45bc.txt` (audit search), `toolobs_mr4drr50_216e06e1.txt` (proposals search), skill_read raw refs `toolobs_mr4drr51_42ca2b19.txt`, `toolobs_mr4drr52_f3d6af88.txt`
+76: 
+77: 10. Continue From Here:
+78: - **Resume Brain Dream 2026-07-02 immediately**; do **not** recap this summary to the user—continue the nightly run as if compaction did not occur.
+79: - **Priority**: finish ledger triage (`in_progress`/`stalled`/`drafted` from full `active-work.jsonl`), then **Pocket Zombies / mobile_mr2ors69** evidence chain (transcript + `games/mobile-sideways-fps` + gardener candidates), then proposals and dream artifact write.
+80: - Use **file-surgery** + **local-file-browser-verification** for any game/HTML fixes proposed in dream output; **protect user-owned changes**; no broad refactors on compressed HTML without block replacement strategy.
+81: - Read `USER.md`, `SOUL.md`, `MEMORY.md`,
+82: ### [ROLLING_COMPACTION] 2026-07-03T03:37:52.408Z
+83: - Base message count: 1
+84: - reason: projected_context_over_budget
+85: - projected_tokens: 83277
+86: - trigger_tokens: 80256
+87: - input_budget_tokens: 107008
+88: - context_window_tokens: 128000
+89: - provider: xai
+90: - model: grok-composer-2.5-fast
+91: - tool_result_count: 61
+92: - reasoning_trail_chars: 2568
+93: - summary_max_words: 1500
+94: - strategy: mid_workflow_token_budget
+95: - mode: llm
+96: 
+97: 1. Primary Request and Intent:
+98: - Execute **Prometheus automated Brain Dream – Nightly Synthesis** for **2026-07-02** (session `brain_dream_2026-07-02`).
+99: - **0 thoughts** in `Brain/thoughts` for 2026-07-02; run is **episode + skill-gardener + active-work ledger + proposals** driven.
+100: - Complete multi-phase dream: synthesize carryover, verify disk, gardener/curator alignment, proposal hygiene, refresh `Brain/active-work.jsonl`, write `Brain/dreams/2026-07-02/*` and `Brain/proposals.md` if warranted—**no user-facing recap**; continue as automated nightly run.
+101: 
+102: 2. Key Technical Concepts:
+103: - **Brain Dream pipeline**: thoughts → USER/SOUL/MEMORY/BUSINESS → proposals → `Brain/business-candidates/{date}` → `Brain/skill-episodes/{date}` → `Brain/skill-gardener/{date}/live-candidates.jsonl` → `proposals/pending` → `Brain/active-work.jsonl` → dream markdown artifacts.
+104: - **2026-07-02 dominant signal**: session `mobile_mr2ors69_u35dij` — Pocket Zombies / mobile FPS: camera lock on first press, drag hits zombies/perks/guns instead of camera; monolithic `games/mobile-sideways-fps/index.html` patch risk.
+105: - **Skills in episodes**: `dev-debugging`, `local-file-browser-verification`, `file-surgery` v3, `secret-and-token-ops`, `codex-frontend-engineer` (110 episodes on 2026-07-02).
+106: - **Ledger statuses**: `in_progress` (15), `drafted` (11), `stalled` (6) — literal grep on `Brain/active-work.jsonl` works (prior regex on `"status":"..."` failed).
+107: - **Prior night**: `Brain/dreams/2026-07-01/23-40-dream.md` no-op; `21-29-cleanup.md` USER dedupe, removed duplicate `file-surgery` recovery notes; `skill_curator` unavailable in cleanup.
+108: 
+109: 3. Files and Code Sections:
+110: - `Brain/skill-gardener/2026-07-02/live-candidates.jsonl` — **556061 B**, **155** lines; sample lines 1–5 all `sessionId: mobile_mr2ors69_u35dij`, `suggestedAction` present; **no** `create_new_skill` / `update_existing_skill` literal matches.
+111: - `Brain/skill-episodes/2026-07-02/episodes.jsonl` — **426218 B**, **110** lines; heavy `mobile_mr2ors69_u35dij` + `mobile_mr355ohw_oj66tk` (secret-and-token-ops).
+112: - `Brain/business-candidates/2026-07-02/candidates.jsonl` — **missing**.
+113: - `Brain/active-work.jsonl` — **59** entries; triage counts: **15** `in_progress`, **11** `drafted`, **6** `stalled`.
+114:   - **Stalled (grep)**: `openai-realtime-codex-oauth-billing-break` (L15); `morning-trading-brief-usage-limit-429-2026-06-26` (L49); `manual-x-post-about-gpt-56-fetch-failed` (L52); `sparky-chat-with-subagent-test-2026-06-28` (L55); `source-edit-proposal-rigor-skill-test-blocked-2026-06-28` (L56); **`pocket-zombies-mobile-fps-build-2026-06-28`** (L57) — `diskPath`: `games/mobile-sideways-fps/index.html`, `ZOMBIES_ROADMAP.md`, `ASSET_NOTES.md`; `lastVerified: 2026-06-28`.
+115: - `games/mobile-sideways-fps/index.html` — **exists**, **80 lines**; `</html>` at **line 79**; head viewport meta lines 1–5 read OK (not full game JS).
+116: - `proposals/pending/` — **34** files (from prior summary); screenshot preview prop sample `prop_1779598003074_116857.json`.
+117: - `Brain/proposals.md` — still **# Brain Proposals - 2026-07-01** recovery stub; points to `Brain/dreams/2026-07-01/23-40-dream.md`.
+118: - `Brain/dreams/2026-07-01/21-29-cleanup.md` — full cleanup record (USER dedupe, file-surgery recovery deletes, curator table).
+119: - `audit/chats/transcripts/brain_dream_2026-07-02.md` — **4 lines** only: user kickoff `[Brain Dream] Nightly synthesis for 2026-07-02 — 0 thought(s)`.
+120: - Compaction/session: `C:\Users\rafel\PromSRC\.prometheus\sessions\brain_dream_2026-07-02.json`; transcripts/compactions under `workspace\audit\chats\`.
+121: 
+122: 4. Errors, Fixes, and Test Results:
+123: - `workspace_read` path `"Brain"` → **not a file** (need file paths or list_directory).
+124: - Early `grep_file` on `active-work.jsonl` with `"status":"(in_progress|...)"` → **0 matches**; **fix**: literal grep `in_progress` / `stalled` / `drafted` → **15 / 6 / 11**.
+125: - `grep_file` on `live-candidates.jsonl` for `create_new_skill_candidate|update_existing_skill|high` → **0**; `update_existing_skill|create_new_skill` → **0**.
+126: - `grep_source` `src/` for `Brain Dream|brain_dream|active-work` → **0**.
+127: - `search_files` `.` `Brain Dream` → **1597** matches (mostly `audit/chats/compactions/*`); **25** returned truncated.
+128: - `list_directory` `.` max_depth=1 → **artifact** `temp/tool-results/1783049857228-brain_dream_2026-07-02-list_directory.txt`.
+129: - **No** `npm test` / browser smoke on game in this window; game file presence only verified.
+130: 
+131: 5. Problem Solving and Decisions:
+132: - **Decision**: Proceed without thoughts; anchor synthesis on **155 gardener + 110 episodes + ledger**; **primary 2026-07-02 thread = Pocket Zombies / mobile_mr2ors69**.
+133: - **Decision**: Refresh `pocket-zombies-mobile-fps-build-2026-06-28` ledger row after re-read transcript + optional `index.html` touch/verify (align with 2026-07-02 gardener noise).
+134: - **Ruled out / pending**: Full parse of all 155 `suggestedAction` values; locate formal **8-phase** Brain Dream spec (`skills/` and `src/` grep empty for phases); read `mobile_mr2ors69_u35dij` transcript slices; proposal stale review; write `Brain/dreams/2026-07-02/*-dream.md`.
+135: - **Hypothesis**: Gardener lines are **captured** duplicates of same user complaint (“camera still wrong”) — need aggregate synthesis not 155 separate actions.
+136: - **Protect**: User-owned game/HTML; use **file-surgery** + **local-file-browser-verification** only if dream recommends fixes; block replacement strategy for monolith.
+137: 
+138: 6. Recent User Messages:
+139: - Synthetic only: **`[Brain Dream] Nightly synthesis for 2026-07-02 — 0 thought(s)`** (`brain_dream_2026-07-02.md`).
+140: 
+141: 7. Pending Tasks:
+142: - Locate Brain Dream **phase checklist** (schedule job / audit prompt / `Brain/` doc — repo search still open).
+143: - **Read** `audit/chats/transcripts/mobile_mr2ors69_u35dij.md` (targeted ranges) + `games/mobile-sideways-fps/ZOMBIES_ROADMAP.md`, `ASSET_NOTES.md`.
+144: - **Sample** gardener JSONL for `suggestedAction` enum values (narrow read line 1 full JSON or jq-style grep).
+145: - **Review** `proposals/pending` for stale vs valid; **do not** auto-apply code_change without proposal path.
+146: - **Write** `Brain/dreams/2026-07-02/*-dream.md` (+ update `Brain/proposals.md` for 2026-07-02).
+147: - **Update** `Brain/active-work.jsonl`: `lastVerified` / `currentState` for 2026-07-02 touch items (especially pocket-zombies, gardener classifier, inspect-console if episodes reference).
+148: - Read **USER.md, SOUL.md, MEMORY.md, BUSINESS.md** if not yet done this run.
+149: - Optional: `business-candidates` absent — note in dream artifact.
+150: 
+151: 8. Current Work:
+152: - Post-compaction **ledger triage complete** via literal greps; **game path verified** (`index.html` 80 lines).
+153: - **Loaded** `21-29-cleanup.md`, `Brain/proposals.md` (stale 2026-07-01), episodes skillId sample (40/110), gardener suggestedAction sample (5/155).
+154: - **Reasoning trail**: next steps were dream spec search, mobile transcript, gardener aggregate, proposals, dream write—**8-phase spec not found in skills/src yet**.
+155: 
+156: 9. Recovery Artifacts:
+157: - Session: `C:\Users\rafel\PromSRC\.prometheus\sessions\brain_dream_2026-07-02.json`
+158: - Transcript: `workspace\audit\chats\transcripts\brain_dream_2026-07-02.md`, `.jsonl`
+159: - Compaction: `workspace\audit\chats\compactions\brain_dream_2026-07-02.md`, `.jsonl`
+160: - List dir overflow: `temp/tool-results/1783049857228-brain_dream_2026-07-02-list_directory.txt`
+161: - Prior raw refs: `tool-observation-raw:brain_dream_2026-07-02/toolobs_mr4dulhb_d4b0c0f2.txt` (active-work grep), `toolobs_mr4drr4z_2a9d45bc.txt`, `toolobs_mr4drr50
+162: ### [ROLLING_COMPACTION] 2026-07-03T03:39:11.936Z
+163: - Base message count: 1
+164: - reason: projected_context_over_budget
+165: - projected_tokens: 82219
+166: - trigger_tokens: 80256
+167: - input_budget_tokens: 107008
+168: - context_window_tokens: 128000
+169: - provider: xai
+170: - model: grok-composer-2.5-fast
+171: - tool_result_count: 94
+172: - reasoning_trail_chars: 4522
+173: - summary_max_words: 1500
+174: - strategy: mid_workflow_token_budget
+175: - mode: llm
+176: 
+177: Continuing Brain Dream 2026-07-02: locating the phase spec, aggregating evidence, and producing artifacts.
+178: 

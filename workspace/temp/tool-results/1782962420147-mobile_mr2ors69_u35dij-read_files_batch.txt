@@ -1,0 +1,88 @@
+games/mobile-sideways-fps/index.html (529 lines) [window 34-53, truncated]:
+34: const ui={start:document.getElementById('start'),startBtn:document.getElementById('startBtn'),left:document.getElementById('leftHud'),mid:document.getElementById('midHud'),right:document.getElementById('rightHud'),msg:document.getElementById('msg'),prompt:document.getElementById('prompt'),knob:document.getElementById('knob')}; const dbg=window.__pocketZombiesDebug||{}; window.__pocketZombiesDebug=dbg;;
+35: const zombieImg=new Image();zombieImg.src='assets/zombie.png';
+36: const gunImg=new Image();gunImg.src='assets/zombie-gun-8bit.png';
+37: const fireGunImg=new Image();fireGunImg.src='assets/zombie-gun-8bit-fire.png';
+38: let W=1,H=1,last=0,raf=0,startClockId=null,audio=false,muted=false;
+39: const TAU=Math.PI*2,FOV=Math.PI/3,keys={},touch={mx:0,my:0,look:0,fire:false};
+40: const shots=[];
+41: const weapons={M1911:{name:'M1911',price:0,dmg:34,rate:.32,mag:8,reserve:48,reload:1.05,spread:.018},SMG:{name:'SMG',price:950,dmg:22,rate:.09,mag:28,reserve:140,reload:1.25,spread:.04},SHOTGUN:{name:'SHOTGUN',price:1250,dmg:92,rate:.72,mag:6,reserve:36,reload:1.45,spread:.085},RIFLE:{name:'RIFLE',price:1800,dmg:58,rate:.18,mag:20,reserve:100,reload:1.35,spread:.012}};
+42: const map0=[
+43: '111111111111111',
+44: '100000010000001',
+45: '100000010000001',
+46: '1000000D0000001',
+47: '100000010000001',
+48: '100000010000001',
+49: '100001000100001',
+50: '100000000000001',
+51: '100000000000001',
+52: '100011101110001',
+53: '100000000000001',
+[READ_TRUNCATED] Use start_line:54, num_lines:80 for the next chunk, or full:true only when needed.
+
+games/mobile-sideways-fps/index.html (529 lines) [window 79-108, truncated]:
+79:  if(state.waveState==='between'){state.betweenTimer-=dt;if(state.betweenTimer<=0){state.wave++;state.waveState='spawning';state.zombiesToSpawn=5+state.wave*2;state.spawnTimer=.5;msg('WAVE '+state.wave,2)}}
+80:  for(const pu of state.powerups){if(Math.hypot(p.x-pu.x,p.y-pu.y)<.7){pickup(pu);pu.dead=true}}state.powerups=state.powerups.filter(p=>!p.dead);
+81: }
+82: function shoot(){
+83:   const w=weapons[state.weapon],am=state.ammo[state.weapon];
+84:   state.gunFlash=.09;
+85:   if(state.reloadTimer>0)return;
+86:   if(am.mag<=0){reload();return}
+87:   am.mag--;state.shots++;
+88:   state.fireCooldown=w.rate*(state.owned.includes('SPEED')?0.78:1);
+89:   shots.push({x:state.player.x+Math.cos(state.player.a)*.35,y:state.player.y+Math.sin(state.player.a)*.35,vx:Math.cos(state.player.a)*18,vy:Math.sin(state.player.a)*18,t:.16});
+90:   beep(180+Math.random()*90,.025);
+91:   let best=null,bang=999;
+92:   for(const z of state.zombies){
+93:     const dx=z.x-state.player.x,dy=z.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+94:     let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+95:     let allowance=w.spread+Math.atan2(.36,dist);
+96:     if(Math.abs(da)<allowance&&dist<9&&Math.abs(da)<bang&&!blocked(state.player.x,state.player.y,z.x,z.y)){best=z;bang=Math.abs(da)}
+97:   }
+98:   if(best){
+99:     let dmg=state.active.insta?999:w.dmg*(Math.random()<.12?2.1:1);
+100:     best.hp-=dmg;best.hurt=.12;
+101:     if(best.hp<=0)kill(best);
+102:   }
+103: }
+104: function kill(z){z.dead=true;state.kills++;state.points+=state.active.double?140:70;if(Math.random()<.16)drop(z.x,z.y);beep(360,.035)}
+105: function reload(){const w=weapons[state.weapon],am=state.ammo[state.weapon];if(am.mag>=w.mag)return msg('MAG FULL',.45);if(am.reserve<=0)return msg('NO AMMO',.45);if(state.reloadTimer>0)return;state.reloadTimer=w.reload*(state.owned.includes('SPEED')?0.55:1);msg('RELOADING',.5)}
+106: function finishReload(){const w=weapons[state.weapon],am=state.ammo[state.weapon],need=w.mag-am.mag,take=Math.min(need,am.reserve);am.mag+=take;am.reserve-=take}
+107: function drop(x,y){const types=['MAX AMMO','INSTA KILL','DOUBLE POINTS','NUKE'];state.powerups.push({x,y,type:types[Math.floor(Math.random()*types.length)],t:9})}function pickup(p){msg(p.type,1.3);beep(650,.08);if(p.type==='MAX AMMO')Object.keys(weapons).forEach(k=>state.ammo[k].reserve=Math.max(state.ammo[k].reserve,weapons[k].reserve));if(p.type==='INSTA KILL')state.active.insta=15;if(p.type==='DOUBLE POINTS')state.active.double=15;if(p.type==='NUKE'){state.zombies.forEach(z=>kill(z));state.points+=400}}
+108: function blocked(x1,y1,x2,y2){const n=24;for(let i=1;i<n;i++){let t=i/n;if(solid(x1+(x2-x1)*t,y1+(y2-y1)*t))return true}return false}
+[READ_TRUNCATED] Use start_line:109, num_lines:80 for the next chunk, or full:true only when needed.
+
+games/mobile-sideways-fps/index.html (529 lines) [window 139-168, truncated]:
+139:   ui.mid.textContent=`${weapons[state.weapon].name} · ${am.mag}/${am.reserve} · $${state.points}${state.reloadTimer>0?' · RELOAD':''}`;
+140:   ui.right.textContent=`HP ${Math.max(0,Math.ceil(state.player.hp))}`;
+141: }
+142: function drawSprite(s,zbuf,cols,cw){
+143:   let dx=s.x-state.player.x,dy=s.y-state.player.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+144:   let da=Math.atan2(Math.sin(ang-state.player.a),Math.cos(ang-state.player.a));
+145:   if(Math.abs(da)>FOV*.72||dist<.15)return;
+146:   const baseScale=s.kind==='z'?1.35:.42;
+147:   let sx=(da/FOV+.5)*W,sz=H/(dist+.05)*baseScale;
+148:   const floorY=H/2+(H/(dist+.05))*.48;
+149:   let sy=s.kind==='z'?floorY-sz:H/2-sz*.55;
+150:   if(zbuf[Math.max(0,Math.min(cols-1,Math.floor(sx/W*cols)))]<dist-.2)return;
+151:   ctx.save();
+152:   ctx.translate(sx,sy+sz/2);
+153:   if(s.kind==='z'){
+154:     let scale=s.variant==='brute'?1.18:(s.variant==='runner'?0.88:1),w=sz*.7*scale,h=sz*1.08*scale;
+155:     ctx.globalAlpha=1;
+156:     if(zombieImg.complete&&zombieImg.naturalWidth){
+157:       ctx.drawImage(zombieImg,-w/2,-h*.58,w,h);
+158:       if(s.hurt){ctx.globalCompositeOperation='source-atop';ctx.fillStyle=`rgba(255,0,0,${Math.min(.75,.25+s.hurt*3)})`;ctx.fillRect(-w/2,-h*.58,w,h);ctx.globalCompositeOperation='source-over'}
+159:     }else{
+160:       ctx.fillStyle=s.hurt?'#ff2020':(s.variant==='brute'?'#6b1b22':s.variant==='runner'?'#407a35':'#2d6b35');ctx.fillRect(-w/2,-h*.5,w,h);ctx.fillStyle=s.hurt?'#ffaaaa':'#151';ctx.fillRect(-w*.28,-h*.7,w*.56,h*.24);ctx.fillStyle='#ffd86b';ctx.fillRect(-w*.18,-h*.64,w*.08,w*.08);ctx.fillRect(w*.1,-h*.64,w*.08,w*.08)
+161:     }
+162:   }else if(s.kind==='p'){
+163:     ctx.fillStyle='#ffd94b';ctx.fillRect(-sz*.28,-sz*.28,sz*.56,sz*.56);ctx.fillStyle='#000';ctx.font=`${Math.max(9,sz*.18)}px sans-serif`;ctx.textAlign='center';ctx.fillText(s.type[0],0,4);
+164:   }else{
+165:     ctx.fillStyle=s.type==='perk'?'#55d6ff':'#e0d07c';ctx.fillRect(-sz*.35,-sz*.35,sz*.7,sz*.7);
+166:   }
+167:   ctx.restore();
+168: }
+[READ_TRUNCATED] Use start_line:169, num_lines:80 for the next chunk, or full:true only when needed.

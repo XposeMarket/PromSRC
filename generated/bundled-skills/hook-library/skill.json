@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "hook-library",
+  "name": "Hook Library",
+  "description": "Curated Prometheus playbook for generating strong social-media hooks, opening lines, captions, short-form video intros, ad hooks, and scroll-stopping first lines matched to platform, content goal, tone, and psychological angle.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "hook",
+    "write hooks",
+    "make this hook better",
+    "opening line",
+    "first line",
+    "caption hook",
+    "social media hook",
+    "TikTok hook",
+    "Reels hook",
+    "Shorts hook",
+    "X post hook",
+    "ad hook",
+    "scroll stopping",
+    "attention grabbing intro",
+    "stronger intro",
+    "better lead",
+    "make this post grab attention",
+    "creator content hook",
+    "viral hook",
+    "multiple hook options"
+  ],
+  "categories": [
+    "copywriting",
+    "social-media",
+    "marketing",
+    "creative"
+  ],
+  "requiredTools": [],
+  "permissions": {
+    "workspaceRead": false,
+    "workspaceWrite": false
+  },
+  "resources": [
+    {
+      "path": "references/workflows/hook-library-2026-06-12.md",
+      "type": "doc",
+      "description": "Add workflow recipe to hook-library"
+    },
+    {
+      "path": "references/workflows/hook-library-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to hook-library"
+    },
+    {
+      "path": "references/workflows/hook-library-2026-06-14.md",
+      "type": "doc",
+      "description": "Add workflow recipe to hook-library"
+    }
+  ]
+}

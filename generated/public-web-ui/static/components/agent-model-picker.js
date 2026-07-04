@@ -38,17 +38,19 @@ const BUILTIN_LABELS = {
 };
 
 const BUILTIN_STATIC_MODELS = {
-  openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai:       ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
-  xai:          ['grok-build-0.1', 'grok-4.3', 'grok-4.20-multi-agent-0309', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning'],
+  xai:          ['grok-build-0.1', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent'],
 };
 
-const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity']);
+const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
 const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
 const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
+const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
 const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 const ANTHROPIC_BUDGETS = [2048, 5000, 10000, 16000, 24000, 32000];
 
@@ -147,16 +149,25 @@ function _modelOptionsHtml(provider, currentModel) {
   return merged.map((m) => `<option value="${escHtml(m)}" ${m===currentModel?'selected':''}>${escHtml(m)}</option>`).join('');
 }
 
-function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
+function _reasoningRowHtml(prefix, agentId, provider, providerConfig, model = '') {
   if (!provider) return '';
   if (REASONING_EFFORT_PROVIDERS.has(provider)) {
-    const opts = provider === 'openai_codex' ? CODEX_EFFORT_OPTIONS : EFFORT_OPTIONS;
+    const opts = provider === 'openai_codex'
+      ? CODEX_EFFORT_OPTIONS
+      : (provider === 'xai'
+        ? (/^grok-4\.20-multi-agent(?:-|$)/i.test(String(model || providerConfig?.model || '').trim()) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS)
+        : EFFORT_OPTIONS);
     const cur = String(providerConfig?.reasoning_effort || '').trim();
+    const labelFor = (o) => {
+      if (!o) return provider === 'xai' ? 'provider default' : '— none —';
+      if (o === 'xhigh') return 'extra high';
+      return o;
+    };
     return `
       <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Reasoning effort</label>
         <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1 1 140px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
-          ${opts.map((o) => `<option value="${o}" ${o===cur?'selected':''}>${o ? escHtml(o) : '— none —'}</option>`).join('')}
+          ${opts.map((o) => `<option value="${o}" ${o===cur?'selected':''}>${escHtml(labelFor(o))}</option>`).join('')}
         </select>
         <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}','${provider}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
       </div>
@@ -240,7 +251,7 @@ export function renderAgentModelPicker(agent, prefix) {
         <button onclick="agentModelPickerClearModel('${prefix}','${escHtml(id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:7px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;flex:0 0 auto">Clear</button>
       </div>
 
-      <div id="${prefix}-reasoning-${escHtml(id)}">${_reasoningRowHtml(prefix, id, provider, providerConfig)}</div>
+      <div id="${prefix}-reasoning-${escHtml(id)}">${_reasoningRowHtml(prefix, id, provider, providerConfig, model)}</div>
     </div>`;
 }
 
@@ -275,7 +286,8 @@ window.agentModelPickerOnProviderChange = function (prefix, agentId) {
   const reasoningEl = document.getElementById(`${prefix}-reasoning-${agentId}`);
   if (reasoningEl) {
     const llm = _llmCache || { providers: {} };
-    reasoningEl.innerHTML = _reasoningRowHtml(prefix, agentId, provider, (llm.providers || {})[provider] || {});
+    const modelEl = document.getElementById(`${prefix}-model-${agentId}`);
+    reasoningEl.innerHTML = _reasoningRowHtml(prefix, agentId, provider, (llm.providers || {})[provider] || {}, modelEl?.value || '');
   }
 };
 

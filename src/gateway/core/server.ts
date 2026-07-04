@@ -339,18 +339,19 @@ export function createServer(
 ): ServerBundle {
   const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
     const isStreamingRequest = isStreamingHttpRequest(req);
+    if (!isStreamingRequest) {
+      res.shouldKeepAlive = false;
+      res.setHeader('Connection', 'close');
+    }
     const destroyRequestSocket = () => {
       if (isStreamingRequest) return;
       setImmediate(() => {
         if (req.socket.destroyed) return;
-        if (req.socket.readableEnded || req.socket.writableEnded) {
-          try { req.socket.destroy(); } catch {}
-        }
+        try { req.socket.destroy(); } catch {}
       });
     };
-    req.on('aborted', destroyRequestSocket);
     req.on('error', destroyRequestSocket);
-    res.on('close', destroyRequestSocket);
+    res.on('finish', destroyRequestSocket);
     if (tryRawGatewayFastPath(req, res)) return;
     if (!tlsOptions && tryHttpsRedirect(req, res, redirectHttpsPort)) return;
     if (tryRawWebStaticFastPath(req, res)) return;

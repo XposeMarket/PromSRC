@@ -63,15 +63,18 @@ const DREAM_RETRY_BACKOFF_MS   = 60 * 60 * 1000;    // wait 60m after a failed a
 const PRIVATE_BRAIN_SOURCE_TOOL_NAMES = new Set([
   'list_source',
   'source_stats',
+  'validate_source',
   'read_source',
   'read_dev_sources',
   'apply_dev_source_patchset',
   'grep_source',
   'list_prom',
   'prom_file_stats',
+  'validate_prom_file',
   'read_prom_file',
   'grep_prom',
   'webui_source_stats',
+  'validate_webui_source',
   'read_webui_source',
   'grep_webui_source',
 ]);
@@ -122,7 +125,7 @@ Do not inspect internal Prometheus implementation files, bundled dev tools, or s
   }
 
   return `You also have prom-root read tools tonight. Use them when the best evidence lives outside plain workspace surfaces:
-- list_prom / read_prom_file / grep_prom for scripts/, electron/, .prometheus/, root docs, and allowlisted project-root files
+- list_prom / read_prom_file / validate_prom_file / grep_prom for scripts/, electron/, .prometheus/, root docs, and allowlisted project-root files
 - read_source / grep_source for src/
 - read_webui_source / grep_webui_source for web-ui/`;
 }
@@ -237,9 +240,9 @@ Source-code proposal rules:
 - Before calling write_proposal for src_edit, inspect current code with the source tools:
   - Use grep_source or list_source to locate relevant files when the path is uncertain
   - Use source_stats before reading large or unfamiliar files
-  - Prefer read_dev_sources to inspect every affected src/ or web-ui/ file in one batch; use read_source/read_webui_source only for one-off emergency reads
+  - Prefer read_dev_sources to inspect every affected src/ or web-ui/ file in one batch; use read_source/read_webui_source only for one-off emergency reads; use validate_source/validate_webui_source when syntax is part of the risk
   - Cite the functions, classes, handlers, constants, or line ranges you inspected
-- For web-ui code, use webui_source_stats, read_dev_sources, read_webui_source, and grep_webui_source
+- For web-ui code, use webui_source_stats, read_dev_sources, read_webui_source, validate_webui_source, and grep_webui_source
 - Do not create automatic code_change proposals for scripts/, electron/, .prometheus/, dist/, build/, or other project-root paths. Defer them or use a non-code action/review proposal unless the user explicitly asks for that broader manual work.
 - Do not rely only on thought summaries for source-edit proposals; base them on actual current files
 - Any proposal touching src/ or web-ui/ must include these exact markdown headings in details:

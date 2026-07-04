@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "deal-analyzer",
+  "name": "deal-analyzer",
+  "description": "Use this skill when the user asks to analyze a deal, term sheet, acquisition offer, partnership agreement, commercial contract, investment terms, cap table dilution, liquidation preferences, due diligence, LOI, or negotiation leverage. Triggers on phrases like is this a good deal, what should I negotiate, review this term sheet, deal red flags, acquisition offer, partnership agreement, vendor agreement, investment terms, M&A, due diligence, and liquidation waterfall. Use it to classify the deal, surface economic/control risks, identify red flags, and produce negotiation priorities.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "deal analysis",
+    "term sheet",
+    "acquisition offer",
+    "partnership agreement",
+    "deal structure",
+    "investment terms",
+    "red flags",
+    "letter of intent",
+    "loi",
+    "due diligence",
+    "deal review",
+    "commercial contract",
+    "vendor agreement",
+    "cap table",
+    "dilution",
+    "liquidation preference",
+    "anti-dilution",
+    "m&a",
+    "is this a good deal",
+    "what should i negotiate"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/workflows/deal-analyzer-2026-06-13.md",
+      "type": "doc",
+      "description": "Add workflow recipe to deal-analyzer"
+    }
+  ]
+}

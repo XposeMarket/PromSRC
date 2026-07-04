@@ -7,7 +7,7 @@ import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
-  renderCreativePage, renderSubagentsPage, renderSubagentDetailPage,
+  renderHubPage, renderSubagentsPage, renderSubagentDetailPage,
 } from './mobile-pages.js?v=slash-command-style-align-v1';
 import {
   getDeviceToken,
@@ -81,9 +81,10 @@ function normalizeMobileRouteParts(parts) {
     proposal: 'proposals',
     prop: 'proposals',
     approvals: 'proposals',
+    creative: 'hub',
   };
   page = aliases[page] || page;
-  if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'creative', 'subagents', 'proposals', 'more', 'pair'].includes(page)) {
+  if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'hub', 'subagents', 'proposals', 'more', 'pair'].includes(page)) {
     extra = [arg, ...extra].filter(Boolean);
     arg = page || null;
     page = 'chat';
@@ -172,7 +173,7 @@ function closeMobileSettings() {
 }
 
 const TAB_FOR_PAGE = {
-  chat: 'chat', voice: 'voice', tasks: 'tasks', creative: 'creative',
+  chat: 'chat', voice: 'voice', tasks: 'tasks', hub: 'hub',
   schedule: null, teams: null, subagents: null, proposals: null, settings: null, more: null,
 };
 
@@ -305,7 +306,7 @@ function render() {
       renderChatPage(slot, { navigate: mobileNavigate, sessionId: null });
       openMobileSettings(arg || undefined);
       return;
-    case 'creative':  return renderCreativePage(slot, { navigate: mobileNavigate });
+    case 'hub':       return renderHubPage(slot, { navigate: mobileNavigate });
     case 'subagents':
       if (arg) return renderSubagentDetailPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return renderSubagentsPage(slot, { navigate: mobileNavigate });

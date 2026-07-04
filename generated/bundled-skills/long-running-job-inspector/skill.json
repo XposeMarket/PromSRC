@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "long-running-job-inspector",
+  "name": "Long-Running Job Inspector",
+  "description": "Inspect, summarize, cancel, retry, and recover Prometheus background tasks, scheduled jobs, process runs, approvals, and stalled executions.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["job inspector", "what is running", "stuck task", "long running job", "cancel task", "process log"],
+  "categories": ["prometheus", "tasks", "processes", "operations"],
+  "requiredTools": ["automations", "workspace_write"],
+  "permissions": { "workspaceRead": true, "workspaceWrite": true, "shell": true }
+}

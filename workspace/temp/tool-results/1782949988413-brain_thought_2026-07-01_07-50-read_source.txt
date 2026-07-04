@@ -1,0 +1,242 @@
+src/gateway/routes/canvas.router.ts (7801 lines) [window 7300-7539, truncated]:
+7300:       storageRoot: storage.rootAbsPath,
+7301:       storageRootRelative: storage.rootRelPath,
+7302:       usesProjectRoot: storage.usesProjectRoot,
+7303:     });
+7304:   } catch (err: any) {
+7305:     const message = String(err?.message || 'Could not save layer assets');
+7306:     const status = /outside workspace|allowed|escaped/i.test(message) ? 403 : 500;
+7307:     res.status(status).json({ success: false, error: message });
+7308:   }
+7309: });
+7310: 
+7311: // GET /api/creative-mode?sessionId=<id>
+7312: router.get('/api/creative-mode', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+7313:   const sessionId = String(req.query?.sessionId || 'default');
+7314:   res.json({ success: true, sessionId, creativeMode: getCreativeMode(sessionId) || null });
+7315: });
+7316: 
+7317: // POST /api/creative-mode  body: { sessionId, mode }
+7318: router.post('/api/creative-mode', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+7319:   const sessionId = String(req.body?.sessionId || 'default');
+7320:   const mode = normalizeCreativeMode(req.body?.mode);
+7321:   const creativeMode = setCreativeMode(sessionId, mode);
+7322:   _broadcastWS({ type: 'creative_mode_changed', sessionId, creativeMode });
+7323:   res.json({ success: true, sessionId, creativeMode });
+7324: });
+7325: 
+7326: // ─────────────────────────────────────────────────────────────────────────
+7327: // HyperFrames bridge routes (Session A + C)
+7328: // ─────────────────────────────────────────────────────────────────────────
+7329: 
+7330: // POST /api/canvas/hyperframes/extract-layers  body: { html }
+7331: // Returns Prometheus-shaped layer records the canvas can show in the layers
+7332: // panel. Each layer carries a HyperFrames elementId so inspector edits can
+7333: // round-trip through /apply-patch.
+7334: router.post('/api/canvas/hyperframes/extract-layers', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7335:   try {
+7336:     const html = String(req.body?.html || '');
+7337:     if (!html.trim()) {
+7338:       res.status(400).json({ success: false, error: 'html is required' });
+7339:       return;
+7340:     }
+7341:     const extraction = getHyperframesBridge().extractHyperframesLayers(html);
+7342:     res.json({ success: true, ...extraction });
+7343:   } catch (err: any) {
+7344:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7345:   }
+7346: });
+7347: 
+7348: // POST /api/canvas/hyperframes/apply-patch  body: { html, ops: HyperframesPatchOp[] }
+7349: // Returns the patched HTML plus a freshly extracted layer set so the canvas
+7350: // can re-render the inspector without round-tripping through extract-layers.
+7351: router.post('/api/canvas/hyperframes/apply-patch', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7352:   try {
+7353:     const html = String(req.body?.html || '');
+7354:     const opsInput = Array.isArray(req.body?.ops) ? req.body.ops : [];
+7355:     if (!html.trim()) {
+7356:       res.status(400).json({ success: false, error: 'html is required' });
+7357:       return;
+7358:     }
+7359:     const ops = opsInput as HyperframesPatchOp[];
+7360:     const result = getHyperframesBridge().applyHyperframesPatch(html, ops);
+7361:     const extraction = getHyperframesBridge().extractHyperframesLayers(result.html);
+7362:     res.json({
+7363:       success: true,
+7364:       html: result.html,
+7365:       warnings: result.warnings,
+7366:       layers: extraction.layers,
+7367:       tracks: extraction.tracks,
+7368:       compositionId: extraction.compositionId,
+7369:       durationMs: extraction.durationMs,
+7370:       variables: extraction.variables,
+7371:       slots: extraction.slots,
+7372:       variableBindings: extraction.variableBindings,
+7373:       advancedBlock: extraction.advancedBlock,
+7374:     });
+7375:   } catch (err: any) {
+7376:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7377:   }
+7378: });
+7379: 
+7380: function getHyperframesStudioDistDir(): string {
+7381:   const candidates = [
+7382:     path.resolve(getWorkspaceRoot(), 'node_modules', '@hyperframes', 'studio', 'dist'),
+7383:     path.resolve(process.cwd(), 'node_modules', '@hyperframes', 'studio', 'dist'),
+7384:     path.resolve(__dirname, '../../../node_modules/@hyperframes/studio/dist'),
+7385:   ];
+7386:   const found = candidates.find((candidate) => fs.existsSync(path.join(candidate, 'index.html')));
+7387:   if (!found) throw new Error('@hyperframes/studio dist/index.html was not found. Run npm install after upgrading HyperFrames packages.');
+7388:   return found;
+7389: }
+7390: 
+7391: function injectPrometheusStudioBridge(html: string): string {
+7392:   const bridge = `<script>
+7393: (function(){
+7394:   window.__PROMETHEUS_HYPERFRAMES_STUDIO__ = true;
+7395:   window.addEventListener('message', function(event){
+7396:     var data = event && event.data || {};
+7397:     if (!data || data.source !== 'prometheus-hyperframes-studio-parent') return;
+7398:     if (data.type === 'load-html') {
+7399:       window.__PROMETHEUS_INITIAL_HYPERFRAMES_HTML__ = String(data.html || '');
+7400:       window.dispatchEvent(new CustomEvent('prometheus-hyperframes-load-html', { detail: { html: window.__PROMETHEUS_INITIAL_HYPERFRAMES_HTML__ } }));
+7401:     }
+7402:   });
+7403:   window.parent && window.parent.postMessage({ source:'prometheus-hyperframes-studio', type:'ready' }, '*');
+7404: })();
+7405: </script>`;
+7406:   if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${bridge}</head>`);
+7407:   return `${bridge}${html}`;
+7408: }
+7409: 
+7410: // GET /api/canvas/hyperframes/studio/*
+7411: // Serves the bundled @hyperframes/studio static app so Prometheus can embed the
+7412: // real HyperFrames editor surface beside its existing canvas/timeline UX.
+7413: router.get('/api/canvas/hyperframes/studio', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+7414:   try {
+7415:     const indexPath = path.join(getHyperframesStudioDistDir(), 'index.html');
+7416:     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+7417:     res.send(injectPrometheusStudioBridge(fs.readFileSync(indexPath, 'utf-8')));
+7418:   } catch (err: any) {
+7419:     res.status(500).send(String(err?.message || 'Could not serve HyperFrames Studio.'));
+7420:   }
+7421: });
+7422: 
+7423: router.get('/api/canvas/hyperframes/studio/*', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+7424:   try {
+7425:     const studioDir = getHyperframesStudioDistDir();
+7426:     const requested = String(req.params?.[0] || 'index.html').replace(/\\/g, '/');
+7427:     const target = path.resolve(studioDir, requested || 'index.html');
+7428:     if (!isPathInside(studioDir, target) || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
+7429:       res.status(404).send('HyperFrames Studio asset not found.');
+7430:       return;
+7431:     }
+7432:     if (path.basename(target).toLowerCase() === 'index.html') {
+7433:       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+7434:       res.send(injectPrometheusStudioBridge(fs.readFileSync(target, 'utf-8')));
+7435:       return;
+7436:     }
+7437:     res.setHeader('Cache-Control', 'no-store');
+7438:     res.sendFile(target);
+7439:   } catch (err: any) {
+7440:     res.status(500).send(String(err?.message || 'Could not serve HyperFrames Studio asset.'));
+7441:   }
+7442: });
+7443: 
+7444: // POST /api/canvas/hyperframes/parse  body: { html }
+7445: // Lightweight inspection: composition metadata + element count. Used by the
+7446: // canvas to decide whether an HTML blob is a HyperFrames composition before
+7447: // instantiating an iframe clip.
+7448: router.post('/api/canvas/hyperframes/parse', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7449:   try {
+7450:     const html = String(req.body?.html || '');
+7451:     if (!html.trim()) {
+7452:       res.status(400).json({ success: false, error: 'html is required' });
+7453:       return;
+7454:     }
+7455:     const { parsed, metadata } = getHyperframesBridge().parseHyperframesHtml(html);
+7456:     res.json({
+7457:       success: true,
+7458:       compositionId: metadata.compositionId,
+7459:       compositionDurationMs: typeof metadata.compositionDuration === 'number'
+7460:         ? Math.round(metadata.compositionDuration * 1000)
+7461:         : null,
+7462:       variables: metadata.variables,
+7463:       elementCount: parsed.elements.length,
+7464:       resolution: parsed.resolution,
+7465:     });
+7466:   } catch (err: any) {
+7467:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7468:   }
+7469: });
+7470: 
+7471: // POST /api/canvas/hyperframes/preview-html  body: { html }
+7472: // Returns the iframe-ready HTML: input HTML normalized for HF, with the
+7473: // official runtime IIFE inlined. The web-ui drops this into the iframe's
+7474: // srcdoc so the picker + seek + playback bridge work out of the box.
+7475: router.post('/api/canvas/hyperframes/preview-html', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7476:   try {
+7477:     const html = String(req.body?.html || '');
+7478:     if (!html.trim()) {
+7479:       res.status(400).json({ success: false, error: 'html is required' });
+7480:       return;
+7481:     }
+7482:     res.json({
+7483:       success: true,
+7484:       previewHtml: getHyperframesBridge().wrapForIframePreview(html),
+7485:       normalizedHtml: getHyperframesBridge().normalizeForHyperframes(html),
+7486:     });
+7487:   } catch (err: any) {
+7488:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7489:   }
+7490: });
+7491: 
+7492: // POST /api/canvas/hyperframes/lint  body: { html }
+7493: router.post('/api/canvas/hyperframes/lint', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7494:   try {
+7495:     const html = String(req.body?.html || '');
+7496:     if (!html.trim()) {
+7497:       res.status(400).json({ success: false, error: 'html is required' });
+7498:       return;
+7499:     }
+7500:     res.json({ success: true, lint: getHyperframesBridge().lintHyperframes(html) });
+7501:   } catch (err: any) {
+7502:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7503:   }
+7504: });
+7505: 
+7506: // GET /api/canvas/hyperframes/catalog?query=&kind=&tag=
+7507: router.get('/api/canvas/hyperframes/catalog', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+7508:   try {
+7509:     const items = getHyperframesCatalog().listHyperframesCatalogItems({
+7510:       query: req.query?.query ? String(req.query.query) : undefined,
+7511:       kind: req.query?.kind ? String(req.query.kind) : undefined,
+7512:       tag: req.query?.tag ? String(req.query.tag) : undefined,
+7513:     });
+7514:     res.json({ success: true, items });
+7515:   } catch (err: any) {
+7516:     res.status(500).json({ success: false, error: err?.message || String(err) });
+7517:   }
+7518: });
+7519: 
+7520: // POST /api/canvas/hyperframes/qa  body: { html, width?, height?, durationMs?, samplePoints? }
+7521: // Headlessly drives the seek protocol and captures screenshots at start/mid/end
+7522: // (plus any explicit timestamps). Returns paths + a verification report.
+7523: router.post('/api/canvas/hyperframes/qa', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+7524:   try {
+7525:     const html = String(req.body?.html || '');
+7526:     if (!html.trim()) {
+7527:       res.status(400).json({ success: false, error: 'html is required' });
+7528:       return;
+7529:     }
+7530:     const report = await getHyperframesQa().runHyperframesQa(html, {
+7531:       width: Number(req.body?.width) || undefined,
+7532:       height: Number(req.body?.height) || undefined,
+7533:       durationMs: Number(req.body?.durationMs) || undefined,
+7534:       samplePoints: Array.isArray(req.body?.samplePoints) ? req.body.samplePoints.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)) : undefined,
+7535:       timeoutMs: Number(req.body?.timeoutMs) || undefined,
+7536:     });
+7537:     res.json({ success: true, report });
+7538:   } catch (err: any) {
+7539:     res.status(500).json({ success: false, error: err?.message || String(err) });
+[READ_TRUNCATED] Returned 240 of 7801 lines. Use start_line:7540, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

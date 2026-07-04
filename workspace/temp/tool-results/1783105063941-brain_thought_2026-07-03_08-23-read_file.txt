@@ -1,0 +1,183 @@
+skills/file-surgery/SKILL.md (486 lines) [window 1-180, truncated]:
+1: ---
+2: name: File Surgery
+3: description: >
+4:   Codex-style file editing and cautious engineering playbook for workspace files, markdown, configs, skills, docs, scripts, UI files, and source-adjacent assets. Use this before any file mutation when the user asks to edit this file, fix this bug, implement a feature, refactor, update UI, patch the repo, change Prometheus source code, self-edit Prometheus, run tests, make this work, update a skill, rewrite config, add/remove sections, inspect code before editing, or verify a file edit. This skill forces repo-grounded inspection, short planning, smallest correct patches, verification, repair loops, git hygiene, and honest reporting.
+5: emoji: "🧩"
+6: version: 3.0.0
+7: triggers: update file, edit file, patch file, file edit, file surgery, edit markdown, update skill, patch skill, replace lines, add section, remove section, fix config, rewrite document, verify file edit, clean up file, careful code edit, inspect before editing, verify build, edit this file, fix this bug, implement this feature, refactor this, update the UI, patch the repo, change Prometheus source code, self-edit Prometheus, run tests, make this work, src, web-ui, generated, package.json, tsconfig, server files, routes, tools, agents, skills, connectors, Prometheus internal code
+8: ---
+9: 
+10: # File Surgery Playbook
+11: 
+12: Use this when Prometheus needs to inspect, modify, or verify workspace files safely.
+13: 
+14: When the request is about code, UI, repo behavior, tests, builds, Prometheus internals, or anything under `src/`, `web-ui/`, `generated/`, `package.json`, `tsconfig*`, routes, tools, agents, skills, or connectors, treat it as an engineering task, not a chat task.
+15: 
+16: ## Codex-Style Engineering Mode
+17: 
+18: You are in Codex-style engineering mode.
+19: 
+20: Your job is not to describe how to change the code. Your job is to inspect the repo, make the smallest correct patch, verify it, repair failures, and report exactly what changed. Do not guess the codebase structure. Read files first. Do not introduce new frameworks, build steps, dependencies, or architecture unless explicitly requested. Preserve existing behavior unless the user asked to change it.
+21: 
+22: Non-negotiables:
+23: 
+24: - Read before editing.
+25: - Trust repo files over memory, user descriptions, and previous plans.
+26: - Never invent paths, scripts, APIs, or architecture.
+27: - Make minimal patches and preserve unrelated behavior.
+28: - Do not reformat unrelated files.
+29: - Run relevant verification after meaningful edits.
+30: - Repair patch-caused failures.
+31: - Never claim success without evidence.
+32: - Never commit or push unless the user explicitly asks.
+33: 
+34: Source of truth rule:
+35: 
+36: - The current repo/files are the source of truth.
+37: - User descriptions are intent, not implementation truth.
+38: - If memory conflicts with files, trust files.
+39: - If a previous plan conflicts with files, trust files.
+40: - In EDIT mode, base changes strictly on the latest provided project files and keep everything else 1:1 identical.
+41: 
+42: Core loop:
+43: 
+44: **STAT → READ/SEARCH → RISK CHECK → PLAN → EDIT → VERIFY → REPORT**
+45: 
+46: Skipping any step is how files get corrupted, duplicated, partially overwritten, edited with stale assumptions, or changed without enough proof that the patch is correct.
+47: 
+48: ---
+49: 
+50: ## Hard Routing Rule
+51: 
+52: For workspace files, use the native file tools. Do **not** use `run_command`, PowerShell, Python, Node one-liners, `sed`, or shell redirection for file inspection or editing when file tools can do the job.
+53: 
+54: Use shell only for actual process execution, builds, tests, git operations, or a transformation the native file tools genuinely cannot perform.
+55: 
+56: ---
+57: 
+58: ## Coding Ops Addendum
+59: 
+60: When the file change affects code, scripts, routes, prompts, generated artifacts, or behavior-bearing config, add these constraints to the core loop:
+61: 
+62: - Before editing, inspect the smallest sufficient set of files to understand the existing pattern. Prefer reading nearby files over inventing structure. If the target file is large, locate relevant functions/classes first, then read focused ranges.
+63: - Inspect relevant imports/exports, callers/callees, package scripts, neighboring modules/components, current git status/diff when available, and existing tests/smoke scripts.
+64: - Produce a short plan before patching: files likely to change, why those files, verification commands, and risky/rollback areas. Keep it to 3-5 bullets for small tasks.
+65: - Understand the current flow before changing it. Read the caller, callee, nearby types/contracts, and at least one representative use site.
+66: - Preserve user work. Check current file state and, when available, git status/diff before touching files that may already be modified.
+67: - Prefer the smallest behaviorally complete patch. Avoid drive-by refactors, formatting churn, dependency swaps, and broad rewrites unless they are necessary to solve the requested problem.
+68: - Match local patterns. Use existing helpers, naming, error handling, logging style, validation conventions, and test structure.
+69: - Keep generated and source copies in sync only when this repo's structure clearly expects both. If unsure, inspect build/copy scripts before editing both.
+70: - Verify at the right level: syntax/parse checks for data files, targeted unit checks for isolated logic, build/typecheck for TypeScript changes, and runtime/browser checks for UI behavior.
+71: - Report any verification you could not run and why. Do not imply safety that was not actually checked.
+72: 
+73: Escalate or pause before editing when the requested change is ambiguous, touches secrets/auth/payment/destructive data paths, requires deleting user work, or would change broad architecture without an explicit request.
+74: 
+75: ### Prometheus Repo Facts to Preserve
+76: 
+77: - Prometheus web UI is currently a static vanilla JS app, not React.
+78: - Do not introduce React, JSX, Tailwind, Next routing, or a new build step unless Raul explicitly requests it.
+79: - Prefer vanilla JS ES modules for current `web-ui` work.
+80: - Desktop page switching uses `setMode()` in `web-ui/src/app.js`.
+81: - Static assets are served through Express routes in `src/gateway/core/app.ts`.
+82: - For `web-ui/src/**` or mobile edits, edit source first and run `npm run sync:web-ui`; do not hand-edit `generated/public-web-ui/**` except for emergency verification.
+83: - For backend/gateway `src/**`, run `npm run build:backend` or `npm run build` before expecting the running gateway to see changes.
+84: - In dev/server mode after source, web UI, or mobile edits, prefer `prom_apply_dev_changes` with accurate `changed_surfaces` when that tool is available; it handles sync/build/restart/reload consistently.
+85: 
+86: ### Dependency and Architecture Discipline
+87: 
+88: - Do not add dependencies unless required.
+89: - Before adding a dependency, check whether an existing dependency already solves it, explain why it is needed, update package files consistently, and verify install/build impact.
+90: - No new frontend framework, React/Tailwind/JSX, build pipeline, or CDN dependency unless explicitly approved.
+91: - Do not migrate architecture unless the task is explicitly a migration.
+92: - Do not replace the existing app shell, routing, state model, or styling system.
+93: - Fit the requested feature into the existing architecture.
+94: 
+95: ### Risk Routing
+96: 
+97: - Small edit: <=80 changed lines, <=2 files, non-critical UI/text behavior. Patch directly, then verify.
+98: - Medium edit: 3-6 files or an architectural touchpoint. Patch, verify, and ask for or run secondary review before final when available.
+99: - Large/risky edit: core runtime, tool execution, scheduler, memory, auth, filesystem, shell commands, browser/desktop control, credentials, or self-modifying Prometheus internals. Create a plan first, inspect related tests/logging/audit paths, get secondary critique when available, patch, verify, then final review.
+100: 
+101: When editing Prometheus itself:
+102: 
+103: - Do not modify safety, approval, filesystem, shell, browser, or credential-handling code without explicit user intent.
+104: - Never weaken approval gates.
+105: - Never broaden filesystem access silently.
+106: - Never store secrets in source files.
+107: - Never log credentials, tokens, cookies, OAuth codes, or API keys.
+108: - Never remove audit logging unless explicitly requested and reviewed.
+109: 
+110: ---
+111: 
+112: ## Tool Map
+113: 
+114: | Job | Use |
+115: |---|---|
+116: | Check size/line count before reading | `file_stats(filename)` |
+117: | Read exact line-numbered content | `read_file(filename, start_line?, num_lines?)` |
+118: | Find text in one file | `grep_file(filename, pattern, context_lines?)` |
+119: | Search across files | `search_files(directory, pattern, file_glob?, context_lines?)` |
+120: | Replace exact known text | `find_replace(filename, find, replace, replace_all?)` |
+121: | Replace a known line range | `replace_lines(filename, start_line, end_line, new_content)` |
+122: | Insert content after a line | `insert_after(filename, after_line, content)` |
+123: | Delete a known line range | `delete_lines(filename, start_line, end_line)` |
+124: | Create a brand-new file | `create_file(filename, content)` |
+125: | Full rewrite / create-or-overwrite | `write_file(filename, content)` |
+126: | Rename or move | `rename_file(old_path, new_path)` |
+127: | Make directories | `mkdir(path)` |
+128: | List directories | `list_directory(path, max_depth?, max_entries?)` |
+129: 
+130: For `src/`, `web-ui/`, or Prometheus root source surfaces, use the source approval route instead of casual workspace edits. For small dev edits, `request_dev_source_edit` normally needs only exact files and a short reason; use a full proposal for broad/risky changes. Never directly mutate `src/` from main chat unless running inside an approved proposal/code-execution context with the source-write tools.
+131: 
+132: ---
+133: 
+134: ## The Seven-Step Loop
+135: 
+136: ### Step 1: STAT
+137: 
+138: Unknown file? Get metadata first.
+139: 
+140: ```json
+141: file_stats({ "filename": "skills/example/SKILL.md" })
+142: ```
+143: 
+144: Use this to learn whether the file fits in one read or needs windowed reads.
+145: 
+146: ### Step 2: READ or SEARCH
+147: 
+148: Always inspect the real current content before editing.
+149: 
+150: ```json
+151: read_file({ "filename": "skills/example/SKILL.md" })
+152: ```
+153: 
+154: For targeted changes, search first:
+155: 
+156: ```json
+157: grep_file({ "filename": "skills/example/SKILL.md", "pattern": "version:", "context_lines": 3 })
+158: ```
+159: 
+160: For unknown locations:
+161: 
+162: ```json
+163: search_files({ "directory": "skills", "pattern": "old phrase", "file_glob": "*.md", "context_lines": 2 })
+164: ```
+165: 
+166: **Never edit from memory or from a prior conversation. Re-read if there is any doubt.**
+167: 
+168: ### Step 3: RISK CHECK
+169: 
+170: Before planning the mutation, classify the edit:
+171: 
+172: - Low risk: docs wording, unique text replacement, isolated markdown section.
+173: - Medium risk: JSON/YAML/config, scripts, generated assets, duplicated source/workspace copies.
+174: - High risk: `src/`, `web-ui/`, auth/secrets, migrations, scheduling, persistence, external APIs, or anything that can delete/overwrite data.
+175: 
+176: For medium/high-risk changes, inspect related files and decide the minimum viable verification before editing. If the edit is high-risk and the user request is vague, ask one concise clarifying question or state the conservative assumption before proceeding.
+177: 
+178: If the patch touches more than 3 files, more than 150 lines, core agent/tool execution code, auth/security/payment/connectors, shell/filesystem/browser/desktop permissions, memory/scheduler, or self-modifying Prometheus internals, trigger secondary review before finalizing when available.
+179: 
+180: ### Step 4: PLAN the edit
+[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.
+[READ_TRUNCATED] Returned 180 of 486 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

@@ -1,6 +1,6 @@
 import { ToolResult } from '../types.js';
 import { shellTool } from './shell.js';
-import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool, readFilesBatchTool, applyWorkspacePatchsetTool, fileTreeTool } from './files.js';
+import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool, validateFileSyntaxTool, readFilesBatchTool, applyWorkspacePatchsetTool, fileTreeTool } from './files.js';
 import { webSearchTool, webSearchSingleTool, webSearchMultiTool, webFetchTool, webFetchBatchTool, shoppingSearchProductsTool } from './web.js';
 import { allSkillTools } from './skills.js';
 import { timeNowTool } from './time.js';
@@ -263,6 +263,7 @@ class ToolRegistry {
     this.registerSafe(grepFileTool);
     this.registerSafe(searchFilesTool);
     this.registerSafe(fileStatsTool);
+    this.registerSafe(validateFileSyntaxTool);
     this.registerSafe(readFilesBatchTool);
     this.registerSafe(applyWorkspacePatchsetTool);
     this.registerSafe(fileTreeTool);

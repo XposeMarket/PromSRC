@@ -14,12 +14,17 @@
       "modelsPath": "/models",
       "staticModels": [
         "grok-build-0.1",
+        "grok-composer-2.5-fast",
         "grok-4.3",
-        "grok-4.20-multi-agent-0309",
+        "grok-4.3-latest",
+        "grok-latest",
         "grok-4.20-0309-reasoning",
-        "grok-4.20-0309-non-reasoning"
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-multi-agent-0309",
+        "grok-4.20-multi-agent"
       ],
-      "supportsLiveModelDiscovery": true
+      "supportsLiveModelDiscovery": true,
+      "supportsReasoningEffort": true
     }
   },
   "ui": {
@@ -61,6 +66,14 @@
         "placeholder": "grok-4.3"
       },
       {
+        "key": "reasoning_effort",
+        "label": "Reasoning Effort",
+        "input": "select",
+        "options": ["", "none", "low", "medium", "high", "xhigh"],
+        "required": false,
+        "help": "Blank uses xAI default. Sent only for effort-capable Grok chat models such as grok-4.3 and grok-4.20-multi-agent; unsupported models omit it to avoid xAI request errors."
+      },
+      {
         "key": "endpoint",
         "label": "Endpoint Override",
         "input": "text",
@@ -72,13 +85,15 @@
     "defaults": {
       "endpoint": "https://api.x.ai/v1",
       "auth_mode": "api_key",
-      "model": "grok-4.3"
+      "model": "grok-4.3",
+      "reasoning_effort": ""
     },
     "schema": {
       "auth_mode": "string",
       "api_key": "string",
       "endpoint": "string?",
-      "model": "string"
+      "model": "string",
+      "reasoning_effort": "string?"
     }
   }
 }

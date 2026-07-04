@@ -1,0 +1,98 @@
+self/index.md (71 lines) [window 1-30, truncated]:
+1: # SELF — Prometheus Self-Reference (Split Index)
+2: 
+3: Last verified against `src/`, `web-ui/`, route/tool definitions, batch read/patchset file tools, web search/fetch/batch-fetch tool definitions, dev-source verification profiles/auto-narrow `prom_apply_dev_changes verify_only`, config defaults, command policy/approval surfaces, current package metadata, provider-aware context budgeting, rolling/mid-workflow compaction, tool observation injection, Brain runner skill-curator behavior, Hub/chat context UI, voice-agent/mobile dictation routing/direct voice tool wrappers, OpenAI/xAI realtime voice integration, mobile Realtime camera snapshot/video-frame capture and visual input handling, mobile camera-roll video attachments, the desktop web UI sou...[line truncated]
+4: Workspace: `D:\Prometheus\workspace`
+5: Project root: `D:\Prometheus`
+6: 
+7: This directory is a split copy of root `SELF.md` — the same source-verified architecture reference, broken into per-area files so Prometheus can read and edit individual sections without churning the full document. In the current tool/runtime view the split directory is `self/` and the monolithic file is `SELF.md`; older wording that says `workspace/self/` or `workspace/SELF.md` refers to the same workspace-root material, not a separate second copy.
+8: 
+9: ## How to read
+10: 
+11: - Start here, then jump to the file that matches the area you're working on.
+12: - Anchors/section numbers from the original `SELF.md` are preserved at the top of every file.
+13: - Creative-mode coverage is large enough to live in its own subfolder under `creative/`.
+14: 
+15: ## Section → file map
+16: 
+17: | § | Area | File |
+18: |---|------|------|
+19: | 1 | Core Identity | [01-identity.md](01-identity.md) |
+20: | 2, 3, 3A, 3B | Startup, Runtime Surfaces, Auth Gate, Mobile Pairing/HTTPS/Tailscale | [02-startup-runtime.md](02-startup-runtime.md) |
+21: | 4, 5 | Execution Modes, Prompt Assembly | [03-execution-and-prompting.md](03-execution-and-prompting.md) |
+22: | 6 | Creative Modes (overview) | [creative/00-overview.md](creative/00-overview.md) |
+23: | 6A | Creative Runtime and Scene Graph | [creative/01-runtime-scene-graph.md](creative/01-runtime-scene-graph.md) |
+24: | 6B | Creative Assets, Uploads, Media Intake | [creative/02-assets-uploads.md](creative/02-assets-uploads.md) |
+25: | 6C | Creative Video and Editing | [creative/03-video-editing.md](creative/03-video-editing.md) |
+26: | 6D | HTML Motion and HyperFrames | [creative/04-html-motion-hyperframes.md](creative/04-html-motion-hyperframes.md) |
+27: | 6D-1 | Creative Generative Pipeline + 2026-05-20 self-edit notes | [creative/05-generative-pipeline.md](creative/05-generative-pipeline.md) |
+28: | 6E | HTML Motion Templates | [creative/06-motion-templates.md](creative/06-motion-templates.md) |
+29: | 6F | HTML Motion Blocks | [creative/07-motion-blocks.md](creative/07-motion-blocks.md) |
+30: | 6G | Remotion Motion Templates | [creative/08-remotion-templates.md](creative/08-remotion-templates.md) |
+[READ_TRUNCATED] Use start_line:31, num_lines:30 for the next chunk, or full:true only when needed.
+
+self/05-tools.md (317 lines) [window 40-69, truncated]:
+40: - `deploy_analysis_team` lives under `agents_and_teams`
+41: - `browser_automation` is wrapper-first: the model-facing surface is `browser_session`, `browser_observe`, `browser_act`, and `browser_extract`
+42: - `desktop_automation` is wrapper-first: the model-facing surface is `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background`
+43: - `external_apps` is wrapper-first for the large bundled connectors: X/xAI uses `x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, and `x_admin`; Vercel uses `vercel_ops`
+44: - `agents_and_teams` is wrapper-first for non-core agent/team operations: `agent_ops`, `agent_chat_ops`, `team_ops_wrapper`, and `team_collab_ops`
+45: - `workspace_write` is wrapper-first: the model-facing surface is `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`
+46: - `workspace_run` is the canonical model-facing command/process/check wrapper under `workspace_write`; hidden compatibility tools `terminal`, `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit` remain executable internals
+47: - `prometheus_source_read` is wrapper-first: `dev_source_read` covers src/, web-ui/, and allowlisted prom-root list/stats/read/batch/grep actions; old granular read helpers remain executable internals
+48: - `prometheus_source_write` is wrapper-first after approval: `dev_source_edit` covers approved src/web-ui patchsets, surgical edits, full writes, deletes, verification, and apply-live; old granular write helpers remain executable internals
+49: - `schedule_job` is core; deeper schedule operator tools such as history/detail/output/patch/stuck-control live under `automations`
+50: - granular workspace file/read/write/git/run/safety/code-nav tools such as `read_file`, `list_directory`, `grep_file`, `file_stats`, `find_replace`, `apply_workspace_patchset`, `git_status`, `run_typecheck`, `snapshot_workspace`, and `code_outline` remain executable compatibility internals but are hidden from the normal exposed schema surface
+51: - granular browser/desktop tools such as `browser_open`, `browser_snapshot`, `browser_click`, `browser_run_js`, `desktop_screenshot`, `desktop_click`, `desktop_window_click`, and `desktop_background_command` remain executable compatibility internals but are hidden from the normal exposed schema surface
+52: - granular X/Vercel, agent/team, and Creative tools remain executable compatibility internals but are hidden from the normal exposed schema surface when their wrapper surface exists
+53: - `search_files`, `read_files_batch`, and `file_tree` remain visible helper tools because they are shared by `workspace_write` and `prometheus_source_read`; `clone_repo` also remains visible because repo intake has special first-use guidance
+54: - legacy `creative_mode` normalizes to `creative_basic`; `image_mode`, `video_mode`, `hyperframes`, `creative_qa`, and `media_quality` normalize to the narrower creative buckets
+55: - `creative_basic` exposes `creative_project` and `creative_scene`; `creative_image` exposes `creative_image_ops`; `creative_video` exposes `creative_video_ops`; `creative_hyperframes` exposes `creative_hyperframes_ops`; `creative_quality` exposes `creative_quality_ops`
+56: - `generate_image` and `generate_video` remain core; `analyze_video` lives under `media_assets`
+57: - only `skill_list` and `skill_read` are core skill tools; `skill_resource_list`, `skill_resource_read`, metadata repair/update, authoring, import/export, and resource mutation live under `skills`
+58: - the model-facing web surface is unified: use `web_search` for preferred-provider, forced-provider, or multi-provider search; use `web_fetch` with either `url` or `urls` for single or batch fetch
+59: - the model-facing card surface is unified as `show_ui_card`; older `show_*` card tool names remain executable as compatibility aliases but are hidden from the exposed schema surface
+60: - the model-facing delivery surface is unified around `delivery_send` and `delivery_send_screenshot`; legacy `send_telegram` and `browser_send_to_telegram` remain executable compatibility aliases but are hidden from the exposed schema surface
+61: - the 2026-06-19 core schema compaction pass reduced the always-on core surface from 47 tools / ~15.9k estimated schema tokens to 45 tools / ~13.3k by shortening verbose descriptions and hiding legacy delivery aliases
+62: - the 2026-06-19 workspace command unification pass made `terminal` cover bounded commands (`action:"run"`), supervised starts (`action:"start"`), and process management (`status`, `log`, `wait`, `kill`, `submit`). The hidden legacy names still route to the same executor for compatibility, while `terminal` command runs reuse the existing run-command deny policy, cwd/boundary analysis, Lite terminal permission mode, command permission grants, approval queue/cards, task pause/resume flow, Telegram approvals, and audit logging.
+63: - the 2026-06-29 workspace wrapper compaction pass added six unified model-facing workspace tools: `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`. The direct executor normalizes those wrapper actions to the existing granular handlers before execution, so path scope, mutation guards, command policy, approval cards, snapshots, git shell-outs, and code-nav behavior remain centralized in the old handlers while the active `workspace_write` schema becomes much smaller.
+64: - the 2026-06-29 dev source wrapper compaction pass added `dev_source_read` under `prometheus_source_read` and `dev_source_edit` under `prometheus_source_write`. `dev_source_edit` is still gated by the existing dev source approval flow: the write category cannot be activated until `request_dev_source_edit` or an approved `code_change` proposal grants access, and each delegated granular handler still runs the old session/scope/syntax checks.
+65: - the 2026-06-29 browser/desktop wrapper compaction pass added `browser_session`, `browser_observe`, `browser_act`, and `browser_extract` under `browser_automation`, plus `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background` under `desktop_automation`. The executor normalizes wrapper actions to the existing granular handlers, preserving browser final-action approvals, observe/capture behavior, desktop screenshot freshness, coordinate validation, scoped window helpers, macro/background lanes, policy checks, and audit logging.
+66: - the 2026-06-29 external/agents/creative wrapper compaction pass added X/xAI and Vercel wrappers under `external_apps`, agent/team wrappers under `agents_and_teams`, and wrapper tools for each Creative bucket. The executor normalizes wrapper actions to existing extension/direct/capability handlers so connector auth, team state, Creative project state, policy checks, and audit logging stay centralized.
+67: - the 2026-06-29 voice wrapper compaction pass made the Realtime voice tool surface wrapper-first: `voice_ops`, `voice_browser`, and `voice_desktop` are exposed alongside canonical `skill_*` and rich `show_*` card tools. Granular `voice_web_*`, `voice_browser_*`, `voice_desktop_*`, screenshot/status, and simple generation tools remain executable compatibility handlers behind `executeVoiceAgentToolWithTrace(...)` normalization.
+68: - the 2026-06-29 wrapper smoke/fix pass corrected wrapper routing edges: `workspace_read(action:"grep")` now supports directory/glob search, `workspace_read(action:"search")` handles glob paths such as `dir/*.txt`, `workspace_safety(action:"snapshot", path)` scopes snapshots to the requested path, and `desktop_window` normalizes `title/name`, `window_id/window_handle/handle`, and exact-window input targets consistently.
+69: - the 2026-06-29 browser speed pass made `browser_act(action:"click"|"key"|"scroll", observe:"none")` true fast-ack paths. Browser click/key no longer pay hardcoded settle waits on `observe:"none"`, and browser status broadcasts for fast paths run in the background instead of blocking the tool result.
+[READ_TRUNCATED] Use start_line:70, num_lines:30 for the next chunk, or full:true only when needed.
+
+self/15-paths-and-sharp-edges.md (126 lines) [window 1-30, truncated]:
+1: ## 29) Data Paths Worth Remembering
+2: 
+3: - Config: `.prometheus/config.json`
+4: - Sessions: `.prometheus/sessions/*.json`
+5: - Browser session registry: `<configDir>/browser-sessions.json`
+6: - Encrypted account session vault entry: `account.supabase.session`
+7: - Paired mobile devices: `.prometheus/paired-devices.json`
+8: - Local mobile HTTPS certificate files when enabled: `.prometheus/certs/gateway-mobile.pfx` and `.prometheus/certs/gateway-mobile.cer`
+9: - Audit log stream: `.prometheus/audit-log.jsonl`
+10: - Tasks: `.prometheus/tasks/`
+11: - Managed process records/logs: `<configDir>/processes/`
+12: - MCP config: `.prometheus/mcp-servers.json`
+13: - Onboarding state: `PROMETHEUS_DATA_DIR/onboarding.json` or `~/.prometheus/onboarding.json`, managed by `src/gateway/onboarding/onboarding-store.ts`
+14: - Migration reports: `<configDir>/migrations/<sourceKind>/<runStamp>/report.json`
+15: - Workspace proposals: `workspace/proposals/`
+16: - Proposal sandboxes: `.prometheus/proposal-workspaces/<proposalId>/repo`
+17: - Audit transcripts: `workspace/audit/chats/transcripts/`
+18: - Audit compactions: `workspace/audit/chats/compactions/`
+19: - Tool observation JSONL: `<configDir>/tool-observations/<sessionId>.jsonl`
+20: - Raw oversized tool observation payloads: `<configDir>/tool-observations/raw/<sessionId>/<toolObservationId>.txt`
+21: - Memory index: `workspace/audit/_index/memory/`
+22: - Obsidian bridge config: `<configDir>/obsidian-bridge.json`
+23: - Obsidian sync manifest: `<configDir>/obsidian-bridge-manifest.json`
+24: - Obsidian indexed note mirrors: `workspace/audit/obsidian/vaults/<vaultId>/notes/`
+25: - Daily memory notes: `workspace/memory/`
+26: - Brain state/thought/dream artifacts: `workspace/Brain/`
+27: - Brain skill episodes: `workspace/Brain/skill-episodes/<date>/episodes.jsonl`
+28: - Brain skill gardener candidates/workflows: `workspace/Brain/skill-gardener/<date>/`
+29: - Brain skill curator queue: `workspace/Brain/skill-curator/suggestions.json`
+30: - Brain skill curator reports: `workspace/Brain/skill-curator/reports/`
+[READ_TRUNCATED] Use start_line:31, num_lines:30 for the next chunk, or full:true only when needed.

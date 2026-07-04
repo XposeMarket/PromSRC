@@ -28,8 +28,8 @@ function sanitizeCacheMarkers(messages: ChatMessage[]): ChatMessage[] {
 }
 
 // Map Prometheus-internal think hints → OpenAI-style reasoning_effort literal.
-// 'xhigh' / 'extra_high' are Codex-only; regular OpenAI + Perplexity cap at 'high',
-// so we clamp those cases to 'high'.
+// 'xhigh' / 'extra_high' are Codex-only for most providers; xAI additionally
+// accepts xhigh for Grok 4.20 multi-agent, handled below by model slug.
 const EFFORT_MAP: Record<string, string> = {
   none: 'none', minimal: 'minimal', fast: 'minimal',
   low: 'low', medium: 'medium', high: 'high',
@@ -39,7 +39,51 @@ const EFFORT_MAP: Record<string, string> = {
 // Providers that meaningfully accept a `reasoning_effort` parameter via the
 // OpenAI-compat surface. lm_studio / llama_cpp ignore unknown fields, so we
 // leave them alone to avoid confusing local servers.
-const EFFORT_PROVIDERS = new Set<string>(['openai', 'perplexity']);
+const EFFORT_PROVIDERS = new Set<string>(['openai', 'perplexity', 'xai']);
+
+function normalizeModelSlug(modelName: string): string {
+  const name = String(modelName || '').trim().toLowerCase();
+  return name.includes('/') ? name.split('/').filter(Boolean).pop() || name : name;
+}
+
+function xaiModelSupportsXHighReasoningEffort(modelName: string): boolean {
+  return /^grok-4\.20-multi-agent(?:-|$)/i.test(normalizeModelSlug(modelName));
+}
+
+function xaiModelSupportsReasoningEffort(modelName: string): boolean {
+  const name = normalizeModelSlug(modelName);
+  return name === 'grok-latest'
+    || /^grok-4\.3(?:-|$)/i.test(name)
+    || /^grok-4\.20-multi-agent(?:-|$)/i.test(name)
+    || /^grok-3-mini(?:-|$)/i.test(name);
+}
+
+function normalizeReasoningEffortForProvider(providerId: string, rawEffort: string, modelName?: string): string {
+  const id = String(providerId || '').trim().toLowerCase();
+  const normalized = String(rawEffort || '').trim().toLowerCase();
+  let effort = EFFORT_MAP[normalized] || 'medium';
+  if (id === 'xai') {
+    if (effort === 'minimal') effort = 'low';
+    if ((normalized === 'xhigh' || normalized === 'extra_high' || normalized === 'max') && xaiModelSupportsXHighReasoningEffort(modelName || '')) {
+      effort = 'xhigh';
+    }
+  }
+  return effort;
+}
+
+function shouldSendReasoningEffort(providerId: string, effort: string, modelName?: string): boolean {
+  const id = String(providerId || '').trim().toLowerCase();
+  // xAI defaults grok-4.3 to low if omitted, so "none" must be sent explicitly
+  // for effort-capable models. Other Grok slugs reject the effort field.
+  if (id === 'xai') {
+    if (!xaiModelSupportsReasoningEffort(modelName || '')) return false;
+    if (xaiModelSupportsXHighReasoningEffort(modelName || '')) {
+      return effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh';
+    }
+    return effort === 'none' || effort === 'low' || effort === 'medium' || effort === 'high';
+  }
+  return effort !== 'none';
+}
 
 function providerToolLimit(providerId: string): number | null {
   const id = String(providerId || '').trim().toLowerCase();
@@ -51,8 +95,13 @@ function getKnownProviderModelInfo(providerId: string, modelName: string): Parti
   const id = String(providerId || '').trim().toLowerCase();
   const name = String(modelName || '').trim();
   if (id === 'xai') {
-    if (name === 'grok-build-0.1') return { contextWindowTokens: 256_000, tokenizer: 'openai' };
-    if (/^grok-4\.3$/i.test(name) || /^grok-4\.20-/i.test(name)) {
+    if (/^grok-composer/i.test(name)) {
+      return { contextWindowTokens: 200_000, tokenizer: 'openai' };
+    }
+    if (/^(grok-build-0\.1|grok-code-fast(?:-1)?(?:-\d{4})?)$/i.test(name)) {
+      return { contextWindowTokens: 256_000, tokenizer: 'openai' };
+    }
+    if (/^(grok-4\.3(?:-latest)?|grok-latest)$/i.test(name) || /^grok-4\.20(?:$|-)/i.test(name)) {
       return { contextWindowTokens: 1_000_000, tokenizer: 'openai' };
     }
   }
@@ -89,6 +138,7 @@ function parseUsage(data: any): ModelUsage | undefined {
   const reasoningTokens = Number(
     usage.completion_tokens_details?.reasoning_tokens
     || usage.output_tokens_details?.reasoning_tokens
+    || usage.reasoning_tokens
     || 0,
   );
   // OpenAI + xAI/Grok auto-cache stable prefixes and report hits here. These are
@@ -226,8 +276,8 @@ export class OpenAICompatAdapter implements LLMProvider {
 	        }
 	      }
 	      if (rawEffort) {
-	        const effort = EFFORT_MAP[rawEffort] || 'medium';
-	        if (effort !== 'none') body.reasoning_effort = effort;
+	        const effort = normalizeReasoningEffortForProvider(this.id, rawEffort, model);
+	        if (shouldSendReasoningEffort(this.id, effort, model)) body.reasoning_effort = effort;
 	      }
 	    }
     const cappedTools = capProviderTools(this.id, options?.tools);

@@ -1,8 +1,9 @@
 ---
 name: hr-recruiter
-description: # HR & Recruiter Skill
+description: Use this skill when the user asks for recruiting, job descriptions, hiring plans, resume screening rubrics, interview kits, candidate scorecards, offer letters, onboarding plans, performance reviews, or PIPs. Triggers on phrases like write a job description, hiring process, interview questions, screen candidates, resume rubric, offer letter, onboarding plan, 30-60-90 plan, performance review, PIP, recruiter help, and compensation range. Use it to create fair, specific HR and talent outputs with candidate experience in mind.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: job description, hiring process, interview questions, screen candidates, resume rubric, offer letter, onboarding plan, 30-60-90 plan, performance review, PIP, recruiter help, compensation range, candidate scorecard, hiring plan, talent acquisition
 ---
 
 # HR & Recruiter Skill

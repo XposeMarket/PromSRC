@@ -1,0 +1,82 @@
+temp/tool-results/1783056395290-brain_thought_2026-07-03_13-24-read_files_batch.txt (95 lines) [window 1-80, truncated]:
+1: games/figure-8-drift/index.html (160 lines) [window 1-40, truncated]:
+2: 1: <!doctype html>
+3: 2: <html lang="en">
+4: 3: <head>
+5: 4: <meta charset="utf-8" />
+6: 5: <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+7: 6: <title>Figure 8 Drift - Three.js</title>
+8: 7: <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307080a'/%3E%3Cpath d='M16 38c10-20 22-20 32 0M16 26c10 20 22 20 32 0' fill='none' stroke='%23ffcf5a' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E" />
+9: 8: <style>
+10: 9:   :root{color-scheme:dark;--gold:#ffcf5a;--red:#ff4b38;--ink:#090a0c;--glass:rgba(8,10,13,.58)}
+11: 10:   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+12: 11:   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#07080a;color:#f8f0dd;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;touch-action:none;user-select:none}
+13: 12:   #game{position:fixed;inset:0;width:100vw;height:100vh;display:block;background:#0c1110}
+14: 13:   .hud{position:fixed;inset:0;pointer-events:none;z-index:5;text-shadow:0 2px 10px #000}
+15: 14:   .top{position:absolute;top:env(safe-area-inset-top,0);left:0;right:0;padding:10px 12px;display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:start}
+16: 15:   .pill{background:linear-gradient(180deg,rgba(14,17,22,.76),rgba(4,5,7,.54));border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 35px rgba(0,0,0,.28),inset 0 1px rgba(255,255,255,.08);border-radius:999px;padding:8px 11px;font-weight:900;letter-spacing:.045em;font-size:12px;white-space:nowrap;backdrop-filter:blur(8px)}
+17: 16:   #speed{text-align:left}.center{text-align:center;color:var(--gold)}#lap{text-align:right}
+18: 17:   #message{position:absolute;left:50%;top:19%;transform:translateX(-50%);width:min(560px,90vw);text-align:center;font-size:clamp(22px,7vw,44px);font-weight:1000;letter-spacing:.05em;color:#fff7d7}.sub{display:block;margin-top:6px;font-size:clamp(12px,3.2vw,16px);font-weight:800;color:#d3c5a7;letter-spacing:.02em}
+19: 18:   .mini{position:absolute;right:10px;top:62px;width:118px;height:82px;border:1px solid rgba(255,255,255,.16);border-radius:16px;background:rgba(0,0,0,.42);overflow:hidden;box-shadow:0 14px 38px rgba(0,0,0,.34)}
+20: 19:   #map{width:100%;height:100%;display:block;opacity:.95}
+21: 20:   .controls{position:fixed;inset:0;pointer-events:none;z-index:10}.touch{position:absolute;pointer-events:auto;touch-action:none;user-select:none}
+22: 21:   #steerPad{left:18px;bottom:calc(18px + env(safe-area-inset-bottom,0));width:142px;height:142px;border-radius:50%;border:1px solid rgba(255,255,255,.16);background:radial-gradient(circle,rgba(255,255,255,.11),rgba(255,255,255,.04));box-shadow:inset 0 0 42px rgba(255,255,255,.04),0 18px 40px rgba(0,0,0,.28)}
+23: 22:   #steerKnob{position:absolute;left:50%;top:50%;width:58px;height:58px;margin:-29px;border-radius:50%;background:linear-gradient(180deg,rgba(255,255,255,.32),rgba(255,255,255,.13));border:1px solid rgba(255,255,255,.24);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+24: 23:   .pedal{right:18px;border-radius:24px;border:1px solid rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-weight:1000;letter-spacing:.05em;color:white;box-shadow:0 16px 36px rgba(0,0,0,.32);backdrop-filter:blur(8px)}
+25: 24:   #gas{bottom:calc(24px + env(safe-area-inset-bottom,0));width:96px;height:124px;background:linear-gradient(180deg,rgba(29,180,95,.72),rgba(13,91,55,.55))}#brake{bottom:calc(158px + env(safe-area-inset-bottom,0));width:88px;height:82px;background:linear-gradient(180deg,rgba(255,79,55,.72),rgba(125,20,20,.55))}
+26: 25:   #handbrake{right:122px;bottom:calc(28px + env(safe-area-inset-bottom,0));width:82px;height:82px;border-radius:50%;background:linear-gradient(180deg,rgba(255,207,90,.82),rgba(179,94,22,.58));font-size:13px}.tinyBtns{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0));transform:translateX(-50%);display:flex;gap:8px;pointer-events:auto}.small{border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.46);color:#fff;border-radius:999px;padding:10px 13px;font-weight:900}
+27: 26:   #start{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;text-align:center;background:radial-gradient(circle at 50% 38%,rgba(48,62,45,.88),rgba(4,5,7,.96));padding:24px;pointer-events:auto}.card{width:min(620px,94vw);border:1px solid rgba(255,255,255,.16);border-radius:28px;background:rgba(4,5,7,.72);box-shadow:0 28px 120px rgba(0,0,0,.62);padding:24px;backdrop-filter:blur(12px)}.card h1{margin:0 0 8px;font-size:clamp(34px,10vw,64px);letter-spacing:-.06em;line-height:.86;color:#fff}.card h1 span{color:var(--gold)}.card p{margin:8px auto;color:#d5cab2;font-weight:700;line-height:1.38}.menuGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;mar...[line truncated]
+28: 27:   @media (min-width:800px){.pill{font-size:14px;padding:10px 14px}.mini{width:150px;height:104px;top:70px}.card{padding:34px}.pedal{right:32px}#steerPad{left:32px}}
+29: 28:   #editor{position:fixed;left:0;right:0;bottom:env(safe-area-inset-bottom,0);z-index:18;padding:10px calc(10px + env(safe-area-inset-right,0)) calc(10px + env(safe-area-inset-bottom,0)) calc(10px + env(safe-area-inset-left,0));background:linear-gradient(180deg,rgba(14,16,20,.3),rgba(14,16,20,.78));border-top:1px solid rgba(255,255,255,.14);display:none;pointer-events:auto}
+30: 29:   #editor.on{display:block}
+31: 30:   .buildPanel{width:min(760px,96vw);margin:0 auto;display:grid;gap:8px}.buildTabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.buildGroup{display:none;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.buildGroup.on{display:grid}.buildGroup.track{grid-template-columns:1fr 1.5fr 1fr 1fr}.buildGroup .wide{grid-column:span 2}
+32: 31:   #editor .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:center;margin-bottom:6px}
+33: 32:   #editor button,#editor .eb{appearance:none;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;border-radius:14px;padding:11px 9px;font:900 12px/1 system-ui,sans-serif;letter-spacing:.04em;min-height:42px}
+34: 33:   #editor button.on{background:rgba(255,207,90,.22);border-color:rgba(255,207,90,.45);color:var(--gold)}
+35: 34:   #editor .lbl{display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.55);font:900 10px/1 system-ui,sans-serif;letter-spacing:.08em}
+36: 35:   #editor select{appearance:none;min-width:0;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.35);color:#fff;border-radius:14px;padding:10px 8px;font:900 12px system-ui,sans-serif;text-align:center}
+37: 36:   body.drive-mode #editor{display:none!important}
+38: 37:   body.drive-mode .controls{display:flex}
+39: 38:   body.build-mode .controls{display:none!important}
+40: 39:   body.build-mode #editor.on{display:block}
+41: 40:   body.build-mode #lap{display:none}
+42: [READ_TRUNCATED] Use start_line:41, num_lines:80 for the next chunk, or full:true only when needed.
+43: 
+44: games/figure-8-drift/index.html (160 lines) [window 75-124, truncated]:
+45: 75: function sampleCustomPath(segs){const pts=[],step=.42;let x=0,z=0,h=Math.PI/2;const push=()=>pts.push(new THREE.Vector3(x,0,z));push();for(const s of segs){if(s.type==='straight'){const len=+s.len||20,n=Math.max(2,Math.ceil(len/step));for(let i=0;i<n;i++){x+=Math.sin(h)*step;z+=Math.cos(h)*step;push()}}else if(s.type==='turnL'||s.type==='turnR'){const sign=s.type==='turnL'?1:-1,rad=(+s.deg||90)*Math.PI/180,r=+s.r||16,n=Math.max(4,Math.ceil(r*rad/step)),dh=sign*rad/n;for(let i=0;i<n;i++){h+=dh;x+=Math.sin(h)*step;z+=Math.cos(h)*step;push()}}}return pts}
+46: 76: function setGatesForTrack(){if(isPreset()){trackClosed=true;gates=[.005,.255,.505,.755]}else{trackClosed=false;gates=[.2,.45,.7,.92]}lapsTotal=9999}
+47: 77: function disposeTrackParts(){for(const o of trackParts){scene.remove(o);o.geometry?.dispose?.()}trackParts=[]}
+48: 78: function rebuildTrack(){disposeTrackParts();setGatesForTrack();let points;if(isPreset())points=presetFigure8Points();else if(!segments.length)points=[new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,24)];else points=sampleCustomPath(segments);curve=new THREE.CatmullRomCurve3(points,trackClosed,'catmullrom',trackClosed?.55:.35);const trackGeo=new THREE.BufferGeometry(),verts=[],uvs=[],idx=[];center=[];N=Math.max(80,Math.min(520,Math.floor(curve.getLength()*2.2)));const bankAmp=isPreset()?.32:.08;for(let i=0;i<N;i++){const u=i/(trackClosed?N:N-1||1),p=curve.getPointAt(Math.min(u,1)),tan=curve.getTangentAt(Math.min(u,.999)).normalize(),n=new THREE.Vector3(-tan.z,0,tan.x);center.push(p.clone()...[line truncated]
+49: 79: 
+50: 80: const car=new THREE.Group();const bodyMat=new THREE.MeshStandardMaterial({color:0xff5138,roughness:.42,metalness:.28}),darkMat=new THREE.MeshStandardMaterial({color:0x101318,roughness:.5}),glassMat=new THREE.MeshStandardMaterial({color:0x8fd7ff,roughness:.18,metalness:.05,transparent:true,opacity:.74});
+51: 81: const body=new THREE.Mesh(new THREE.BoxGeometry(2.35,.58,4.2),bodyMat);body.position.y=.55;body.castShadow=true;car.add(body);const cab=new THREE.Mesh(new THREE.BoxGeometry(1.65,.55,1.75),glassMat);cab.position.set(0,1.05,-.35);cab.castShadow=true;car.add(cab);for(const x of[-1.25,1.25])for(const z of[-1.35,1.35]){const w=new THREE.Mesh(new THREE.CylinderGeometry(.38,.38,.32,16),darkMat);w.rotation.z=Math.PI/2;w.position.set(x,.34,z);w.castShadow=true;car.add(w)}scene.add(car);
+52: 82: const skidMat=new THREE.MeshBasicMaterial({color:0x050505,transparent:true,opacity:.42,depthWrite:false}),skids=[];function addSkid(x,z,yaw){const m=new THREE.Mesh(new THREE.PlaneGeometry(.34,2.1),skidMat);m.position.set(x,.085,z);m.rotation.set(-Math.PI/2,0,yaw);scene.add(m);skids.push({m,life:7});if(skids.length>140){scene.remove(skids.shift().m)}}
+53: 83: const smoke=[];function smokeTex(){return tex(128,(x,s)=>{const g=x.createRadialGradient(s/2,s/2,4,s/2,s/2,s/2);g.addColorStop(0,'rgba(220,220,210,.42)');g.addColorStop(1,'rgba(220,220,210,0)');x.fillStyle=g;x.fillRect(0,0,s,s)})}const sTex=smokeTex(),sMat=new THREE.SpriteMaterial({map:sTex,transparent:true,depthWrite:false,color:0xd9d4c7});function spawnSmoke(x,z){const sp=new THREE.Sprite(sMat.clone());sp.position.set(x,.55,z);sp.scale.set(1.2,1.2,1);scene.add(sp);smoke.push({sp,life:.75})}
+54: 84: let passed=0,carX=0,carZ=1,yaw=Math.PI/2,velX=0,velZ=0,laps=0,score=0,combo=1,bestDrift=0,offroad=0,finished=false;
+55: 85: function syncCarToStart(){if(!center.length)return;const p=center[0],tan=curve.getTangentAt(0).normalize();carX=p.x;carZ=p.z+1;yaw=Math.atan2(tan.x,tan.z)}
+56: 86: function updateSegUI(){const el=document.getElementById('segCount');if(el)el.textContent=isPreset()?'Figure-8 preset':segments.length+' pieces'}
+57: 87: function readTrackLibrary(){try{const raw=localStorage.getItem(TRACK_LS_KEY);const j=raw?JSON.parse(raw):null;return Array.isArray(j)?j:[]}catch(_){return[]}}
+58: 88: function writeTrackLibrary(list){try{localStorage.setItem(TRACK_LS_KEY,JSON.stringify(list.slice(0,24)))}catch(_){}}
+59: 89: function trackSnapshot(){return{segments:segments.map(s=>({...s})),trackClosed,isPreset:isPreset(),savedAt:Date.now()}}
+60: 90: function applyTrackSnapshot(snap){if(!snap||!Array.isArray(snap.segments))return false;if(snap.isPreset&&snap.segments.length===1&&snap.segments[0].type==='preset'){segments=[{...PRESET_F8}];trackClosed=true}else{segments=snap.segments.map(x=>({...x}));trackClosed=!!snap.trackClosed}rebuildTrack();reset();updateSegUI();return true}
+61: 91: function saveTrackToSlot(){if(isPreset()){ui.msg.innerHTML='SAVE TRACK<span class="sub">Add straights/turns first — figure-8 can’t be saved as custom.</span>';return}const name=prompt('Track name','My track');if(name==null)return;const list=readTrackLibrary();const entry={name:(name.trim()||'My track').slice(0,40),...trackSnapshot()};const ix=list.findIndex(t=>t.name===entry.name);if(ix>=0)list[ix]=entry;else list.unshift(entry);writeTrackLibrary(list);refreshTrackLoadSelect();refreshMenuTrackSelect();ui.msg.innerHTML='SAVED<span class="sub">“'+entry.name+'” stored on this device.</span>'}
+62: 92: function loadTrackFromSlot(){const sel=document.getElementById('trackLoadSel');if(!sel||!sel.value)return;const list=readTrackLibrary();const t=list.find(x=>String(x.savedAt)===sel.value);if(!t)return;applyTrackSnapshot(t);ui.msg.innerHTML='LOADED<span class="sub">'+t.name+'</span>'}
+63: 93: function deleteTrackSlot(){const sel=document.getElementById('trackLoadSel');if(!sel||!sel.value)return;if(!confirm('Delete this saved track?'))return;writeTrackLibrary(readTrackLibrary().filter(x=>String(x.savedAt)!==sel.value));refreshTrackLoadSelect();refreshMenuTrackSelect()}
+64: 94: function refreshTrackLoadSelect(){const sel=document.getElementById('trackLoadSel');if(!sel)return;const list=readTrackLibrary(),v=sel.value;sel.innerHTML='<option value="">— saved —</option>'+list.map(t=>'<option value="'+t.savedAt+'">'+t.name.replace(/</g,'')+'</option>').join('');if([...sel.options].some(o=>o.value===v))sel.value=v}
+65: 95: function refreshMenuTrackSelect(){const sel=document.getElementById('menuTrackSel');if(!sel)return;const list=readTrackLibrary(),v=sel.value;sel.innerHTML='<option value="">— saved tracks —</option>'+list.map(t=>'<option value="'+t.savedAt+'">'+t.name.replace(/</g,'')+'</option>').join('');if([...sel.options].some(o=>o.value===v))sel.value=v}
+66: 96: function syncTrackSelects(from){const a=document.getElementById('trackLoadSel'),b=document.getElementById('menuTrackSel');if(from==='menu'&&a&&b)a.value=b.value;else if(a&&b)b.value=a.value}
+67: 97: function switchBuildTab(name){for(const n of['Road','Track','Mode']){document.getElementById('tab'+n)?.classList.toggle('on',n===name);document.getElementById('group'+n)?.classList.toggle('on',n===name)}}
+68: 98: function setBuildMode(on){buildMode=on;document.body.classList.toggle('build-mode',on);document.body.classList.toggle('drive-mode',!on);document.getElementById('modeBuild')?.classList.toggle('on',on);document.getElementById('modeDrive')?.classList.toggle('on',!on);car.visible=!on;if(on&&center.length){const p=center[Math.floor(center.length/2)];buildCam.px=p.x;buildCam.pz=p.z}}
+69: 99: function ensureCustom(){if(isPreset()){segments=[];trackClosed=false}}
+70: 100: function addStraightPiece(){ensureCustom();segments.push({type:'straight',len:+document.getElementById('straightLen').value});rebuildTrack();reset()}
+71: 101: function addTurnPiece(turn){ensureCustom();segments.push({type:turn,deg:+document.getElementById('turnDeg').value,r:+document.getElementById('turnRad').value});rebuildTrack();reset()}
+72: 102: function loadPresetF8(){segments=[{...PRESET_F8}];rebuildTrack();reset();ui.msg.innerHTML='FIGURE 8 DRIFT<span class="sub">Endless laps — drift for score.</span>'}
+73: 103: function openMenu(){ui.start.style.display='flex';started=false;paused=false;finished=false;touch.steer=touch.gas=touch.brake=touch.hand=0;velX=velZ=0}
+74: 104: document.getElementById('modeBuild')?.addEventListener('click',()=>setBuildMode(true));
+75: 105: document.getElementById('modeDrive')?.addEventListener('click',()=>{setBuildMode(false);reset()});
+76: 106: document.getElementById('presetF8')?.addEventListener('click',loadPresetF8);
+77: 107: document.getElementById('menuBtn')?.addEventListener('click',openMenu);
+78: 108: document.getElementById('menuBtnDrive')?.addEventListener('click',openMenu);
+79: 109: document.getElementById('addStraight')?.addEventListener('click',addStraightPiece);
+80: 110: document.getElementById('addTurnL')?.addEventListener('click',()=>addTurnPiece('turnL'));
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

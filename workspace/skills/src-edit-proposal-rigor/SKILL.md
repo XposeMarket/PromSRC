@@ -1,12 +1,12 @@
 ---
 name: src-edit-proposal-rigor
-description: Strict Codex-style workflow for Prometheus self-source edits, including evidence-first proposals and the dev-only request_dev_source_edit fast approval flow.
+description: Pragmatic workflow for Prometheus self-source edits, including scoped dev approvals and full proposals only when risk or scope requires them.
 emoji: "ðŸ§©"
-version: 2.0.0
+version: 2.1.0
 triggers: src edit, source edit, Prometheus source, change Prometheus source code, self-edit Prometheus, request_dev_source_edit, dev source edit, proposal code change, code_change proposal, edit src, edit web-ui, edit mobile app, edit generated web ui, edit gateway, edit route, edit tool execution, edit approvals, edit scheduler, edit memory, edit connector, patch Prometheus internals, fix Prometheus bug, implement Prometheus feature
 ---
 
-# SRC Edit Proposal Rigor
+# SRC Edit Approval Workflow
 
 Use this skill for any change that edits Prometheus product source or source-adjacent runtime surfaces:
 
@@ -18,7 +18,7 @@ Use this skill for any change that edits Prometheus product source or source-adj
 - mobile app/PWA code
 - approval, filesystem, shell, browser, desktop, credential, or audit code
 
-This is a Codex-style engineering workflow. The job is not to describe how to change Prometheus. The job is to inspect the repo, make or propose the smallest correct patch through the approved route, verify it, repair failures, and report exactly what changed.
+This is a Codex-style engineering workflow. The job is not to describe how to change Prometheus. The job is to inspect the repo, make or propose the smallest correct patch through the approved route, verify it, repair failures, and report exactly what changed. Use the lightest approval shape that preserves scoped source safety.
 
 ---
 
@@ -47,7 +47,7 @@ Use `request_dev_source_edit` when all of these are true:
 - the change is not weakening safety/security/approval boundaries unless the user explicitly requested that exact area;
 - the task can be verified in the current turn.
 
-`request_dev_source_edit` asks Raul for approval/rejection inline. When approved, source-write tools unlock only for the approved chat/session/scope. Approval is not permission to skip rigor. After approval:
+`request_dev_source_edit` asks Raul for approval/rejection inline. For ordinary small edits, call it with exact files and a short user-grounded reason; add a concise plan/evidence only when the edit is non-trivial, broad, or near safety/approval/runtime boundaries. When approved, source-write tools unlock only for the approved chat/session/scope. Approval is not permission to skip inspection or verification. After approval:
 
 1. Re-inspect the exact current files and dirty work.
 2. Patch only approved files/surfaces.
@@ -157,7 +157,7 @@ Do not over-plan. Small tasks can use 3-5 bullets.
 
 ### 4. Patch or Proposal
 
-If using `request_dev_source_edit`, request only the necessary files and include the intended verification command. After approval, patch only the approved scope.
+If using `request_dev_source_edit`, request only the necessary files and a short reason. Add a verification profile/command or concise plan only when it helps the user understand risk or completion. After approval, patch only the approved scope.
 
 If using `write_proposal`, use the proposal template below and include deterministic execution instructions.
 
@@ -273,16 +273,17 @@ Preflight checks before submitting:
 
 ---
 
-## Dev Fast Approval Template
+## Dev Fast Approval Shape
 
-Use this shape when calling `request_dev_source_edit`:
+Use this minimal shape when calling `request_dev_source_edit`:
 
 - `files`: exact source files/surfaces to unlock, no extras
 - `reason`: short user-grounded reason
-- `verification_command`: narrowest relevant check, for example:
+- optional `verification_profile` or `verification_command`: narrowest relevant check, for example:
   - `npm run sync:web-ui`
   - `npm run build:backend`
   - `npm run build`
+- optional `plan`: 1-3 grounded bullets or file/line evidence when the edit is non-trivial
 
 After approval, final report must include:
 

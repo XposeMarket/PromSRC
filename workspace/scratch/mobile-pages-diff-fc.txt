@@ -1,0 +1,114 @@
+﻿Comparing files WEB-UI\SRC\MOBILE\mobile-pages.js and GENERATED\PUBLIC-WEB-UI\STATIC\MOBILE\MOBILE-PAGES.JS
+***** WEB-UI\SRC\MOBILE\mobile-pages.js
+ 6268:      const stableTraceSummaryLabels = {};
+ 6269:      let stablePendingImageBatch = null;
+ 6270:      let stableThinkingDots = null;
+ 6271:      const stableLiveTraceGroups = {};
+ 6272:      const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
+***** GENERATED\PUBLIC-WEB-UI\STATIC\MOBILE\MOBILE-PAGES.JS
+ 6268:      const stableTraceSummaryLabels = {};
+ 6269:      const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
+*****
+
+***** WEB-UI\SRC\MOBILE\mobile-pages.js
+ 6283:        });
+ 6284:        stablePendingImageBatch = currentBubble.querySelector('.pm-generated-image-batch--pending');
+ 6285:        stableThinkingDots = currentBubble.querySelector('.pm-thinking-dots');
+ 6286:        currentBubble.querySelectorAll('details.pm-trace-tool-group[data-pm-trace-live-current="1"]').forEach((node) => {
+ 6287:          const groupKey = String(node.getAttribute('data-pm-trace-group') || '').trim();
+ 6288:          if (groupKey) stableLiveTraceGroups[groupKey] = node;
+ 6289:        });
+ 6290:        currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
+***** GENERATED\PUBLIC-WEB-UI\STATIC\MOBILE\MOBILE-PAGES.JS
+ 6280:        });
+ 6281:        currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
+*****
+
+***** WEB-UI\SRC\MOBILE\mobile-pages.js
+ 6336:        });
+ 6337:        if (stablePendingImageBatch) {
+ 6338:          const nextPending = currentBubble.querySelector('.pm-generated-image-batch--pending');
+ 6339:          if (nextPending && nextPending !== stablePendingImageBatch) nextPending.replaceWith(stablePendingImageBatch);
+ 6340:        }
+ 6341:        if (stableThinkingDots) {
+ 6342:          const nextDots = currentBubble.querySelector('.pm-thinking-dots');
+ 6343:          if (nextDots && nextDots !== stableThinkingDots) nextDots.replaceWith(stableThinkingDots);
+ 6344:        }
+ 6345:        Object.entries(stableLiveTraceGroups).forEach(([groupKey, stableNode]) => {
+ 6346:          const selector = `details.pm-trace-tool-group[data-pm-trace-live-current="1"][data-pm-trace-group="${_pmCssEscape(group
+ 6347:  Key)}"]`;
+ 6348:          const nextGroup = currentBubble.querySelector(selector);
+ 6349:          if (nextGroup && stableNode !== nextGroup) nextGroup.replaceWith(stableNode);
+ 6350:        });
+ 6351:      } catch {}
+***** GENERATED\PUBLIC-WEB-UI\STATIC\MOBILE\MOBILE-PAGES.JS
+ 6327:        });
+ 6328:      } catch {}
+*****
+
+***** WEB-UI\SRC\MOBILE\mobile-pages.js
+ 6422:  
+ 6423:  function _syncMobileWorkTimerLabel(threadEl) {
+ 6424:    const thread = _activeMobileThread();
+ 6425:    const message = [...thread].reverse().find((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+ 6426:    if (!message) return false;
+ 6427:    const msgIndex = thread.indexOf(message);
+ 6428:    const root = threadEl || document.getElementById('pm-chat-thread');
+ 6429:    if (!root) return false;
+ 6430:    const msgEl = root.querySelector(`[data-msg-index="${msgIndex}"]`);
+ 6431:    if (!msgEl) return false;
+ 6432:    const timerEl = msgEl.querySelector('.pm-work-timer:not(.pm-work-timer--expandable)');
+ 6433:    if (!timerEl) return false;
+ 6434:    const startedAt = _mobileAssistantWorkStartedAt(message);
+ 6435:    if (!startedAt) return false;
+ 6436:    const duration = Date.now() - startedAt;
+ 6437:    const label = `Working for ${_formatMobileWorkDuration(duration)}`;
+ 6438:    if (timerEl.textContent !== label) timerEl.textContent = label;
+ 6439:    return true;
+ 6440:  }
+***** GENERATED\PUBLIC-WEB-UI\STATIC\MOBILE\MOBILE-PAGES.JS
+ 6399:  
+ 6400:  function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
+ 6401:    const hasStreamingAssistant = _activeMobileThread().some((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+ 6402:    if (hasStreamingAssistant) {
+ 6403:      if (!__pmChat.workTimer) {
+ 6404:        __pmChat.workTimer = setInterval(() => {
+ 6405:          const activeThreadEl = document.getElementById('pm-chat-thread') || threadEl;
+ 6406:          const activeBodyEl = document.getElementById('pm-chat-body') || bodyEl;
+ 6407:          if (!activeThreadEl) return;
+ 6408:          if (!_patchLatestMobileStreamingMessage(activeThreadEl, activeBodyEl, key)) {
+ 6409:            _flushThreadRender(activeThreadEl, activeBodyEl, key);
+ 6410:          }
+ 6411:        }, 1000);
+ 6412:      }
+ 6413:    } else if (__pmChat.workTimer) {
+ 6414:      clearInterval(__pmChat.workTimer);
+ 6415:      __pmChat.workTimer = null;
+ 6416:    }
+ 6417:  }
+*****
+
+***** WEB-UI\SRC\MOBILE\mobile-pages.js
+ 6441:  
+ 6442:  function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
+ 6443:    const hasStreamingAssistant = _activeMobileThread().some((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+ 6444:    if (hasStreamingAssistant) {
+ 6445:      if (!__pmChat.workTimer) {
+ 6446:        __pmChat.workTimer = setInterval(() => {
+ 6447:          const activeThreadEl = document.getElementById('pm-chat-thread') || threadEl;
+ 6448:          if (!activeThreadEl) return;
+ 6449:          _syncMobileWorkTimerLabel(activeThreadEl);
+ 6450:        }, 1000);
+ 6451:      }
+ 6452:    } else if (__pmChat.workTimer) {
+ 6453:      clearInterval(__pmChat.workTimer);
+ 6454:      __pmChat.workTimer = null;
+ 6455:    }
+ 6456:  }
+ 6457:  
+ 6458:  function _installMobileTimestampReveal(threadEl, onMessageAction) {
+***** GENERATED\PUBLIC-WEB-UI\STATIC\MOBILE\MOBILE-PAGES.JS
+ 6418:  
+ 6419:  function _installMobileTimestampReveal(threadEl, onMessageAction) {
+*****
+

@@ -1,8 +1,9 @@
 ---
 name: financial-model
-description: Use this skill for financial modeling, business metric analysis, and projections. Outputs clean tables and optionally generates Excel/CSV files.
+description: Use this skill when the user asks to build financial models, revenue projections, runway models, scenario analyses, SaaS metric models, unit economics tables, P&L forecasts, break-even models, fundraising needs models, or spreadsheet-style projections. Triggers on phrases like build a financial model, model runway, project revenue, 12-month forecast, unit economics model, SaaS metrics table, model three scenarios, how much should I raise, break-even model, and export a forecast. Use it to show assumptions, formulas, tables, and sensitivity analysis clearly.
 emoji: "🧩"
-version: 1.0.0
+version: 1.1.0
+triggers: build financial model, model runway, project revenue, revenue projection, 12-month forecast, unit economics model, SaaS metrics table, model scenarios, how much should I raise, break-even model, P&L forecast, cash burn model, fundraising model, financial projection
 ---
 
 # Financial Model

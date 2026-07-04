@@ -1,0 +1,124 @@
+
+### [DEBUG] 2026-07-03T00:50:49.773Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Fixed `games/mobile-sideways-fps/index.html` control regression: movement formula was aligned to the old 2D camera convention while Three.js camera yaw uses the opposite forward vector, making joystick movement feel inverted/wrong. Updated forward/strafe math to `dx=-sin(yaw)*f+cos(yaw)*s`, `dz=-cos(yaw)*f-sin(yaw)*s`; removed continuous `touch.look` drift from update loop; changed look pad to apply pointer deltas directly like mouse drag (`yaw -= dx*.0035`, `pitch -= dy*.0025`). HTML syntax validation passed. Browser opened and Start clicked; JS state probe failed because module-scoped state is not exposed on `window`, harmless for the game.
+
+### [DEBUG] 2026-07-03T00:58:22.210Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Fixed `games/mobile-sideways-fps/index.html` missing Three.js PNG assets by replacing `THREE.Sprite` billboard objects with textured `PlaneGeometry` + `MeshBasicMaterial` billboards and adding `root.traverse(...lookAt(camera.position))` in render. Also changed zombie sway from `sprite.material.rotation` to mesh `rotation.z`. Validation passed and started-game screenshot was delivered to Raul.
+
+### [TASK] 2026-07-03T01:59:50.552Z
+_Source: Background agent; session: brain_thought_2026-07-02_09-44_
+Brain Thought 1 (2026-07-02 09-44, window 13:44 UTC–01:44 UTC) verification complete. Dominant activity: mobile_mr2ors69_u35dij — Pocket Zombies / mobile-sideways-fps game fixes (controls, PlaneGeometry billboards, assets); parallel mid-investigation on mobile canvas HTML asset loading (liveSrc→/api/canvas/workspace/* in mobile-shell.js:1986-1987, canvasWorkspaceUrl:2283-2286; inlineStandaloneHtml only on export ~4951 not live iframe). Live re-verify: routes exist in canvas.router.ts; game notes in memory/2026-07-03-intraday-notes.md. Deliverables pending file write: Brain/thoughts/2026-07-02/09-44-thought.md + Brain/active-work.jsonl append (mobile-html-canvas-workspace-asset-loading, pocket-zombies-mobile-sideways-fps-playtest). Skill maintenance: local-file-browser-verification note resource recommended (serve cwd + mobile canvas distinction).
+
+### [DEV_EDIT_COMPLETE] 2026-07-03T02:27:03.431Z
+_Source: Background agent; session: brain_thought_restart_build_deploy_1783045618128_mobile_mr2ors69_u35dij_0_
+dev_edit_mr4b73nv_03640271: Mobile canvas HTML games — workspace URLs + ?pt= gateway auth on inline/download/workspace routes. Touched src/gateway/routes/canvas.router.ts (requireGatewayAuthAllowQueryToken / _requireGatewayAuth on canvas inline, download, workspace/*); web-ui mobile-api.js (authenticated streaming URLs), mobile-shell.js, mobile-pages.js (_mobileMediaUrl / canvas tab src). Verification: npm run sync:web-ui; prom_apply_dev_changes web-ui; gateway hot restart succeeded. Live: mobile file canvas should load Pocket Zombies and similar HTML game assets via tokenized URLs.
+
+### [TASK] 2026-07-03T03:46:00.079Z
+_Source: Background agent; session: brain_dream_2026-07-02_
+Brain Dream 2026-07-02 completed. 0 thoughts; synthesized from memory/2026-07-02-intraday-notes (30+ entries), 110 skill episodes, 155 gardener captures (Pocket Zombies / mobile_mr2ors69). Wrote Brain/dreams/2026-07-02/03-42-dream.md, Brain/proposals.md (2026-07-02). Refreshed active-work pocket-zombies row to in_progress lastVerified 2026-07-02. code_change proposal for Creative ONNX paths rejected by store (missing source-read evidence on model-paths.ts grep empty). Tool issues this run: workspace_edit mkdir needed path not directory; write_proposal needs src grep evidence; compaction x3 on grok-composer-2.5-fast.
+
+### [DEBUG] 2026-07-03T04:33:04.085Z
+_Source: Mobile chat session; session: mobile_mr4ees3z_ytvzm4; origin: Mobile app_
+Updated `games/figure-8-drift/index.html` per Raul's mobile screenshot/request: reorganized crowded build UI into tabbed ROAD/TRACK/MODE panels, added a real start/menu screen with Drive Figure 8, Build Track, reset preset, camera, and saved-track load/delete controls, fixed build-mode two-finger pinch zoom by tracking pinch distance as well as pan midpoint, and changed drift physics to preserve momentum when letting off gas (`coast=.996` off throttle, lower lat pull off throttle, higher grip retention) so the car keeps sliding instead of braking immediately. HTML/script syntax validates OK. Tool notes: mandatory skill matching overfired on irrelevant brand/secret skills for this local HTML game edit, costing extra tokens; workspace_read long minified lines still truncate unless using physical-line reads.
+
+### [DEBUG] 2026-07-03T04:41:38.734Z
+_Source: Mobile chat session; session: mobile_mr4ees3z_ytvzm4; origin: Mobile app_
+Fixed `games/figure-8-drift/index.html` render break after menu UI changes. Root cause: script still assigned `.onclick` to missing `#startBtn`, causing `TypeError: Cannot set properties of null` before the render loop/init completed. Removed accidental duplicate legacy menu line and guarded the legacy start handler. Browser verification on file URL now shows 0 console errors; DRIVE FIGURE 8 starts, hides menu, body enters `drive-mode`, and canvas produces rendered image data.
+
+### [DEBUG] 2026-07-03T04:49:44.362Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Fixed Pocket Zombies upside-down non-weapon sprites/assets in `games/mobile-sideways-fps/index.html` by changing the dynamic CanvasTexture setup from `t.flipY=false` to `t.flipY=true`. User gun/HUD was already correct because it is a DOM image, not a Three.js CanvasTexture sprite.
+
+### [DEBUG] 2026-07-03T05:10:57.003Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Fixed Pocket Zombies firing regression in `games/mobile-sideways-fps/index.html`: shooting ray direction was still using the old positive yaw/cos convention while movement/camera uses negative sin/cos, so taps flashed but rays went behind the player and missed zombies. Updated `shoot()` to use `(-sin(yaw), -cos(yaw))`, normalize direction, slightly widen hit radii, add tracer lines, and make the weapon fire sprite/recoil visibly snap back/forth longer. HTML validation passed; `node --check` on .html failed with ERR_UNKNOWN_FILE_EXTENSION, so use validate_file for inline HTML syntax.
+
+### [DEBUG] 2026-07-03T05:58:16.913Z
+_Source: Mobile chat session; session: mobile_mr4ees3z_ytvzm4; origin: Mobile app_
+Figure-8 drift: removed full-width #editor dark gradient/blur over track view; styling only on .buildPanel. Build camera: 1-finger orbit, 2-finger pinch+zoom+lighter pan, smoothed applyBuildCamera(dt), touch no longer blocks pointer orbit on desktop.
+
+### [DEBUG] 2026-07-03T06:05:39.631Z
+_Source: Mobile chat session; session: mobile_mr4ees3z_ytvzm4; origin: Mobile app_
+Figure-8 drift: knockable orange track cones — hide on car hit (speed>1.2, dist<1.4), respawn ~1.5–2.2s; cones[] separate from trackParts. Slightly slower: gas*32, max 46, coast .9985 off-throttle.
+
+### [TASK] 2026-07-03T06:11:44.115Z
+_Source: Background agent; session: brain_thought_2026-07-03_14-06_
+Brain Thought 1 (2026-07-03 14-06, window 2026-07-02 18:06–2026-07-03 06:06 UTC) complete. Wrote Brain/thoughts/2026-07-03/14-06-thought.md. Ledger: figure-8-drift-mobile-build, pocket-zombies-mobile-fps (05:14 HUD/touch open), mobile-html-canvas-workspace-asset-loading. Skill maintenance this run: codex post-menu-refactor-dom-guard, threejs yaw-movement-fire-alignment (prior session resources verified on disk).
+
+### [DEBUG] 2026-07-03T06:17:27.118Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies combat pass: aimDir() via camera.getWorldDirection; shoot ray vs zombies with flashZombieHit red tint + damage floaters; tracers 0.45s brighter; fire/reload HUD held longer with render()-driven sprite (not transform-only recoil). File: games/mobile-sideways-fps/index.html. Note: replace_lines once wiped shoot/reload body — recovered with insert_after.
+
+### [DEBUG] 2026-07-03T06:19:16.694Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Fixed Pocket Zombies `games/mobile-sideways-fps/index.html` JS parse errors that blocked shoot/tracers/HUD: invalid `?.55`/`?.02`/`?.94` ternaries → proper `?0.55:1` etc.; reload Speed Cola uses `state.perks.has('SPEED')`. Tracers now thick visible `Mesh` beams (not thin Lines). Zombie `hitFlash` init + stronger red flash on hit. Weapon HUD/fire/reload PNGs use `texUrl()` cache-bust. User should hard-refresh mobile canvas.
+
+### [DEBUG] 2026-07-03T15:49:30.784Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies fire reliability: lookPad no longer covers FIRE (bottom strip + narrower left); fire pointerdown calls shoot() immediately; bindButton lostpointercapture clears touch.fire.
+
+### [DEBUG] 2026-07-03T15:56:34.752Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies: replaced billboard zombie PNG sprites with procedural Three.js humanoid meshes (head/torso/limbs; walker/brute/crawler/dog variants). Walk animation, face movement direction, hit flash on all body materials, dispose on kill/reset. File: games/mobile-sideways-fps/index.html. Fixed killZombie string break from edit.
+
+### [DEBUG] 2026-07-03T16:10:24.274Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies mobile invisible zombies: root cause was corrupted index.html — script closed at line 81 then ~97 lines of duplicate JS (including z.sprite loop) lived after </html>. Deleted lines 85-181. Game loop now single clean script with mesh zombies. Mobile visibility: MeshLambertMaterial for humanoids, stronger hemi/ambient/point lights, capped shadow map 1024, lighter fog.
+
+### [DEBUG] 2026-07-03T16:39:11.078Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies visual verify (HTTP :8768): preserveDrawingBuffer:true added so WebGL paints to canvas. __pzDebug at 0.8s: zombies=8, zombieMeshesInScene=8 (userData.zombieBody). Canvas pixel sample ~36% skin/green tones when alive — 3D room + humanoid Lambert meshes rendering. Automation dies in <2s so death overlay often covers shot; scene graph proof meshes pop up. Screenshots sent to mobile origin.
+
+### [DEBUG] 2026-07-03T16:56:31.562Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies visibility pass: Raul reported zombies not visible despite HUD. Read local-file-browser-verification + threejs-mobile-webgl + three skills. In games/mobile-sideways-fps/index.html changed humanoid zombies to unlit MeshBasicMaterial, enlarged mesh scale 1.75, made wave-1 first spawns closer to player, brightened per-type green skin/cloth colors, and disabled zombie material depthTest/depthWrite to prevent walls/floor depth hiding them. validate_file passes. Browser verification still showed rapid death; screenshots sent to mobile. Pixel sampling only detected very few green pixels before final depthTest tweak; next check should reload ?v=zvisfix6, start, screenshot within <0.5s, and if still hard to see, add a temporary debug/first-wave spawn directly in front of camera or reduce wave-1 damage/speed.
+
+### [DEBUG] 2026-07-03T17:20:48.596Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies mobile canvas investigation: opened Prometheus mobile UI at http://127.0.0.1:18789/#mobile/chat and directly opened Canvas sheet iframe for `games/mobile-sideways-fps/index.html`. Mobile canvas path serves live HTML from `/api/canvas/workspace/...` with same-origin sandbox and correct full-frame sizing; assets load and iframe WebGL canvas renders. Real issue found in game file visibility/orientation: player yaw reset faced away from first-wave near spawns, so zombies existed but were off-camera. Patched initial/reset yaw to `Math.PI`, moved first-wave near spawn points in front of player (`z≈6.4-7.1`), and widened mobile FOV in resize. Validation OK. In mobile canvas iframe after reload/start, `__pzDebug` shows 1 zombie mesh and framebuffer pixel stats show visible green/red nonblack pixels, confirming rendered zombie colors appear in the mobile canvas path.
+
+### [DEBUG] 2026-07-03T17:43:15.662Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies asset-loading regression: Raul reported assets no longer loading after mobile canvas/zombie visibility passes. Inspected `games/mobile-sideways-fps/index.html`; syntax OK and asset folder contains referenced PNGs. Found texture path had reverted to direct `THREE.TextureLoader` with failed-load fallback replacing texCache but not existing material maps, plus iOS-risky upload behavior. Patched line 36 to always return a same-origin power-of-two `CanvasTexture` placeholder immediately, load image into that same canvas, use ClampToEdge/Linear/no mipmaps/unpackAlignment=1/flipY=true, and mark sprite materials dirty. This should restore HUD/wall-buy/pickup sprites in Prometheus mobile canvas. Validation: `validate_file` syntax OK. Asset-existence shell check was blocked by Lite terminal permissions; manual asset list confirms names exist.
+
+### [DEBUG] 2026-07-03T18:25:13.806Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies pass (IMG_6417 feedback): gun HUD bottom -4vh clipped weapon on mobile — set bottom:0. Zombie scale 1.75→0.78 (~55% smaller). resolveAssetUrl() for canvas iframe asset paths. Tracers: thin core+shell cylinders, fade cleanup. Three 0.160.0 stable build.
+
+### [DEBUG] 2026-07-03T19:18:35.522Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies pass: zombie groundLift (.34h walkers, .08 crawler, .14h dog) fixes feet-in-floor; perk/wall sprites flipY+raf texture update; fire button no pointer capture + lookPad inset above FIRE so fire+look multitouch works.
+
+### [DEBUG] 2026-07-03T19:54:38.158Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies pass (Raul 5-item + ref imgs): SMG/shotgun/rifle HUD class wpn-alt (+4vw,+4vh); lookPad full right edge, no pointer capture on look; fire no capture; setWeaponHudIdle for reliable pistol revert; zombie depthTest true (walls); smaller hit radii + 0.72 perp mult; tighter spread 1.35x; groundLift bump; removed stray state.perks=new Set line.
+
+### [DEBUG] 2026-07-03T19:58:54.959Z
+_Source: Mobile chat session; session: mobile_mr2ors69_u35dij; origin: Mobile app_
+Pocket Zombies black-after-START: root cause TypeError state.perks is not iterable in updateHud — state.perks missing from initial state object (only set in reset). Crashed on load updateHud() and again on START→reset→updateHud(), killing RAF loop → black WebGL. Fix: perks:new Set() in state init + defensive iterate in updateHud. Verified canvas route after fix: START hides overlay, game runs (automation dies fast to YOU DIED).
+
+### [TASK] 2026-07-03T22:54:39.366Z
+_Source: Mobile chat session; session: mobile_mr5ix76j_u60vp1_
+Galaxy Drift space game at games/mobile-space-explorer/: modular Three.js (galaxy→biome fade, 4 planet biomes, NPCs chat/hostile, mobile sticks+desktop WASD, asteroid hull damage). HTTP http://127.0.0.1:8778/ — browser verified START, WebGL, jade planet transition, asteroid damage lowers hull.
+
+### [TASK] 2026-07-03T22:56:37.092Z
+_Source: Mobile chat session; session: mobile_mr5ix76j_u60vp1_
+Galaxy Drift (games/mobile-space-explorer) goal verified 2026-07-03: HTTP :8778, START→galaxy WebGL, asteroid bump hull 100→92, warpToPlanet('jade')→biome HUD JADE HOLLOW/jungle. Modular js/ not monolith.
+
+### [TASK] 2026-07-03T22:58:08.733Z
+_Source: Mobile chat session; session: mobile_mr5ix76j_u60vp1_
+Galaxy Drift goal verified 2026-07-03: games/mobile-space-explorer modular (galaxy.js, biome.js, main.js, touch/desktop input, npcs). HTTP :8778 START→galaxy WebGL, testAsteroidBump hull 100→92, warpToPlanet('jade')→biome HUD JADE HOLLOW/jungle. Plan steps 1-4 implemented in repo.
+
+### [TASK] 2026-07-03T23:16:56.812Z
+_Source: Mobile chat session; session: mobile_mr5ix76j_u60vp1; origin: Mobile app_
+Galaxy Drift expansion (find_replace only): galaxy.js +55 debris chunks, 12 satellites, comet+trail, derelict wreck; biome tundra crystals, jungle ruins, 40 rocks; npcs 8 chars, buildNpcMesh visor/gun/cloak/staff, ranged enemy shots, pulsing rings; mothership interior side walls, crates, hangar+parked ship, 3 terminals, bar/stools, Officer Lane crew, ceiling pipes, 2 point lights; projectiles enemy red bolts hit player.
+
+### [DISCOVERY] 2026-07-03T23:27:26.975Z
+_Source: Mobile chat session; session: mobile_mr5k2xqv_82sm2j; origin: Mobile app_
+2026-07-03 X research for Raul: Hermes Unbroker skill (Teknium/SHL0MS, optional Hermes skill for data-broker removal). OpenClaw = star hype + security backlash (exposed instances, skill marketplace malware). Claude Fable 5 live again Jul 1; discourse = 10-80-10 routing, router not nerf, China/Alibaba ban angle. scroll_collect benchmark: FYP ~38s/118 posts prior; Claude search 8×400ms ~3.8s/27 items; Hermes search 6×250ms ~2.5s/31 items; scroll_collect_v2 failed (schema.fields). xai search 6s timeout repeatedly.
+
+### [DISCOVERY] 2026-07-03T23:32:19.757Z
+_Source: Mobile chat session; session: mobile_mr5k2xqv_82sm2j; origin: Mobile app_
+X collection benchmark 2026-07-03: web_fetch status ~3.8s/~2k result tokens (2 tweets+thread); web_fetch search ~2.7s/~1.9k tokens (dup-heavy); scroll_collect status 1.1s/1411 tokens/2 items; scroll_collect hermes search 2.5s/16.4k tokens/36 items (max_chars); run_js status 986ms/489 tokens; page_text 70ms/802 tokens noisy; scroll_collect_v2 still errors without proper schema.fields shape. user_chrome open failed 15s CDP.

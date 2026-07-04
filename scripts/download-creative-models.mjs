@@ -1,19 +1,29 @@
 #!/usr/bin/env node
 /**
- * Downloads MobileSAM (encoder + decoder) and LaMa ONNX weights into
- * `<prometheus config dir>/models/`. Run once; the Creative Image extract-layers
- * pipeline expects these files. Overridable via env vars:
+ * Downloads MobileSAM (encoder + decoder), LaMa, and RMBG ONNX weights into
+ * `<prometheus config dir>/models/`. The default destination follows the
+ * runtime config-dir order: PROMETHEUS_DATA_DIR, project .prometheus if present,
+ * then ~/.prometheus. PROMETHEUS_CONFIG_DIR is a script-only destination override.
+ * Run once; the Creative Image extract-layers pipeline expects these files.
+ * Overridable via env vars:
  *   PROMETHEUS_MOBILESAM_ENCODER_PATH, PROMETHEUS_MOBILESAM_DECODER_PATH, PROMETHEUS_LAMA_PATH
+ *   PROMETHEUS_RMBG_PATH
  *   PROMETHEUS_MOBILESAM_ENCODER_URL, PROMETHEUS_MOBILESAM_DECODER_URL, PROMETHEUS_LAMA_URL
+ *   PROMETHEUS_RMBG_URL
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import https from 'node:https';
-import { URL } from 'node:url';
+import { URL, fileURLToPath } from 'node:url';
 
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '..');
+const PROJECT_CONFIG_DIR = path.join(PROJECT_ROOT, '.prometheus');
+const HOME_CONFIG_DIR = path.join(os.homedir(), '.prometheus');
 const CONFIG_DIR = process.env.PROMETHEUS_CONFIG_DIR
-  || path.join(process.cwd(), '.prometheus');
+  || (process.env.PROMETHEUS_DATA_DIR ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus') : '')
+  || (fs.existsSync(PROJECT_CONFIG_DIR) ? PROJECT_CONFIG_DIR : HOME_CONFIG_DIR);
 const MODELS_DIR = path.join(CONFIG_DIR, 'models');
 fs.mkdirSync(MODELS_DIR, { recursive: true });
 

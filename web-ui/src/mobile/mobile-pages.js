@@ -26,7 +26,6 @@ import {
   loadBgTasks, loadBgTaskDetail, loadBgTaskEvidence, sendBgTaskMessage, runBgTaskAction, loadVoiceStatus,
   transcribeVoiceAudio, synthesizeVoiceAudio, loadVoiceVoices,
   loadMobileMoreSummary, loadMobileHubOverview, loadMobileAuditRuns, loadMobileMemoryOverview,
-  applyMobileSkillCuratorSuggestion, denyMobileSkillCuratorSuggestion,
   loadMobileProposals, loadMobileProposal, approveMobileProposal, denyMobileProposal,
   loadMobileApprovals, approveMobileApproval, denyMobileApproval, loadMobileQuestions,
   loadMobileProcessRuns, loadMobileProcessRunLog, rerunMobileProcessRun, killMobileProcessRun, submitMobileProcessInput,
@@ -34,7 +33,7 @@ import {
   loadMobileCommandModels, loadMobileStopTargets, stopMobileMainChat, stopMobileRuntime,
   runMobileScreenshotCommand, restartMobileGateway,
   loadMobileWorkspaceFiles, loadMobileFileScreenshot,
-  loadCanvasImageDataUrl, creativeExtractLayers, loadCreativeGallery, buildInlineMediaUrl,
+  loadCanvasImageDataUrl, creativeExtractLayers, loadCreativeGallery, buildInlineMediaUrl, buildDownloadMediaUrl, buildWorkspaceCanvasUrl,
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentHeartbeat,
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
@@ -636,6 +635,11 @@ function _loadMobileThreadCache(sessionId) {
     if (!entry || !Array.isArray(entry.thread)) return [];
     // Discard cache older than 24h — stale enough to be confusing
     if (Date.now() - Number(entry.savedAt || 0) > 86_400_000) return [];
+    if (_mobileThreadLooksRoleGrouped(entry.thread)) {
+      delete store[sid];
+      try { localStorage.setItem(PM_MOBILE_THREAD_CACHE_KEY, JSON.stringify(store)); } catch {}
+      return [];
+    }
     return entry.thread;
   } catch { return []; }
 }
@@ -891,6 +895,68 @@ function _cloneMobileMessageForBranch(msg) {
 function _mobileMessageCopyText(msg) {
   const text = String(msg?.content || msg?.body?.text || '').trim();
   return msg?.role === 'user' ? _stripMobileInternalUploadContext(text) : text;
+}
+
+function _mobileMessageStableFingerprint(msg) {
+  if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) return '';
+  const role = String(msg.role || '');
+  const text = _mobileMessageCopyText(msg)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!text) return '';
+  const attachments = [
+    ...(Array.isArray(msg.attachmentPreviews) ? msg.attachmentPreviews : []),
+    ...(Array.isArray(msg.body?.attachments) ? msg.body.attachments : []),
+  ]
+    .map((item) => String(item?.workspacePath || item?.path || item?.filePath || item?.name || '').trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+    .join(',');
+  return `${role}|${text}|${attachments}`;
+}
+
+function _pruneMobileRoleGroupedDuplicateTail(thread) {
+  const list = Array.isArray(thread) ? thread : [];
+  if (list.length < 4) return list;
+  let end = list.length - 1;
+  while (end >= 0 && !(list[end]?.role === 'user' || list[end]?.role === 'ai')) end -= 1;
+  if (end < 2) return list;
+  const tailRole = list[end]?.role;
+  let start = end;
+  while (start > 0 && list[start - 1]?.role === tailRole) start -= 1;
+  const tailLength = end - start + 1;
+  if (tailLength < 2) return list;
+  const earlier = new Set();
+  for (let i = 0; i < start; i += 1) {
+    const key = _mobileMessageStableFingerprint(list[i]);
+    if (key) earlier.add(key);
+  }
+  if (!earlier.size) return list;
+  let duplicateCount = 0;
+  for (let i = start; i <= end; i += 1) {
+    const key = _mobileMessageStableFingerprint(list[i]);
+    if (key && earlier.has(key)) duplicateCount += 1;
+  }
+  if (duplicateCount < tailLength || duplicateCount < 2) return list;
+  list.splice(start, tailLength);
+  return list;
+}
+
+function _mobileThreadLooksRoleGrouped(thread) {
+  const list = Array.isArray(thread) ? thread : [];
+  const before = list.length;
+  const clone = list.map((msg) => ({ ...msg }));
+  _pruneMobileRoleGroupedDuplicateTail(clone);
+  return clone.length < before;
+}
+
+function _reconcileMobileThreadOrder(thread) {
+  const list = Array.isArray(thread) ? thread : [];
+  _pruneMobileRoleGroupedDuplicateTail(list);
+  _dedupeMobileAssistantTurns(list);
+  _reindexMobileThread(list);
+  return list;
 }
 
 function _isMobileVoiceAgentWorkerHandoff(msg) {
@@ -1768,6 +1834,14 @@ function _renderMobileWorkTimer(msg, opts = {}) {
   return `<div class="pm-work-timer">${label}</div>`;
 }
 
+function _wrapMobileMarkdownTables(html) {
+  const src = String(html || '');
+  if (!src || !/<table\b/i.test(src)) return src;
+  return src.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (tableHtml) => {
+    return `<div class="pm-md-table-scroll">${tableHtml}</div>`;
+  });
+}
+
 function _renderMobileMarkdown(text) {
   const raw = String(text || '');
   if (!raw.trim()) return '';
@@ -1781,7 +1855,7 @@ function _renderMobileMarkdown(text) {
       .catch(() => {});
   }
   try {
-    return renderMd(raw);
+    return _wrapMobileMarkdownTables(renderMd(raw));
   } catch {
     return escapeHtml(raw).replace(/\n/g, '<br>');
   }
@@ -2199,7 +2273,7 @@ function _renderMobileProcess(entries, options = {}) {
   `;
 }
 
-function _appendMobileLiveTrace(message, type, text, { append = false } = {}) {
+function _appendMobileLiveTrace(message, type, text, { append = false, extra = null } = {}) {
   if (!message) return;
   const content = String(text || '');
   if (!content) return;
@@ -2208,7 +2282,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false } = {}) {
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
-  if (!isThoughtLike) _flushMobileTraceThoughtProbe(message);
+  if (!isThoughtLike) _flushMobileTraceThoughtProbe(message, { force: true });
   if (isThoughtLike && _mobileTraceShouldProbeThought(message, normalizedType, append)) {
     const probe = message._pmTraceThoughtProbe;
     const nextProbeText = _appendMobileStreamingText(
@@ -2258,9 +2332,43 @@ function _appendMobileLiveTrace(message, type, text, { append = false } = {}) {
         type: normalizedType,
         text: trimmed,
         time: _nowTime(),
+        ...(extra && typeof extra === 'object' ? { extra } : {}),
       });
     }
   }
+}
+
+function _appendMobileCompactionTrace(message, status = 'compacting', summary = '', extra = null) {
+  if (!message) return;
+  if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  _flushMobileTraceThoughtProbe(message, { force: true });
+  const normalizedStatus = String(status || 'compacting').toLowerCase();
+  const label = normalizedStatus === 'compacting'
+    ? 'Compacting Context'
+    : normalizedStatus === 'failed'
+      ? 'Context Compaction Failed'
+      : normalizedStatus === 'skipped'
+        ? 'Context Compaction Skipped'
+        : 'Context Compacted';
+  const cleanSummary = String(summary || extra?.summary || '').trim();
+  const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
+  const payload = extra && typeof extra === 'object' ? extra : {};
+  if (last && String(last.type || '').toLowerCase() === 'compaction') {
+    last.text = label;
+    last.status = normalizedStatus;
+    if (cleanSummary) last.summary = cleanSummary;
+    last.extra = { ...(last.extra || {}), ...payload };
+    return;
+  }
+  message.liveTraceEntries.push({
+    id: `mtrace_compact_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: 'compaction',
+    text: label,
+    status: normalizedStatus,
+    summary: cleanSummary,
+    extra: payload,
+    time: _nowTime(),
+  });
 }
 
 function _appendMobileVisionTrace(message, evt) {
@@ -2467,6 +2575,27 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     if (_isInternalMobileRestartProcessEntry(entry)) return;
     let type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
     let text = String(entry.text || entry.content || entry.message || '').trim();
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : null;
+    const action = String(extra?.action || extra?.toolName || entry.action || entry.toolName || '').trim();
+    if (action === 'context_compaction') {
+      const status = String(extra?.extra?.status || extra?.status || '').toLowerCase()
+        || (type === 'error' ? 'failed' : type === 'tool' ? 'compacting' : 'compacted');
+      type = 'compaction';
+      text = status === 'compacting'
+        ? 'Compacting Context'
+        : status === 'failed'
+          ? 'Context Compaction Failed'
+          : status === 'skipped'
+            ? 'Context Compaction Skipped'
+            : 'Context Compacted';
+      entry = {
+        ...entry,
+        type,
+        text,
+        status,
+        summary: String(extra?.extra?.summary || extra?.summary || entry.summary || '').trim(),
+      };
+    }
     if (type === 'preamble' || type === 'think' || type === 'assistant') {
       text = _dedupeMobileTraceProseText(text);
     }
@@ -2569,13 +2698,6 @@ function _moveMobileVisibleAnswerIntoWorkflowTrace(message) {
   _moveMobileAnswerTextIntoTrace(message, message?.toolActivityStarted ? 'think' : 'preamble');
 }
 
-function _shouldRouteMobileTokenToLiveTrace(message) {
-  if (!message || message.finalResponseStarted) return false;
-  const mode = String(message.agentExecutionMode || '').trim();
-  if (message._pmRecoveryReplay === true && mode !== 'chat') return true;
-  return mode !== 'chat' && !message.toolActivityStarted;
-}
-
 function _renderMobileLiveTracePreview(entry) {
   const preview = entry?.preview && typeof entry.preview === 'object' ? entry.preview : null;
   const dataUrl = String(preview?.dataUrl || entry?.dataUrl || '').trim();
@@ -2673,9 +2795,8 @@ function _isMobileTraceThoughtFragmentText(value) {
   if (!comparable) return true;
   const words = comparable.split(/\s+/).filter(Boolean);
   if (!words.length) return true;
-  if (words.length <= 2 && comparable.length <= 24) return true;
-  if (words.length <= 5 && comparable.length <= 64) return true;
   if (/[.!?]\s*$/.test(raw) || /\n\s*\n/.test(raw)) return false;
+  if (words.length === 1 && comparable.length <= 16) return true;
   return false;
 }
 
@@ -2751,16 +2872,7 @@ function _mobileTraceShouldProbeThought(message, type, append) {
   const entries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
   const last = entries[entries.length - 1];
   if (last && String(last.type || '').toLowerCase() === String(type || '').toLowerCase()) return false;
-  if (!entries.some((entry) => _isMobileTraceThoughtType(entry?.type))) return false;
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
-    if (!entry) continue;
-    const hasContent = String(entry.text || entry.content || '').trim()
-      || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim();
-    if (!hasContent) continue;
-    return !_isMobileTraceThoughtType(entry.type);
-  }
-  return false;
+  return true;
 }
 
 function _pushMobileTraceThoughtEntry(message, type, text, time = '') {
@@ -2842,6 +2954,28 @@ function _renderMobileLiveTraceEntry(entry) {
   return `<div class="pm-live-segment ${escapeHtml(type)}"${attr}><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
 }
 
+function _isMobileTraceCompactionEntry(entry) {
+  return String(entry?.type || '').toLowerCase() === 'compaction';
+}
+
+function _renderMobileCompactionBreak(entry) {
+  const status = String(entry?.status || entry?.extra?.status || '').toLowerCase();
+  const label = String(entry?.text || '').trim()
+    || (status === 'compacting' ? 'Compacting Context' : status === 'failed' ? 'Context Compaction Failed' : 'Context Compacted');
+  const summary = String(entry?.summary || entry?.extra?.summary || '').trim();
+  const body = summary
+    ? `<div class="pm-trace-compaction-body"><div class="pm-live-md">${_renderMobileMarkdown(summary)}</div></div>`
+    : (status === 'compacting' ? '<div class="pm-trace-compaction-body muted">Compaction summary will appear when complete.</div>' : '');
+  return `<details class="pm-trace-compaction" data-status="${escapeHtml(status || 'done')}">
+    <summary>
+      <span class="pm-trace-compaction-line" aria-hidden="true"></span>
+      <strong>${escapeHtml(label)}</strong>
+      <span class="pm-trace-compaction-line" aria-hidden="true"></span>
+    </summary>
+    ${body}
+  </details>`;
+}
+
 function _isMobilePreparedTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
   const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
@@ -2895,6 +3029,11 @@ function _mobileTraceGroups(entries) {
   const groups = [];
   let activeToolGroup = null;
   list.forEach((entry) => {
+    if (_isMobileTraceCompactionEntry(entry)) {
+      activeToolGroup = null;
+      groups.push({ kind: 'compaction', entries: [entry] });
+      return;
+    }
     if (_isMobileTraceThoughtEntry(entry)) {
       activeToolGroup = null;
       groups.push({ kind: 'thought', entries: [entry] });
@@ -2910,7 +3049,9 @@ function _mobileTraceGroups(entries) {
 }
 
 function _mobileTraceHasToolGroup(entries) {
-  return _mobileTraceGroups(entries).some((group) => group.kind === 'tools' && group.entries.length > 0);
+  return _mobileTraceGroups(entries).some((group) =>
+    (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0
+  );
 }
 
 function _mobileTraceToolLabel(text) {
@@ -3190,10 +3331,13 @@ function _mobileTraceSummaryKey(text) {
 function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent = false } = {}) {
   const groups = _mobileTraceGroups(entries);
   if (!groups.length) return '';
-  if (!streaming && !groups.some((group) => group.kind === 'tools' && group.entries.length > 0)) return '';
+  if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
   return `<div class="pm-trace-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
       return `<div class="pm-trace-thought">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div>`;
+    }
+    if (group.kind === 'compaction') {
+      return group.entries.map(_renderMobileCompactionBreak).join('');
     }
     const isLiveCurrent = streaming && index === groups.length - 1;
     const summary = isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries);
@@ -3247,8 +3391,11 @@ function _mobileMediaName(item, path) {
 function _mobileMediaUrl(media, mode = 'inline') {
   if (media.dataUrl) return media.dataUrl;
   if (/^https?:\/\//i.test(media.path)) return media.path;
-  const endpoint = mode === 'download' ? '/api/canvas/download' : '/api/canvas/inline';
-  return media.path ? `${endpoint}?path=${encodeURIComponent(media.path)}` : '#';
+  if (!media.path) return '#';
+  if (mode === 'download') return buildDownloadMediaUrl(media.path);
+  const ext = _mobileFileExt(media.path || media.name);
+  if (['html', 'htm'].includes(ext)) return buildWorkspaceCanvasUrl(media.path);
+  return buildInlineMediaUrl(media.path);
 }
 
 function _normalizeMobileMedia(item) {
@@ -3420,6 +3567,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
       return !!text && !!msgText && msgText === text;
     });
   };
+  const hasServerHistory = next.some((msg) => msg?.role === 'user' || msg?.role === 'ai');
   for (const msg of local) {
     if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) continue;
     if (_isMobileHiddenVoiceDraftMessage(msg, -1)) continue;
@@ -3428,7 +3576,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
       && msg.streaming !== true
       && _mobileAssistantHasVisibleAnswer(msg)
       && Date.now() - Number(msg.workEndedAt || msg.timestamp || 0) < 45_000;
-    const isPendingUser = msg.role === 'user' && !hasMatchingTurn(msg);
+    const isPendingUser = !hasServerHistory && msg.role === 'user' && !hasMatchingTurn(msg);
     if ((isPendingAssistant || isRecentCompletedAssistant || isPendingUser) && !hasMatchingTurn(msg)) {
       next.push(msg);
     }
@@ -3439,7 +3587,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
 function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
   const merged = _mergeMobileThreadLocalArtifacts(mapped, localThread);
-  return _mergeMobilePinnedCompletedTurn(sessionId, merged);
+  return _reconcileMobileThreadOrder(_mergeMobilePinnedCompletedTurn(sessionId, merged));
 }
 
 function _clearMobileLiveRunForSession(sessionId) {
@@ -3734,7 +3882,8 @@ function _isMobileImageGenerationStreamEntry(entry) {
 function _renderMobileGeneratedImageLoadingCard() {
   return `<div class="pm-generated-image-batch pm-generated-image-batch--pending" aria-live="polite">
     <div class="pm-generated-image-loading-panel">
-      <span aria-hidden="true"></span>
+      <span class="pm-generated-image-particles" aria-hidden="true"></span>
+      <span class="pm-generated-image-orb" aria-hidden="true"></span>
       <i aria-hidden="true"></i>
     </div>
   </div>`;
@@ -4300,10 +4449,13 @@ function _normalizeMobileFileChanges(fileChanges) {
   const normalizedFiles = files.map((file) => {
     const path = String(file?.path || file?.displayPath || '').trim();
     const displayPath = String(file?.displayPath || path || '').trim();
+    const displayIsAbsolute = /^(?:[a-zA-Z]:[\\/]|\/)/.test(displayPath);
+    const openPath = displayPath && !displayIsAbsolute ? displayPath : path;
     const statusRaw = String(file?.status || 'modified').toLowerCase();
     const status = ['added', 'modified', 'deleted', 'renamed'].includes(statusRaw) ? statusRaw : 'modified';
     return {
       path,
+      openPath,
       displayPath,
       status,
       insertions: Math.max(0, Number(file?.insertions) || 0),
@@ -4320,6 +4472,18 @@ function _normalizeMobileFileChanges(fileChanges) {
       deletions: Math.max(0, Number(summary.deletions) || normalizedFiles.reduce((sum, file) => sum + file.deletions, 0)),
     },
     files: normalizedFiles,
+    checkpoint: _normalizeMobileWorkspaceCheckpoint(fileChanges?.checkpoint),
+  };
+}
+
+function _normalizeMobileWorkspaceCheckpoint(checkpoint) {
+  if (!checkpoint || typeof checkpoint !== 'object') return null;
+  const id = String(checkpoint.id || checkpoint.checkpoint_id || checkpoint.checkpointId || '').trim();
+  if (!id) return null;
+  return {
+    id,
+    createdAt: Number(checkpoint.createdAt || checkpoint.created_at || 0) || 0,
+    snapshotCount: Math.max(0, Number(checkpoint.snapshotCount || checkpoint.snapshot_count || 0) || 0),
   };
 }
 
@@ -4338,11 +4502,12 @@ function _normalizeMobileFileChangeGroups(fileChanges) {
 }
 
 function _renderMobileFileChangeRow(file) {
-  const canOpen = file.path && file.status !== 'deleted';
-  const kind = _mobileMediaKind({ path: file.path, name: file.displayPath });
+  const openPath = String(file.openPath || file.path || '').trim();
+  const canOpen = openPath && file.status !== 'deleted';
+  const kind = _mobileMediaKind({ path: openPath, name: file.displayPath });
   return `
     <div class="pm-file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}"
-      ${canOpen ? `data-pm-file-change-path="${escapeHtml(file.path)}" data-pm-file-change-name="${escapeHtml(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file')}" data-pm-file-change-kind="${escapeHtml(kind)}"` : 'aria-disabled="true"'}>
+      ${canOpen ? `data-pm-file-change-path="${escapeHtml(openPath)}" data-pm-file-change-name="${escapeHtml(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file')}" data-pm-file-change-kind="${escapeHtml(kind)}"` : 'aria-disabled="true"'}>
       <div class="pm-file-change-main">
         <span class="pm-file-change-status ${escapeHtml(file.status)}">${escapeHtml(file.binary ? 'binary' : file.status)}</span>
         <span class="pm-file-change-path">${escapeHtml(file.displayPath)}</span>
@@ -4355,17 +4520,26 @@ function _renderMobileFileChangeRow(file) {
   `;
 }
 
+function _renderMobileWorkspaceCheckpointAction(checkpoint) {
+  if (!checkpoint?.id) return '';
+  const title = checkpoint.snapshotCount
+    ? `Restore this turn checkpoint (${checkpoint.snapshotCount} snapshots)`
+    : 'Restore this turn checkpoint';
+  return `<button type="button" class="pm-file-change-restore-btn" data-pm-restore-checkpoint="${escapeHtml(checkpoint.id)}" title="${escapeHtml(title)}">Restore</button>`;
+}
+
 function _renderMobileFileChangesGroup(data, options = {}) {
   if (!data) return '';
   const visible = data.files.slice(0, 3);
   const rest = data.files.slice(3);
   const fileWord = data.summary.fileCount === 1 ? 'file' : 'files';
   const label = String(options.label || '').trim();
+  const checkpointAction = _renderMobileWorkspaceCheckpointAction(options.checkpoint || data.checkpoint);
   return `
     <div class="pm-file-changes-card">
       <div class="pm-file-changes-head">
         <strong>${label ? `${escapeHtml(label)} - ` : ''}${data.summary.fileCount} ${fileWord} changed</strong>
-        <span><em class="ins">+${data.summary.insertions}</em><em class="del">-${data.summary.deletions}</em></span>
+        <span class="pm-file-changes-actions">${checkpointAction}<span class="pm-file-changes-total"><em class="ins">+${data.summary.insertions}</em><em class="del">-${data.summary.deletions}</em></span></span>
       </div>
       <div class="pm-file-change-list">
         ${visible.map(_renderMobileFileChangeRow).join('')}
@@ -4382,8 +4556,9 @@ function _renderMobileFileChangesGroup(data, options = {}) {
 
 function _renderMobileFileChanges(fileChanges) {
   const groups = _normalizeMobileFileChangeGroups(fileChanges);
+  const checkpoint = _normalizeMobileWorkspaceCheckpoint(fileChanges?.checkpoint);
   if (groups.length) {
-    return `<div class="pm-file-changes-grouped">${groups.map((group) => _renderMobileFileChangesGroup(group.data, { label: group.label })).join('')}</div>`;
+    return `<div class="pm-file-changes-grouped">${groups.map((group, index) => _renderMobileFileChangesGroup(group.data, { label: group.label, checkpoint: index === 0 ? checkpoint : null })).join('')}</div>`;
   }
   return _renderMobileFileChangesGroup(_normalizeMobileFileChanges(fileChanges));
 }
@@ -5818,6 +5993,9 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     const openTerminals = {};
     const stableVisionPreviews = {};
     const stableTraceSummaryLabels = {};
+    let stablePendingImageBatch = null;
+    let stableThinkingDots = null;
+    const stableLiveTraceGroups = {};
     const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
     const questionDrafts = _captureMobileQuestionDraftState(currentEl);
     try {
@@ -5829,6 +6007,12 @@ function _patchMobileThreadMessage(threadEl, message, index) {
         const groupKey = node.closest('details.pm-trace-tool-group')?.getAttribute('data-pm-trace-group') || '';
         const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
         if (groupKey && key) stableTraceSummaryLabels[groupKey] = { key, node };
+      });
+      stablePendingImageBatch = currentBubble.querySelector('.pm-generated-image-batch--pending');
+      stableThinkingDots = currentBubble.querySelector('.pm-thinking-dots');
+      currentBubble.querySelectorAll('details.pm-trace-tool-group[data-pm-trace-live-current="1"]').forEach((node) => {
+        const groupKey = String(node.getAttribute('data-pm-trace-group') || '').trim();
+        if (groupKey) stableLiveTraceGroups[groupKey] = node;
       });
       currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
         if (d.open) {
@@ -5876,6 +6060,19 @@ function _patchMobileThreadMessage(threadEl, message, index) {
         } else if (!stable || stable.key !== key) {
           node.classList.add('pm-trace-summary-swap');
         }
+      });
+      if (stablePendingImageBatch) {
+        const nextPending = currentBubble.querySelector('.pm-generated-image-batch--pending');
+        if (nextPending && nextPending !== stablePendingImageBatch) nextPending.replaceWith(stablePendingImageBatch);
+      }
+      if (stableThinkingDots) {
+        const nextDots = currentBubble.querySelector('.pm-thinking-dots');
+        if (nextDots && nextDots !== stableThinkingDots) nextDots.replaceWith(stableThinkingDots);
+      }
+      Object.entries(stableLiveTraceGroups).forEach(([groupKey, stableNode]) => {
+        const selector = `details.pm-trace-tool-group[data-pm-trace-live-current="1"][data-pm-trace-group="${_pmCssEscape(groupKey)}"]`;
+        const nextGroup = currentBubble.querySelector(selector);
+        if (nextGroup && stableNode !== nextGroup) nextGroup.replaceWith(stableNode);
       });
     } catch {}
     const nextActions = nextEl.querySelector('[data-msg-action]') ? nextEl.querySelectorAll('[data-msg-action]') : null;
@@ -5935,7 +6132,7 @@ function _patchLatestMobileStreamingMessage(threadEl, bodyEl, key = 'chat') {
   return true;
 }
 
-function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 90) {
+function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 16) {
   if (!threadEl) return false;
   const timerKey = String(key || 'chat');
   if (__pmChat.patchRenderTimers?.[timerKey]) return true;
@@ -5949,17 +6146,33 @@ function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 9
   return true;
 }
 
+function _syncMobileWorkTimerLabel(threadEl) {
+  const thread = _activeMobileThread();
+  const message = [...thread].reverse().find((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+  if (!message) return false;
+  const msgIndex = thread.indexOf(message);
+  const root = threadEl || document.getElementById('pm-chat-thread');
+  if (!root) return false;
+  const msgEl = root.querySelector(`[data-msg-index="${msgIndex}"]`);
+  if (!msgEl) return false;
+  const timerEl = msgEl.querySelector('.pm-work-timer:not(.pm-work-timer--expandable)');
+  if (!timerEl) return false;
+  const startedAt = _mobileAssistantWorkStartedAt(message);
+  if (!startedAt) return false;
+  const duration = Date.now() - startedAt;
+  const label = `Working for ${_formatMobileWorkDuration(duration)}`;
+  if (timerEl.textContent !== label) timerEl.textContent = label;
+  return true;
+}
+
 function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
   const hasStreamingAssistant = _activeMobileThread().some((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
   if (hasStreamingAssistant) {
     if (!__pmChat.workTimer) {
       __pmChat.workTimer = setInterval(() => {
         const activeThreadEl = document.getElementById('pm-chat-thread') || threadEl;
-        const activeBodyEl = document.getElementById('pm-chat-body') || bodyEl;
         if (!activeThreadEl) return;
-        if (!_patchLatestMobileStreamingMessage(activeThreadEl, activeBodyEl, key)) {
-          _flushThreadRender(activeThreadEl, activeBodyEl, key);
-        }
+        _syncMobileWorkTimerLabel(activeThreadEl);
       }, 1000);
     }
   } else if (__pmChat.workTimer) {
@@ -5981,9 +6194,14 @@ function _installMobileTimestampReveal(threadEl, onMessageAction) {
   let lastTouchStartedAt = 0;
   const maxReveal = 88;
 
-  const isInteractiveTarget = (target) => !!target?.closest?.(
-    'button,a,input,textarea,select,summary,details,[data-msg-action],[data-pm-command-action],[data-pm-file-change-path],.pm-media-card,.pm-generated-file,.pm-product-carousel,.pm-product-track,.pm-product-card'
-  );
+  const isInteractiveTarget = (target) => {
+    if (!target) return false;
+    if (target.closest?.(
+      'button,a,input,textarea,select,summary,details,[data-msg-action],[data-pm-command-action],[data-pm-file-change-path],[data-pm-restore-checkpoint],.pm-media-card,.pm-generated-file,.pm-product-carousel,.pm-product-track,.pm-product-card'
+    )) return true;
+    if (target.closest?.('.pm-md-table-scroll')) return true;
+    return false;
+  };
 
   // ── Expandable work timer → toggle trace drawer ──────────────────────────
   threadEl.addEventListener('click', (event) => {
@@ -7211,8 +7429,49 @@ function _wireMobileVisualSaveButtons(root = document) {
 function _wireMobileChatEnhancements(root = document) {
   _wireMobileMediaCards(root);
   _wireMobileFileChangeRows(root);
+  _wireMobileCheckpointRestoreButtons(root);
   _wireMobileSnippetCopyButtons(root);
   _wireMobileVisualSaveButtons(root);
+}
+
+async function _restoreMobileWorkspaceCheckpoint(checkpointId, button = null) {
+  const id = String(checkpointId || '').trim();
+  if (!id) return;
+  const approved = window.confirm?.('Restore this turn checkpoint?\n\nThis will put every changed file back to its state before that Prometheus turn.') ?? false;
+  if (!approved) return;
+  const btn = button && typeof button === 'object' ? button : null;
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+  }
+  try {
+    const result = await mobileGatewayFetch('/api/canvas/history/restore', {
+      method: 'POST',
+      body: JSON.stringify({ checkpoint_id: id, confirm: true }),
+      timeoutMs: 30000,
+    });
+    const touched = (Array.isArray(result?.restored) ? result.restored.length : 0) + (Array.isArray(result?.deleted) ? result.deleted.length : 0);
+    pmToast(touched ? `Restored ${touched} path${touched === 1 ? '' : 's'}` : 'Restored checkpoint', 'success');
+  } catch (err) {
+    pmToast(`Restore failed: ${String(err?.message || err)}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+    }
+  }
+}
+
+function _wireMobileCheckpointRestoreButtons(root = document) {
+  root?.querySelectorAll?.('[data-pm-restore-checkpoint]')?.forEach((button) => {
+    if (button.dataset.pmRestoreCheckpointWired === '1') return;
+    button.dataset.pmRestoreCheckpointWired = '1';
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      _restoreMobileWorkspaceCheckpoint(button.getAttribute('data-pm-restore-checkpoint') || '', button);
+    });
+  });
 }
 
 function _wireMobileFileChangeRows(root = document) {
@@ -7329,7 +7588,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     online: true,
     hideTitle: true,
     hideBrand: true,
-    rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.plus}</button>`,
+    rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.compose}</button>`,
   });
   page.innerHTML = `
     ${header}
@@ -7347,7 +7606,6 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     <form class="pm-composer" id="pm-composer">
       <span class="pm-glass-lens" aria-hidden="true"></span>
       <span class="pm-glass-border" aria-hidden="true"></span>
-      <input id="pm-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-chat-slash-popover" id="pm-chat-slash-popover" hidden></div>
       <div class="pm-skill-trigger-pill" id="pm-skill-trigger-pill" hidden aria-live="polite"></div>
       <div class="pm-attach-tray" id="pm-attach-tray" hidden></div>
@@ -7356,7 +7614,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         <span class="pm-command-chip-clear" aria-hidden="true">&times;</span>
       </button>
       <div class="pm-composer-row">
-        <button type="button" class="pm-icon-btn" id="pm-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
+        <label class="pm-icon-btn pm-attach-native-btn" id="pm-attach-btn" aria-label="Attach files" role="button" tabindex="0">
+          ${ICONS.paperclip}
+          <input id="pm-file-input" class="pm-native-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" />
+        </label>
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
           <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
@@ -7515,7 +7776,9 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     if (sid && sid === requestedSession) {
       const event = String(msg?.event || '').trim();
       const status = String(msg?.goal?.status || '').trim();
-      if (status === 'active' || /^(runner_started|turn_started|runtime_failure|runner_stopped)$/.test(event)) {
+      const shouldRecoverGoalStream = /^(runner_started|turn_started|runtime_failure|startup_auto_resume)$/.test(event)
+        || (!event && status === 'active');
+      if (shouldRecoverGoalStream) {
         scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
       }
     }
@@ -7600,6 +7863,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   function openAttachSheet(options = {}) {
     const target = String(options?.target || 'chat').trim() || 'chat';
     attachSheetTarget = target === 'voice' ? 'voice' : 'chat';
+    if (attachSheetTarget !== 'voice') {
+      pendingFileInputTarget = 'chat';
+      closeAttachSheet();
+      fileInput?.click();
+      return;
+    }
     if (!attachSheet) {
       pendingFileInputTarget = attachSheetTarget;
       fileInput?.click();
@@ -8283,6 +8552,8 @@ void main() {
     __pmChat.recoverTimer = setTimeout(() => refreshMobileRunRecovery({ silent: true, force, fullRefresh }), Math.max(250, Number(delay) || 2500));
   }
 
+  let gatewayStatusInFlight = false;
+  let gatewayStatusFailures = 0;
   function updateOnlineStatus() {
     // The pill is now the interactive model badge (.pm-model-badge): it shows the
     // current model name, not the literal "Online"/"Offline" text. We only toggle
@@ -8290,14 +8561,23 @@ void main() {
     // the embedded native haptic switch.
     const pill = page.querySelector('.pm-model-badge') || page.querySelector('.pm-online');
     if (!pill) return;
+    if (gatewayStatusInFlight) return;
+    gatewayStatusInFlight = true;
     const wasOffline = pill.classList.contains('offline');
-    loadGatewayStatus()
+    loadGatewayStatus({ timeoutMs: 30000 })
       .then(() => {
+        gatewayStatusFailures = 0;
         pill.classList.remove('offline');
         if (wasOffline) scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
       })
       .catch(() => {
-        pill.classList.add('offline');
+        gatewayStatusFailures += 1;
+        if (gatewayStatusFailures >= 3) {
+          pill.classList.add('offline');
+        }
+      })
+      .finally(() => {
+        gatewayStatusInFlight = false;
       });
   }
 
@@ -8715,8 +8995,8 @@ void main() {
   }
 
   function renderThreadSoon() {
-    if (!_scheduleMobileStreamingPatch(threadEl, body, requestedSession)) {
-      _scheduleThreadRender(threadEl, body, requestedSession);
+    if (!_scheduleMobileStreamingPatch(threadEl, body, requestedSession, 16)) {
+      _scheduleThreadRender(threadEl, body, requestedSession, 16);
     }
   }
 
@@ -8827,7 +9107,7 @@ void main() {
     _sideRenderTimer = setTimeout(() => {
       _sideRenderTimer = null;
       renderMobileSideSheet();
-    }, 90);
+    }, 16);
   }
   function flushSideRender() {
     if (_sideRenderTimer) { clearTimeout(_sideRenderTimer); _sideRenderTimer = null; }
@@ -8941,11 +9221,7 @@ void main() {
       case 'token':
         if (evt.text) {
           const chunk = String(evt.text);
-          if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
-            _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
-          } else {
-            _appendMobileVisualStreamToken(aiTurn, chunk, scheduleSideRenderSoon);
-          }
+          _appendMobileVisualStreamToken(aiTurn, chunk, scheduleSideRenderSoon);
         }
         scheduleSideRenderSoon();
         return 'streaming';
@@ -8973,12 +9249,21 @@ void main() {
           _collectMediaFromToolEvent(aiTurn, evt);
         }
         if (evt.message) {
-          _appendMobileProcess(aiTurn, 'info', String(evt.message), evt);
-          _appendMobileLiveTrace(aiTurn, String(evt.type || '') === 'tool_progress' ? 'tool' : 'info', String(evt.message));
+          const messageText = String(evt.message);
+          const isCompactionPreflight = String(evt.type || '') === 'ui_preflight' && /^Compacting the thread before continuing/i.test(messageText);
+          if (!isCompactionPreflight) {
+            _appendMobileProcess(aiTurn, 'info', messageText, evt);
+            _appendMobileLiveTrace(aiTurn, String(evt.type || '') === 'tool_progress' ? 'tool' : 'info', messageText);
+          }
         }
         renderMobileSideSheet();
         return 'streaming';
       case 'tool_call':
+        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+          _appendMobileCompactionTrace(aiTurn, 'compacting', '', evt.args || evt);
+          renderMobileSideSheet();
+          return 'streaming';
+        }
         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileProcess(aiTurn, 'tool', _mobileToolLabel(evt), evt);
@@ -8986,6 +9271,13 @@ void main() {
         renderMobileSideSheet();
         return 'streaming';
       case 'tool_result':
+        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+          const status = String(evt?.extra?.status || '').toLowerCase() || (evt.error ? 'failed' : 'compacted');
+          _appendMobileCompactionTrace(aiTurn, status, evt?.extra?.summary || '', evt.extra || evt);
+          _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', status === 'failed' ? 'Context compaction failed' : 'Context compacted', evt);
+          renderMobileSideSheet();
+          return 'streaming';
+        }
         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         _collectMediaFromToolEvent(aiTurn, evt);
@@ -9790,11 +10082,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       case 'token':
         if (evt.text) {
           const chunk = String(evt.text);
-          if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
-            _appendMobileLiveTrace(aiTurn, aiTurn.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
-          } else {
-            _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
-          }
+          _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
         }
         renderThreadSoon();
         return 'streaming';
@@ -9821,12 +10109,21 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       case 'ui_preflight':
       case 'heartbeat':
         if (evt.message) {
-          _appendMobileProcess(aiTurn, 'info', String(evt.message));
-          _appendMobileLiveTrace(aiTurn, 'info', String(evt.message));
+          const messageText = String(evt.message);
+          const isCompactionPreflight = String(evt.type || '') === 'ui_preflight' && /^Compacting the thread before continuing/i.test(messageText);
+          if (!isCompactionPreflight) {
+            _appendMobileProcess(aiTurn, 'info', messageText, evt);
+            _appendMobileLiveTrace(aiTurn, 'info', messageText);
+          }
           renderThreadSoon();
         }
         return 'streaming';
       case 'tool_call': {
+        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+          _appendMobileCompactionTrace(aiTurn, 'compacting', '', evt.args || evt);
+          renderThreadSoon();
+          return 'streaming';
+        }
         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
@@ -9837,6 +10134,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         return 'streaming';
       }
       case 'tool_result': {
+        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+          const status = String(evt?.extra?.status || '').toLowerCase() || (evt.error ? 'failed' : 'compacted');
+          _appendMobileCompactionTrace(aiTurn, status, evt?.extra?.summary || '', evt.extra || evt);
+          _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', status === 'failed' ? 'Context compaction failed' : 'Context compacted', evt);
+          renderThreadSoon();
+          return 'streaming';
+        }
         _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
         aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
@@ -10409,7 +10713,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       return;
     }
 
-    const isUnsavedDraftSession = requestedSession === MOBILE_CHAT_SESSION_ID;
+    const liveActiveSessionId = String(__pmChat.activeSessionId || '').trim();
+    const isUnsavedDraftSession = requestedSession === MOBILE_CHAT_SESSION_ID || liveActiveSessionId === MOBILE_CHAT_SESSION_ID;
     const actualSessionId = isUnsavedDraftSession ? createMobileChatSessionId() : requestedSession;
     if (isUnsavedDraftSession) {
       __pmChat.threads[actualSessionId] = [];
@@ -10571,14 +10876,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         delete __pmChat.patchRenderTimers[timerKey];
       }
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
-      const patchedFinal = _patchMobileThreadMessage(threadEl, targetAiTurn, _activeMobileThread().indexOf(targetAiTurn));
+      const patchedFinal = _patchMobileThreadMessage(threadEl, targetAiTurn, activeThread.indexOf(targetAiTurn));
       if (patchedFinal) {
         _syncMobileWorkTimer(threadEl, body, actualSessionId);
         _restoreMobileChatScroll(body, scrollSnapshot);
       } else {
         renderThreadNow();
       }
-      const finalThread = _activeMobileThread();
+      const finalThread = Array.isArray(__pmChat.threads[actualSessionId]) ? __pmChat.threads[actualSessionId] : activeThread;
       _saveMobileThreadCache(actualSessionId, finalThread);
       updateMobileChatSessionHistory(actualSessionId, _mobileHistoryForServer(finalThread)).catch((err) => {
         console.warn('[mobile chat] failed to persist completed turn:', err);
@@ -10685,24 +10990,25 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (!document.hidden) runRecoveryOnReturn();
   };
   const runRecoveryOnWsOpen = () => runRecoveryOnReturn();
-  const onMainChatStreamEvent = (msg = {}) => {
-    if (String(msg.sessionId || '') !== requestedSession) return;
-    if (__pmChat.activeSessionId !== requestedSession) return;
+  const applyMainChatStreamPayload = (msg = {}) => {
+    if (String(msg.sessionId || '') !== requestedSession) return '';
+    if (__pmChat.activeSessionId !== requestedSession) return '';
     hideReconnectingStatus();
     const activeThread = _activeMobileThread();
-    const incomingClientRequestId = String(msg.data?.clientRequestId || '').trim();
-    const eventType = String(msg.event || '');
+    const data = msg.data && typeof msg.data === 'object' ? msg.data : msg;
+    const incomingClientRequestId = String(data?.clientRequestId || '').trim();
+    const eventType = String(msg.event || data?.event || data?.type || '');
     if (eventType === 'user_message') {
       const ownClientRequestId = String(__pmChat.sentClientRequestIds?.[requestedSession] || '').trim();
-      if (incomingClientRequestId && incomingClientRequestId === ownClientRequestId) return;
-      const payload = msg.data?.message && typeof msg.data.message === 'object' ? msg.data.message : {};
+      if (incomingClientRequestId && incomingClientRequestId === ownClientRequestId) return 'own-user';
+      const payload = data?.message && typeof data.message === 'object' ? data.message : {};
       const text = _stripMobileInternalUploadContext(payload.content || payload.text || payload.body?.text || '');
       const channelLabel = String(payload.channelLabel || payload.channel || payload.source || payload.body?.source || '').toLowerCase();
       const isInternalWatchUserMessage = channelLabel === 'internal_watch' || /^\[Internal watch\b/i.test(text);
       const attachments = Array.isArray(payload.attachmentPreviews)
         ? payload.attachmentPreviews
         : (Array.isArray(payload.body?.attachments) ? payload.body.attachments : []);
-      const ts = Number(payload.timestamp || msg.at || Date.now()) || Date.now();
+      const ts = Number(payload.timestamp || msg.at || data?.at || Date.now()) || Date.now();
       const existingWorkerHandoff = _findMobileVoiceWorkerHandoffByText(activeThread, text, ts);
       if (existingWorkerHandoff) {
         existingWorkerHandoff._clientRequestId = incomingClientRequestId || existingWorkerHandoff._clientRequestId;
@@ -10711,7 +11017,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         }
         _markMobileSessionRunning(requestedSession, true);
         setBusy(true);
-        return;
+        return 'streaming';
       }
       const previousUser = [...activeThread].reverse().find((turn) => turn?.role === 'user');
       const previousText = _stripMobileInternalUploadContext(previousUser?.body?.text || previousUser?.content || '');
@@ -10734,7 +11040,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       _markMobileSessionRunning(requestedSession, true);
       setBusy(true);
-      return;
+      return 'streaming';
     }
     _markMobileSessionRunning(requestedSession, true);
     let aiTurn = incomingClientRequestId
@@ -10743,7 +11049,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (!aiTurn) aiTurn = _findLatestAssistantTurn(activeThread);
     if (!aiTurn || !aiTurn.streaming) {
       const rememberedRun = _readMobileActiveRun(requestedSession);
-      const recoveredStartedAt = Number(rememberedRun?.startedAt || msg.startedAt || msg.at || 0);
+      const recoveredStartedAt = Number(rememberedRun?.startedAt || data?.run?.startedAt || data?.startedAt || msg.startedAt || msg.at || data?.at || 0);
       const startedAt = Number.isFinite(recoveredStartedAt) && recoveredStartedAt > 0 ? recoveredStartedAt : Date.now();
       aiTurn = {
         role: 'ai',
@@ -10762,11 +11068,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     aiTurn.streaming = true;
     const evt = {
-      type: String(msg.event || ''),
-      ...(msg.data || {}),
-      seq: msg.seq,
-      streamId: msg.streamId,
-      at: msg.at,
+      ...data,
+      type: eventType,
+      seq: msg.seq || data?.seq,
+      streamId: msg.streamId || data?.streamId,
+      at: msg.at || data?.at,
     };
     const applied = applyMobileChatStreamEvent(aiTurn, evt);
     if (applied === 'done' || applied === 'error') {
@@ -10775,10 +11081,40 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _markMobileSessionRunning(requestedSession, false);
       setBusy(false, requestedSession);
     } else if (applied && applied !== 'duplicate') setBusy(true);
+    return applied;
+  };
+  const onMainChatStreamEvent = (msg = {}) => {
+    applyMainChatStreamPayload(msg);
+  };
+  const onMainChatGoalSse = (msg = {}) => {
+    const sid = String(msg.sessionId || '').trim();
+    if (sid !== requestedSession) return;
+    const event = String(msg.event || '').trim();
+    if (!event) return;
+    applyMainChatStreamPayload({
+      sessionId: sid,
+      event,
+      streamId: msg.streamId,
+      seq: msg.seq,
+      at: msg.at,
+      data: msg,
+    });
   };
   const onMainChatStreamUpdate = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return;
     if (__pmChat.activeSessionId !== requestedSession) return;
+    const updateStreamId = String(msg.streamId || '').trim();
+    const updateLastSeq = Math.max(0, Math.floor(Number(msg.lastSeq || msg.seq || 0)) || 0);
+    const remembered = _readMobileActiveRun(requestedSession);
+    const currentRun = __pmChat.activeRuns?.[requestedSession] || {};
+    const rememberedStreamId = String(currentRun.streamId || remembered?.streamId || '').trim();
+    const rememberedLastSeq = Math.max(
+      Number(currentRun.lastSeq || 0) || 0,
+      Number(remembered?.lastSeq || 0) || 0,
+    );
+    if (updateStreamId && rememberedStreamId === updateStreamId && updateLastSeq > 0 && updateLastSeq <= rememberedLastSeq) {
+      return;
+    }
     scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
   };
   const onVoiceInterruptionEvent = (msg = {}) => {
@@ -10899,6 +11235,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
   wsEventBus?.on?.('main_chat_stream_event', onMainChatStreamEvent);
   wsEventBus?.on?.('main_chat_stream_update', onMainChatStreamUpdate);
+  wsEventBus?.on?.('main_chat_goal_sse', onMainChatGoalSse);
   wsEventBus?.on?.('voice_interruption', onVoiceInterruptionEvent);
   wsEventBus?.on?.('voice_agent_tool_event', onVoiceAgentToolEvent);
   wsEventBus?.on?.('bg_agent_event', onBackgroundSpawnEvent);
@@ -10935,6 +11272,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     document.removeEventListener('visibilitychange', runRecoveryOnVisibility);
     wsEventBus?.off?.('main_chat_stream_event', onMainChatStreamEvent);
     wsEventBus?.off?.('main_chat_stream_update', onMainChatStreamUpdate);
+    wsEventBus?.off?.('main_chat_goal_sse', onMainChatGoalSse);
     wsEventBus?.off?.('voice_interruption', onVoiceInterruptionEvent);
     wsEventBus?.off?.('voice_agent_tool_event', onVoiceAgentToolEvent);
     wsEventBus?.off?.('bg_agent_event', onBackgroundSpawnEvent);
@@ -11264,7 +11602,17 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     sideDragY = null;
   }, { passive: true });
 
-  attachBtn?.addEventListener('click', () => openAttachSheet({ target: 'chat' }));
+  attachBtn?.addEventListener('pointerdown', () => {
+    pendingFileInputTarget = 'chat';
+    closeAttachSheet();
+  });
+  attachBtn?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    pendingFileInputTarget = 'chat';
+    closeAttachSheet();
+    fileInput?.click();
+  });
   attachSheetScrim?.addEventListener('click', closeAttachSheet);
   attachSheet?.querySelectorAll('[data-pm-attach-action]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -11501,11 +11849,11 @@ function _loadVoiceSettings() {
       wakeGateActive: listenMode === 'always_listening' && saved.wakeGateActive === true,
       sttProviderLocked: saved.sttProviderLocked === true,
       autoProviderDefault: saved.autoProviderDefault || '',
-      voiceAgentRealtimeAgent: saved.voiceAgentRealtimeAgent !== false,
+      voiceAgentRealtimeAgent: saved.voiceAgentRealtimeAgent === true,
       voiceAgentXaiRealtime: saved.voiceAgentXaiRealtime === true,
     };
   } catch {
-    return { voiceMode: 'default', sttProvider: 'browser', ttsProvider: 'browser', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: false, autoProviderDefault: '', voiceAgentRealtimeAgent: true, voiceAgentXaiRealtime: false };
+    return { voiceMode: 'default', sttProvider: 'browser', ttsProvider: 'browser', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: false, autoProviderDefault: '', voiceAgentRealtimeAgent: false, voiceAgentXaiRealtime: false };
   }
 }
 
@@ -11523,7 +11871,7 @@ function _mobileRealtimeListenModeFromSettings(settings = __pmVoice?.settings ||
 
 function _mobileRealtimeProviderKeyFromSettings(settings = __pmVoice?.settings || {}) {
   const mode = String(settings?.voiceMode || '').trim();
-  if (mode === 'openai_realtime' && settings?.voiceAgentRealtimeAgent !== false) return 'openai_realtime';
+  if (mode === 'openai_realtime' && settings?.voiceAgentRealtimeAgent === true) return 'openai_realtime';
   if (mode === 'xai' && settings?.voiceAgentXaiRealtime === true) return 'xai_realtime';
   return 'split';
 }
@@ -14385,7 +14733,7 @@ function _handleMobileRealtimeAgentQuietTranscript(transcript) {
 
 function _isMobileRealtimeAgentMode() {
   const mode = String(__pmVoice?.settings?.voiceMode || '').trim();
-  if (mode === 'openai_realtime') return __pmVoice?.settings?.voiceAgentRealtimeAgent !== false;
+  if (mode === 'openai_realtime') return __pmVoice?.settings?.voiceAgentRealtimeAgent === true;
   if (mode === 'xai') return __pmVoice?.settings?.voiceAgentXaiRealtime === true;
   return false;
 }
@@ -15390,6 +15738,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
   const startId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   __pmRealtimeAgent.connectingSessionId = sid;
   __pmRealtimeAgent.connectingStartId = startId;
+  let xaiRealtimeStartCleanup = null;
 
   __pmRealtimeAgent.connecting = (async () => {
     _voiceDebug('xai-realtime-bootstrap-start', { sessionId: sid, listenMode });
@@ -15407,6 +15756,16 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     const source = captureCtx.createMediaStreamSource(micStream);
     const processor = captureCtx.createScriptProcessor(2048, 1, 1);
     const mutedGain = captureCtx.createGain();
+    let ws = null;
+    let playback = null;
+    xaiRealtimeStartCleanup = () => {
+      try { processor.disconnect(); } catch {}
+      try { source.disconnect(); } catch {}
+      try { mutedGain.disconnect(); } catch {}
+      try { captureCtx.close?.(); } catch {}
+      try { playback?.close?.(); } catch {}
+      try { ws?.close?.(); } catch {}
+    };
     mutedGain.gain.value = 0;
     const xaiCapture = {
       sending: listenMode === 'push_to_talk' || listenMode === 'always_listening',
@@ -15473,10 +15832,10 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
 
     // Single subprotocol entry only — xAI negotiates the wrong protocol if extras
     // (e.g. 'realtime') are offered, which silently breaks session config/auth.
-    const ws = new WebSocket(bootstrap.wsUrl, [`xai-client-secret.${bootstrap.clientSecret}`]);
+    ws = new WebSocket(bootstrap.wsUrl, [`xai-client-secret.${bootstrap.clientSecret}`]);
     ws.binaryType = 'arraybuffer';
     xaiCapture.ws = ws;
-    const playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+    playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
     await playback.resume?.();
 
     ws.addEventListener('close', (ev) => {
@@ -15581,7 +15940,10 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     ws.addEventListener('close', () => { if (__pmRealtimeAgent.conn?.ws === ws) __pmRealtimeAgent.conn = null; });
     _voiceDebug('xai-realtime-ready', { sessionId: sid, listenMode });
     return __pmRealtimeAgent.conn;
-  })().finally(() => {
+  })().catch((err) => {
+    try { xaiRealtimeStartCleanup?.(); } catch {}
+    throw err;
+  }).finally(() => {
     if (__pmRealtimeAgent.connectingStartId === startId) {
       __pmRealtimeAgent.connecting = null;
       __pmRealtimeAgent.connectingSessionId = '';
@@ -18161,7 +18523,7 @@ export async function renderVoicePage(page, ctx) {
     online: true,
     hideTitle: true,
     hideBrand: true,
-    rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New voice chat">${ICONS.plus}</button>`,
+    rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New voice chat">${ICONS.compose}</button>`,
   });
   page.innerHTML = `
     ${header}
@@ -19643,7 +20005,7 @@ void main() {
     const realtimeAgentLabel = page.querySelector('#pm-voice-realtime-agent-label');
     const realtimeAgentCheckbox = page.querySelector('#pm-voice-realtime-agent');
     if (realtimeAgentLabel) realtimeAgentLabel.style.display = selectedMode === 'openai_realtime' ? '' : 'none';
-    if (realtimeAgentCheckbox) realtimeAgentCheckbox.checked = settings.voiceAgentRealtimeAgent !== false;
+    if (realtimeAgentCheckbox) realtimeAgentCheckbox.checked = settings.voiceAgentRealtimeAgent === true;
     // xAI realtime toggle: only visible when voice mode is xai
     const xaiRealtimeLabel = page.querySelector('#pm-voice-xai-realtime-label');
     const xaiRealtimeCheckbox = page.querySelector('#pm-voice-xai-realtime');
@@ -23374,14 +23736,11 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     case 'token': {
       const chunk = String(evt.text || '');
       if (!chunk) return false;
-      if (!message.finalResponseStarted && !message.toolActivityStarted) {
-        _appendMobileLiveTrace(message, 'preamble', chunk, { append: true });
-      } else {
-        message.finalResponseStarted = true;
-        message.content = `${message.content || ''}${chunk}`;
-        message.text = message.content;
-        message.body = { ...(message.body || {}), text: message.content };
-      }
+      message.finalResponseStarted = true;
+      const previous = String(message.body?.text || message.content || message.text || '');
+      message.content = _appendMobileStreamingText(previous, chunk);
+      message.text = message.content;
+      message.body = { ...(message.body || {}), text: message.content };
       message._progress = '';
       return true;
     }
@@ -23419,6 +23778,11 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     }
     case 'tool_call': {
       const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
+      if (action === 'context_compaction') {
+        _appendMobileCompactionTrace(message, 'compacting', '', evt.args || evt);
+        message._progress = 'Compacting Context';
+        return true;
+      }
       const stepNum = Number(evt.stepNum || 0);
       const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
       const args = evt.args && typeof evt.args === 'object' ? JSON.stringify(evt.args).slice(0, 180) : '';
@@ -23432,6 +23796,12 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
       const text = String(evt.result || evt.output || '').trim();
       const ok = evt.error === true ? false : !/^ERROR:/i.test(text);
+      if (action === 'context_compaction') {
+        const status = String(evt?.extra?.status || '').toLowerCase() || (ok ? 'compacted' : 'failed');
+        _appendMobileCompactionTrace(message, status, evt?.extra?.summary || '', evt.extra || evt);
+        message._progress = '';
+        return true;
+      }
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
@@ -25590,27 +25960,9 @@ function _renderMoreLanding(page, { navigate }) {
   const body = page.querySelector('#pm-more-body');
 
   const paint = (data) => {
-    const latestGoal = data?.hub?.latestGoal;
     const recentRuns = Array.isArray(data?.audit?.runs) ? data.audit.runs : [];
     const recentMemory = Array.isArray(data?.memory?.recent) ? data.memory.recent : [];
     body.innerHTML = `
-      <button class="pm-more-card pm-more-card-hub" data-route="#mobile/more/hub" type="button">
-        <div class="pm-more-card-top">
-          <span class="pm-more-icon">${ICONS.target}</span>
-          <span><strong>Hub</strong><em>Usage, goals, and models</em></span>
-          <span class="pm-chev">${ICONS.chev}</span>
-        </div>
-        <div class="pm-more-stats">
-          ${_pmStatCard('tokens', _pmCompactNumber(_pmModelTotal(data?.hub?.models)))}
-          ${_pmStatCard('tool calls', _pmCompactNumber(data?.hub?.tools?.toolCalls || data?.hub?.tools?.total || 0))}
-        </div>
-        <div class="pm-more-preview-box">
-          <span class="pm-mini-label">Latest goal</span>
-          <strong>${escapeHtml(latestGoal ? _pmGoalTitle(latestGoal) : 'No goals yet')}</strong>
-          <p>${escapeHtml(latestGoal ? (_pmGoalBody(latestGoal) || String(latestGoal.status || 'In progress')) : 'Goals from the main chat will appear here.')}</p>
-        </div>
-      </button>
-
       <button class="pm-more-card pm-more-card-audit" data-route="#mobile/more/audit" type="button">
         <div class="pm-more-card-top">
           <span class="pm-more-icon">${ICONS.clipboard}</span>
@@ -25693,111 +26045,152 @@ function _renderMoreLanding(page, { navigate }) {
   _pmScheduleInitialLoad(page, load);
 }
 
-async function _renderMoreHub(page, { navigate }) {
+function _pmHubAccount() {
+  let account = null;
+  try { account = getAccount?.(); } catch {}
+  const rawEmail = String(account?.email || account?.user?.email || '').trim();
+  const rawName = String(account?.name || account?.displayName || account?.user?.name || rawEmail.split('@')[0] || 'Prometheus').trim();
+  const name = rawName.replace(/^@/, '') || 'Prometheus';
+  const handleBase = rawEmail ? rawEmail.split('@')[0] : name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return { name, handle: handleBase ? `@${handleBase}` : '@local' };
+}
+
+function _pmHubInitials(name = '') {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  const initials = parts.length >= 2 ? `${parts[0][0] || ''}${parts[1][0] || ''}` : String(name || 'P').slice(0, 2);
+  return initials.toUpperCase() || 'PM';
+}
+
+function _pmHubStat(label, value) {
+  return `<span><b>${escapeHtml(String(value))}</b><em>${escapeHtml(label)}</em></span>`;
+}
+
+function _pmTokenLevel(value, max) {
+  const n = Math.max(0, Number(value) || 0);
+  if (n <= 0) return 0;
+  const ratio = n / Math.max(1, Number(max) || 1);
+  if (ratio >= 0.8) return 5;
+  if (ratio >= 0.55) return 4;
+  if (ratio >= 0.32) return 3;
+  if (ratio >= 0.14) return 2;
+  return 1;
+}
+
+function _pmTokenActivityGrid(activity = {}) {
+  const daily = Array.isArray(activity?.daily) ? activity.daily : [];
+  if (!daily.length) {
+    return `<div class="pm-hub-token-empty">No token activity recorded yet.</div>`;
+  }
+  const first = new Date(`${daily[0].date}T00:00:00`);
+  const leading = Number.isFinite(first.getTime()) ? first.getDay() : 0;
+  const values = daily.map((row) => Math.max(0, Number(row.tokens || row.count || 0)));
+  const max = Math.max(1, ...values);
+  const labels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day) => `<span>${day}</span>`).join('');
+  let cells = '';
+  for (let i = 0; i < leading; i++) cells += '<i class="empty"></i>';
+  daily.forEach((row) => {
+    const tokens = Math.max(0, Number(row.tokens || row.count || 0));
+    const title = `${row.date}: ${_pmCompactNumber(tokens)} tokens`;
+    cells += `<i data-level="${_pmTokenLevel(tokens, max)}" title="${escapeHtml(title)}"></i>`;
+  });
+  const months = [];
+  const seen = new Set();
+  daily.forEach((row, index) => {
+    const [year, month] = String(row.date || '').split('-');
+    const key = `${year}-${month}`;
+    if (!year || !month || seen.has(key)) return;
+    seen.add(key);
+    const d = new Date(`${row.date}T00:00:00`);
+    months.push(`<span style="grid-column:${Math.floor((leading + index) / 7) + 1}">${escapeHtml(d.toLocaleDateString(undefined, { month: 'short' }))}</span>`);
+  });
+  return `
+    <div class="pm-hub-token-scroll">
+      <div class="pm-hub-token-calendar">
+        <div class="pm-hub-token-labels">${labels}</div>
+        <div>
+          <div class="pm-hub-token-months">${months.join('')}</div>
+          <div class="pm-hub-token-cells">${cells}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+export async function renderHubPage(page, { navigate } = {}) {
   const extras = `<span class="pm-spacer"></span><button class="pm-icon-btn" id="pm-hub-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
-    ${renderMobileHeader({ title: 'Hub', leftIcon: 'back', onBack: () => navigate('#mobile/more'), online: true, extras, hideTitle: true, hideBrand: true })}
-    <div class="pm-body pm-more-page" id="pm-hub-body">${_pmMoreSkeleton()}</div>
+    ${renderMobileHeader({ title: 'Hub', online: true, extras, hideTitle: true, hideBrand: true })}
+    <div class="pm-body pm-hub-profile-page" id="pm-hub-body">${_pmMoreSkeleton()}</div>
   `;
-  wireHeaderActions(page, { onBack: () => navigate('#mobile/more') });
+  wireHeaderActions(page, {});
   const body = page.querySelector('#pm-hub-body');
   const load = async () => {
     try {
       body.innerHTML = _pmMoreSkeleton();
       const data = await loadMobileHubOverview();
+      const account = _pmHubAccount();
       const latestGoal = data.goals[0];
-      const curator = data.curator || { suggestions: [], pending: 0, quarantined: 0 };
-      const curatorSuggestions = Array.isArray(curator.suggestions) ? curator.suggestions : [];
-      const curatorActivity = Array.isArray(curator.activity) ? curator.activity : [];
-      const curatorLow = curatorSuggestions.filter((s) => String(s.risk || '').toLowerCase() === 'low').length;
       const modelStats = data.models || {};
       const toolStats = data.tools || {};
-      const totalTokens = _pmModelTotal(modelStats);
+      const tokenActivity = data.tokenActivity || { daily: [], stats: {} };
+      const tokenStats = tokenActivity.stats || {};
+      const totalTokens = Number(tokenStats.totalTokens || _pmModelTotal(modelStats)) || 0;
+      const peakTokens = Number(tokenStats.peakTokens || 0) || 0;
+      const activeDays = Number(tokenStats.activeDays || toolStats.activeDays || modelStats.activeDays || 0) || 0;
+      const currentStreak = Number(tokenStats.current ?? tokenStats.currentStreak ?? toolStats.currentStreak ?? modelStats.currentStreak ?? 0) || 0;
+      const longestStreak = Number(tokenStats.longest ?? tokenStats.longestStreak ?? toolStats.longestStreak ?? modelStats.longestStreak ?? 0) || 0;
       const toolCalls = Number(toolStats.toolCalls || toolStats.total || 0) || 0;
+      const topModels = Array.isArray(data.topModels) ? data.topModels : [];
+      const topTools = Array.isArray(data.topTools) ? data.topTools : [];
       body.innerHTML = `
-        <section class="pm-more-detail-hero">
-          <div><span class="pm-mini-label">Total tokens</span><strong>${escapeHtml(_pmCompactNumber(totalTokens))}</strong></div>
-          <div><span class="pm-mini-label">Favorite model</span><strong>${escapeHtml(modelStats.favorite || modelStats.favoriteByTokens || toolStats.favorite || 'none')}</strong></div>
-          ${_pmSparkBars(data.modelDaily, 'count', 16)}
+        <section class="pm-hub-profile-hero">
+          <div class="pm-hub-avatar">${escapeHtml(_pmHubInitials(account.name))}</div>
+          <h1>${escapeHtml(account.name)}</h1>
+          <p><span>${escapeHtml(account.handle)}</span><span>Prometheus</span></p>
         </section>
-        <section class="pm-more-grid pm-hub-overview-grid">
-          ${_pmStatCard('Sessions', _pmCompactNumber(toolStats.chatSessions || modelStats.chatSessions || 0))}
-          ${_pmStatCard('Messages', _pmCompactNumber(toolStats.messages || modelStats.chatMessages || 0))}
-          ${_pmStatCard('Model calls', _pmCompactNumber(_pmModelCalls(modelStats)))}
-          ${_pmStatCard('Tool calls', _pmCompactNumber(toolCalls))}
-          ${_pmStatCard('Active days', _pmCompactNumber(toolStats.activeDays || modelStats.activeDays || 0))}
-          ${_pmStatCard('Current streak', `${Number(toolStats.currentStreak || modelStats.currentStreak || 0)}d`)}
-          ${_pmStatCard('Longest streak', `${Number(toolStats.longestStreak || modelStats.longestStreak || 0)}d`)}
-          ${_pmStatCard('Peak hour', toolStats.peakHour || modelStats.peakHour || '-')}
+        <section class="pm-hub-profile-stats">
+          ${_pmHubStat('Lifetime tokens', _pmCompactNumber(totalTokens))}
+          ${_pmHubStat('Peak tokens', _pmCompactNumber(peakTokens))}
+          ${_pmHubStat('Model calls', _pmCompactNumber(_pmModelCalls(modelStats)))}
+          ${_pmHubStat('Current streak', `${currentStreak}d`)}
+          ${_pmHubStat('Longest streak', `${longestStreak}d`)}
         </section>
-        <section class="pm-card pm-more-section">
-          <div class="pm-card-head">Latest Goal</div>
-          <h3>${escapeHtml(latestGoal ? _pmGoalTitle(latestGoal) : 'No goals yet')}</h3>
+        <section class="pm-hub-profile-section">
+          <div class="pm-hub-section-head">
+            <strong>Token activity</strong>
+            <span>${escapeHtml(_pmCompactNumber(totalTokens))} total</span>
+          </div>
+          ${_pmTokenActivityGrid(tokenActivity)}
+        </section>
+        <section class="pm-hub-profile-columns">
+          <div class="pm-hub-profile-section">
+            <div class="pm-hub-section-head"><strong>Activity insights</strong></div>
+            <div class="pm-hub-insight-list">
+              <span><em>Active days</em><b>${escapeHtml(_pmCompactNumber(activeDays))}</b></span>
+              <span><em>Tool calls</em><b>${escapeHtml(_pmCompactNumber(toolCalls))}</b></span>
+              <span><em>Sessions</em><b>${escapeHtml(_pmCompactNumber(toolStats.chatSessions || modelStats.chatSessions || 0))}</b></span>
+              <span><em>Peak hour</em><b>${escapeHtml(String(toolStats.peakHour || modelStats.peakHour || '-'))}</b></span>
+            </div>
+          </div>
+          <div class="pm-hub-profile-section">
+            <div class="pm-hub-section-head"><strong>Most used models</strong></div>
+            <div class="pm-hub-usage-list">
+              ${topModels.slice(0, 4).map((m) => `<span><b>${escapeHtml(m.name || 'Model')}</b><em>${escapeHtml(_pmCompactNumber(m.tokens || 0))} tokens</em></span>`).join('') || '<p>No model usage yet.</p>'}
+            </div>
+          </div>
+        </section>
+        <section class="pm-hub-profile-section">
+          <div class="pm-hub-section-head"><strong>Latest goal</strong><span>${escapeHtml(latestGoal ? _pmDateTime(latestGoal.updatedAt || latestGoal.completedAt || latestGoal.createdAt) : '')}</span></div>
+          <h2>${escapeHtml(latestGoal ? _pmGoalTitle(latestGoal) : 'No goals yet')}</h2>
           <p>${escapeHtml(latestGoal ? (_pmGoalBody(latestGoal) || String(latestGoal.status || 'In progress')) : 'Main chat goals will appear here once Prometheus records them.')}</p>
-          <div class="pm-more-meta-row"><span>${escapeHtml(String(latestGoal?.status || ''))}</span><span>${escapeHtml(_pmDateTime(latestGoal?.updatedAt || latestGoal?.completedAt || latestGoal?.createdAt))}</span></div>
         </section>
-        <section class="pm-more-grid">
-          ${_pmStatCard('Goals', _pmCompactNumber(data.goals.length))}
-          ${_pmStatCard('Curator pending', _pmCompactNumber(curator.pending || 0))}
-          ${_pmStatCard('Quarantined', _pmCompactNumber(curator.quarantined || 0))}
-          ${_pmStatCard('Low risk', _pmCompactNumber(curatorLow))}
-        </section>
-        <section class="pm-card pm-more-section">
-          <div class="pm-card-head">Top Models</div>
-          <div class="pm-more-list">
-            ${(data.topModels || []).slice(0, 5).map((m) => `<span><b>${escapeHtml(m.name)}</b><em>${escapeHtml(_pmCompactNumber(m.tokens || 0))} tokens - ${escapeHtml(_pmCompactNumber(m.calls || 0))} calls</em></span>`).join('') || '<p>No model usage yet.</p>'}
+        <section class="pm-hub-profile-section">
+          <div class="pm-hub-section-head"><strong>Most used tools</strong></div>
+          <div class="pm-hub-usage-list">
+            ${topTools.slice(0, 6).map((t) => `<span><b>${escapeHtml(t.name || 'Tool')}</b><em>${escapeHtml(_pmCompactNumber(t.count || 0))} calls</em></span>`).join('') || '<p>No tool usage yet.</p>'}
           </div>
-        </section>
-        <section class="pm-card pm-more-section">
-          <div class="pm-card-head">Top Tools</div>
-          <div class="pm-more-list">
-            ${(data.topTools || []).slice(0, 6).map((t) => `<span><b>${escapeHtml(t.name || 'tool')}</b><em>${escapeHtml(_pmCompactNumber(t.count || 0))} calls</em></span>`).join('') || '<p>No tool usage yet.</p>'}
-          </div>
-        </section>
-        <section class="pm-card pm-more-section">
-          <div class="pm-card-head">Top Skills</div>
-          <div class="pm-more-list">
-            ${(data.skills || []).slice(0, 5).map((s) => `<span><b>${escapeHtml(s.name || s.id)}</b><em>${escapeHtml(_pmCompactNumber(s.count || 0))} uses</em></span>`).join('') || '<p>No skill usage yet.</p>'}
-          </div>
-        </section>
-        <section class="pm-card pm-more-section pm-curator-section">
-          <div class="pm-card-head">Skill Curator Review</div>
-          <p>${escapeHtml(curatorActivity.length ? 'Review queue plus recent Thought and Dream skill activity.' : 'Brain suggestions waiting to be folded into Prometheus skills.')}</p>
-          <div class="pm-curator-list">${_pmCuratorCards(curatorSuggestions)}</div>
-          ${curatorActivity.length ? `<div class="pm-more-list pm-hub-activity-list">
-            ${curatorActivity.slice(0, 8).map((item) => `<span><b>${escapeHtml(item.title || 'Skill activity')}</b><em>${escapeHtml([item.status, item.source, item.risk ? `${item.risk} risk` : ''].filter(Boolean).join(' - '))}</em><small>${escapeHtml(String(item.summary || item.requestExcerpt || '').slice(0, 140))}</small></span>`).join('')}
-          </div>` : ''}
         </section>
       `;
-      body.querySelectorAll('[data-curator-toggle]').forEach((btn) => {
-        btn.addEventListener('click', (event) => {
-          event.stopPropagation();
-          const id = btn.getAttribute('data-curator-toggle') || '';
-          const detail = document.getElementById(`pm-curator-details-${id}`);
-          if (detail) detail.hidden = !detail.hidden;
-        });
-      });
-      const actCurator = async (id, kind, btn) => {
-        if (!id) return;
-        btn.disabled = true;
-        try {
-          if (kind === 'approve') await applyMobileSkillCuratorSuggestion(id);
-          else await denyMobileSkillCuratorSuggestion(id);
-          pmToast(kind === 'approve' ? 'Skill suggestion approved' : 'Skill suggestion denied', 'success');
-          await load();
-        } catch (err) {
-          pmToast('Curator action failed: ' + (err?.message || err), 'error');
-          btn.disabled = false;
-        }
-      };
-      body.querySelectorAll('[data-approve-curator]').forEach((btn) => btn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        actCurator(btn.getAttribute('data-approve-curator'), 'approve', btn);
-      }));
-      body.querySelectorAll('[data-deny-curator]').forEach((btn) => btn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        actCurator(btn.getAttribute('data-deny-curator'), 'deny', btn);
-      }));
       return true;
     } catch (err) {
       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.target}</div><h2>Could not load Hub</h2><p>${escapeHtml(err.message || '')}</p></div>`;
@@ -25990,7 +26383,10 @@ async function _renderMoreMemory(page, { navigate }) {
 }
 
 export async function renderMorePage(page, { section = '', navigate }) {
-  if (section === 'hub') return _renderMoreHub(page, { navigate });
+  if (section === 'hub') {
+    try { navigate?.('#mobile/hub'); } catch {}
+    return renderHubPage(page, { navigate });
+  }
   if (section === 'audit') return _renderMoreAudit(page, { navigate });
   if (section === 'memory') return _renderMoreMemory(page, { navigate });
   return _renderMoreLanding(page, { navigate });
@@ -27049,7 +27445,10 @@ export async function renderCreativePage(page, { navigate } = {}) {
     if (provider === 'hf') {
       return `Compose a HyperFrames still using web-based motion freeze-frame. Prompt: ${text}\nAspect: ${aspect}. Save the result PNG under generated/images/ and report the path.`;
     }
-    return `Use the generate_image tool with provider="${provider}" to create an image.\nPrompt: ${text}\nAspect ratio: ${aspect}. Save under generated/images/. Reply with the final file path.`;
+    const transparencyHint = /\b(transparent|no background|alpha|cutout|sprite)\b/i.test(text)
+      ? '\nSet background="transparent" and output_format="png" on the tool call for real alpha transparency.'
+      : '';
+    return `Use the generate_image tool with provider="${provider}" to create an image.\nPrompt: ${text}\nAspect ratio: ${aspect}.${transparencyHint} Save under generated/images/. Reply with the final file path.`;
   }
 
   let activeStream = null;
@@ -27156,7 +27555,7 @@ export async function renderCreativePage(page, { navigate } = {}) {
     source_loaded: 8, vision_candidates: 22, text_candidates: 32, proposal_merge: 38,
     foreground_start: 44, foreground_mask: 56, sam_start: 60, sam_masks: 74,
     alpha_cutouts: 78, vector_trace: 82, inpaint_start: 86, clean_plate: 94,
-    scene_assembled: 100,
+    scene_assembled: 96, layer_assets_saved: 100,
   };
 
   const onExtractProgress = (msg) => {

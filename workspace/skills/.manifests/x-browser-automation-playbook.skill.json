@@ -1,37 +1,30 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when operating X/Twitter in the browser: drafting or posting tweets, replies, likes, bookmarks, searches, profile checks, media uploads, or account engagement with final-action approval where required.",
   "triggers": [
-    "post this on X",
+    "post this on x",
     "tweet this",
-    "reply on X",
+    "reply on x",
     "like this tweet",
     "bookmark this tweet",
-    "search X",
-    "check Twitter",
+    "search x",
+    "check twitter",
     "open x.com",
     "draft a tweet",
     "schedule a tweet",
-    "upload media to X",
+    "upload media to x",
     "quote tweet",
-    "follow on X",
-    "inspect X profile",
-    "X engagement",
-    "Twitter browser automation",
+    "follow on x",
+    "inspect x profile",
+    "x engagement",
+    "twitter browser automation",
     "don't post yet",
-    "fill tweet composer"
+    "fill tweet composer",
+    "benchmark x urls",
+    "scroll collect benchmark",
+    "web_fetch vs scroll_collect",
+    "x extraction latency",
+    "stopwatch telemetry"
   ],
-  "categories": [
-    "x",
-    "twitter",
-    "browser",
-    "social"
-  ],
-  "requiredTools": [
-    "browser_automation",
-    "external_apps"
-  ],
-  "lifecycle": "active",
   "id": "x-browser-automation-playbook"
 }
