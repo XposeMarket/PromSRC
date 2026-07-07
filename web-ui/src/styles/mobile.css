@@ -4310,6 +4310,13 @@ body.pm-model-badge-pressing * {
 }
 .pm-live-md > :first-child { margin-top: 0; }
 .pm-live-md > :last-child { margin-bottom: 0; }
+.pm-live-stream-enter {
+  animation: pm-live-stream-enter 210ms cubic-bezier(.16,1,.3,1) both;
+}
+@keyframes pm-live-stream-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .pm-trace-summary-swap {
   animation: pm-trace-summary-swap 220ms cubic-bezier(.16,1,.3,1) both;
 }
@@ -4318,6 +4325,7 @@ body.pm-model-badge-pressing * {
   to { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 @media (prefers-reduced-motion: reduce) {
+  .pm-live-stream-enter,
   .pm-trace-summary-swap {
     animation: none !important;
   }

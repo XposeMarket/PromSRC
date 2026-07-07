@@ -95,6 +95,15 @@ function bgtSaveHidden(set) {
   localStorage.setItem(BGT_HIDDEN_KEY, JSON.stringify([...set]));
 }
 
+function updateBgtHeartbeatLabel() {
+  const label = document.getElementById('bgt-heartbeat-label');
+  if (!label) return;
+  const cache = window.heartbeatSettingsCache || {};
+  const enabled = cache.enabled !== false;
+  const mins = Math.max(1, Math.min(1440, Number(cache.interval_minutes || cache.intervalMinutes || 30) || 30));
+  label.textContent = enabled ? `• heartbeat: ${mins}min` : '• heartbeat: off';
+}
+
 function bgtHideTask(taskId) {
   const hidden = bgtGetHidden();
   hidden.add(taskId);

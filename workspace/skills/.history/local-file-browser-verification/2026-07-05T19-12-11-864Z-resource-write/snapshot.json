@@ -1,0 +1,12 @@
+{
+  "skillId": "local-file-browser-verification",
+  "reason": "resource-write",
+  "createdAt": "2026-07-05T19:12:11.868Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\local-file-browser-verification",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "6328240b4fc07ac1"
+}

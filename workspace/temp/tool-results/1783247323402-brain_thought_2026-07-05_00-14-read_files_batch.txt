@@ -1,0 +1,41 @@
+Brain/active-work.jsonl (9 lines) [window 1-9]:
+1: {"id":"figure-8-drift-mobile-build","title":"Figure 8 Drift mobile track builder and drift physics","origin":"audit/chats/transcripts/mobile_mr4ees3z_ytvzm4.jsonl; memory/2026-07-03-intraday-notes.md:38-44","diskPath":"games/figure-8-drift/index.html","status":"stalled","lastVerified":"2026-07-05","currentState":"No activity this window; playtest-ready on disk unchanged.","research":[],"evidence":["games/figure-8-drift/index.html","Brain/thoughts/2026-07-05/15-46-thought.md"]}
+2: {"id":"pocket-zombies-mobile-fps","title":"Pocket Zombies 3D mobile FPS","origin":"mobile_mr2ors69_u35dij; memory/2026-07-03-intraday-notes.md:58-88","diskPath":"games/mobile-sideways-fps/index.html","status":"in_progress","lastVerified":"2026-07-05","currentState":"index.html still 84 lines minified; phone playtest for touch/HUD not run this window.","research":[],"evidence":["games/mobile-sideways-fps/index.html","Brain/thoughts/2026-07-05/15-46-thought.md"]}
+3: {"id":"mobile-html-canvas-workspace-asset-loading","title":"Mobile canvas HTML games workspace asset URLs","origin":"dev_edit_mr4b73nv_03640271; memory/2026-07-03-intraday-notes.md:14-16","diskPath":"src/gateway/routes/canvas.router.ts","status":"in_progress","lastVerified":"2026-07-05","currentState":"Paired-phone E2E for canvas ?pt= URLs still pending; no change this window.","research":[],"evidence":["prop_1783136282176_299d40","Brain/active-work.jsonl"]}
+4: {"id":"galaxy-drift-space-explorer","title":"Galaxy Drift Three.js space explorer","origin":"audit/chats/transcripts/mobile_mr5ix76j_u60vp1.jsonl; memory/2026-07-03-intraday-notes.md:102-116","diskPath":"games/mobile-space-explorer","status":"in_progress","lastVerified":"2026-07-05","currentState":"No activity this window; shell on disk unchanged.","research":[],"evidence":["games/mobile-space-explorer/index.html"]}
+5: {"id":"x-url-extraction-benchmark","title":"X/Twitter extraction tool benchmark (latency/tokens)","origin":"audit/chats/transcripts/mobile_mr5k2xqv_82sm2j.jsonl; memory/2026-07-04-intraday-notes.md:2-4","diskPath":"browser-tool-bench/x-url-extraction-benchmark-2026-07-04.md","status":"in_progress","lastVerified":"2026-07-05","currentState":"Markdown file still missing on disk; prop_1783223154700_8f3971 pending.","research":["memory/2026-07-04-intraday-notes.md:2-4"],"evidence":["Brain/proposals.md:12","read_file not found 2026-07-05"]}
+6: {"id":"mobile-markdown-table-ui","title":"Mobile chat markdown table rendering and scroll","origin":"memory/2026-07-04-intraday-notes.md:6-16; mobile_mr5nxwer_k2cnon","diskPath":"web-ui/src/mobile/mobile-pages.js; web-ui/src/styles/mobile.css","status":"resolved","lastVerified":"2026-07-05","currentState":"_wrapMobileMarkdownTables @ mobile-pages.js:1837 still present.","research":[],"evidence":["web-ui/src/mobile/mobile-pages.js:1837"]}
+7: {"id":"memory-md-full-injection","title":"Uncapped MEMORY.md in runtime prompt assembly","origin":"dev_edit_mr5tihqn; memory/2026-07-04-intraday-notes.md:22-24","diskPath":"src/gateway/prompt-context.ts","status":"resolved","lastVerified":"2026-07-05","currentState":"No re-edit this window; prior Dream verify stands.","research":[],"evidence":["src/gateway/prompt-context.ts:1241","Brain/dreams/2026-07-04/23-43-dream.md"]}
+8: {"id":"context-window-measured-sections","title":"Measured context-window section tokens (not weight EST)","origin":"audit/chats/transcripts/mobile_mr5n02o2_cahepa.md ~04:00-04:02","diskPath":"src/gateway/routes/chat.router.ts; src/gateway/prompt-context.ts","status":"in_progress","lastVerified":"2026-07-05","currentState":"prop_1783223137706_c443a3 pending; no src change this window.","research":[],"evidence":["Brain/proposals.md:10"]}
+9: {"id":"nebulax-mobile-dashboard-relaunch","title":"NebulaX dashboard mobile + local preview relaunch","origin":"mobile_mr6rp21b_me6es5; memory/2026-07-05-intraday-notes.md; reports/nebulax-relaunch-roadmap-2026-07-04.md","diskPath":"repos/nebulax-test","status":"in_progress","lastVerified":"2026-07-05","currentState":"ChartPanel2 mobile compact + loadLayoutForViewport in inline-02.jsx; nx-dashboard-mobile.css linked; portfolio-card.js stub on disk; Babel 7.26.10 + React prod UMD in NebulaX.html; iPhone runtime error needs hard-refresh retest; Jupiter browser CORS open.","research":["reports/nebulax-relaunch-roadmap-2026-07-04.md"],"evidence":["repos/nebulax-test/assets/js/inline-02.jsx:230-3...[line truncated]
+
+memory/2026-07-05-intraday-notes.md (29 lines) [window 1-29]:
+1: 
+2: ### [TASK] 2026-07-05T03:45:59.022Z
+3: _Source: Background agent; session: brain_dream_2026-07-04_
+4: Brain Dream 2026-07-04 DONE: 3 thoughts ingested; live verify context-window weighted children @ chat.router.ts:13502; MEMORY @ prompt-context.ts:1241; mobile tables @ mobile-pages.js:1837. Proposals: prop_1783223137706_c443a3 (measured context-window), prop_1783223125148_17e8d6 (X bench skill), prop_1783223154700_8f3971 (bench markdown action). Wrote Brain/dreams/2026-07-04/23-43-dream.md, Brain/proposals.md, active-work.jsonl, MEMORY project_memory, prometheus entity event. Blocked: direct browser-tool-bench write outside dream scope.
+5: 
+6: ### [TASK] 2026-07-05T03:48:57.254Z
+7: _Source: Background agent; session: brain_dream_2026-07-04_
+8: Brain Dream 2026-07-04 post-compaction verify DONE: dream 23-43-dream.md + active-work 8 rows + proposals.md updated with prop_1783223154700_8f3971 id; MEMORY project_memory line added. Live: bench md missing (action pending); mobile table wrapper @1837 confirmed; pocket-zombies 84 lines. Tool friction: workspace search_files on single src path 0 hits — use dev_source_read grep on src/ instead.
+9: 
+10: ### [TASK] 2026-07-05T03:49:01.896Z
+11: _Source: Mobile chat session; session: mobile_mr6rp21b_me6es5; origin: Mobile app_
+12: NebulaX preview server: python http.server port 8788 bind 0.0.0.0 cwd repos/nebulax-test runId run_2810b7249d494f83. Phone URLs: http://10.0.0.125:8788/ or /NebulaX.html (same WiFi). Tailscale alt: http://100.108.163.3:8788/
+13: 
+14: ### [DEBUG] 2026-07-05T03:56:55.882Z
+15: _Source: Mobile chat session; session: mobile_mr6rp21b_me6es5; origin: Mobile app_
+16: NebulaX mobile runtime error fix (2026-07-05): User screenshot showed full-screen #err Runtime error with Babel appendChild stack on Safari @ 10.0.0.125. Fixed NebulaX.html broken head (stray </style>, corrupted comment), pinned Babel @7.26.10, React production UMD, guarded ReactDOM.createRoot mount in inline-02.jsx, guarded nx-wallet top-level Connection. index.html: nx-wallet.js + mobile banner CSS + NXWallet.connect fallback for Safari.
+17: 
+18: ### [TASK] 2026-07-05T04:00:32.734Z
+19: _Source: Mobile chat session; session: mobile_mr6rp21b_me6es5; origin: Mobile app_
+20: NebulaX dashboard mobile pass (2026-07-05): Added assets/css/nx-dashboard-mobile.css + linked in NebulaX.html. inline-02.jsx: loadLayoutForViewport (phone = chart+arcade left, portfolio+alerts right), mobile quick nav strip, responsive header classes, chart height ~42vh on mobile, single-column dash cols below 767px, hide Edit HomePage on xs, explore grid 2-col on mobile.
+21: 
+22: ### [TASK] 2026-07-05T04:04:08.518Z
+23: _Source: Mobile chat session; session: mobile_mr6rp21b_me6es5; origin: Mobile app_
+24: NebulaX mobile iframe fix (2026-07-05): User reported full-page not mobile friendly — DexScreener iframe + 2-col grid. Changes: ChartPanel2 on ≤767px shows price strip + "Open chart" link (no iframe). loadLayoutForViewport mobile: single column left=[chart,data-feed,portfolio,alerts] right=[]. nx-dash-cols gridTemplateColumns forced 1fr on mobile. CSS overflow-x + compact chart styles.
+25: 
+26: ### [TASK] 2026-07-05T04:12:04.362Z
+27: _Source: Mobile chat session; session: mobile_mr6rp21b_me6es5; origin: Mobile app_
+28: Local File Browser Verification for NebulaX (2026-07-05): Opened http://127.0.0.1:8788/NebulaX.html — desktop smoke PASS (dashboard mounts, trending OK). Console: 404 portfolio-card.js (missing file), Jupiter CORS, Babel warning. ChartPanel2 uses matchMedia 767px for mobile compact (no iframe). Report: repos/nebulax-test/reports/local-browser-verification-2026-07-05.md. iPhone Runtime error/Babel still needs real-device retest + optional prebuild.
+29: 

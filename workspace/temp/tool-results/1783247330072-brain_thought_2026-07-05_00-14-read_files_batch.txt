@@ -1,0 +1,82 @@
+Brain/thoughts/2026-07-05/15-46-thought.md (119 lines) [window 1-80, truncated]:
+1: ---
+2: # Thought 1 - 2026-07-05 | Window: 2026-07-04 19:46 UTC-2026-07-05 04:13 UTC
+3: _Generated: 2026-07-05 00:13 local_
+4: 
+5: ## Summary
+6: 
+7: This window opened quiet on Prometheus internals and then lit up on **NebulaX** from mobile. Brain Dream for 2026-07-04 finished in the first minutes (03:43–03:49 UTC): three prior thoughts reconciled, eight active-work rows refreshed, and three proposals indexed while the X URL benchmark markdown file is still absent on disk until **prop_1783223154700_8f3971** runs. After that, Raul’s only sustained user thread was **mobile_mr6rp21b_me6es5**: relaunch roadmap context from late 2026-07-04, then a focused execution sprint—HTTP preview on port 8788, Safari/Babel runtime repair, dashboard mobile layout, DexScreener iframe removal on narrow viewports, and a disciplined **local-file-browser-verif...[line truncated]
+8: 
+9: Tonight’s disk check matters: **portfolio-card.js** now exists as a stub (the verification report’s 404 was accurate at write time but is partially stale). **ChartPanel2** in `inline-02.jsx` really does branch at ≤767px to a compact card with live price and an external chart link—no iframe on mobile. Prometheus mobile table wrapping at `mobile-pages.js:1837` remains shipped. The X benchmark artifact path `browser-tool-bench/x-url-extraction-benchmark-2026-07-04.md` is still missing, matching Dream notes. Pocket Zombies is still an 84-line minified HTML shell awaiting phone playtest.
+10: 
+11: I wonder if NebulaX’s biggest near-term win is not more dashboard polish but **Path A from the roadmap**—Jupiter proxy migration and honest “beta” gating—while Raul finishes mobile visual taste on phone. I wonder whether precompiling `inline-02.jsx` would eliminate the iPhone Babel failure mode faster than more inline guards. I wonder if the **local-file-browser-verification** skill should always recommend **first navigation at mobile width** when the user’s evidence is iPhone screenshots, since desktop-then-resize missed the chart branch once.
+12: 
+13: ## Pulse Cards
+14: 
+15: ```json
+16: [
+17:   {
+18:     "title": "NebulaX iPhone Retest",
+19:     "body": "Mobile dashboard fixes are on disk; your phone is the real proof for chart layout and Babel.",
+20:     "prompt": "Help me retest NebulaX on my iPhone after the 2026-07-05 mobile fixes. Start the preview server in repos/nebulax-test, give me the LAN URL, and list exactly what I should see (no iframe, compact SOL price, no red runtime overlay). If anything fails, diagnose from my screenshot."
+21:   },
+22:   {
+23:     "title": "NebulaX Relaunch Path",
+24:     "body": "You have a full roadmap; picking Path A or B unlocks Jupiter swaps and a honest launch story.",
+25:     "prompt": "Read reports/nebulax-relaunch-roadmap-2026-07-04.md and what we changed in repos/nebulax-test this week. Recommend whether Path A (terminal MVP) or Path B (culture terminal + one game) fits Raul best now, then give me the first three concrete tasks for next session."
+26:   },
+27:   {
+28:     "title": "Pocket Zombies Playtest",
+29:     "body": "The 84-line build is ready; a quick phone pass on touch and HUD closes the loop.",
+30:     "prompt": "Open games/mobile-sideways-fps/index.html via the workspace canvas or a local server, verify multitouch fire+look and HUD from the latest fixes, and tell me what to test on my phone and what still looks broken."
+31:   }
+32: ]
+33: ```
+34: 
+35: ## A. Activity Summary
+36: 
+37: - **Brain Dream 2026-07-04** ran 2026-07-05T03:43–03:49Z; wrote `Brain/dreams/2026-07-04/23-43-dream.md`, updated `Brain/active-work.jsonl`, `Brain/proposals.md`, MEMORY project_memory line (`memory/2026-07-05-intraday-notes.md:2-8`).
+38: - **User chat:** `mobile_mr6rp21b_me6es5` — NebulaX relaunch analysis (origin ~19:50Z prior day), then dashboard mobile work 03:49–04:12Z (`memory/2026-07-05-intraday-notes.md:10-28`).
+39: - **Files touched (NebulaX):** `NebulaX.html`, `assets/css/nx-dashboard-mobile.css`, `assets/js/inline-02.jsx`, `assets/js/portfolio-card.js` (stub), `index.html` wallet banner, `reports/local-browser-verification-2026-07-05.md`.
+40: - **Skills used:** `codex-frontend-engineer`, `local-file-browser-verification` (`Brain/skill-episodes/2026-07-05/episodes.jsonl`).
+41: - **Scheduled cron:** No window-scoped user-facing cron activity identified in scanned runs; X jobs exist on disk but no new runs tied to this window in sampled audit.
+42: - **Teams/agents:** No new team spawns; background Brain Dream only.
+43: 
+44: ## B. Behavior Quality
+45: 
+46: **Went well:**
+47: - NebulaX mobile iteration matched user feedback (screenshot → iframe fix) with concrete file edits and a verification report | evidence: `memory/2026-07-05-intraday-notes.md:22-28`, `repos/nebulax-test/reports/local-browser-verification-2026-07-05.md`
+48: - Appropriate skill reads for frontend + local browser verification | evidence: `Brain/skill-episodes/2026-07-05/episodes.jsonl`
+49: 
+50: **Stalled or struggled:**
+51: - Mobile verification report correctly flagged PARTIAL PASS; automation did not emulate narrow viewport at first paint | evidence: `local-browser-verification-2026-07-05.md:32-35`
+52: - Dream noted `search_files` on single src path returning 0 hits — prefer `dev_source_read` grep | evidence: `memory/2026-07-05-intraday-notes.md:8`
+53: 
+54: **Tool usage patterns:**
+55: - Heavy `workspace_read` / `search_files` / browser automation for NebulaX; HTTP server via workspace_run pattern in notes.
+56: - Brain Thought scope: no user chats in window except mobile NebulaX + Dream background.
+57: 
+58: **User corrections:**
+59: - User pushed back that page was “not mobile friendly” and blamed iframe — addressed in follow-up pass (`Brain/skill-gardener/2026-07-05/live-candidates.jsonl` id `sg_7024ddf0904bedab`).
+60: 
+61: ## C. Skill And Workflow Signals
+62: 
+63: | Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
+64: |----------------|--------|-----------------|-----------|---------|
+65: | local-file-browser-verification | User invoked explicit verification; full report template used | update triggers (applied C2) | high | episodes.jsonl L2; live-candidates sg_e32da70b |
+66: | codex-frontend-engineer | Mobile dashboard CSS/JSX layout pass | no change tonight | medium | episodes.jsonl L1 |
+67: | nebulax local preview (python 8788 + LAN) | Repeatable pattern: serve repo, phone URL, fix, re-verify | propose composite or skill resource “mobile-first viewport at navigate” | medium | memory/2026-07-05-intraday-notes.md:12 |
+68: | Jupiter dead v6 + browser CORS | Roadmap + console CORS on api.jup.ag | action proposal for proxy path | high | roadmap L38-44; verification report L18 |
+69: 
+70: ## C2. Existing Skill Maintenance
+71: 
+72: **Applied during this Thought:**
+73: - local-file-browser-verification | addTriggers: nebulax, lan phone preview, iphone safari, 8788, mobile dashboard smoke test | why: session mobile_mr6rp21b matched skill but triggers were generic | evidence: mobile_mr6rp21b + verification report | verification: skill_read shows updated trigger list in metadata path via skill_update_metadata
+74: 
+75: **Deferred for Dream review:**
+76: - local-file-browser-verification | add SKILL.md guardrail: open narrow viewport **before** first navigation when user evidence is mobile Safari | insufficient single-session proof for manifest write | evidence: verification report L32-35
+77: 
+78: ## D. Business Candidates
+79: 
+80: | Candidate | Destination | Action | Confidence | Evidence |
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

@@ -1,7 +1,6 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to create, update, inspect, pause, resume, delete, run, debug, or verify scheduled jobs, recurring automations, timers, cron jobs, agent-owned schedules, or delivery schedules. It emphasizes self-contained prompts and outbound verification.",
   "triggers": [
     "scheduled job",
     "schedule automation",
@@ -17,18 +16,10 @@
     "schedule status",
     "scheduled task",
     "recurring automation",
-    "verify scheduled output"
+    "verify scheduled output",
+    "['delivery_send telegram'",
+    "'morning wake-up channel'",
+    "'deliver to telegram instead of mobile']"
   ],
-  "categories": [
-    "automation",
-    "scheduler",
-    "tasks"
-  ],
-  "requiredTools": [
-    "schedule_job",
-    "automation_dashboard",
-    "automations"
-  ],
-  "lifecycle": "active",
   "id": "scheduler-operations-playbook"
 }

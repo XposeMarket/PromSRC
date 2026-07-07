@@ -106,14 +106,164 @@ function initSettingsStaticIcons() {
   setCredentialToggleIcon(document.getElementById('cred-brave-visibility-toggle'), false);
 }
 
+const SETTINGS_DATA_CACHE_TTL_MS = {
+  searchSummary: 30_000,
+  modelSettings: 60_000,
+  credentialsFields: 90_000,
+  credentialsVaultStatus: 45_000,
+  credentialsVaultLog: 45_000,
+  channelsStatus: 45_000,
+  integrationsWebhook: 45_000,
+  integrationsMcp: 60_000,
+  agents: 45_000,
+};
+
+const _settingsDataCache = new Map();
+const _settingsDataRequests = new Map();
+let _settingsAgentsLoadedSelection = '';
+let _settingsVisibilityRefreshTimer = null;
+let _settingsVisibilityRefreshWired = false;
+let _pendingModelStatusProbeTimer = null;
+
+function _isSettingsCacheFresh(entry, now = Date.now()) {
+  return !!entry && entry.expiresAt > now;
+}
+
+function _withSettingsCache({ key, ttlMs, fetcher }) {
+  const now = Date.now();
+  const entry = _settingsDataCache.get(key);
+
+  if (_isSettingsCacheFresh(entry, now)) {
+    return { value: entry.value, refreshPromise: null };
+  }
+
+  const refreshPromise = _settingsDataRequests.get(key);
+  if (refreshPromise) {
+    return { value: entry?.value || null, refreshPromise };
+  }
+
+  const promise = Promise.resolve().then(() => fetcher()).then((value) => {
+    if (value === undefined) return value;
+    _settingsDataCache.set(key, {
+      value,
+      expiresAt: Date.now() + ttlMs,
+    });
+    return value;
+  }).finally(() => {
+    _settingsDataRequests.delete(key);
+  });
+  _settingsDataRequests.set(key, promise);
+  return { value: entry?.value || null, refreshPromise: promise };
+}
+
+function _touchSettingsCache(key) {
+  if (!_settingsDataCache.has(key)) return;
+  const value = _settingsDataCache.get(key).value;
+  _settingsDataCache.set(key, {
+    value,
+    expiresAt: Date.now() + SETTINGS_DATA_CACHE_TTL_MS.searchSummary,
+  });
+}
+
+function _touchSettingsCacheWithTtl(key, ttlMs) {
+  if (!_settingsDataCache.has(key)) return;
+  const value = _settingsDataCache.get(key).value;
+  _settingsDataCache.set(key, {
+    value,
+    expiresAt: Date.now() + (ttlMs || SETTINGS_DATA_CACHE_TTL_MS.searchSummary),
+  });
+}
+
+function _markSettingsCacheBusted(key) {
+  _settingsDataCache.delete(key);
+  _settingsDataRequests.delete(key);
+}
+
+function _touchSettingsCacheOnInteraction(key, ttlMs = SETTINGS_DATA_CACHE_TTL_MS.searchSummary) {
+  _touchSettingsCacheWithTtl(key, ttlMs);
+}
+
+function _isCacheEntryStale(entry) {
+  return !entry || !entry.expiresAt || entry.expiresAt <= Date.now();
+}
+
+function _withSWRCacheEntry({ key, ttlMs, fetcher }) {
+  const cached = _withSettingsCache({ key, ttlMs, fetcher });
+  const refreshExpired = _isCacheEntryStale(_settingsDataCache.get(key));
+  return { ...cached, refreshExpired };
+}
+
+function _scheduleSettingsVisibilityRefresh() {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return;
+  if (_settingsVisibilityRefreshWired) return;
+  _settingsVisibilityRefreshWired = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (_settingsVisibilityRefreshTimer) clearTimeout(_settingsVisibilityRefreshTimer);
+    _settingsVisibilityRefreshTimer = setTimeout(() => {
+      _settingsVisibilityRefreshTimer = null;
+      const activeTab = String(window.settingsTab || '').trim();
+      const maybeRefresh = [];
+      if (activeTab === 'models') {
+        const cache = _settingsDataCache.get('settings-models');
+        if (_isCacheEntryStale(cache)) maybeRefresh.push(loadModelSettings());
+      }
+      if (activeTab === 'agents') {
+        const cache = _settingsDataCache.get('settings-agents');
+        if (_isCacheEntryStale(cache)) maybeRefresh.push(loadAgentsTab());
+      }
+      if (activeTab === 'credentials') {
+        const cache = _settingsDataCache.get('settings-credentials-fields');
+        if (_isCacheEntryStale(cache)) maybeRefresh.push(loadCredentialsTab());
+      }
+      if (activeTab === 'channels') {
+        const cache = _settingsDataCache.get('settings-channels');
+        if (_isCacheEntryStale(cache)) maybeRefresh.push(loadChannelsStatus());
+      }
+      if (activeTab === 'integrations') {
+        const webhookCache = _settingsDataCache.get('settings-webhooks');
+        const mcpCache = _settingsDataCache.get('settings-mcp');
+        if (_isCacheEntryStale(webhookCache)) maybeRefresh.push(loadWebhookSettings());
+        if (_isCacheEntryStale(mcpCache)) maybeRefresh.push(loadMCPServers());
+      }
+      if (maybeRefresh.length) {
+        Promise.allSettled(maybeRefresh).catch(() => {});
+      }
+    }, 250);
+  });
+}
+
+let quickSearchRigor = 'verified';
+let quickThinkingEffort = 'standard';
+
+function applySearchSettingsSummary(s) {
+  const el = document.getElementById('r-failed');
+  if (el) el.textContent = s.preferred_provider || 'tavily';
+  quickSearchRigor = s.search_rigor || 'verified';
+  updateQuickModeUI();
+}
+
 async function loadSearchSettingsSummary() {
-  try {
-    const s = await api('/api/settings/search');
-    const el = document.getElementById('r-failed');
-    if (el) el.textContent = s.preferred_provider || 'tavily';
-    quickSearchRigor = s.search_rigor || 'verified';
-    updateQuickModeUI();
-  } catch {}
+  const cached = _withSettingsCache({
+    key: 'settings-search-summary',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.searchSummary,
+    fetcher: () => api('/api/settings/search'),
+  });
+  if (cached.value) {
+    applySearchSettingsSummary(cached.value);
+    if (!cached.refreshPromise) return;
+  }
+  if (cached.refreshPromise) {
+    cached.refreshPromise.then((s) => {
+      if (s) applySearchSettingsSummary(s);
+    }).catch(() => {});
+    if (!cached.value) {
+      try {
+        const latest = await cached.refreshPromise;
+        if (latest) applySearchSettingsSummary(latest);
+      } catch {}
+    }
+  }
 }
 
 function updateQuickModeUI() {
@@ -184,6 +334,7 @@ function setQuickThinkingEffort(level) {
 function setSettingsTab(tab) {
   window.settingsTab = tab;
   const tabs = ['system', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
+  const pendingLoads = [];
 
   tabs.forEach(t => {
     const btn = document.getElementById(`settings-tab-${t}`);
@@ -199,25 +350,27 @@ function setSettingsTab(tab) {
         panel.style.display = gridTabs.includes(t) ? 'block' : 'block';
         if (t === 'system' && typeof window.renderThemePicker === 'function') window.renderThemePicker();
         if (t === 'heartbeat') {
-          if (!window.heartbeatSettingsLoaded) loadHeartbeatSettings().catch(() => {});
+          if (!window.heartbeatSettingsLoaded) pendingLoads.push(loadHeartbeatSettings());
           else if (window.heartbeatEditor) window.heartbeatEditor.refresh();
         }
-        if (t === 'channels') loadChannelsStatus();
-        if (t === 'models') loadModelSettings();
-        if (t === 'agents') loadAgentsTab().then(() => {
-          if (window.agentMdEditor) window.agentMdEditor.refresh();
-        });
-        if (t === 'integrations') loadIntegrationsTab();
-        if (t === 'credentials') loadCredentialsTab();
-        if (t === 'security') loadSecuritySettings();
-        if (t === 'migration') loadMigrationPanel();
-        if (t === 'shortcuts') loadShortcutsPanel();
-        if (t === 'pairing')   loadPairingPanel();
+        if (t === 'channels') pendingLoads.push(loadChannelsStatus());
+        if (t === 'models') pendingLoads.push(loadModelSettings());
+        if (t === 'agents') pendingLoads.push(loadAgentsTab());
+        if (t === 'integrations') pendingLoads.push(loadIntegrationsTab());
+        if (t === 'credentials') pendingLoads.push(loadCredentialsTab());
+        if (t === 'security') pendingLoads.push(loadSecuritySettings());
+        if (t === 'migration') pendingLoads.push(loadMigrationPanel());
+        if (t === 'shortcuts') pendingLoads.push(loadShortcutsPanel());
+        if (t === 'pairing')   pendingLoads.push(loadPairingPanel());
       } else {
         panel.style.display = 'none';
       }
     }
   });
+
+  if (pendingLoads.length) {
+    Promise.allSettled(pendingLoads).catch(() => {});
+  }
 }
 
 async function replayOnboardingTutorial() {
@@ -527,34 +680,104 @@ async function tickAgentHeartbeat() {
 
 // --- Credentials Tab ---------------------------------------------------------
 
-async function loadCredentialsTab() {
-  await Promise.all([loadCredFields(), loadCredVaultStatus(), loadCredVaultLog()]);
+function applyCredentialFields(s = {}) {
+  // Server returns '••••••••' if key is set, '' if not
+  const setField = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = val || '';
+    el.placeholder = val ? '••••••••  (key stored — enter new value to replace)' : el.getAttribute('data-placeholder') || '';
+  };
+  setField('cred-tinyfish-key', s.tinyfish_api_key);
+  setField('cred-tavily-key',  s.tavily_api_key);
+  setField('cred-google-key',  s.google_api_key);
+  setField('cred-brave-key',   s.brave_api_key);
+  const cxEl = document.getElementById('cred-google-cx');
+  if (cxEl) {
+    cxEl.value = s.google_cx || '';
+    const labelEl = cxEl.previousElementSibling;
+    if (labelEl?.tagName === 'LABEL') {
+      labelEl.innerHTML = 'Google CSE ID <span style="font-weight:400;color:var(--muted)">(stored in vault for persistence)</span>';
+    }
+  }
+}
+
+function applyCredentialVaultStatus(data = {}) {
+  const el = document.getElementById('cred-vault-status');
+  if (!el) return;
+  const keys = data.keys || [];
+  if (!keys.length) {
+    el.innerHTML = '<span style="color:var(--warn)">? No credentials stored yet.</span>';
+    return;
+  }
+  el.innerHTML = keys.map(k => {
+    const label = {
+      'search.tavily_api_key':  'Tavily API Key',
+      'search.tinyfish_api_key': 'TinyFish API Key',
+      'search.google_api_key':  'Google API Key',
+      'search.google_cx':       'Google CSE ID',
+      'search.brave_api_key':   'Brave API Key',
+      'llm.openai.api_key':     'OpenAI API Key',
+      'hooks.token':            'Webhook Token',
+      'channels.telegram.botToken': 'Telegram Token',
+      'channels.discord.botToken':  'Discord Token',
+    }[k] || k;
+    return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+      <span style="color:var(--ok);font-size:13px">&#10003;</span>
+      <span style="font-size:12px;color:var(--text)">${label}</span>
+      <span style="font-size:10px;color:var(--muted);font-family:monospace">${k}</span>
+    </div>`;
+  }).join('');
+}
+
+function applyCredentialVaultLog(data = {}) {
+  const el = document.getElementById('cred-vault-log');
+  if (!el) return;
+  const lines = (data.lines || []).slice(-18).reverse();
+  if (!lines.length) {
+    el.textContent = 'No audit entries yet.';
+    return;
+  }
+  el.innerHTML = lines.map(l => {
+    const safe = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const color = l.includes('SET') ? 'var(--ok)' : l.includes('GET') ? 'var(--brand)' : l.includes('DEL') ? 'var(--err)' : 'var(--muted)';
+    return `<div style="color:${color};white-space:nowrap">${safe}</div>`;
+  }).join('');
+}
+
+function loadCredentialsTab() {
+  loadCredFields().catch(() => {});
+  loadCredVaultStatus().catch(() => {});
+  loadCredVaultLog().catch(() => {});
 }
 
 async function loadCredFields() {
   window._settingsCredentialsLoadedToUI = false;
-  try {
-    const s = await api('/api/settings/search');
-    // Server returns '••••••••' if key is set, '' if not
-    const setField = (id, val) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.value = val || '';
-      el.placeholder = val ? '••••••••  (key stored — enter new value to replace)' : el.getAttribute('data-placeholder') || '';
-    };
-    setField('cred-tinyfish-key', s.tinyfish_api_key);
-    setField('cred-tavily-key',  s.tavily_api_key);
-    setField('cred-google-key',  s.google_api_key);
-    setField('cred-brave-key',   s.brave_api_key);
-    const cxEl = document.getElementById('cred-google-cx');
-    if (cxEl) {
-      cxEl.value = s.google_cx || '';
-      const labelEl = cxEl.previousElementSibling;
-      if (labelEl?.tagName === 'LABEL') {
-        labelEl.innerHTML = 'Google CSE ID <span style="font-weight:400;color:var(--muted)">(stored in vault for persistence)</span>';
-      }
-    }
+  const cached = _withSettingsCache({
+    key: 'settings-credentials-fields',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.credentialsFields,
+    fetcher: () => api('/api/settings/search'),
+  });
+  if (cached.value) {
+    applyCredentialFields(cached.value);
     window._settingsCredentialsLoadedToUI = true;
+    if (!cached.refreshPromise) return;
+    cached.refreshPromise.then((fresh) => {
+      if (!fresh) return;
+      applyCredentialFields(fresh);
+    }).catch((e) => {
+      console.warn('loadCredFields:', e);
+    });
+    return;
+  }
+  try {
+    const s = await cached.refreshPromise;
+    if (s) {
+      applyCredentialFields(s);
+      window._settingsCredentialsLoadedToUI = true;
+    } else {
+      window._settingsCredentialsLoadedToUI = false;
+    }
   } catch(e) {
     window._settingsCredentialsLoadedToUI = false;
     console.warn('loadCredFields:', e);
@@ -562,52 +785,44 @@ async function loadCredFields() {
 }
 
 async function loadCredVaultStatus() {
-  const el = document.getElementById('cred-vault-status');
-  if (!el) return;
+  const cached = _withSettingsCache({
+    key: 'settings-credentials-vault-status',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.credentialsVaultStatus,
+    fetcher: () => api('/api/credentials/status'),
+  });
+  if (cached.value) {
+    applyCredentialVaultStatus(cached.value);
+    if (!cached.refreshPromise) return;
+    cached.refreshPromise.then((fresh) => applyCredentialVaultStatus(fresh || {})).catch(() => {});
+    return;
+  }
   try {
-    const data = await api('/api/credentials/status');
-    const keys = data.keys || [];
-    if (!keys.length) {
-      el.innerHTML = '<span style="color:var(--warn)">? No credentials stored yet.</span>';
-      return;
-    }
-    el.innerHTML = keys.map(k => {
-      const label = {
-        'search.tavily_api_key':  'Tavily API Key',
-        'search.tinyfish_api_key': 'TinyFish API Key',
-        'search.google_api_key':  'Google API Key',
-        'search.google_cx':       'Google CSE ID',
-        'search.brave_api_key':   'Brave API Key',
-        'llm.openai.api_key':     'OpenAI API Key',
-        'hooks.token':            'Webhook Token',
-        'channels.telegram.botToken': 'Telegram Token',
-        'channels.discord.botToken':  'Discord Token',
-      }[k] || k;
-      return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
-        <span style="color:var(--ok);font-size:13px">&#10003;</span>
-        <span style="font-size:12px;color:var(--text)">${label}</span>
-        <span style="font-size:10px;color:var(--muted);font-family:monospace">${k}</span>
-      </div>`;
-    }).join('');
+    const data = await cached.refreshPromise;
+    applyCredentialVaultStatus(data || {});
   } catch(e) {
-    el.innerHTML = `<span style="color:var(--err);font-size:12px">Could not load vault status: ${e.message}</span>`;
+    const el = document.getElementById('cred-vault-status');
+    if (el) el.innerHTML = `<span style="color:var(--err);font-size:12px">Could not load vault status: ${e.message}</span>`;
   }
 }
 
 async function loadCredVaultLog() {
-  const el = document.getElementById('cred-vault-log');
-  if (!el) return;
+  const cached = _withSettingsCache({
+    key: 'settings-credentials-vault-log',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.credentialsVaultLog,
+    fetcher: () => api('/api/credentials/audit'),
+  });
+  if (cached.value) {
+    applyCredentialVaultLog(cached.value);
+    if (!cached.refreshPromise) return;
+    cached.refreshPromise.then((fresh) => applyCredentialVaultLog(fresh || {})).catch(() => {});
+    return;
+  }
   try {
-    const data = await api('/api/credentials/audit');
-    const lines = (data.lines || []).slice(-18).reverse();
-    if (!lines.length) { el.textContent = 'No audit entries yet.'; return; }
-    el.innerHTML = lines.map(l => {
-      const safe = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const color = l.includes('SET') ? 'var(--ok)' : l.includes('GET') ? 'var(--brand)' : l.includes('DEL') ? 'var(--err)' : 'var(--muted)';
-      return `<div style="color:${color};white-space:nowrap">${safe}</div>`;
-    }).join('');
+    const data = await cached.refreshPromise;
+    applyCredentialVaultLog(data || {});
   } catch(e) {
-    el.textContent = 'Could not load audit log.';
+    const el = document.getElementById('cred-vault-log');
+    if (el) el.textContent = 'Could not load audit log.';
   }
 }
 
@@ -1065,94 +1280,139 @@ function onProviderChange() {
   if (typeof renderModelsUsage === 'function') renderModelsUsage();
 }
 
-async function loadModelSettings() {
-  window._llmSettingsLoadedToUI = false;
-  try {
-    await ensureProviderCatalogUIReady();
-    await fetchCredentialedModelProviderIds(true);
-    const data = await api('/api/settings/provider', { timeoutMs: 8000 });
-    const llm = data?.llm || { provider: 'ollama', providers: {} };
-    const prov = llm.provider || 'ollama';
-    window._llmSettingsCache = llm;
-    window._llmSettingsLoadedToUI = true;
-    renderProviderSelectors();
-    const provSel = document.getElementById('settings-llm-provider');
-    if (provSel) provSel.value = prov;
-
-    const pc = llm.providers || {};
-
-    // Populate each provider's fields from saved config
-    const v = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
-    v('settings-ollama-endpoint',  pc.ollama?.endpoint);
-    const primaryModelSel = document.getElementById('settings-primary-model');
-    const savedOllamaModel = String(pc.ollama?.model || '').trim();
-    if (primaryModelSel) {
-      primaryModelSel.dataset.savedValue = savedOllamaModel;
-      if (savedOllamaModel && !Array.from(primaryModelSel.options || []).find(o => o.value === savedOllamaModel)) {
-        primaryModelSel.innerHTML = `<option value="${escHtml(savedOllamaModel)}">${escHtml(savedOllamaModel)}</option>${primaryModelSel.innerHTML}`;
-      }
-      if (savedOllamaModel) primaryModelSel.value = savedOllamaModel;
-    }
-    v('settings-llamacpp-endpoint', pc.llama_cpp?.endpoint);
-    v('settings-llamacpp-model',    pc.llama_cpp?.model);
-    v('settings-lmstudio-endpoint', pc.lm_studio?.endpoint);
-    v('settings-lmstudio-model',    pc.lm_studio?.model);
-    v('settings-openai-key',        pc.openai?.api_key);
-    if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
-    { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
-    { const s = document.getElementById('settings-openai-tool-choice'); if (s) s.value = pc.openai?.tool_choice || 'required'; }
-    if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
-    { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex?.reasoning_effort || ''; }
-    { const s = document.getElementById('settings-codex-tool-choice'); if (s) s.value = pc.openai_codex?.tool_choice || 'auto'; }
-    if (pc.anthropic?.model) { const s = document.getElementById('settings-anthropic-model'); if (s) s.value = pc.anthropic.model; }
-    { const s = document.getElementById('settings-anthropic-effort'); if (s) s.value = pc.anthropic?.reasoning_effort || ''; }
-    v('settings-perplexity-key',    pc.perplexity?.api_key);
-    if (pc.perplexity?.model) { const s = document.getElementById('settings-perplexity-model'); if (s) s.value = pc.perplexity.model; }
-    { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity?.reasoning_effort || ''; }
-    v('settings-gemini-key',        pc.gemini?.api_key);
-    if (pc.gemini?.model) { const s = document.getElementById('settings-gemini-model'); if (s) s.value = pc.gemini.model; }
-    if (pc.anthropic) {
-      const chk = document.getElementById('settings-anthropic-extended-thinking');
-      if (chk) {
-        chk.checked = !!pc.anthropic.extended_thinking;
-        const row = document.getElementById('anthropic-thinking-budget-row');
-        if (row) row.style.display = chk.checked ? 'block' : 'none';
-      }
-      if (pc.anthropic.thinking_budget) {
-        const sel = document.getElementById('settings-anthropic-thinking-budget');
-        if (sel) sel.value = String(pc.anthropic.thinking_budget);
-      }
-      const fastChk = document.getElementById('settings-anthropic-fast-mode');
-      if (fastChk) fastChk.checked = !!pc.anthropic.fast_mode;
-      syncAnthropicReasoningControls();
-    }
-
-    getProviderCatalogItems()
-      .filter(item => !BUILTIN_PROVIDER_IDS.includes(item.id))
-      .forEach(item => applyDynamicProviderConfig(item.id, pc[item.id]));
-
-    // Auth/model probes can be slow on cold startup. Populate saved settings first,
-    // then let live status/model lists settle without blocking the Settings modal.
+function scheduleModelStatusRefresh(prov) {
+  if (_pendingModelStatusProbeTimer) return;
+  _pendingModelStatusProbeTimer = setTimeout(() => {
+    _pendingModelStatusProbeTimer = null;
+    if (document?.visibilityState === 'hidden') return;
+    if (window.settingsTab !== 'models') return;
     Promise.allSettled([
       refreshCodexStatus(),
       refreshAnthropicStatus(),
       refreshXaiStatus(),
       prov === 'openai' ? refreshOpenAIModels(true) : Promise.resolve(),
     ]).catch(() => {});
+  }, 120);
+}
 
-    // Auto-load model list for list-capable providers in the background.
-    setTimeout(() => onProviderChange(), 0);
-    if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
-      window.applyReasoningPrefsFromProviderConfig(llm, prov);
+async function loadModelSettings() {
+  window._llmSettingsLoadedToUI = false;
+  const providerBoot = ensureProviderCatalogUIReady()
+    .then(() => fetchCredentialedModelProviderIds(true))
+    .then(() => ({ ok: true }))
+    .catch(() => ({ ok: false }));
+
+  const loadFromApi = () => api('/api/settings/provider', { timeoutMs: 8000 });
+  const cached = _withSettingsCache({
+    key: 'settings-models',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.modelSettings,
+    fetcher: loadFromApi,
+  });
+
+  const applyModelPayload = async (payload) => {
+    try {
+      const llm = payload?.llm || { provider: 'ollama', providers: {} };
+      const prov = llm.provider || 'ollama';
+      window._llmSettingsCache = llm;
+      renderProviderSelectors();
+      const provSel = document.getElementById('settings-llm-provider');
+      if (provSel) provSel.value = prov;
+
+      const pc = llm.providers || {};
+      const v = (id, val) => {
+        const el = document.getElementById(id);
+        if (el && val) el.value = val;
+      };
+
+      v('settings-ollama-endpoint',  pc.ollama?.endpoint);
+      const primaryModelSel = document.getElementById('settings-primary-model');
+      const savedOllamaModel = String(pc.ollama?.model || '').trim();
+      if (primaryModelSel) {
+        primaryModelSel.dataset.savedValue = savedOllamaModel;
+        if (savedOllamaModel && !Array.from(primaryModelSel.options || []).find(o => o.value === savedOllamaModel)) {
+          primaryModelSel.innerHTML = `<option value="${escHtml(savedOllamaModel)}">${escHtml(savedOllamaModel)}</option>${primaryModelSel.innerHTML}`;
+        }
+        if (savedOllamaModel) primaryModelSel.value = savedOllamaModel;
+      }
+      v('settings-llamacpp-endpoint', pc.llama_cpp?.endpoint);
+      v('settings-llamacpp-model',    pc.llama_cpp?.model);
+      v('settings-lmstudio-endpoint', pc.lm_studio?.endpoint);
+      v('settings-lmstudio-model',    pc.lm_studio?.model);
+      v('settings-openai-key',        pc.openai?.api_key);
+      if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
+      { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
+      { const s = document.getElementById('settings-openai-tool-choice'); if (s) s.value = pc.openai?.tool_choice || 'required'; }
+      if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
+      { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex?.reasoning_effort || ''; }
+      { const s = document.getElementById('settings-codex-tool-choice'); if (s) s.value = pc.openai_codex?.tool_choice || 'auto'; }
+      if (pc.anthropic?.model) { const s = document.getElementById('settings-anthropic-model'); if (s) s.value = pc.anthropic.model; }
+      { const s = document.getElementById('settings-anthropic-effort'); if (s) s.value = pc.anthropic?.reasoning_effort || ''; }
+      v('settings-perplexity-key',    pc.perplexity?.api_key);
+      if (pc.perplexity?.model) { const s = document.getElementById('settings-perplexity-model'); if (s) s.value = pc.perplexity.model; }
+      { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity?.reasoning_effort || ''; }
+      v('settings-gemini-key',        pc.gemini?.api_key);
+      if (pc.gemini?.model) { const s = document.getElementById('settings-gemini-model'); if (s) s.value = pc.gemini.model; }
+
+      if (pc.anthropic) {
+        const chk = document.getElementById('settings-anthropic-extended-thinking');
+        if (chk) {
+          chk.checked = !!pc.anthropic.extended_thinking;
+          const row = document.getElementById('anthropic-thinking-budget-row');
+          if (row) row.style.display = chk.checked ? 'block' : 'none';
+        }
+        if (pc.anthropic.thinking_budget) {
+          const sel = document.getElementById('settings-anthropic-thinking-budget');
+          if (sel) sel.value = String(pc.anthropic.thinking_budget);
+        }
+        const fastChk = document.getElementById('settings-anthropic-fast-mode');
+        if (fastChk) fastChk.checked = !!pc.anthropic.fast_mode;
+        syncAnthropicReasoningControls();
+      }
+
+      getProviderCatalogItems()
+        .filter(item => !BUILTIN_PROVIDER_IDS.includes(item.id))
+        .forEach(item => applyDynamicProviderConfig(item.id, pc[item.id]));
+
+      window._llmSettingsLoadedToUI = true;
+      setTimeout(() => onProviderChange(), 0);
+      if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
+        window.applyReasoningPrefsFromProviderConfig(llm, prov);
+      }
+
+      Promise.allSettled([
+        loadAgentModelDefaults(),
+        loadBrainModelConfig(),
+        loadSessionCompactionSettings(),
+      ]).then(() => { renderModelsUsage(); }).catch(() => {});
+      scheduleModelStatusRefresh(prov);
+    } catch (e) {
+      console.warn('loadModelSettings apply failed:', e);
+      window._llmSettingsLoadedToUI = false;
     }
-    Promise.allSettled([
-      loadAgentModelDefaults(),
-      loadBrainModelConfig(),
-      loadSessionCompactionSettings(),
-    ]).then(() => { renderModelsUsage(); }).catch(() => {});
-  } catch (e) {
-    window._llmSettingsLoadedToUI = false;
-    console.warn('loadModelSettings error:', e);
+  };
+
+  await providerBoot;
+
+  if (cached.value) {
+    await applyModelPayload(cached.value);
+    scheduleModelStatusRefresh(cached.value?.llm?.provider || 'ollama');
+    if (cached.refreshPromise) {
+      cached.refreshPromise.then((fresh) => {
+        if (fresh) {
+          applyModelPayload(fresh);
+          scheduleModelStatusRefresh(fresh?.llm?.provider || 'ollama');
+        }
+      }).catch((e) => {
+        console.warn('loadModelSettings refresh failed:', e);
+      });
+    }
+    return;
+  }
+
+  const fresh = await cached.refreshPromise;
+  if (fresh) {
+    await applyModelPayload(fresh);
+    scheduleModelStatusRefresh(fresh?.llm?.provider || 'ollama');
   }
 }
 
@@ -2032,6 +2292,7 @@ function onAnthropicModelChange() {
 async function refreshOllamaModels() { await refreshProviderModels(); }
 
 async function openSettings(tab) {
+  _scheduleSettingsVisibilityRefresh();
   document.getElementById('settings-modal').style.display = 'flex';
   window._settingsPathsLoadedToUI = false;
   window._settingsSearchLoadedToUI = false;
@@ -2040,37 +2301,44 @@ async function openSettings(tab) {
     saveBtn.disabled = false;
     saveBtn.textContent = 'Save';
   }
-  setSettingsTab(tab || window.settingsTab || 'system');
-  try {
-    const status = await api('/api/status', { timeoutMs: 5000 });
-    document.getElementById('settings-runtime-model').textContent = status.currentModel || '-';
-    document.getElementById('settings-runtime-gateway').textContent = status.gateway || '-';
-    document.getElementById('settings-runtime-ollama').textContent = status.ollama ? 'Online' : 'Offline';
-  } catch {}
-  try {
-    const paths = await api('/api/settings/paths', { timeoutMs: 5000 });
-    const workspaceEl = document.getElementById('settings-workspace-path');
-    const allowedEl = document.getElementById('settings-allowed-paths');
-    const blockedEl = document.getElementById('settings-blocked-paths');
-    if (workspaceEl) workspaceEl.value = paths.workspace_path || '';
-    if (allowedEl) allowedEl.value = (paths.allowed_paths || []).join('\n');
-    if (blockedEl) blockedEl.value = (paths.blocked_paths || []).join('\n');
-    window._settingsPathsLoadedToUI = true;
-  } catch {
-    window._settingsPathsLoadedToUI = false;
-  }
-  try {
-    const s = await api('/api/settings/search', { timeoutMs: 5000 });
-    const providerEl = document.getElementById('settings-provider');
-    const rigorEl = document.getElementById('settings-search-rigor');
-    if (providerEl) providerEl.value = s.preferred_provider || 'tavily';
-    if (rigorEl) rigorEl.value = s.search_rigor || 'verified';
-    window._settingsSearchLoadedToUI = true;
-    // Keys are loaded via the Credentials tab — not here
-  } catch {
-    window._settingsSearchLoadedToUI = false;
-  }
-  try { await loadSessionCompactionSettings(); } catch {}
+  const targetTab = tab || window.settingsTab || 'system';
+  setSettingsTab(targetTab);
+  const bootJobs = [
+    api('/api/status', { timeoutMs: 5000 }).then((status) => {
+      const runtimeModelEl = document.getElementById('settings-runtime-model');
+      const runtimeGatewayEl = document.getElementById('settings-runtime-gateway');
+      const runtimeOllamaEl = document.getElementById('settings-runtime-ollama');
+      if (runtimeModelEl) runtimeModelEl.textContent = status.currentModel || '-';
+      if (runtimeGatewayEl) runtimeGatewayEl.textContent = status.gateway || '-';
+      if (runtimeOllamaEl) runtimeOllamaEl.textContent = status.ollama ? 'Online' : 'Offline';
+    }).catch(() => {}),
+    api('/api/settings/paths', { timeoutMs: 5000 }).then((paths) => {
+      const workspaceEl = document.getElementById('settings-workspace-path');
+      const allowedEl = document.getElementById('settings-allowed-paths');
+      const blockedEl = document.getElementById('settings-blocked-paths');
+      if (workspaceEl) workspaceEl.value = paths.workspace_path || '';
+      if (allowedEl) allowedEl.value = (paths.allowed_paths || []).join('\n');
+      if (blockedEl) blockedEl.value = (paths.blocked_paths || []).join('\n');
+      window._settingsPathsLoadedToUI = true;
+    }).catch(() => {
+      window._settingsPathsLoadedToUI = false;
+    }),
+    loadSearchSettingsSummary().then(() => {
+      const providerEl = document.getElementById('settings-provider');
+      const rigorEl = document.getElementById('settings-search-rigor');
+      const s = {
+        preferred_provider: document.getElementById('r-failed')?.textContent || 'tavily',
+        search_rigor: quickSearchRigor,
+      };
+      if (providerEl) providerEl.value = s.preferred_provider;
+      if (rigorEl) rigorEl.value = s.search_rigor;
+      window._settingsSearchLoadedToUI = true;
+    }).catch(() => {
+      window._settingsSearchLoadedToUI = false;
+    }),
+    loadSessionCompactionSettings().catch(() => {}),
+  ];
+  Promise.allSettled(bootJobs).catch(() => {});
 }
 
 function closeSettings() {
@@ -2081,6 +2349,7 @@ function closeSettings() {
   }
   document.getElementById('settings-modal').style.display = 'none';
   channelsStatusLoaded = false;
+  _settingsAgentsLoadedSelection = '';
 }
 
 // -- Migration panel -------------------------------------------------------------------------------------------------------------
@@ -2754,10 +3023,10 @@ function agentFormNew() {
 }
 
 async function selectAgent(id) {
+  const previous = window.selectedAgentId;
   window.selectedAgentId = id;
   const selected = findSelectedAgent();
   setAgentForm(selected);
-  // Show/hide Delete button — main agent is protected
   const deleteBtn = document.getElementById('agent-delete-btn');
   if (deleteBtn) {
     const isProtected = isMainAgentEntry(selected);
@@ -2767,21 +3036,43 @@ async function selectAgent(id) {
     deleteBtn.style.cursor = isProtected ? 'not-allowed' : 'pointer';
   }
   renderAgentsList();
-  // Force CodeMirror refresh on every agent switch — fixes blank editor for sub-agents
+  if (selected) {
+    const shouldReloadSelection = id !== previous || id !== _settingsAgentsLoadedSelection;
+    if (shouldReloadSelection) {
+      _settingsAgentsLoadedSelection = '';
+    }
+    await loadAgentDetailsForCurrentSelection(shouldReloadSelection);
+  }
+}
+
+function updateAgentDeleteProtection(selected) {
+  const deleteBtn = document.getElementById('agent-delete-btn');
+  if (!deleteBtn) return;
+  const isProtected = isMainAgentEntry(selected);
+  deleteBtn.disabled = isProtected;
+  deleteBtn.title = isProtected ? 'Cannot delete the main agent' : '';
+  deleteBtn.style.opacity = isProtected ? '0.4' : '1';
+  deleteBtn.style.cursor = isProtected ? 'not-allowed' : 'pointer';
+}
+
+async function loadAgentDetailsForCurrentSelection(force = false) {
+  if (!window.selectedAgentId) return;
+  if (!force && _settingsAgentsLoadedSelection === window.selectedAgentId) return;
+  _settingsAgentsLoadedSelection = window.selectedAgentId;
+
   ensureAgentMdEditor();
   if (window.agentMdEditor) {
     window.agentMdEditor.setValue('');
     window.agentMdEditor.refresh();
   }
-  // Populate model dropdown for this agent's provider
   const provEl = document.getElementById('agent-edit-provider');
-  if (provEl && provEl.value) {
-    await loadAgentModelOptions(true); // true = preserve current selection
-  }
-	  await loadSelectedAgentMd();
-  await loadAgentHeartbeat();
-	  await loadAgentRunHistory();
-	}
+  if (provEl && provEl.value) loadAgentModelOptions(true).catch(() => {});
+  await Promise.all([
+    loadSelectedAgentMd().catch(() => {}),
+    loadAgentRunHistory().catch(() => {}),
+    isSelectedMainAgent() ? Promise.resolve() : loadAgentHeartbeat().catch(() => {}),
+  ]);
+}
 
 // --- Agent model picker ------------------------------------------------------
 
@@ -2904,10 +3195,11 @@ function openAgentSettings(agentId) {
   }
   // Load agents tab and select the agent
   loadAgentsTab().then(() => {
-    window.selectedAgentId = agentId;
-    renderAgentsList();
     const agent = window.agentsConfigList.find(a => a.id === agentId);
-    if (agent) setAgentForm(agent);
+    if (agent) {
+      _settingsAgentsLoadedSelection = '';
+      selectAgent(agent.id).catch(() => {});
+    }
     // Scroll the agent into view in the list
     setTimeout(() => {
       const btn = document.querySelector(`[onclick*="selectAgent('${agentId}')"]`);
@@ -2953,10 +3245,9 @@ async function loadAgentsTab() {
       window.teamsData = (_td.teams || []);
     } catch {}
   }
-  try {
-    const data = await api('/api/agents', { timeoutMs: 8000 });
+
+  const applyAgentsPayload = (data = {}) => {
     window.agentsConfigList = Array.isArray(data?.agents) ? data.agents : [];
-    // Prefer selecting main agent so newly-created subagents do not steal focus
     const defaultAgentId = window.agentsConfigList.find(a => a.id === 'main')?.id
       || data?.defaultAgentId
       || window.agentsConfigList.find(a => a.default === true)?.id
@@ -2967,27 +3258,30 @@ async function loadAgentsTab() {
     renderAgentsList();
     const selected = findSelectedAgent();
     setAgentForm(selected);
-    // Sync delete button protection state
-    const deleteBtn = document.getElementById('agent-delete-btn');
-    if (deleteBtn) {
-      const isProtected = isMainAgentEntry(selected);
-      deleteBtn.disabled = isProtected;
-      deleteBtn.title = isProtected ? 'Cannot delete the main agent' : '';
-      deleteBtn.style.opacity = isProtected ? '0.4' : '1';
-      deleteBtn.style.cursor = isProtected ? 'not-allowed' : 'pointer';
-    }
+    updateAgentDeleteProtection(selected);
     if (selected) {
-    // Refresh CodeMirror so it doesn't show blank on tab re-open
-    if (window.agentMdEditor) { window.agentMdEditor.setValue(''); window.agentMdEditor.refresh(); }
-    // Load model options for the selected agent's provider
-    const provEl = document.getElementById('agent-edit-provider');
-    if (provEl && provEl.value) loadAgentModelOptions(true).catch(() => {});
-    loadSelectedAgentMd().catch(() => {});
-    loadAgentRunHistory().catch(() => {});
-    if (!isSelectedMainAgent()) loadAgentHeartbeat().catch(() => {});
+      loadAgentDetailsForCurrentSelection(selected.id !== _settingsAgentsLoadedSelection);
     } else {
       agentFormNew();
+      _settingsAgentsLoadedSelection = '';
     }
+  };
+
+  const cached = _withSettingsCache({
+    key: 'settings-agents',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.agents,
+    fetcher: () => api('/api/agents', { timeoutMs: 8000 }),
+  });
+  if (cached.value) {
+    applyAgentsPayload(cached.value);
+    if (cached.refreshPromise) {
+      cached.refreshPromise.then((fresh) => { if (fresh) applyAgentsPayload(fresh); }).catch(() => {});
+    }
+    return;
+  }
+  try {
+    const data = await cached.refreshPromise;
+    applyAgentsPayload(data || {});
   } catch (err) {
     addProcessEntry('error', `Failed to load agents: ${err.message}`);
   }
@@ -3336,9 +3630,13 @@ async function sendSelectedChannelTest() {
 }
 
 async function loadChannelsStatus() {
-  try {
-    const data = await api('/api/channels/status');
-    if (!data?.success) return;
+  const cached = _withSettingsCache({
+    key: 'settings-channels',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.channelsStatus,
+    fetcher: () => api('/api/channels/status'),
+  });
+
+  const apply = (data = {}) => {
     const tg = data.telegram || {};
     const dc = data.discord || {};
     const wa = data.whatsapp || {};
@@ -3374,9 +3672,24 @@ async function loadChannelsStatus() {
       document.getElementById('settings-wa-recipient').value = wa.testRecipient || '';
     }
     onChannelTypeChange();
-  } catch (err) {
-    console.error('[Channels] Status load failed:', err);
+  };
+
+  if (cached.value) {
+    apply(cached.value);
+    if (!cached.refreshPromise) return;
+    cached.refreshPromise.then((fresh) => {
+      if (fresh) apply(fresh);
+    }).catch((err) => {
+      console.error('[Channels] Status refresh failed:', err);
+    });
+    return;
   }
+
+  cached.refreshPromise.then((fresh) => {
+    if (fresh) apply(fresh);
+  }).catch((err) => {
+    console.error('[Channels] Status load failed:', err);
+  });
 }
 
 async function saveChannelSettings(channel) {
@@ -3390,6 +3703,7 @@ async function saveChannelSettings(channel) {
     if (data?.success) {
       addProcessEntry('final', `${channel} settings saved.`);
       channelsStatusLoaded = false;
+      _markSettingsCacheBusted('settings-channels');
       await loadChannelsStatus();
     } else {
       alert('Save failed: ' + (data?.error || 'unknown error'));
@@ -3602,9 +3916,25 @@ async function saveSettings() {
       return;
     }
     if (activeTab === 'search' || activeTab === 'credentials') {
+      _markSettingsCacheBusted('settings-search-summary');
       loadSearchSettingsSummary().catch(() => {});
-      if (activeTab === 'credentials') loadCredFields().catch(() => {});
+      if (activeTab === 'credentials') {
+        _markSettingsCacheBusted('settings-credentials-fields');
+        _markSettingsCacheBusted('settings-credentials-vault-status');
+        _markSettingsCacheBusted('settings-credentials-vault-log');
+        loadCredFields().catch(() => {});
+      }
       if (bulkPayload.search?.search_rigor) quickSearchRigor = bulkPayload.search.search_rigor;
+    }
+    if (activeTab === 'models') {
+      _markSettingsCacheBusted('settings-models');
+    }
+    if (activeTab === 'channels') {
+      _markSettingsCacheBusted('settings-channels');
+    }
+    if (activeTab === 'integrations') {
+      _markSettingsCacheBusted('settings-webhooks');
+      _markSettingsCacheBusted('settings-mcp');
     }
     const securityStatus = document.getElementById('settings-security-status');
     if (activeTab === 'security' && securityStatus) setSettingsStatus(securityStatus, 'success', 'Saved');
@@ -3699,24 +4029,41 @@ function setIntegTab(tab) {
 
 async function loadIntegrationsTab() {
   setIntegTab(_integTab);
-  await loadWebhookSettings();
-  await loadMCPServers();
+  const jobs = [loadWebhookSettings(), loadMCPServers()];
+  Promise.allSettled(jobs).catch(() => {});
 }
 
 // --- Webhooks -----------------------------------------------------------------
 
+function applyWebhookPayload(payload = {}) {
+  const h = payload?.hooks || {};
+  const cb = document.getElementById('wh-enabled');
+  const inp = document.getElementById('wh-token');
+  const pathInp = document.getElementById('wh-path');
+  if (cb) cb.checked = h.enabled === true;
+  if (inp) inp.value = h.tokenSet ? '••••••••' : '';
+  if (pathInp) pathInp.value = h.path || '/hooks';
+  updateWebhookStatus(h.enabled, h.tokenSet);
+  updateWebhookUrlDisplay(h.enabled, h.tokenSet, h.path || '/hooks');
+}
+
 async function loadWebhookSettings() {
+  const cached = _withSettingsCache({
+    key: 'settings-webhooks',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.integrationsWebhook,
+    fetcher: () => api('/api/settings/hooks'),
+  });
+  if (cached.value) {
+    applyWebhookPayload(cached.value);
+    if (!cached.refreshPromise) return;
+    cached.refreshPromise.then((fresh) => {
+      if (fresh) applyWebhookPayload(fresh);
+    }).catch(() => {});
+    return;
+  }
   try {
-    const data = await api('/api/settings/hooks');
-    const h = data.hooks || {};
-    const cb = document.getElementById('wh-enabled');
-    const inp = document.getElementById('wh-token');
-    const pathInp = document.getElementById('wh-path');
-    if (cb) cb.checked = h.enabled === true;
-    if (inp) inp.value = h.tokenSet ? '••••••••' : '';
-    if (pathInp) pathInp.value = h.path || '/hooks';
-    updateWebhookStatus(h.enabled, h.tokenSet);
-    updateWebhookUrlDisplay(h.enabled, h.tokenSet, h.path || '/hooks');
+    const data = await cached.refreshPromise;
+    if (data) applyWebhookPayload(data);
   } catch(e) {
     console.warn('loadWebhookSettings:', e);
   }
@@ -3771,6 +4118,7 @@ async function saveWebhookSettings() {
       body: JSON.stringify({ enabled, token: rawToken, path: hookPath }),
     });
     if (r.success) {
+      _markSettingsCacheBusted('settings-webhooks');
       await loadWebhookSettings();
       showIntegMsg('? Webhook settings saved — restart gateway to apply', '#166534', '#f0fdf4');
     } else {
@@ -3825,8 +4173,12 @@ const MCP_PRESETS = {
 async function loadMCPServers() {
   const el = document.getElementById('mcp-server-list');
   if (!el) return;
-  try {
-    const data = await api('/api/mcp/servers');
+  const cached = _withSettingsCache({
+    key: 'settings-mcp',
+    ttlMs: SETTINGS_DATA_CACHE_TTL_MS.integrationsMcp,
+    fetcher: () => api('/api/mcp/servers'),
+  });
+  const applyServers = (data = {}) => {
     const servers = data.servers || [];
     if (servers.length === 0) {
       el.innerHTML = '<div style="color:var(--muted);font-style:italic;padding:8px 0">No MCP servers configured yet.<br>Add one above or click a preset on the right.</div>';
@@ -3855,6 +4207,20 @@ async function loadMCPServers() {
         </div>
       </div>`;
     }).join('');
+  };
+  if (cached.value) {
+    applyServers(cached.value);
+    if (!cached.refreshPromise) return;
+    cached.refreshPromise.then((fresh) => {
+      if (fresh) applyServers(fresh);
+    }).catch((e) => {
+      console.warn('loadMCPServers refresh failed:', e);
+    });
+    return;
+  }
+  try {
+    const data = await cached.refreshPromise;
+    if (data) applyServers(data);
   } catch(e) {
     el.innerHTML = `<div style="color:#ef4444">Failed to load: ${escHtml(e.message)}</div>`;
   }
@@ -3958,6 +4324,7 @@ async function saveMCPServer() {
     const r = await api('/api/mcp/servers', { method: 'POST', body: JSON.stringify(cfg) });
     if (r.success) {
       if (msgEl) msgEl.textContent = '? Saved';
+      _markSettingsCacheBusted('settings-mcp');
       setTimeout(() => hideMCPAddForm(), 600);
       await loadMCPServers();
       // Auto-connect if enabled
@@ -3982,6 +4349,7 @@ async function deleteMCPServer(id) {
   if (!confirm(`Delete MCP server "${id}"?`)) return;
   try {
     await api(`/api/mcp/servers/${id}`, { method: 'DELETE' });
+    _markSettingsCacheBusted('settings-mcp');
     await loadMCPServers();
   } catch(e) { showIntegMsg('Delete failed: ' + e.message, '#991b1b', '#fef2f2'); }
 }
@@ -3991,13 +4359,16 @@ async function connectMCPServer(id) {
   try {
     const r = await api(`/api/mcp/servers/${id}/connect`, { method: 'POST' });
     if (r.success) {
+      _markSettingsCacheBusted('settings-mcp');
       showIntegMsg(`? Connected — ${(r.tools||[]).length} tool(s) available`, '#166534', '#f0fdf4');
     } else {
       showIntegMsg('? Connection failed: ' + (r.error || 'Unknown'), '#991b1b', '#fef2f2');
     }
+    _markSettingsCacheBusted('settings-mcp');
     await loadMCPServers();
   } catch(e) {
     showIntegMsg('Connect error: ' + e.message, '#991b1b', '#fef2f2');
+    _markSettingsCacheBusted('settings-mcp');
     await loadMCPServers();
   }
 }
@@ -4005,6 +4376,7 @@ async function connectMCPServer(id) {
 async function disconnectMCPServer(id) {
   try {
     await api(`/api/mcp/servers/${id}/disconnect`, { method: 'POST' });
+    _markSettingsCacheBusted('settings-mcp');
     await loadMCPServers();
     showIntegMsg('Disconnected from ' + id, '#475569', '#f8fafc');
   } catch(e) { showIntegMsg('Disconnect error: ' + e.message, '#991b1b', '#fef2f2'); }

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when writing, pruning, auditing, correcting, or deciding placement for durable memory, user preferences, project facts, operational runbooks, notes, or entity/business context.",
+  "description": "Use this skill when writing, pruning, auditing, correcting, or deciding placement for durable memory, user preferences, project facts, operational runbooks, notes, or entity/business context — including when Raul asks to move procedural bullets from USER/SOUL/MEMORY into existing skills instead of deleting knowledge.",
   "triggers": [
     "update memory",
     "write this to memory",
@@ -17,20 +17,14 @@
     "memory governance",
     "prune memory",
     "memory correction",
-    "update USER.md",
-    "update MEMORY.md",
-    "business context memory"
+    "update user.md",
+    "update memory.md",
+    "business context memory",
+    "audit USER SOUL MEMORY",
+    "move memory into skills",
+    "memory file hygiene",
+    "what to remove from MEMORY.md",
+    "memory feels heavy"
   ],
-  "categories": [
-    "memory",
-    "governance",
-    "continuity"
-  ],
-  "requiredTools": [
-    "advanced_memory",
-    "workspace_write"
-  ],
-  "lifecycle": "active",
-  "name": "Memory Governance Playbook",
   "id": "memory-governance-playbook"
 }

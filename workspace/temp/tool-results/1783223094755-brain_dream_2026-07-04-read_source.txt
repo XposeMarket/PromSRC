@@ -1,0 +1,182 @@
+src/gateway/routes/chat.router.ts (17130 lines) [window 13610-13789, truncated]:
+13610:     includedInContext: false,
+13611:     outOfBand: true,
+13612:     percentLabel: 'last',
+13613:     children,
+13614:   };
+13615: }
+13616: 
+13617: function buildContextWindowCurrentState(input: {
+13618:   sessionId: string;
+13619:   profile: { contextWindowTokens: number; tokenizer: any };
+13620:   currentInputTokens: number;
+13621:   messageTokens: number;
+13622:   recentToolTokens: number;
+13623:   compactionTriggerTokens: number;
+13624:   storedThread: any;
+13625:   modelUsage: any;
+13626:   turnTelemetry?: any;
+13627: }) {
+13628:   const lastCall = input.modelUsage?.lastContextCall || input.modelUsage?.lastCall || {};
+13629:   const latestMessageInputTokens = Math.max(0, Number(lastCall.estimatedMessageInputTokens || 0));
+13630:   const latestSystemPromptTokens = Math.max(0, Number(lastCall.estimatedSystemPromptTokens || 0));
+13631:   const latestToolSchemaTokens = Math.max(
+13632:     0,
+13633:     Number(lastCall.estimatedToolSchemaTokens || 0) || estimateCurrentSystemToolSchemaTokens(input.sessionId, input.profile),
+13634:   );
+13635:   const latestProviderInputTokens = Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0));
+13636:   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
+13637:   const activeSkillTokens = activeSkillEstimate.tokens;
+13638:   const legacySystemPromptEstimate = Math.max(0, latestMessageInputTokens - input.currentInputTokens - activeSkillTokens);
+13639:   const systemPromptTokens = latestSystemPromptTokens > 0
+13640:     ? Math.max(0, latestSystemPromptTokens - activeSkillTokens)
+13641:     : (legacySystemPromptEstimate || estimateCurrentSystemPromptTokens(input.sessionId, input.profile));
+13642:   const storedMessageTokens = Math.max(0, Number(input.storedThread?.visibleChatTokens || 0) + Number(input.storedThread?.attachmentMetadataTokens || 0));
+13643:   const processTokens = Math.max(0, Number(input.storedThread?.processEntryTokens || 0) + Number(input.storedThread?.legacyToolLogTokens || 0));
+13644:   const storedObservationTokens = Math.max(0, Number(input.storedThread?.toolObservationStoredTokens || 0));
+13645:   const rawToolStorageTokens = Math.max(0, Number(input.storedThread?.rawToolResultTokens || 0));
+13646:   const systemToolChildren = buildSystemToolSchemaChildren(input.sessionId, input.profile, latestToolSchemaTokens);
+13647:   const systemPromptChildren = buildSystemPromptChildren(systemPromptTokens);
+13648:   const providerUsageChildren = buildProviderUsageChildren(input.modelUsage);
+13649:   const lastTurnUsageRow = buildLastTurnUsageRow(input.turnTelemetry);
+13650:   const skillChildren = activeSkillEstimate.children;
+13651:   const contextWindowTokens = Math.max(0, Number(input.profile.contextWindowTokens || 0));
+13652:   const compactionTriggerTokens = Math.max(0, Number(input.compactionTriggerTokens || 0));
+13653:   const contextLimitTokens = compactionTriggerTokens > 0 && contextWindowTokens > 0
+13654:     ? Math.min(compactionTriggerTokens, contextWindowTokens)
+13655:     : (compactionTriggerTokens || contextWindowTokens);
+13656:   const inContextRows: ContextWindowRow[] = [
+13657:     { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
+13658:     { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0, children: systemToolChildren },
+13659:     { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0, children: systemPromptChildren },
+13660:     { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0, children: skillChildren, estimated: activeSkillTokens > 0 },
+13661:     { id: 'tool_observations', label: 'Tool observations', tokens: Math.max(0, input.recentToolTokens), active: input.recentToolTokens > 0 },
+13662:     { id: 'mcp_tools', label: 'MCP tools', tokens: 0, active: false },
+13663:     { id: 'mcp_tools_deferred', label: 'MCP tools (deferred)', tokens: 0, active: false },
+13664:   ].map((row) => ({ ...row, includedInContext: true, percentBasis: 'window' }));
+13665:   const inContextRowTotal = inContextRows.reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
+13666:   const runtimeOverheadBasis = latestSystemPromptTokens > 0
+13667:     ? latestMessageInputTokens + latestToolSchemaTokens
+13668:     : inContextRowTotal;
+13669:   const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - runtimeOverheadBasis);
+13670:   const runtimeOverheadRow = runtimeOverheadTokens > 0
+13671:     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
+13672:     : [];
+13673:   const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
+13674:   const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
+13675:   return {
+13676:     currentStateTokens,
+13677:     contextLimitTokens,
+13678:     contextWindowTokens,
+13679:     compactionTriggerTokens,
+13680:     latestProviderInputTokens,
+13681:     nextCallEstimateTokens: input.currentInputTokens,
+13682:     freeSpaceTokens,
+13683:     rows: [
+13684:       ...inContextRows,
+13685:       ...runtimeOverheadRow,
+13686:       { id: 'free_space', label: 'Free before compaction', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
+13687:       { id: 'next_call_estimate', label: 'Next call estimate', tokens: input.currentInputTokens, active: input.currentInputTokens > 0, includedInContext: false, percentLabel: 'next' },
+13688:       { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, percentBasis: 'window', percentLabel: 'limit' },
+13689:       { id: 'model_context_window', label: 'Model context window', tokens: contextWindowTokens, active: false, includedInContext: false, outOfBand: true, percentLabel: 'full' },
+13690:       { id: 'full_stored_thread', label: 'Full stored thread', tokens: Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0)), active: false, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13691:       { id: 'stored_process_logs', label: 'Stored process logs', tokens: processTokens, active: processTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13692:       { id: 'stored_tool_observations', label: 'Stored tool observations', tokens: storedObservationTokens, active: storedObservationTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13693:       { id: 'raw_tool_storage', label: 'Raw tool storage', tokens: rawToolStorageTokens, active: rawToolStorageTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+13694:       ...(lastTurnUsageRow ? [lastTurnUsageRow] : []),
+13695:       { id: 'logged_provider_usage', label: 'Logged provider usage', tokens: Math.max(0, Number(input.modelUsage?.totalTokens || 0)), active: Number(input.modelUsage?.totalTokens || 0) > 0, includedInContext: false, outOfBand: true, percentLabel: 'total', children: providerUsageChildren },
+13696:     ],
+13697:   };
+13698: }
+13699: 
+13700: function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voiceReply: string, action: string, eventId: string, processEntries: any[]): string {
+13701:   const rawSid = String(sessionId || '').trim();
+13702:   const userText = compactVoiceText(transcript || '', 1200);
+13703:   const replyText = String(voiceReply || '').trim();
+13704:   const id = String(eventId || '').trim();
+13705:   if (!rawSid || !userText || !replyText) return rawSid;
+13706:   // A voice-first new chat on mobile can still be sitting on the throwaway
+13707:   // 'mobile_default' draft slot when the realtime handoff posts here. The
+13708:   // mobile drawer never lists 'mobile_default', so persisting a durable turn
+13709:   // under it orphans the whole conversation (works live, vanishes on nav).
+13710:   // Rotate to a real mobile_<id> session and register it as channel 'mobile'
+13711:   // so it surfaces in the session list exactly like a text-first chat does.
+13712:   let sid = rawSid;
+13713:   if (rawSid === 'mobile_default') {
+13714:     sid = `mobile_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`;
+13715:     try {
+13716:       // Register the real session as channel 'mobile' so the drawer lists it.
+13717:       // Do not seed a title message here: the user turn added below becomes
+13718:       // the first message and the drawer derives the title from history,
+13719:       // which avoids a duplicate user bubble.
+13720:       touchSession(sid, { channel: 'mobile' });
+13721:       flushSession(sid);
+13722:     } catch (registerErr: any) {
+13723:       console.warn('[voice-agent] failed to register rotated mobile voice session:', registerErr?.message || registerErr);
+13724:     }
+13725:   }
+13726:   try {
+13727:     const session = getSession(sid);
+13728:     const history = Array.isArray(session.history) ? session.history : [];
+13729:     if (id && history.some((msg: any) => String(msg?.voiceInterruptionEventId || '') === id && String(msg?.content || '').trim() === replyText)) {
+13730:       return sid;
+13731:     }
+13732:     const groupId = `voice_workflow_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`;
+13733:     const now = Date.now();
+13734:     addMessage(sid, {
+13735:       role: 'user',
+13736:       content: userText,
+13737:       timestamp: now,
+13738:       channel: 'voice',
+13739:       channelLabel: 'voice',
+13740:       workflowGroupId: groupId,
+13741:       workflowPart: 'interruption',
+13742:       workflowLabel: action === 'handoff_new_work' ? 'Voice request' : 'Voice interruption',
+13743:       voiceInterruptionEventId: id || undefined,
+13744:     } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+13745:     addMessage(sid, {
+13746:       role: 'assistant',
+13747:       content: replyText,
+13748:       timestamp: now + 1,
+13749:       source: 'voice_agent',
+13750:       processEntries: Array.isArray(processEntries) ? processEntries : [],
+13751:       workflowGroupId: groupId,
+13752:       workflowPart: action === 'interrupt_worker' ? 'abort_response' : 'interruption_response',
+13753:       workflowLabel: action === 'interrupt_worker' ? 'Abort response' : 'Interruption response',
+13754:       voiceInterruptionEventId: id || undefined,
+13755:     } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+13756:     flushSession(sid);
+13757:   } catch (err: any) {
+13758:     console.warn('[voice-agent] failed to persist visible voice turn:', err?.message || err);
+13759:   }
+13760:   return sid;
+13761: }
+13762: 
+13763: function hasRecentVoiceWorkflowUserMessage(sessionId: string, message: string, maxAgeMs = 180000): boolean {
+13764:   const text = String(message || '').replace(/\s+/g, ' ').trim();
+13765:   if (!sessionId || !text) return false;
+13766:   try {
+13767:     const history = Array.isArray(getSession(sessionId).history) ? getSession(sessionId).history : [];
+13768:     const now = Date.now();
+13769:     return history.some((msg: any) => {
+13770:       if (msg?.role !== 'user') return false;
+13771:       if (!String(msg?.voiceInterruptionEventId || '').trim() && !String(msg?.workflowGroupId || '').trim()) return false;
+13772:       if (String(msg?.content || '').replace(/\s+/g, ' ').trim() !== text) return false;
+13773:       const ts = Number(msg?.timestamp || 0);
+13774:       return !Number.isFinite(ts) || ts <= 0 || now - ts <= maxAgeMs;
+13775:     });
+13776:   } catch {
+13777:     return false;
+13778:   }
+13779: }
+13780: 
+13781: function buildFastRouteSpokenReply(toolName: string, toolResult: any): string {
+13782:   const ok = toolResult?.ok !== false;
+13783:   const summary = compactVoiceText(toolResult?.summary || toolResult?.stdout || toolResult?.error || '', 600);
+13784:   if (!ok) return `${friendlyVoiceToolName(toolName)} failed${summary ? `: ${summary}` : '.'}`;
+13785:   switch (toolName) {
+13786:     case 'voice_web_search': return summary ? `Here's what I found: ${summary}` : 'Search complete.';
+13787:     case 'voice_web_fetch': return summary ? `Here's the content: ${summary}` : 'Fetched.';
+13788:     case 'voice_memory_search': return summary ? `From memory: ${summary}` : 'Nothing found in memory.';
+13789:     case 'voice_agent_memory': return summary || 'Voice agent memory updated.';
+[READ_TRUNCATED] Returned 180 of 17130 lines. Use start_line:13790, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

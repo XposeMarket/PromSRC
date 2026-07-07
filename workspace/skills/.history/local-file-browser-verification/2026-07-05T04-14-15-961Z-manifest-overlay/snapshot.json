@@ -1,0 +1,12 @@
+{
+  "skillId": "local-file-browser-verification",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-07-05T04:14:15.965Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\local-file-browser-verification",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "6328240b4fc07ac1"
+}

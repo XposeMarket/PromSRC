@@ -1,0 +1,170 @@
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28902 lines) [window 2485-2564, truncated]:
+2485:   const seed = `${raw.length}|${raw.slice(0, 96)}|${raw.slice(-96)}|${preview?.width || ''}x${preview?.height || ''}`;
+2486:   for (let i = 0; i < seed.length; i += 1) {
+2487:     hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
+2488:   }
+2489:   return `vision_${Math.abs(hash).toString(36)}_${raw.length.toString(36)}`;
+2490: }
+2491: 
+2492: function _isMobileStartupStatusText(value) {
+2493:   return /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i
+2494:     .test(String(value || '').trim());
+2495: }
+2496: 
+2497: function _isMobileBareThinkingTraceText(value) {
+2498:   return /^thinking(?:\.\.\.)?$/i.test(String(value || '').replace(/\s+/g, ' ').trim());
+2499: }
+2500: 
+2501: function _mobileTraceTextLooksLikeFinalAnswer(text, finalText) {
+2502:   const trace = String(text || '').replace(/\s+/g, ' ').trim();
+2503:   const final = String(finalText || '').replace(/\s+/g, ' ').trim();
+2504:   if (!trace || !final) return false;
+2505:   if (trace === final) return true;
+2506:   const traceLower = trace.toLowerCase();
+2507:   const finalLower = final.toLowerCase();
+2508:   if (trace.length >= 32 && finalLower.startsWith(traceLower)) return true;
+2509:   if (final.length >= 32 && traceLower.startsWith(finalLower)) return true;
+2510:   return false;
+2511: }
+2512: 
+2513: function _mergeMobileLiveTraceIntoProcess(message) {
+2514:   if (!message) return;
+2515:   _flushMobileTraceThoughtProbe(message, { force: true });
+2516:   const traces = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
+2517:   if (!traces.length) return;
+2518:   if (!Array.isArray(message.processEntries)) message.processEntries = [];
+2519:   const existing = new Set(message.processEntries.map((entry) =>
+2520:     `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+2521:   ));
+2522:   for (const trace of traces) {
+2523:     const type = String(trace?.type || 'info').toLowerCase();
+2524:     const rawText = String(trace?.text || '').trim();
+2525:     const text = (type === 'preamble' || type === 'think' || type === 'assistant')
+2526:       ? _dedupeMobileTraceProseText(rawText)
+2527:       : rawText;
+2528:     if (!text || (type !== 'preamble' && type !== 'think')) continue;
+2529:     const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+2530:     if (existing.has(key)) continue;
+2531:     existing.add(key);
+2532:     message.processEntries.unshift({
+2533:       id: `trace_proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+2534:       type,
+2535:       text,
+2536:       time: String(trace?.time || _nowTime()),
+2537:     });
+2538:   }
+2539: }
+2540: 
+2541: function _mobileProcessEntriesWithLiveTrace(message, entries) {
+2542:   const out = Array.isArray(entries) ? entries.map((entry) => ({ ...entry })) : [];
+2543:   const traces = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+2544:   if (!traces.length) return out;
+2545:   const existing = new Set(out.map((entry) =>
+2546:     `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+2547:   ));
+2548:   const liveEntries = [];
+2549:   for (const trace of traces) {
+2550:     const type = String(trace?.type || 'info').toLowerCase();
+2551:     const rawText = String(trace?.text || '').trim();
+2552:     const text = (type === 'preamble' || type === 'think' || type === 'assistant')
+2553:       ? _dedupeMobileTraceProseText(rawText)
+2554:       : rawText;
+2555:     if (!text || (type !== 'preamble' && type !== 'think')) continue;
+2556:     const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+2557:     if (existing.has(key)) continue;
+2558:     existing.add(key);
+2559:     liveEntries.push({
+2560:       id: `trace_proc_preview_${liveEntries.length}`,
+2561:       type,
+2562:       text,
+2563:       time: String(trace?.time || _nowTime()),
+2564:     });
+[READ_TRUNCATED] Returned 80 of 28902 lines. Use start_line:2565, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28902 lines) [window 3040-3119, truncated]:
+3040:     });
+3041:     rootEl.querySelectorAll('.pm-trace-thought[data-pm-trace-group], details.pm-trace-tool-group[data-pm-trace-group]').forEach((node) => {
+3042:       const id = String(node.getAttribute('data-pm-trace-group') || '').trim();
+3043:       if (!id || segmentSeen.has(id)) return;
+3044:       segmentSeen.add(id);
+3045:       node.classList.add('pm-live-stream-enter');
+3046:     });
+3047:   } catch {}
+3048: }
+3049: 
+3050: function _mobileTraceGroups(entries) {
+3051:   const list = _mobileVisibleTraceEntries(entries);
+3052:   const groups = [];
+3053:   let activeToolGroup = null;
+3054:   list.forEach((entry) => {
+3055:     if (_isMobileTraceCompactionEntry(entry)) {
+3056:       activeToolGroup = null;
+3057:       groups.push({ kind: 'compaction', entries: [entry] });
+3058:       return;
+3059:     }
+3060:     if (_isMobileTraceThoughtEntry(entry)) {
+3061:       activeToolGroup = null;
+3062:       groups.push({ kind: 'thought', entries: [entry] });
+3063:       return;
+3064:     }
+3065:     if (!activeToolGroup) {
+3066:       activeToolGroup = { kind: 'tools', entries: [] };
+3067:       groups.push(activeToolGroup);
+3068:     }
+3069:     activeToolGroup.entries.push(entry);
+3070:   });
+3071:   return groups.map((group, index) => ({ ...group, id: _mobileTraceGroupStableKey(group, index) }));
+3072: }
+3073: 
+3074: function _mobileTraceHasToolGroup(entries) {
+3075:   return _mobileTraceGroups(entries).some((group) =>
+3076:     (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0
+3077:   );
+3078: }
+3079: 
+3080: function _mobileTraceToolLabel(text) {
+3081:   return String(text || '')
+3082:     .replace(/\s+/g, ' ')
+3083:     .replace(/^Preparing\s+/i, '')
+3084:     .replace(/^Prepared\s+/i, '')
+3085:     .replace(/\s*(?:->|→).*/, '')
+3086:     .replace(/:\s+(?!\{).*/, '')
+3087:     .replace(/\s+(?:complete|failed)$/i, '')
+3088:     .replace(/:\s*\{.*$/, '')
+3089:     .trim();
+3090: }
+3091: 
+3092: function _mobileTraceCountPhrase(count) {
+3093:   if (count === 1) return 'once';
+3094:   if (count === 2) return 'twice';
+3095:   return `${count} times`;
+3096: }
+3097: 
+3098: function _mobileTraceJsonPayload(text) {
+3099:   const raw = String(text || '');
+3100:   const start = raw.search(/[\[{]/);
+3101:   if (start < 0) return null;
+3102:   const opener = raw[start];
+3103:   const closer = opener === '[' ? ']' : '}';
+3104:   const end = raw.lastIndexOf(closer);
+3105:   if (end <= start) return null;
+3106:   try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+3107: }
+3108: 
+3109: function _mobileTracePayloadValues(payload, keys, limit = 4) {
+3110:   const wanted = new Set((keys || []).map((key) => String(key || '').toLowerCase()));
+3111:   const out = [];
+3112:   const visit = (value, depth = 0) => {
+3113:     if (out.length >= limit || value == null || depth > 5) return;
+3114:     if (Array.isArray(value)) {
+3115:       value.forEach((item) => visit(item, depth + 1));
+3116:       return;
+3117:     }
+3118:     if (typeof value !== 'object') return;
+3119:     Object.entries(value).forEach(([key, item]) => {
+[READ_TRUNCATED] Returned 80 of 28902 lines. Use start_line:3120, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- [batch truncated] ---
+Only first 2 files read. Re-run with remaining files if needed.

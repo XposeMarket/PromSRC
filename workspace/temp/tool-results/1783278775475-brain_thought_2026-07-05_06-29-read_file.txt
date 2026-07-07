@@ -1,0 +1,126 @@
+Brain/thoughts/2026-07-05/06-29-thought.md (125 lines) [window 1-125]:
+1: ---
+2: # Thought 3 - 2026-07-05 | Window: 2026-07-05 10:29 UTC-2026-07-05 19:10 UTC
+3: _Generated: 2026-07-05 15:10 local_
+4: 
+5: ## Summary
+6: 
+7: After a quiet Brain-only slice (Thought 2, 04:14–10:28 UTC), this window picked up **real user momentum** in two different lanes. At **12:01 UTC** the new **Morning motivational wake-up** cron fired for the first time: `delivery_send` reached mobile on the first try, Walt Disney quote plus a short encouragement, logged in intraday notes (`job_1783232120356_kfzu6`). That closes the loop on Raul’s **06:15 UTC** request (session `mobile_mr7ect84_9n28jv`) for daily **8:00 AM Eastern** wake-ups — the schedule exists and one live run succeeded.
+8: 
+9: The heavier signal landed at **14:23–14:25 UTC** on desktop session `78512f06-7f72-46d5-b6a0-06934425a4e1`: Raul asked Prometheus to **review the pending proposal backlog** and prioritize what to approve. The assistant answered with a structured triage — **38 pending** in `proposals/pending/`, a “approve first” cluster (switch-model fallbacks, xAI billing preflight, measured context-window, Skill Gardener false business classification, MCP OAuth), a recommended **five-approval week batch**, and explicit **deny/archive** candidates (duplicate Brain Dream no-ops, one-off shopping/X drafts). No proposals were executed in-window; disk still shows the July 4 Dream trio plus the larger May–July pi...[line truncated]
+10: 
+11: Tonight’s **current-state** checks: `browser-tool-bench/x-url-extraction-benchmark-2026-07-04.md` is **still missing**; `repos/nebulax-test/assets/js/portfolio-card.js` is now a **stub** (verification report text still mentions 404 — report is partially stale); `inline-02.jsx` still has `loadLayoutForViewport` at ≤767px and mobile column layout at lines 408–419; iPhone Babel/runtime and narrow **first-paint** validation remain **open** per the verification report. I added a low-risk **local-file-browser-verification** example resource for mobile-first navigation before first browser load.
+12: 
+13: I wonder if Raul’s proposal triage session is the right moment to **pair approvals** — e.g. context-window measurement plus the X bench action/skill props — so one executor week delivers both Hub trust and a repeatable bench artifact. I wonder whether the morning wake-up job should get **expected_outputs** on intraday `write_note` lines so cron success is file-verified, not only `delivery_send` success. I wonder if NebulaX’s next unblock is still **one iPhone hard refresh** before any Jupiter proxy work, since desktop automation already admitted it never validated narrow first paint.
+14: 
+15: ## Pulse Cards
+16: 
+17: ```json
+18: [
+19:   {
+20:     "title": "Approve This Week's Five",
+21:     "body": "You asked which pending proposals matter most; a tight five-ID batch is ready to click through.",
+22:     "prompt": "Pick up our pending proposal triage from today. List the five IDs you recommended I approve first (switch-model fallbacks, xAI billing preflight, measured context-window, MCP OAuth, subagent recovery), and for each one give me a one-line risk, whether it needs gateway restart, and what I'll notice after it lands."
+23:   },
+24:   {
+25:     "title": "Morning Wake-Up Tune-Up",
+26:     "body": "Today's 8am job delivered on mobile; we can harden quote variety and logging before tomorrow.",
+27:     "prompt": "Review the Morning motivational wake-up scheduled job that ran successfully on 2026-07-05. Open its schedule detail and last run, suggest one small improvement (quote dedup, expected_outputs on intraday notes, or delivery channel), and offer to patch the job prompt if I want it."
+28:   },
+29:   {
+30:     "title": "NebulaX Phone Proof",
+31:     "body": "Mobile dashboard code is on disk; your iPhone is still the real acceptance test.",
+32:     "prompt": "Help me finish NebulaX mobile acceptance: start the preview server in repos/nebulax-test, give me the LAN URL, and walk me through iPhone hard refresh steps. Tell me exactly what I should see (no DexScreener iframe, compact SOL chart link) and what to do if the Babel runtime overlay still appears."
+33:   }
+34: ]
+35: ```
+36: 
+37: ## A. Activity Summary
+38: 
+39: - **10:28–10:29 UTC:** Brain Thought 2 completed; wrote `Brain/thoughts/2026-07-05/00-14-thought.md`; no user chats in that sub-window. Evidence: `audit/chats/transcripts/brain_thought_2026-07-05_00-14.md`.
+40: - **12:01 UTC:** Cron job `job_1783232120356_kfzu6` — **Morning motivational wake-up** — `status: success`, ~109s, mobile `origin` delivery, Walt Disney quote. Evidence: `audit/cron/runs/job_1783232120356_kfzu6.jsonl`, `memory/2026-07-05-intraday-notes.md:30-36`.
+41: - **14:23–14:25 UTC:** User session `78512f06-7f72-46d5-b6a0-06934425a4e1` — pending proposal review and prioritization (38 pending, recommended approve/deny lists). Evidence: `audit/chats/transcripts/78512f06-7f72-46d5-b6a0-06934425a4e1.md`.
+42: - **Pre-window (origin):** Wake-up schedule created ~06:15 UTC `mobile_mr7ect84_9n28jv` (8:00 AM Eastern daily). Evidence: `audit/chats/transcripts/mobile_mr7ect84_9n28jv.md`.
+43: - **Files changed in-window:** None by user; Thought maintenance added `skills/local-file-browser-verification/examples/mobile-first-navigation.md`.
+44: - **Tasks/teams:** No team spawns; scheduler-owner subagent path for wake-up per skill episode.
+45: - **NebulaX (carry-forward, verified tonight):** `portfolio-card.js` stub; `inline-02.jsx` mobile layout helpers; verification report unchanged on disk.
+46: 
+47: ## B. Behavior Quality
+48: 
+49: **Went well:**
+50: - First scheduled wake-up delivered without retry; matched user’s mobile-first expectation | evidence: cron JSONL + intraday TASK note
+51: - Proposal triage answer was actionable (tables, deny list, five-ID batch) without requiring tool spam | evidence: `78512f06-7f72-46d5-b6a0-06934425a4e1.md`
+52: - Wake-up creation session set clear timezone and first-run expectation | evidence: `mobile_mr7ect84_9n28jv.md:12-16`
+53: 
+54: **Stalled or struggled:**
+55: - Proposal count “38 pending” not re-verified with list tools in transcript — reasonable estimate but Dream should spot-check `proposals/pending/` count | evidence: assistant reply line 6
+56: - NebulaX mobile acceptance still blocked on human iPhone retest (unchanged) | evidence: `local-browser-verification-2026-07-05.md:43-51`
+57: 
+58: **Tool usage patterns:**
+59: - Wake-up cron: `scheduler-operations-playbook` read + `delivery_send` + `write_note` (episode L3).
+60: - Proposal chat: file/list reads (gardener candidate sg_65f23a31); no executions.
+61: 
+62: **User corrections:**
+63: - none observed in 10:29–19:10 UTC window
+64: 
+65: ## C. Skill And Workflow Signals
+66: 
+67: | Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
+68: |----------------|--------|-----------------|------------|----------|
+69: | scheduler-operations-playbook | First successful daily wake-up cron; self-contained completion note scope | add example: motivational delivery + write_note dedup pattern | medium | skill-episodes L3; cron JSONL |
+70: | proposal triage / backlog review | User asked for approve focus across 38 pending | propose skill or composite “pending proposal triage” checklist | medium | transcript 78512f06; gardener sg_65f23a31 |
+71: | local-file-browser-verification | NebulaX report: resize ≠ narrow first paint | example resource added (C2) | high | verification report §32-35 |
+72: | local-file-browser-verification | Triggers include nebulax/8788 in overlay | no further trigger work | high | skill_inspect triggers array |
+73: 
+74: ## C2. Existing Skill Maintenance
+75: 
+76: **Applied during this Thought:**
+77: - local-file-browser-verification | added `examples/mobile-first-navigation.md` (narrow viewport before first navigation) | why: NebulaX verification proved desktop-then-resize false negative | evidence: `repos/nebulax-test/reports/local-browser-verification-2026-07-05.md:32-35` | verification: skill_resource_write succeeded; resources now 3 per tool result
+78: 
+79: **Deferred for Dream review:**
+80: - scheduler-operations-playbook | compact example for user-facing motivational cron with `delivery_send` + intraday logging | evidence: wake-up run 2026-07-05T12:01:53Z
+81: - proposal triage | new skill only if user repeats backlog review | evidence: single session today
+82: 
+83: ## D. Business Candidates
+84: 
+85: | Candidate | Destination | Action | Confidence | Evidence |
+86: |-----------|-------------|--------|-----------|----------|
+87: | Daily 8am Eastern motivational delivery (mobile) | USER.md preferences or MEMORY operational | append_event (preference) | medium | mobile_mr7ect84; cron success 12:01 UTC |
+88: | NebulaX project (unchanged) | entities/project/nebulax.md | update_entity | medium | Thought 1 JSONL; disk repos/nebulax-test |
+89: 
+90: **Business candidate JSONL:** Brain\business-candidates\2026-07-05\candidates.jsonl written / **not needed** (no new high-confidence entity rows beyond Thought 1; wake-up is user preference — Dream may route to USER)
+91: 
+92: ## E. Memory Candidates
+93: 
+94: | Item | Target | Recall Trigger | Future Behavior | Staleness Risk | Confidence | Evidence |
+95: |------|--------|----------------|-----------------|----------------|-----------|----------|
+96: | Raul wants daily 8:00 AM Eastern motivational wake-up on mobile | USER.md | Morning automation / schedule requests | Default channel mobile/origin; use scheduler playbook | User changes time/channel | medium | mobile_mr7ect84_9n28jv.md |
+97: | Proposal backlog triage: prioritize switch-model, xAI preflight, context-window, MCP OAuth, subagent recovery | MEMORY.md task_outcomes or project_memory | User asks “what proposals should I approve” | Offer same five-ID batch; deny duplicate no-ops | Queue drained or IDs stale | medium | 78512f06 transcript |
+98: | portfolio-card.js stub fixes 404; verification report line 16 stale | nowhere (operational note) | NebulaX verify | Re-run verification or annotate report | — | high | stub file on disk vs report |
+99: 
+100: ## F. Opportunity Seeds
+101: 
+102: | Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
+103: |------|----------------|----------------------------|-----------|----------|
+104: | Execute Raul’s “this week five” proposal approvals | Unblocks cost, billing visibility, Hub context, MCP OAuth, Mara-style chat recovery | `proposals/pending/` prop IDs from triage chat | high | 78512f06 transcript L58-66 |
+105: | Deny duplicate Brain Dream no-op proposals while triaging | Reduces noise in 38-pending queue | `proposals/pending/prop_1782963693048*.json` | medium | transcript L41-43 |
+106: | NebulaX iPhone hard refresh + optional precompile | Only remaining mobile acceptance gate before Jupiter | `repos/nebulax-test/assets/js/inline-02.jsx` | high | verification report |
+107: | Run prop_1783223154700_8f3971 bench markdown | Artifact still missing tonight | `browser-tool-bench/` | high | read_file not found |
+108: | Harden wake-up job with expected_outputs on intraday note | Cron “success” ↔ durable log link | `audit/cron/jobs/` wake-up job | medium | cron run + scheduler skill §4 |
+109: 
+110: ## G. Improvement Candidates
+111: 
+112: | Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
+113: |-------|---------------|--------------------------|------------|----------|
+114: | Pending proposal triage UI / “recommended batch” helper | feature_addition | code_change or general | low | user asked; no existing prop |
+115: | Measured context-window (existing) | feature_addition | code_change | high | prop_1783223137706; user ranked approve-first |
+116: | xAI billing preflight (existing) | feature_addition | code_change | high | transcript approve-first table |
+117: | Verification report stale vs portfolio stub | task_trigger | action (refresh report) | medium | report L16 vs stub file |
+118: 
+119: ## H. Window Verdict
+120: 
+121: **Active:** yes  
+122: **Signal quality:** medium-high (first live wake-up cron + substantive proposal triage; NebulaX carry-forward verified)  
+123: **Summary:** 12:01 UTC wake-up succeeded on mobile; 14:23 UTC proposal prioritization chat; NebulaX stub and mobile JSX confirmed on disk; bench markdown and iPhone retest still open.
+124: 
+125: ---

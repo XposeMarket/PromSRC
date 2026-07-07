@@ -1,5 +1,10 @@
 ---
-
+name: Scheduler Operations Playbook
+description: Operations runbook for Prometheus automations - scheduled jobs, schedule-owner subagents, managed-team schedules, expected output checks, internal watches, run history, stuck-state controls, user-visible delivery verification, model routing, and agent heartbeats.
+emoji: 🗓️
+version: 1.1.0
+triggers: schedule_job, schedule_job_detail, schedule_job_patch, schedule_job_history, schedule_job_log_search, schedule_job_outputs, schedule_job_stuck_control, automation_dashboard, internal_watch, update_heartbeat, parse_schedule_pattern, scheduled job, cron job, recurring job, schedule-owner subagent, managed team schedule, expected outputs, heartbeat diagnostics, stalled job, stuck job, false success, stale output, delivery verification
+---
 
 # Scheduler Operations Playbook
 
@@ -93,6 +98,11 @@ Before mutating any job, inspect the real current state.
 4. Create with:
    - `schedule_job(action:"create", confirm:true, name:"...", instruction_prompt:"...", schedule:{...}, timezone:"...", delivery:{channel:"web"})`
 5. Re-list and open detail to verify config.
+6. Add expected outputs when the job should create/read a file or deterministic artifact:
+   - `schedule_job_outputs(action:"set", job_id:"...", expected_outputs:[...], confirm:true)`
+7. Run once immediately when safe:
+   - `schedule_job(action:"run_now", job_id:"...")`
+8. Verify via detail/history/output checks.
 
 ### Schedule shapes and ownership fields
 
@@ -101,11 +111,6 @@ Before mutating any job, inspect the real current state.
 - For managed-team schedules, pass `team_id`; the scheduler wakes the team manager first.
 - For non-team schedules, omit `subagent_id` unless intentionally reusing a known schedule-owner subagent. The scheduler will create/assign an isolated owner automatically.
 - Treat `delivery.session_target:"main"` as legacy compatibility, not actual ownership.
-6. Add expected outputs when the job should create/read a file or deterministic artifact:
-   - `schedule_job_outputs(action:"set", job_id:"...", expected_outputs:[...], confirm:true)`
-7. Run once immediately when safe:
-   - `schedule_job(action:"run_now", job_id:"...")`
-8. Verify via detail/history/output checks.
 
 ### Prompt requirements for future-proof jobs
 
@@ -121,8 +126,8 @@ A good scheduled job prompt includes:
 - Delivery expectations.
 - Verification requirements.
 
-Bad: “Send Raul a morning brief.”
-Good: “Read `signal-radar/x/latest-daily-x-signal.md`; if missing, report the exact missing path and do not invent signals; deliver exactly this phone-friendly markdown format...”
+Bad: "Send Raul a morning brief."
+Good: "Read `signal-radar/x/latest-daily-x-signal.md`; if missing, report the exact missing path and do not invent signals; deliver exactly this phone-friendly markdown format..."
 
 ---
 
@@ -148,6 +153,7 @@ Use `schedule_job(action:"update", confirm:true, ...)` for ordinary schedule/tim
 - Keep the schedule unchanged unless the user asked to change timing.
 - Preserve explicit safety rules in existing prompts unless intentionally replacing them.
 - If adding a new primary tool route, keep deterministic fallback behavior.
+- If output files matter, add/update expected output checks in the same maintenance pass.
 
 ### Patchable fields
 
@@ -160,7 +166,6 @@ Use `schedule_job(action:"update", confirm:true, ...)` for ordinary schedule/tim
 - `expected_outputs`
 
 For changes outside those fields — cron/friendly schedule, delivery channel, `team_id`, `subagent_id`, or one-shot vs recurring shape — use `schedule_job(action:"update", confirm:true, ...)` after reading the detail and preserving unchanged fields.
-- If output files matter, add/update expected output checks in the same maintenance pass.
 
 ---
 
@@ -185,9 +190,7 @@ For production fixes, one successful `run_now` is good but not always enough. If
 
 ## 7) Expected Outputs
 
-Expected outputs are how scheduled jobs avoid false success.
-
-Use when a job should create, update, or rely on a file/artifact.
+Expected outputs are how scheduled jobs avoid false success. Use when a job should create, update, or rely on a file/artifact.
 
 - Get current specs:
   - `schedule_job_outputs(action:"get", job_id:"...")`
@@ -197,6 +200,12 @@ Use when a job should create, update, or rely on a file/artifact.
 - Check specs:
   - `schedule_job_outputs(action:"check", job_id:"...")`
 
+Expected output entries may be either:
+- a workspace-relative path string, e.g. `"signal-radar/x/latest-daily-x-signal.md"`
+- an object, e.g. `{path:"signal-radar/x/latest-daily-x-signal.md", requiredText:"# Daily X Signal Radar", absentText:"[obsolete brand]"}`
+
+Use `requiredText` for must-have headers/markers and `absentText` for stale brands, known bad placeholders, or previous failure strings. If delivery depends on a file, require enough text to prove it is the fresh intended artifact, not just any file at that path.
+
 Good expected output examples:
 - `{path:"signal-radar/x/latest-daily-x-signal.md", requiredText:"# Daily X Signal Radar", absentText:"[obsolete brand]"}`
 - `{path:"opportunity-radar/latest-weekly-opportunity-brief.md", requiredText:"## Top opportunities"}`
@@ -205,14 +214,6 @@ Expected output checks do not replace reading the file when the content is high-
 
 ---
 
-
-### Output spec forms
-
-Expected output entries may be either:
-- a workspace-relative path string, e.g. `"signal-radar/x/latest-daily-x-signal.md"`
-- an object, e.g. `{path:"signal-radar/x/latest-daily-x-signal.md", requiredText:"# Daily X Signal Radar", absentText:"[obsolete brand]"}`
-
-Use `requiredText` for must-have headers/markers and `absentText` for stale brands, known bad placeholders, or previous failure strings. If delivery depends on a file, require enough text to prove it is the fresh intended artifact, not just any file at that path.
 ## 8) Incident Triage Flow
 
 Use this sequence for stalled/failed/no-output jobs:
@@ -287,7 +288,7 @@ Fix:
 ### D. Managed-team scheduled run does nothing useful
 
 Symptoms:
-- `lastResult`: “Hey! How can I help?”
+- `lastResult`: "Hey! How can I help?"
 - Manager woke with insufficient mission/focus/instructions.
 
 Fix:
@@ -306,7 +307,6 @@ Fix:
 - `schedule_job_stuck_control(action:"cancel_retry_loop"...)` or `rerun_clean` after patch.
 - Inspect whether duplicate tasks remain active.
 
-
 ### F. Long-running or asynchronous run loses foreground visibility
 
 Symptoms:
@@ -320,7 +320,8 @@ Fix:
 - Use `target:{type:"task", task_id:"..."}` for linked task terminal status, or `target:{type:"file", path:"..."}` with `mode:"appears_or_changes"` for artifact completion.
 - Include `on_match` instructions that reopen detail/history/output checks and report the result; include `on_timeout` instructions that state the exact timeout and next inspection step.
 - Keep `max_firings:1` unless intentionally monitoring multiple changes.
-### F. Delivery missing
+
+### G. Delivery missing
 
 Symptoms:
 - Job complete, but Raul does not see the result.
@@ -355,9 +356,6 @@ Heartbeat safety rules:
 
 ---
 
-
----
-
 ## 11) Model Routing and Capability Checks
 
 Scheduled jobs often run outside the main chat's current model. Do not assume the current live chat model is the job model.
@@ -387,6 +385,9 @@ For Telegram/Discord/WhatsApp or other external delivery:
 - If the content is generated from a file, read/check the actual file and confirm it is fresh before delivery.
 - For stale-brand/obsolete-copy risks, use expected outputs with `absentText` and inspect the final outbound text.
 - If delivery fails, preserve the artifact path and deliver via a web/main-channel fallback rather than regenerating from memory.
+
+---
+
 ## 13) Delivery Rules
 
 ### Web delivery
@@ -419,16 +420,14 @@ For Telegram/Discord/WhatsApp or other external delivery:
 - Resume: `schedule_job(action:"resume", job_id:"...")`
 - Delete: `schedule_job(action:"delete", job_id:"...", confirm:true)`
 - Run now: `schedule_job(action:"run_now", job_id:"...")`
-- Expected outputs get/check/set: `schedule_job_outputs(action:"get"|"check"|"set", ...)`
+- Outputs get/check/set: `schedule_job_outputs(action:"get"|"check"|"set", job_id:"...", ...)`
 - Stuck control: `schedule_job_stuck_control(action:"clear_blocked"|"mark_handled"|"cancel_retry_loop"|"rerun_clean", job_id:"...", confirm:true)`
 - Task detail: `task_control(action:"get", task_id:"...")`
-- Outputs get/check/set: `schedule_job_outputs(action:"get"|"check"|"set", job_id:"...", ...)`
+- Task list: `task_control(action:"list", include_all_sessions:true, status:"...")`
 - Watch completion: `internal_watch(action:"create", target:{type:"scheduled_job", job_id:"..."}, condition:{mode:"terminal"|"latest_result"|"ran"}, ttl_ms:..., on_match:"...", on_timeout:"...")`
-- Dashboard: `automation_dashboard(limit:25, include_done:false)`
 - Model routing inspect: `get_agent_models()`
 - Model routing update: `set_agent_model(agent_type:"...", model:"provider/model")`
 - Parse schedule text: `parse_schedule_pattern(text:"weekdays at 9am", timezone:"America/New_York")`
-- Task list: `task_control(action:"list", include_all_sessions:true, status:"...")`
 - Heartbeat config: `update_heartbeat(agent_id:"...", ...)`
 
 ---
@@ -444,4 +443,4 @@ For Telegram/Discord/WhatsApp or other external delivery:
 - Use text/API-first routes for scheduled reliability when possible.
 - Record meaningful fixes and recurring gotchas with `write_note`.
 
-A scheduled job is not “healthy” because it ran. It is healthy when it ran the intended prompt, used the intended tools, produced fresh expected outputs, and delivered the right user-visible result without unsafe side effects.
+A scheduled job is not "healthy" because it ran. It is healthy when it ran the intended prompt, used the intended tools, produced fresh expected outputs, and delivered the right user-visible result without unsafe side effects.

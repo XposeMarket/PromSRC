@@ -56,6 +56,11 @@
       "path": "references/hit-testing-debug-snippets.md",
       "type": "doc",
       "description": "Browser JS snippets for diagnosing covered buttons, intercepted clicks, and touch overlays."
+    },
+    {
+      "path": "examples/mobile-first-navigation.md",
+      "type": "example",
+      "description": "When to set narrow viewport before first navigation for mobile Safari/local HTML verification."
     }
   ]
 }

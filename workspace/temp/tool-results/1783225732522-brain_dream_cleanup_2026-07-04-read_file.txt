@@ -1,0 +1,182 @@
+Brain/skill-curator/suggestions.json (11082 lines) [window 1-180, truncated]:
+1: [
+2:   {
+3:     "id": "sc_59a22f035f00070a",
+4:     "createdAt": "2026-07-05T03:49:04.564Z",
+5:     "updatedAt": "2026-07-05T03:49:04.928Z",
+6:     "status": "applied",
+7:     "skillId": "ai-surface-smoke-research",
+8:     "title": "Add style pattern to ai-surface-smoke-research",
+9:     "reason": "Skill \"ai-surface-smoke-research\" helped complete a reusable workflow with concrete tool choreography.",
+10:     "lessonType": "style_pattern",
+11:     "futureTrigger": "Use this when the user asks for a similar creative/video output or explicitly says to keep this style.",
+12:     "learnedBehavior": "Consider adding a compact example, checklist, or template resource to ai-surface-smoke-research that captures the successful sequence and any useful constraints.",
+13:     "whyUseful": "Preserves a user-approved creative direction as reusable style guidance instead of saving a raw transcript.",
+14:     "approvePreview": "Approve will add references/styles/ai-surface-smoke-research-2026-07-04.md to ai-surface-smoke-research.",
+15:     "qualityScore": 72,
+16:     "autoApplyEligible": true,
+17:     "autoDecisionReason": "Low-risk style resource with positive or explicit reusable feedback.",
+18:     "evidence": [
+19:       "Brain/skill-gardener/2026-07-04/workflow-episodes.jsonl",
+20:       "Brain/skill-episodes/2026-07-04/episodes.jsonl"
+21:     ],
+22:     "risk": "low",
+23:     "change": {
+24:       "kind": "write_resource",
+25:       "path": "references/styles/ai-surface-smoke-research-2026-07-04.md",
+26:       "content": "# Creative style pattern: ai-surface-smoke-research\n\nSource candidate: sg_bf2648d3a0e376bb\nCaptured: 2026-07-04T05:12:53.597Z\nLesson type: style_pattern\nConfidence: high\n\n## Future Trigger\nUse this when the user asks for a similar creative/video output or explicitly says to keep this style.\n\n## Learned Behavior\nConsider adding a compact example, checklist, or template resource to ai-surface-smoke-research that captures the successful sequence and any useful constraints.\n\n## Why This Helps\nPreserves a user-approved creative direction as reusable style guidance instead of saving a raw transcript.\n\n## Evidence\n- Brain/skill-gardener/2026-07-04/workflow-episode...[line truncated]
+27:     },
+28:     "scan": {
+29:       "verdict": "safe",
+30:       "findings": [],
+31:       "scannedAt": "2026-07-05T03:49:04.564Z",
+32:       "contentHash": "a85d19a409c2a41d"
+33:     },
+34:     "appliedAt": "2026-07-05T03:49:04.928Z"
+35:   },
+36:   {
+37:     "id": "sc_91364c8b5e65ccfc",
+38:     "createdAt": "2026-07-05T03:49:04.564Z",
+39:     "updatedAt": "2026-07-05T03:49:05.282Z",
+40:     "status": "applied",
+41:     "skillId": "voice-browser-desktop-smoke-test",
+42:     "title": "Add style pattern to voice-browser-desktop-smoke-test",
+43:     "reason": "Skill \"voice-browser-desktop-smoke-test\" helped complete a reusable workflow with concrete tool choreography.",
+44:     "lessonType": "style_pattern",
+45:     "futureTrigger": "Use this when the user asks for a similar creative/video output or explicitly says to keep this style.",
+46:     "learnedBehavior": "Consider adding a compact example, checklist, or template resource to voice-browser-desktop-smoke-test that captures the successful sequence and any useful constraints.",
+47:     "whyUseful": "Preserves a user-approved creative direction as reusable style guidance instead of saving a raw transcript.",
+48:     "approvePreview": "Approve will add references/styles/voice-browser-desktop-smoke-test-2026-07-04.md to voice-browser-desktop-smoke-test.",
+49:     "qualityScore": 72,
+50:     "autoApplyEligible": true,
+51:     "autoDecisionReason": "Low-risk style resource with positive or explicit reusable feedback.",
+52:     "evidence": [
+53:       "Brain/skill-gardener/2026-07-04/workflow-episodes.jsonl",
+54:       "Brain/skill-episodes/2026-07-04/episodes.jsonl"
+55:     ],
+56:     "risk": "low",
+57:     "change": {
+58:       "kind": "write_resource",
+59:       "path": "references/styles/voice-browser-desktop-smoke-test-2026-07-04.md",
+60:       "content": "# Creative style pattern: voice-browser-desktop-smoke-test\n\nSource candidate: sg_22f3b4cc845277b7\nCaptured: 2026-07-04T05:12:53.597Z\nLesson type: style_pattern\nConfidence: high\n\n## Future Trigger\nUse this when the user asks for a similar creative/video output or explicitly says to keep this style.\n\n## Learned Behavior\nConsider adding a compact example, checklist, or template resource to voice-browser-desktop-smoke-test that captures the successful sequence and any useful constraints.\n\n## Why This Helps\nPreserves a user-approved creative direction as reusable style guidance instead of saving a raw transcript.\n\n## Evidence\n- Brain/skill-gardener/2026-07-04/wo...[line truncated]
+61:     },
+62:     "scan": {
+63:       "verdict": "safe",
+64:       "findings": [],
+65:       "scannedAt": "2026-07-05T03:49:04.564Z",
+66:       "contentHash": "089395a60f025432"
+67:     },
+68:     "appliedAt": "2026-07-05T03:49:05.282Z"
+69:   },
+70:   {
+71:     "id": "sc_743370cc3cd3ca0d",
+72:     "createdAt": "2026-07-05T03:49:04.564Z",
+73:     "updatedAt": "2026-07-05T03:49:04.564Z",
+74:     "status": "pending",
+75:     "skillId": "ai-surface-smoke-research",
+76:     "title": "Add style pattern to ai-surface-smoke-research",
+77:     "reason": "Business workflow detected (social): social/content workflow signal.",
+78:     "lessonType": "style_pattern",
+79:     "futureTrigger": "Use this when the user asks for a similar creative/video output or explicitly says to keep this style.",
+80:     "learnedBehavior": "Consider adding a business workflow example/template to ai-surface-smoke-research so Prometheus can repeat this operating pattern for the user's business.",
+81:     "whyUseful": "Preserves a user-approved creative direction as reusable style guidance instead of saving a raw transcript.",
+82:     "approvePreview": "Approve will add references/styles/ai-surface-smoke-research-2026-07-04.md to ai-surface-smoke-research.",
+83:     "qualityScore": 72,
+84:     "autoApplyEligible": false,
+85:     "autoDecisionReason": "Low-risk style resource with positive or explicit reusable feedback.",
+86:     "evidence": [
+87:       "Brain/skill-gardener/2026-07-04/workflow-episodes.jsonl",
+88:       "Brain/skill-episodes/2026-07-04/episodes.jsonl"
+89:     ],
+90:     "risk": "medium",
+91:     "change": {
+92:       "kind": "write_resource",
+93:       "path": "references/styles/ai-surface-smoke-research-2026-07-04.md",
+94:       "content": "# Creative style pattern: ai-surface-smoke-research\n\nSource candidate: sg_1f64cfbc83cee2ff\nCaptured: 2026-07-04T05:12:53.597Z\nLesson type: style_pattern\nConfidence: high\n\n## Future Trigger\nUse this when the user asks for a similar creative/video output or explicitly says to keep this style.\n\n## Learned Behavior\nConsider adding a business workflow example/template to ai-surface-smoke-research so Prometheus can repeat this operating pattern for the user's business.\n\n## Why This Helps\nPreserves a user-approved creative direction as reusable style guidance instead of saving a raw transcript.\n\n## Evidence\n- Brain/skill-gardener/2026-07-04/workflow-episodes.jsonl...[line truncated]
+95:     },
+96:     "scan": {
+97:       "verdict": "safe",
+98:       "findings": [],
+99:       "scannedAt": "2026-07-05T03:49:04.564Z",
+100:       "contentHash": "d866758c465f40d7"
+101:     }
+102:   },
+103:   {
+104:     "id": "sc_167e07006a6a34b4",
+105:     "createdAt": "2026-07-04T03:38:27.768Z",
+106:     "updatedAt": "2026-07-05T03:49:04.562Z",
+107:     "status": "pending",
+108:     "skillId": "x-browser-automation-playbook",
+109:     "title": "Review skill change: x-browser-automation-playbook metadata_update",
+110:     "reason": "Skill change has no evidence links, so the curator should verify the reason before treating it as trusted. Changed paths: ../.manifests/x-browser-automation-playbook.skill.json.",
+111:     "lessonType": "instruction_patch",
+112:     "futureTrigger": "Use during the daily self-improvement audit whenever Prometheus, Thought, Dream, or tooling changed skills directly.",
+113:     "learnedBehavior": "Review the actual skill mutation ledger before trusting the day's self-improvement as good memory.",
+114:     "whyUseful": "Keeps Prometheus self-editing honest by checking normal chat, Thought, Dream, curator, and manual skill changes in one daily pass.",
+115:     "approvePreview": "Approve marks this daily skill-change audit as accepted. It does not mutate skill files.",
+116:     "qualityScore": 80,
+117:     "autoApplyEligible": false,
+118:     "autoDecisionReason": "Review-only ledger audit items are never auto-applied.",
+119:     "evidence": [
+120:       "workspace/skills/.history/skill-change-ledger.jsonl"
+121:     ],
+122:     "risk": "medium",
+123:     "change": {
+124:       "kind": "review_only",
+125:       "content": "# Daily Skill Change Audit\n\nSkill: x-browser-automation-playbook\nChange type: metadata_update\nApplied by: skill_manager\nTimestamp: 2026-07-04T01:01:33.083Z\nRisk: medium\n\n## Why Review\nSkill change has no evidence links, so the curator should verify the reason before treating it as trusted.\n\n## Changed Paths\n- ../.manifests/x-browser-automation-playbook.skill.json\n\n## Evidence\n- (none recorded)\n\n## Reason\nBrain Thought 4 2026-07-03: Raul asked twice (mobile_mr5k2xqv, mobile_mr5n02o2) to benchmark web_fetch vs browser_scroll_collect/run_js on X URLs with stopwatch telemetry; improves discovery for extraction perf work.\n"
+126:     },
+127:     "scan": {
+128:       "verdict": "safe",
+129:       "findings": [],
+130:       "scannedAt": "2026-07-05T03:49:04.562Z",
+131:       "contentHash": "8464028eb49461b3"
+132:     }
+133:   },
+134:   {
+135:     "id": "sc_f92e0da982df163d",
+136:     "createdAt": "2026-07-04T03:38:27.768Z",
+137:     "updatedAt": "2026-07-05T03:49:04.562Z",
+138:     "status": "pending",
+139:     "skillId": "threejs-mobile-webgl",
+140:     "title": "Review skill change: threejs-mobile-webgl skill_update",
+141:     "reason": "Skill change has no evidence links, so the curator should verify the reason before treating it as trusted. Changed paths: references/mobile-canvas-iframe-game-checklist.md, skill.json.",
+142:     "lessonType": "instruction_patch",
+143:     "futureTrigger": "Use during the daily self-improvement audit whenever Prometheus, Thought, Dream, or tooling changed skills directly.",
+144:     "learnedBehavior": "Review the actual skill mutation ledger before trusting the day's self-improvement as good memory.",
+145:     "whyUseful": "Keeps Prometheus self-editing honest by checking normal chat, Thought, Dream, curator, and manual skill changes in one daily pass.",
+146:     "approvePreview": "Approve marks this daily skill-change audit as accepted. It does not mutate skill files.",
+147:     "qualityScore": 80,
+148:     "autoApplyEligible": false,
+149:     "autoDecisionReason": "Review-only ledger audit items are never auto-applied.",
+150:     "evidence": [
+151:       "workspace/skills/.history/skill-change-ledger.jsonl"
+152:     ],
+153:     "risk": "medium",
+154:     "change": {
+155:       "kind": "review_only",
+156:       "content": "# Daily Skill Change Audit\n\nSkill: threejs-mobile-webgl\nChange type: skill_update\nApplied by: brain_thought\nTimestamp: 2026-07-03T18:58:13.529Z\nRisk: medium\n\n## Why Review\nSkill change has no evidence links, so the curator should verify the reason before treating it as trusted.\n\n## Changed Paths\n- references/mobile-canvas-iframe-game-checklist.md\n- skill.json\n\n## Evidence\n- (none recorded)\n\n## Reason\nBrain Thought 3 window: repeated mobile-canvas visibility, asset URL, duplicate-script, and spawn-yaw fixes on Pocket Zombies\n"
+157:     },
+158:     "scan": {
+159:       "verdict": "safe",
+160:       "findings": [],
+161:       "scannedAt": "2026-07-05T03:49:04.562Z",
+162:       "contentHash": "ab854cfb56ac85e3"
+163:     }
+164:   },
+165:   {
+166:     "id": "sc_f8469b4af67a9867",
+167:     "createdAt": "2026-07-04T03:38:27.768Z",
+168:     "updatedAt": "2026-07-05T03:49:04.562Z",
+169:     "status": "pending",
+170:     "skillId": "file-surgery",
+171:     "title": "Review skill change: file-surgery skill_update",
+172:     "reason": "Skill change has no evidence links, so the curator should verify the reason before treating it as trusted. Changed paths: references/recovery/minified-js-invalid-optional-chaining-2026-07-03.md, skill.json.",
+173:     "lessonType": "instruction_patch",
+174:     "futureTrigger": "Use during the daily self-improvement audit whenever Prometheus, Thought, Dream, or tooling changed skills directly.",
+175:     "learnedBehavior": "Review the actual skill mutation ledger before trusting the day's self-improvement as good memory.",
+176:     "whyUseful": "Keeps Prometheus self-editing honest by checking normal chat, Thought, Dream, curator, and manual skill changes in one daily pass.",
+177:     "approvePreview": "Approve marks this daily skill-change audit as accepted. It does not mutate skill files.",
+178:     "qualityScore": 80,
+179:     "autoApplyEligible": false,
+180:     "autoDecisionReason": "Review-only ledger audit items are never auto-applied.",
+[READ_TRUNCATED] Returned 180 of 11082 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

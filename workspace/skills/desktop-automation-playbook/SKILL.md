@@ -2,7 +2,7 @@
 name: Desktop Automation Playbook
 description: Current operating guide for Prometheus desktop automation on Windows. Covers screenshot-first execution, window targeting, UI Automation, precise clicking, scrolling, typing, verification, macros, and when to use desktop tools versus browser or shell tools.
 emoji: 🖥️
-version: 4.4.0
+version: 4.5.0
 triggers: desktop, desktop_screenshot, desktop_window_screenshot, desktop_window_control, desktop_click, desktop_drag, desktop_scroll, desktop_type, desktop_type_raw, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_accessibility_tree, desktop_get_window_text, desktop_get_monitors, desktop_find_installed_app, desktop_list_installed_apps, desktop_launch_app, desktop_send_to_telegram, desktop_wait_for_change, desktop_pixel_watch, desktop_record_macro, desktop_replay_macro, desktop_list_apps, desktop_list_windows, desktop_get_window_state, desktop_window_click, desktop_window_type, desktop_window_press_key, desktop_window_scroll, desktop_window_drag, window_id, window-scoped, canonical window model, click screen, type into app, open app, find installed app, launch app by app_id, automate desktop, GUI automation, windows automation, mouse click, screenshot anchored click, coordinate_space, maximize window, restore window, minimize window
 ---
 
@@ -110,6 +110,7 @@ Do not use desktop clicks to operate a website unless browser automation is unav
 
 ### UI understanding and text extraction
 - `desktop_get_window_text(window_name)` — read visible text and values from a window via UI Automation
+
 ### Mouse and keyboard actions
 - `desktop_click(...)` — actual mouse click at coordinates; supports `coordinate_space:"capture"|"window"|"monitor"|"virtual"`, screenshot/window anchoring, left/right click, double-click, modifiers, and verification modes
 - `desktop_drag(...)` — click-and-drag between coordinates using the same coordinate-space model as clicks
@@ -118,15 +119,13 @@ Do not use desktop clicks to operate a website unless browser automation is unav
 - `desktop_type(text)` — fast clipboard-paste text entry into focused control
 - `desktop_type_raw(text)` — raw key-by-key entry when paste fails
 - `desktop_wait(ms)` — fixed delay when you truly just need time to pass
-- `desktop_type_raw(text)` — raw key-by-key entry when paste fails
-- `desktop_wait(ms)` — fixed delay when you truly just need time to pass
 
 ### Clipboard helpers
 - `desktop_get_clipboard()` — read clipboard text
+- `desktop_set_clipboard(...)` — place text, image, or file(s) on the clipboard
 
 ### Telegram proof / sharing
 - `desktop_send_to_telegram(caption?)` — send the most recent desktop screenshot to Raul; call `desktop_screenshot` first so there is a fresh image to send
-- `desktop_set_clipboard(...)` — place text, image, or file(s) on the clipboard
 
 ### Precision waiting
 - `desktop_pixel_watch(...)` — watch one pixel until it changes or matches a target color
@@ -158,7 +157,7 @@ This path avoids title collisions and stale-focus mistakes because every action 
 6. verify with another screenshot or a state-reading tool when the result is ambiguous or risky
 
 ### A1. Active chat composer / coding-assistant apps — type-only path
-Use this for Codex, Claude, Cursor chat, and similar desktop AI/coding assistant apps when the user has already put the cursor in the composer or explicitly says variants of: “just type”, “don’t click”, “don’t focus”, “type and press Enter”, or “the box is already active”.
+Use this for Codex, Claude, Cursor chat, and similar desktop AI/coding assistant apps when the user has already put the cursor in the composer or explicitly says variants of: "just type", "don't click", "don't focus", "type and press Enter", or "the box is already active".
 
 Hard rule: **do not click, focus, screenshot, inspect, close, switch windows, read UI, or touch anything else.** The only allowed actions are:
 1. `desktop_type(message)`
@@ -175,8 +174,7 @@ desktop_type("<message>")
 desktop_press_key("Enter")
 ```
 
-Do not “verify” by clicking or refocusing between those two calls. If verification is needed afterward, use a screenshot only after sending, and do not interact with the UI unless the user asks.
-
+Do not "verify" by clicking or refocusing between those two calls. If verification is needed afterward, use a screenshot only after sending, and do not interact with the UI unless the user asks.
 
 If the user says to open Codex/Claude/Cursor first, the minimal safe path is:
 1. open or focus the named app only if necessary using `desktop_launch_app` or `desktop_focus_window`
@@ -211,6 +209,7 @@ Never click sidebars, title bars, close buttons, chat history, or composer areas
 3. confirm available macros with `desktop_list_macros`
 4. replay with `desktop_replay_macro`
 5. still verify after replay if the workflow has side effects
+
 ---
 
 ## When to use each tool
@@ -264,7 +263,7 @@ Best for:
 Targeting options:
 - `name` — capture a window by title/process substring
 - `handle` — capture the exact HWND when `desktop_find_window` returned multiple candidates
-- `active:true` — capture the currently focused window when the user says “current/focused window”
+- `active:true` — capture the currently focused window when the user says "current/focused window"
 - `focus_first:false` — inspect without stealing focus when focus preservation matters
 - `padding` — include a small border around the window crop when title bars or shadows matter
 
@@ -350,6 +349,7 @@ Important options for click/drag/scroll:
 - `coordinate_space:"window"` + `window_name`/`window_handle` for app-local points
 - `coordinate_space:"monitor"` + `monitor_index` for display-local points
 - `verify:"auto"` for normal screenshot/window targeting, `verify:"strict"` for risky actions, `verify:"off"` only for speed or known no-op actions
+
 ### `desktop_press_key`
 Use for:
 - Enter / Escape / Tab
@@ -394,37 +394,7 @@ Recipe:
 Do not send stale screenshots; always capture immediately before sending.
 
 ### `desktop_diff_screenshot`
-Use after two screenshots when you want a text summary of what visually changed.
-
-Good for debugging subtle UI reactions.
-### Click a visible point accurately
-1. capture the relevant window/monitor with `desktop_window_screenshot` or `desktop_screenshot`
-2. choose the target point from that exact image
-3. click with `coordinate_space:"capture"` + the returned `screenshot_id`
-4. leave `verify:"auto"` on unless speed matters, or use `verify:"strict"` for risky clicks
-
-### Click a named control accurately
-1. `desktop_get_accessibility_tree(window_name)`
-2. locate the control and its bounds
-3. click the center with `desktop_click` using `coordinate_space:"window"` when bounds are window-local, or `coordinate_space:"virtual"` only when bounds are already virtual-screen coordinates
-4. verify with screenshot or tree/text refresh
-- loading indicators
-- enabled/disabled state changes
-- progress completion indicators
-- waiting for a button or status light to change color
-
-This is much cheaper than repeated screenshots.
-### Safe multi-monitor click
-1. `desktop_get_monitors()`
-2. pick the correct display
-3. screenshot that monitor or region and keep `screenshot_id`
-4. click with `coordinate_space:"capture"` + `screenshot_id` when selecting a point from the screenshot
-5. if using direct display coordinates, use `coordinate_space:"monitor"` + `monitor_index`
-6. treat `monitor_relative:true` as legacy compatibility, not the preferred new style
-7. verify after clicking
-- preload text for pasting
-- copy an image into clipboard
-- stage one or more files for paste/file-drop workflows
+Use after two screenshots when you want a text summary of what visually changed. Good for debugging subtle UI reactions.
 
 ### Macro tools
 Use macro tools only for repetitive, stable GUI flows.
@@ -440,10 +410,16 @@ Do not rely on macros for fragile, constantly changing UIs unless you also verif
 
 ## Precision patterns
 
+### Click a visible point accurately
+1. capture the relevant window/monitor with `desktop_window_screenshot` or `desktop_screenshot`
+2. choose the target point from that exact image
+3. click with `coordinate_space:"capture"` + the returned `screenshot_id`
+4. leave `verify:"auto"` on unless speed matters, or use `verify:"strict"` for risky clicks
+
 ### Click a named control accurately
 1. `desktop_get_accessibility_tree(window_name)`
 2. locate the control and its bounds
-3. click the center with `desktop_click`
+3. click the center with `desktop_click` using `coordinate_space:"window"` when bounds are window-local, or `coordinate_space:"virtual"` only when bounds are already virtual-screen coordinates
 4. verify with screenshot or tree/text refresh
 
 ### Read a window without OCR guesswork
@@ -461,9 +437,25 @@ Do not rely on macros for fragile, constantly changing UIs unless you also verif
 1. `desktop_get_monitors()`
 2. pick the correct display
 3. screenshot that monitor or region and keep `screenshot_id`
-4. use `coordinate_space:"capture"` + `screenshot_id` for screenshot-selected points
-5. use `coordinate_space:"monitor"` + `monitor_index` only for direct monitor-local coordinates
-6. verify after clicking
+4. click with `coordinate_space:"capture"` + `screenshot_id` when selecting a point from the screenshot
+5. if using direct display coordinates, use `coordinate_space:"monitor"` + `monitor_index`
+6. treat `monitor_relative:true` as legacy compatibility, not the preferred new style
+7. verify after clicking
+
+### Wait for a specific visual signal instead of screenshotting repeatedly
+Use `desktop_wait_for_change` or `desktop_pixel_watch` (rather than repeated screenshots) for:
+- loading indicators
+- enabled/disabled state changes
+- progress completion indicators
+- waiting for a button or status light to change color
+
+This is much cheaper than repeated screenshots.
+
+### Clipboard staging for paste/upload workflows
+Use `desktop_set_clipboard(...)` to:
+- preload text for pasting
+- copy an image into clipboard
+- stage one or more files for paste/file-drop workflows
 
 ### Wait intelligently instead of sleeping
 - use `desktop_wait_for_change` when any visible change should occur
@@ -473,6 +465,7 @@ Do not rely on macros for fragile, constantly changing UIs unless you also verif
 ---
 
 ## Desktop vs browser vs shell
+
 | Situation | Best tool / workflow |
 |---|---|
 | Discover open windows + stable IDs | `desktop_list_windows` (or `desktop_list_apps`) → `window_id` |
@@ -497,8 +490,6 @@ Do not rely on macros for fragile, constantly changing UIs unless you also verif
 | Native Windows app or OS dialog | desktop tools |
 | Terminal / build / git / scripts | `run_command` |
 | Reading website content only | `web_search({ fetch_top_k })`, `web_fetch_batch`, or one `web_fetch` |
-| Need exact desktop UI roles and bounds | `desktop_get_accessibility_tree` |
-| Need visible text from a native app | `desktop_get_window_text` |
 | Repetitive desktop input sequence | desktop macro tools |
 
 If it is a normal website, browser tools are usually better than desktop tools.
@@ -522,28 +513,6 @@ If it is shell work, use `run_command` instead of clicking around a terminal.
 - Using browser tools for native app dialogs or desktop tools for normal web flows when the other surface is clearly better
 - Title-matching and raw coordinates to act on a known app window instead of resolving a `window_id` and using the `desktop_window_*` tools, which focus the exact window and use window-space coordinates
 - Re-using a `desktop_get_window_state` snapshot after the UI changed — it is a point-in-time snapshot, so re-capture before relying on it again
-
----
-| Situation | Best tool / workflow |
-|---|---|
-| Need one app clearly | `desktop_window_screenshot` |
-| Need current/focused app | `desktop_window_screenshot({ active:true })` |
-| Need whole desktop context | `desktop_get_monitors` → `desktop_screenshot` |
-| Need exact control names and bounds | `desktop_get_accessibility_tree` |
-| Need visible text from a window | `desktop_get_window_text` |
-| Need to wait for UI to change | `desktop_wait_for_change` or `desktop_pixel_watch` |
-| Need a real mouse click from a screenshot | `desktop_click({ coordinate_space:"capture", screenshot_id, x, y })` |
-| Need app-local click/scroll/drag | `coordinate_space:"window"` + `window_name` or `window_handle` |
-| Need drag-and-drop or slider movement | `desktop_drag` with screenshot/window anchoring |
-| Paste-style text entry | `desktop_type` |
-| Paste blocked | `desktop_type_raw` |
-| Need to scroll a pane | screenshot → click pane if safe → `desktop_scroll` with `coordinate_space` |
-| Need launch by installed app | `desktop_find_installed_app` → `desktop_launch_app({ app_id })` |
-| Need send screenshot proof to Telegram | fresh `desktop_screenshot` → `desktop_send_to_telegram` |
-| Need reusable repeated GUI steps | `desktop_record_macro` → `desktop_stop_macro` → `desktop_replay_macro` |
-| Paste blocked | `desktop_type_raw` |
-| Need to scroll a pane | click pane → `desktop_scroll` |
-| Need reusable repeated GUI steps | `desktop_record_macro` → `desktop_stop_macro` → `desktop_replay_macro` |
 
 ---
 

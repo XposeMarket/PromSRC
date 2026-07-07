@@ -1,0 +1,183 @@
+self/17-desktop-web-ui.md (285 lines) [window 1-180, truncated]:
+1: # 33) Desktop Web UI Maintenance Reference
+2: 
+3: Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, `src/gateway/core/app.ts`, subagent Home chat/Runs recovery routes, and package scripts on: 2026-06-30
+4: 
+5: This section is for the desktop web UI only: the browser/Electron operator surface served from `web-ui/` and mirrored into `generated/public-web-ui/`. Do not use this section as the mobile app reference. Mobile/PWA code lives under `web-ui/src/mobile/*` and is covered separately in `16-mobile-app.md`.
+6: 
+7: ## Source Layout
+8: 
+9: Canonical desktop source:
+10: 
+11: - `web-ui/index.html` - desktop document shell, sidebar/nav DOM, page-view containers, settings modal markup, right/canvas panel markup, legacy inline script, desktop module imports, onboarding imports, auth boot wrapper, and mobile root/router includes.
+12: - `web-ui/src/app.js` - desktop app bootstrap helpers, theme, sidebar collapse/resize, right-panel open/close, More popover, sidebar segment tabs, and `setMode(...)` page routing.
+13: - `web-ui/src/state.js` - shared browser state object and constants such as theme storage key.
+14: - `web-ui/src/api.js` - shared `api(path, opts)` wrapper, API base fallback handling, paired-device token attachment when present, and browser global `window.api`.
+15: - `web-ui/src/ws.js` - shared WebSocket connection, event bus, mobile token query support, reload/update handling, and `window.connectWS`.
+16: - `web-ui/src/utils.js` - desktop/shared helpers for escaping HTML, time/memory/percent formatting, toasts, confirms, logs, visual iframe/srcdoc rendering, Mermaid rendering, Markdown rendering, and legacy `window.*` helper exports.
+17: - `web-ui/src/shortcuts.js` - global keyboard shortcut registry (`registerShortcut`, `initGlobalShortcuts`), attached once from `app.js`. Owns `Ctrl+N` (new chat), `Ctrl+K` (command palette), and `Ctrl+/` (shortcuts help).
+18: - `web-ui/src/command-palette.js` - `Ctrl+K` command palette overlay (jump to pages, recent chats, and a few quick actions). Builds its DOM on first open and is loaded via dynamic `import()` from `shortcuts.js`.
+19: - `web-ui/src/shortcuts-help.js` - `Ctrl+/` "Keyboard Shortcuts" reference overlay, also loaded via dynamic `import()`.
+20: 
+21: Desktop page modules:
+22: 
+23: - `web-ui/src/pages/ChatPage.js` - main desktop chat workspace, sessions/channels sidebar data, SSE chat streaming, retained stream catch-up, process log, approvals, voice/dictation/realtime voice controls, browser canvas controls, right-panel canvas/editor workspace, creative editor integration, generated media rendering, queued prompts, context-window indicator, and most chat/canvas globals.
+24: - `web-ui/src/pages/TasksPage.js` - background task board, task detail panel, task chat/replies, task approvals, task state changes, evidence bus, coding workspace/command run panels, manager status, and error response panel.
+25: - `web-ui/src/pages/SchedulePage.js` - schedules/automations list, Brain schedule cards, create/edit modal, RRULE parsing helpers, run-now/delete/enable controls, schedule reference chips, and schedule websocket refresh behavior.
+26: - `web-ui/src/pages/TeamsPage.js` - teams canvas/board, team chat, team tabs, manager review/run-all/pause/resume/delete flows, context refs/files, memory, runs, workspace tree/editor, team subagent detail drawers, and team websocket handling.
+27: - `web-ui/src/pages/SubagentsPage.js` - standalone subagent list/detail, local Agent Profile Pack preview/install/uninstall UI, marketplace provenance badges, subagent Home chat, abort/file upload/attachment previews, Runs tab task cards/recovery chat, system prompt editing, heartbeat config/markdown, context references/files, spawned tasks, memory reload, and process toggles.
+28:   - Subagent chat embeds the shared chat composer classes inside a detail panel. Keep `SubagentsPage.js` markup scoped with `subagent-panel-chat-shell`, `subagent-panel-chat-messages`, and `subagent-panel-chat-composer`; `components.css` overrides that scoped composer to `position: static` so it does not inherit the main chat `.chat-input-area` absolute bottom positioning.
+29:   - Subagent Home chat is for direct conversation, voice-originated chat, and main-agent handoff/tool messages. Do not use it as implicit paused-task recovery.
+30:   - Subagent Runs tab uses task cards backed by `/api/agents/:id/runs` and `/api/agents/:id/runs/:taskId`. Recovery-eligible cards expose a chat thread and composer backed by `/api/agents/:id/runs/:taskId/recovery`.
+31:   - Run recovery chat should reuse regular chat bubble/composer styling and attachment upload helpers so it matches Home chat visually and supports images/video/files.
+32: 
+33: - `web-ui/src/pages/ProposalsPage.js` - proposal list/filter, pending badge, approve/deny, jump-to-session, and jump-to-task behavior.
+34: - `web-ui/src/pages/AuditPage.js` - non-main run audit log, run grouping/status classification, pagination, row expansion, and stats rendering.
+35: - `web-ui/src/pages/MemoryPage.js` - memory graph canvas, force/layout modes, controls drawer, detail drawer, add-memory composer, attachment handling, graph refresh/indexing, shape/image layout, tooltips, and selection.
+36: - `web-ui/src/pages/HubPage.js` - skill usage, tool/model overview cards, skill preview modal, skill resources, curator suggestions, achievements scaffold, and Hub activation.
+37: - `web-ui/src/pages/ConnectionsPage.js` - connector catalog/grid, connector detail view, OAuth/manual credential flows, browser login verification, disconnect, activity, X/xAI flows, and Obsidian vault connect/sync/remove.
+38: - `web-ui/src/pages/SettingsPage.js` - settings modal tabs: system, heartbeat, search, credentials, security, models, channels, agents, integrations, shortcuts, pairing, migration, OAuth/provider state, MCP/webhooks, channel tests, agent config, and pairing/remote access UI.
+39: - `web-ui/src/pages/ProjectsPage.js` - sidebar projects list, project cards, project sessions, new/delete project flows, project files, project instructions/memory snapshot, and project-to-chat/canvas handoff.
+40: 
+41: Desktop shared components:
+42: 
+43: - `web-ui/src/components/ProcessRunCard.js` - process run card rendering, process-run list HTML, recent process fetch, card controls, and live process stream updates.
+44: - `web-ui/src/components/CodingWorkspacePanel.js` - coding workspace status/diff panel and coding action handlers.
+45: - `web-ui/src/components/agent-model-picker.js` - per-agent provider/model/reasoning picker, catalog hydration, live model refresh, save/clear handlers, and saved-callback registry.
+46: - `web-ui/src/components/model-provider-credentials.js` - model provider credential status cache and provider filtering helpers.
+47: 
+48: Creative desktop components:
+49: 
+50: - `web-ui/src/components/creative/sceneGraph.js` - scene/document/element model, text measurement, library packs, animation presets, layout validation, selection context, patch parsing, timeline resolution, and scene graph op execution.
+51: - `web-ui/src/components/creative/audioEngine.js` - audio track config normalization, preview element management, audio readiness, timeline sync, media readiness, export audio sessions, and audio analysis fetches.
+52: - `web-ui/src/components/creative/exportEngine.js` - browser-side creative export engine.
+53: - `web-ui/src/components/creative/renderJobs.js` - render job status normalization, worker-mode detection/context, render job API client, and render worker controller.
+54: - `web-ui/src/components/creative/hyperframesController.js`, `hyperframesPreview.js`, and `hyperframesCatalogBrowser.js` - HyperFrames preview, editing, catalog browsing, lint/QA/export/materialization handoff.
+55: - `web-ui/src/components/creative/motionTemplates.js` - creative motion template API client.
+56: - `web-ui/src/components/creative/editor/*` - modular native creative editor: layout, store/history, preview renderer/viewport, handles/snapping/text editing/context menu, timeline/graph editor, text/shapes/effects/subtitles/properties/assets panels, shortcuts, and export encoder/dialog.
+57: 
+58: Desktop auth/onboarding:
+59: 
+60: - `web-ui/src/auth/account.js` - account auth client helpers used by the desktop boot/login flow.
+61: - `web-ui/src/onboarding/onboarding-controller.js` - onboarding state machine and first-run orchestration.
+62: - `web-ui/src/onboarding/tutorial-overlay.js` - tutorial overlay.
+63: - `web-ui/src/onboarding/model-picker.js` - onboarding model/provider selection.
+64: - `web-ui/src/onboarding/memory-confirm.js` - memory seed confirmation.
+65: - `web-ui/src/onboarding/migration-panel.js` - migration preview/execute UI.
+66: - `web-ui/src/onboarding/meet-panel.js` - first-meet flow.
+67: - `web-ui/src/onboarding/redo-onboarding.js` - redo onboarding confirmation flow.
+68: 
+69: Desktop styles:
+70: 
+71: - `web-ui/src/styles/base.css` - global variables, base layout, shell primitives, sidebar/nav foundations.
+72: - `web-ui/src/styles/components.css` - reusable controls/cards/modals, chat controls, context-window indicator, process/approval/media styles, and many desktop component styles.
+73: - `web-ui/src/styles/pages.css` - page-specific desktop styles, chat/canvas/right-panel styles, creative and process page surfaces.
+74: - `web-ui/src/styles/projects.css` - project sidebar/cards/file grid/editor styles.
+75: - `web-ui/src/styles/hub.css` - Hub page styles.
+76: - `web-ui/src/styles/onboarding.css` - onboarding overlay/panel styles.
+77: - `web-ui/src/styles/fonts.css` - local font imports generated for public runtime.
+78: - `web-ui/src/styles/mobile.css` - mobile-only styles; do not treat it as desktop UI unless editing shared activation boundaries.
+79: 
+80: Generated public mirror:
+81: 
+82: - `generated/public-web-ui/index.html`
+83: - `generated/public-web-ui/static/app.js`, `api.js`, `ws.js`, `utils.js`, `state.js`
+84: - `generated/public-web-ui/static/pages/*`
+85: - `generated/public-web-ui/static/components/*`
+86: - `generated/public-web-ui/static/styles/*`
+87: - `generated/public-web-ui/vendor/*`
+88: 
+89: Never hand-edit generated desktop files except for emergency diagnosis. Make source changes under `web-ui/`, then sync generated output.
+90: 
+91: ## Page Routing and DOM Ownership
+92: 
+93: Desktop routing is not a framework router. `web-ui/index.html` declares page containers and desktop chrome, then `web-ui/src/app.js:setMode(mode)` shows/hides those containers.
+94: 
+95: Current desktop modes in `app.js`:
+96: 
+97: - `chat` -> `#chat-view`
+98: - `bgtasks` -> `#bgtasks-view`
+99: - `schedule` -> `#schedule-view`
+100: - `teams` -> `#teams-view`
+101: - `subagents` -> `#subagents-view`
+102: - `proposals` -> `#proposals-view`
+103: - `audit` -> `#audit-view`
+104: - `memory` -> `#memory-view`
+105: - `hub` -> `#hub-view`
+106: 
+107: The left sidebar lives in `#sidebar`. Its nav items call `setMode(...)` directly from inline `onclick` attributes. Sidebar segment tabs are handled by `setSidebarSegTab(...)` and swap among `#sidebar-jobs`, `#sidebar-channels`, `#sidebar-projects`, and `#sidebar-skills`.
+108: 
+109: The chat mode owns the central `main.main-shell` and the right panel. Non-chat modes hide the main shell and close the right panel. The right panel `#right-panel` contains the canvas/editor/browser/agent execution surfaces; `toggleRightPanel(...)`, `toggleCanvas(...)`, `setCanvasMode(...)`, and related globals mostly live in `ChatPage.js`.
+110: 
+111: Settings is modal, not a page mode. `openSettings(tab)` and `closeSettings()` live in `SettingsPage.js`; the modal markup lives in `index.html`.
+112: 
+113: Connections detail uses a fixed overlay `#connector-view`. `ConnectionsPage.js` owns `openConnectorView(...)`, `closeConnectorView(...)`, credential/OAuth flows, and Obsidian-specific actions.
+114: 
+115: Projects are split: sidebar/list behavior lives in `ProjectsPage.js`, while project sessions ultimately route back into Chat/canvas through `ChatPage.js` globals.
+116: 
+117: The desktop still has a legacy inline script in `index.html`. Many inline handlers depend on `window.*` functions exposed by ES modules. When moving behavior out of the inline script, preserve the existing global names until all markup callers are migrated.
+118: 
+119: ## Module Imports and Boot Sequence
+120: 
+121: Desktop module order in `web-ui/index.html` is currently:
+122: 
+123: 1. `src/state.js`
+124: 2. `src/api.js`
+125: 3. `src/utils.js`
+126: 4. `src/ws.js`
+127: 5. `src/app.js`
+128: 6. `src/pages/ChatPage.js`
+129: 7. `src/pages/AuditPage.js`
+130: 8. `src/pages/HubPage.js`
+131: 9. `src/pages/MemoryPage.js`
+132: 10. `src/pages/ProposalsPage.js`
+133: 11. `src/pages/SchedulePage.js`
+134: 12. `src/pages/TasksPage.js`
+135: 13. `src/pages/TeamsPage.js`
+136: 14. `src/pages/SubagentsPage.js`
+137: 15. `src/pages/ConnectionsPage.js`
+138: 16. `src/pages/SettingsPage.js`
+139: 17. `src/pages/ProjectsPage.js`
+140: 18. an inline module that imports auth/onboarding helpers
+141: 19. `src/mobile/mobile-router.js`
+142: 
+143: `state.js`, `api.js`, `utils.js`, `ws.js`, and `app.js` load before page modules because page modules use their globals/imports. `ChatPage.js` is loaded before most other page modules because other surfaces call chat/session/canvas helpers through `window.*`.
+144: 
+145: The inline boot wrapper calls account/onboarding helpers and eventually starts the desktop app. The old global `connectWS()` shim in `index.html` delegates to `window.connectWS()` from `ws.js` once the module is available.
+146: 
+147: Mobile router inclusion at the bottom does not make this a mobile section. It exists so the same static bundle can switch into mobile mode when `#mobile`, `/mobile`, `?source=pwa`, `?pair=...`, `pm_force_mobile`, or a paired token requires it.
+148: 
+149: ## Desktop API and WebSocket Backends
+150: 
+151: Static desktop UI is served by `src/gateway/core/app.ts`, which mounts `generated/public-web-ui` as the web root and `/vendor/*` plus `/assets`.
+152: 
+153: Important backend route groups consumed by the desktop UI:
+154: 
+155: - `src/gateway/routes/chat.router.ts` - `/api/status`, `/api/chat`, `/api/chat/steer`, `/api/sessions*`, `/api/sessions/:id/context-window`, voice-agent endpoints, retained main-chat stream endpoints used for cross-surface catch-up.
+156: - `src/gateway/routes/canvas.router.ts` - `/api/canvas/*`, `/api/creative-mode`, preview/document/media routes, project preview/export/publish routes, HTML Motion, HyperFrames, creative assets/libraries/render jobs/scene/composition/export routes, `/api/open-path`, `/api/clear-history`.
+157: - `src/gateway/routes/tasks.router.ts` - background task/task chat/task control APIs consumed by `TasksPage.js`.
+158: - `src/gateway/routes/processes.router.ts` - managed process/run APIs consumed by `ProcessRunCard.js` and task panels.
+159: - `src/gateway/routes/teams.router.ts` - team board, team chat, manager actions, team workspace, team memory, team subagent APIs.
+160: - `src/gateway/routes/channels.router.ts` - channel status/config/test APIs, agents/subagent APIs, explicit subagent run/recovery APIs, persona/team-room Telegram flows, and dispatch.
+161: - `src/gateway/routes/proposals.router.ts` - proposal list/approve/deny APIs.
+162: - `src/gateway/routes/projects.router.ts` - project list/session/file/instruction/memory APIs.
+163: - `src/gateway/routes/settings.router.ts` - settings, providers/models, search, heartbeat, security, and related config APIs.
+164: - `src/gateway/routes/account.router.ts` - account config/status/login/logout/refresh APIs used by auth boot.
+165: - `src/gateway/routes/connections.router.ts`, `extensions.router.ts`, and `obsidian.router.ts` - connector catalog/status/credentials/OAuth/browser-login and Obsidian vault APIs.
+166: - `src/gateway/routes/hub.router.ts` - Hub usage, tool/model overview, skill content/resources, curator suggestions, goals, and achievements.
+167: - `src/gateway/routes/memory.router.ts` - memory graph/detail/create/refresh/status APIs.
+168: - `src/gateway/routes/onboarding.router.ts` and `migration.router.ts` - onboarding state and migration preview/execute/report APIs.
+169: - `src/gateway/routes/pairing.router.ts` - pairing panel, remote access, QR/human-code, certificate, claim/approval status APIs. Desktop approval UI is in `SettingsPage.js`; mobile pairing screens are in the mobile section.
+170: - `src/gateway/routes/audit-log.router.ts` - audit log query API.
+171: - `src/gateway/routes/coding.router.ts` - coding workspace session/status/diff/stage/branch APIs.
+172: - `src/gateway/routes/goals.router.ts` - goals, MCP server/tool, and shortcut APIs still used by older desktop settings surfaces.
+173: 
+174: WebSocket events enter through `web-ui/src/ws.js` and are consumed by page modules through `window.wsEventBus.addEventListener('message', ...)`. Chat streaming also uses `/api/chat` SSE directly in `ChatPage.js`; retained and cross-surface stream events are also mirrored through websocket/main-chat stream handlers.
+175: 
+176: Paused task recovery is backend-synchronized, but standalone subagent Home chat is intentionally split from task recovery. `TasksPage.js` posts to the task message APIs. `SubagentsPage.js` Home chat posts to normal subagent chat routes, while the Runs tab posts recovery guidance to `POST /api/agents/:id/runs/:taskId/recovery`. Standalone subagent recovery turns should not be mirrored into Home chat history or rendered as normal Home messages. Team surfaces can still route team room/member/manager blocked-task turns through team recovery when that is the intended owner surface.
+177: 
+178: ## Desktop Globals and Public Function Map
+179: 
+180: The desktop UI intentionally exposes many functions on `window` because `index.html` still contains inline handlers and page modules call each other without a framework-level event bus. When refactoring, treat these names as compatibility API until the corresponding markup/caller is migrated.
+[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.
+[READ_TRUNCATED] Returned 180 of 285 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

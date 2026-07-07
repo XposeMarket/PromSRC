@@ -1,0 +1,165 @@
+repos/PromSRC-compare/src/gateway/tool-builder.ts (1657 lines) [window 900-979, truncated]:
+900: const COMPOSITE_MANAGEMENT_TOOL_NAMES = new Set([
+901:   'create_composite',
+902:   'get_composite',
+903:   'edit_composite',
+904:   'delete_composite',
+905:   'list_composites',
+906: ]);
+907: 
+908: function isSavedCompositeToolName(name: string): boolean {
+909:   try {
+910:     return loadComposites().has(name);
+911:   } catch {
+912:     return false;
+913:   }
+914: }
+915: 
+916: export function getToolCategory(name: string): InternalToolCategory | null {
+917:   // Keep these always available as core runtime tools.
+918:   if (name === 'browser_send_to_telegram') return null;
+919:   if (name === 'delivery_send' || name === 'delivery_send_screenshot') return null;
+920:   if (name === 'connector_list') return null; // core tool — always available
+921:   if (name === 'generate_image' || name === 'generate_video') return null;
+922:   if (name === 'chat_with_subagent') return null; // core direct-chat tool for standalone subagents
+923:   if (name === 'agent_run_ops') return null; // core run/recovery bridge for subagent autopilot
+924:   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+925:   if (name === 'save_site_shortcut') return 'browser_automation';
+926:   if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test') return 'browser_automation';
+927:   if (name.startsWith('browser_')) return 'browser_automation';
+928:   if (name.startsWith('desktop_')) return 'desktop_automation';
+929:   if (EXTERNAL_APP_WRAPPER_TOOL_NAMES.has(name)) return 'external_apps';
+930:   if (name.startsWith('connector_')) return 'external_apps';
+931:   if (name.startsWith('x_api_')) return 'external_apps';
+932:   if (name.startsWith('mcp__')) return 'mcp_server_tools';
+933:   if (name.startsWith('vercel_')) return 'integration_admin';
+934:   if (TEAM_OPS_TOOL_NAMES.has(name)) return 'agents_and_teams';
+935:   if (DEV_ONLY_SOURCE_READ_TOOL_NAMES.has(name)) return 'prometheus_source_read';
+936:   if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'prometheus_source_write';
+937:   if (COMMAND_RUNNER_TOOL_NAMES.has(name)) return 'workspace_write';
+938:   if (FILE_OPS_TOOL_NAMES.has(name)) return 'workspace_write';
+939:   if (MEMORY_TOOL_NAMES.has(name)) return 'advanced_memory';
+940:   if (MEDIA_TOOL_NAMES.has(name)) return 'media_assets';
+941:   if (CREATIVE_VIDEO_QA_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+942:   if (HYPERFRAMES_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+943:   if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+944:   if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
+945:   if (name.startsWith('skill_') && name !== 'skill_list' && name !== 'skill_read') return 'skills';
+946:   if (SKILL_AUTHORING_TOOL_NAMES.has(name)) return 'skills';
+947:   if (MODEL_MANAGEMENT_TOOL_NAMES.has(name)) return 'model_management';
+948:   if (BUSINESS_TOOL_NAMES.has(name)) return 'business';
+949:   if (name.startsWith('creative_')) return getCreativeToolCategory(name);
+950:   if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
+951:   if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';
+952:   if (PROPOSAL_ADMIN_TOOL_NAMES.has(name)) return 'proposal_admin';
+953:   if (COMPOSITE_MANAGEMENT_TOOL_NAMES.has(name) || isSavedCompositeToolName(name)) return 'composite_tools';
+954:   return null; // null = core tool, always included
+955: }
+956: 
+957: const TOOL_BUILD_CACHE_TTL_MS = 30_000;
+958: const TOOL_BUILD_CACHE_MAX_ENTRIES = 64;
+959: const INCLUDE_DIRECT_CONNECTOR_TOOL_SCHEMAS =
+960:   String(process.env.PROMETHEUS_DIRECT_CONNECTOR_TOOL_SCHEMAS || '').trim() === '1';
+961: const DYNAMIC_TOOL_SURFACE_CATEGORIES = new Set<string>([
+962:   'mcp_server_tools',
+963:   'composite_tools',
+964: ]);
+965: const toolBuildCache = new Map<string, { at: number; tools: any[] }>();
+966: 
+967: function stableCategoryKey(categories: Set<string>): string {
+968:   return Array.from(categories).sort().join(',');
+969: }
+970: 
+971: function trimToolBuildCache(): void {
+972:   while (toolBuildCache.size > TOOL_BUILD_CACHE_MAX_ENTRIES) {
+973:     const firstKey = toolBuildCache.keys().next().value;
+974:     if (!firstKey) return;
+975:     toolBuildCache.delete(firstKey);
+976:   }
+977: }
+978: 
+979: export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>) {
+[READ_TRUNCATED] Use start_line:980, num_lines:80 for the next chunk, or full:true only when needed.
+
+repos/PromSRC-compare/src/gateway/tool-builder.ts (1657 lines) [window 1455-1534, truncated]:
+1455:         });
+1456:       }
+1457:     } catch { /* MCP not ready yet — skip silently */ }
+1458:   }
+1459: 
+1460:   if (categoryIsActive('composite_tools')) {
+1461:     try {
+1462:       dynamicToolDefs.push(...getCompositeDefs());
+1463:       dynamicToolDefs.push(...getCompositeManagementTools());
+1464:     } catch { /* composites dir may not exist yet — skip silently */ }
+1465:   }
+1466: 
+1467:   dynamicToolDefs.sort((a, b) =>
+1468:     String(a?.function?.name || '').localeCompare(String(b?.function?.name || '')),
+1469:   );
+1470:   toolDefs.push(...dynamicToolDefs);
+1471: 
+1472:   // In public builds, hide every tool the execution layer hard-blocks
+1473:   // (isToolHiddenInPublicBuild in subagent-executor) — not just the source-read
+1474:   // names. Otherwise the model is shown source-write / self-update / restart tool
+1475:   // defs it can never execute, wasting context and inviting failed calls.
+1476:   const runtimeToolDefs = isPublicBuild
+1477:     ? toolDefs.filter((t: any) => !isToolHiddenInPublicBuild(String(t?.function?.name || '')))
+1478:     : toolDefs;
+1479:   const visibleToolDefs = runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || '')));
+1480: 
+1481:   // ── Filter to core + activated categories ──────────────────────────────────
+1482:   // When activatedCategories is provided, only return core tools + those in active categories.
+1483:   if (activatedCategories !== undefined) {
+1484:     const filteredTools = visibleToolDefs.filter((t: any) => {
+1485:       const name = String(t?.function?.name || '');
+1486:       const cat = getToolCategory(name);
+1487:       if (SOURCE_READ_FILE_HELPER_TOOL_NAMES.has(name) && normalizedActiveCategories.has('prometheus_source_read')) {
+1488:         return true;
+1489:       }
+1490:       return cat === null || normalizedActiveCategories.has(cat);
+1491:     });
+1492:     if (cacheKey) {
+1493:       toolBuildCache.set(cacheKey, { at: Date.now(), tools: filteredTools });
+1494:       trimToolBuildCache();
+1495:     }
+1496:     return filteredTools.slice();
+1497:   }
+1498: 
+1499:   return visibleToolDefs;
+1500: }
+1501: 
+1502: // ─── Tool Execution Helpers ────────────────────────────────────────────────────
+1503: 
+1504: export interface ToolResult {
+1505:   name: string;
+1506:   args: any;
+1507:   result: string;
+1508:   error: boolean;
+1509:   extra?: any;
+1510:   data?: any;
+1511:   artifacts?: any[];
+1512: }
+1513: 
+1514: export interface TaskControlResponse {
+1515:   success: boolean;
+1516:   action: string;
+1517:   code?: string;
+1518:   message?: string;
+1519:   scope?: string;
+1520:   task?: Record<string, any> | null;
+1521:   tasks?: Array<Record<string, any>>;
+1522:   scheduled_jobs?: Array<Record<string, any>>;
+1523:   candidates?: Array<Record<string, any>>;
+1524: }
+1525: 
+1526: export type ScheduleJobAction =
+1527:   | 'list'
+1528:   | 'create'
+1529:   | 'update'
+1530:   | 'pause'
+1531:   | 'resume'
+1532:   | 'delete'
+1533:   | 'run_now';
+1534: 
+[READ_TRUNCATED] Use start_line:1535, num_lines:80 for the next chunk, or full:true only when needed.

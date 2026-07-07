@@ -99,6 +99,11 @@
       "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-self-16-mobile-2026-07-04.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
+    },
+    {
+      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-repos-nebulax--2026-07-05.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
     }
   ]
 }

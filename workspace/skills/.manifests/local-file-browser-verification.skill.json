@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "open this html and test it",
+    "start an http server for this file",
+    "check browser console",
+    "click the button and see what happens",
+    "manually verify this file",
+    "smoke test local page",
+    "debug why the ui does not work",
+    "inspect console errors",
+    "take a screenshot of the local page",
+    "test this mobile html game",
+    "verify taps and clicks",
+    "run it in browser",
+    "use browser tools to test it",
+    "check the dom after clicking",
+    "local html smoke test",
+    "browser verify local file",
+    "nebulax",
+    "lan phone preview",
+    "iphone safari",
+    "8788",
+    "mobile dashboard smoke test"
+  ],
+  "id": "local-file-browser-verification"
+}

@@ -1,0 +1,140 @@
+repos/PromSRC-compare/src/gateway/tools/defs/cis-system.ts (1926 lines) [window 95-149, truncated]:
+95:       },
+96:     },
+97:     // ── deploy_analysis_team: one-shot website intelligence team (CIS Phase 2) ─
+98:     {
+99:       type: 'function',
+100:       function: {
+101:         name: 'deploy_analysis_team',
+102:         description:
+103:           'Run a full go-to-market website analysis for any URL. ' +
+104:           'It deploys background specialists for business profiling, SEO discovery, social reputation, browser funnel testing, CRO and messaging critique, technical auditing, and competitive positioning. ' +
+105:           'It returns a structured GTM intelligence bundle plus downloadable artifacts for the main agent to compile into an inline interactive HTML dashboard, followed by a full written marketing, sales, and site-improvement plan. ' +
+106:           'Do not call present_file after this tool. The final experience should be inline, not file-first. ' +
+107:           'Use when the user asks to analyze, audit, check, or investigate any website.',
+108:         parameters: {
+109:           type: 'object',
+110:           required: ['url'],
+111:           properties: {
+112:             url: { type: 'string', description: 'The full URL to analyze (must include https://)' },
+113:             save_to_entity: { type: 'string', description: 'Optional: entity slug to save report summary to (e.g. "acme-corp")' },
+114:           },
+115:         },
+116:       },
+117:     },
+118:     // ── present_file: open a file in the canvas viewer ───────────────────────
+119:     {
+120:       type: 'function',
+121:       function: {
+122:         name: 'present_file',
+123:         description:
+124:           'Open a workspace file in the canvas viewer so the user can see it. ' +
+125:           'Use this to surface any file created by background agents, analysis tools, or other processes that ' +
+126:           "don't automatically open the canvas. Accepts absolute or workspace-relative paths. " +
+127:           'Common use: after deploy_analysis_team completes, call present_file({ path: reportPath }) to open the HTML report.',
+128:         parameters: {
+129:           type: 'object',
+130:           required: ['path'],
+131:           properties: {
+132:             path: { type: 'string', description: 'Absolute or workspace-relative path to the file to open in the canvas' },
+133:           },
+134:         },
+135:       },
+136:     },
+137:     // ── dispatch_team_agent: run a subagent in a managed team ─────────────────
+138:     {
+139:       type: 'function',
+140:       function: {
+141:         name: 'dispatch_team_agent',
+142:         description: 'Dispatch a subagent in a managed team to perform a task. By default runs synchronously (blocks until done). Set background=true to fire-and-forget — returns a task_id immediately so you can do other work while the agent runs, then call get_agent_result(task_id) when you need the result.',
+143:         parameters: {
+144:           type: 'object',
+145:           required: ['team_id', 'agent_id', 'task'],
+146:           properties: {
+147:             team_id: { type: 'string', description: 'The team ID (e.g. "team_abc123_xyz")' },
+148:             agent_id: { type: 'string', description: 'The ID of the agent to dispatch (must be a subagent member of the team)' },
+149:             task: { type: 'string', description: 'Full task description for the agent to execute — be specific and include all needed context' },
+[READ_TRUNCATED] Use start_line:150, num_lines:80 for the next chunk, or full:true only when needed.
+
+repos/PromSRC-compare/src/gateway/tools/defs/file-web-memory.ts (2447 lines) [window 1-80, truncated]:
+1: // src/gateway/tools/defs/file-web-memory.ts
+2: // Tool definitions for file operations, web tools, and memory tools.
+3: 
+4: import { filterPublicBuildToolDefs } from '../../../runtime/distribution.js';
+5: 
+6: export function getFileWebMemoryTools(): any[] {
+7:   const tools = [
+8:     {
+9:       type: 'function',
+10:       function: {
+11:         name: 'workspace_read',
+12:         description: 'Unified workspace read/inspection wrapper. Use grep/search to locate targets, stats for unfamiliar or large files, and capped reads only when exact context is needed. Tree/list/batch reads are budgeted by default; pass explicit max_* only when needed.',
+13:         parameters: {
+14:           type: 'object',
+15:           required: ['action'],
+16:           properties: {
+17:             action: { type: 'string', enum: ['tree', 'list', 'list_files', 'exists', 'stats', 'read', 'validate', 'batch_read', 'grep', 'search'], description: 'Read action to perform.' },
+18:             path: { type: 'string', description: 'File or directory path relative to the workspace, or an allowed absolute path.' },
+19:             file: { type: 'string', description: 'Alias for path when targeting one file.' },
+20:             filename: { type: 'string', description: 'Alias for path when targeting one file.' },
+21:             directory: { type: 'string', description: 'Alias for path when targeting a directory.' },
+22:             paths: { type: 'array', items: { type: 'string' }, description: 'Paths for batch_read when files is not provided.' },
+23:             files: {
+24:               type: 'array',
+25:               description: 'Entries for batch_read. Defaults are budgeted; each item can include filename/path plus optional start_line/num_lines/full.',
+26:               items: {
+27:                 type: 'object',
+28:                 properties: {
+29:                   filename: { type: 'string' },
+30:                   path: { type: 'string' },
+31:                   start_line: { type: 'number' },
+32:                   num_lines: { type: 'number' },
+33:                   full: { type: 'boolean' },
+34:                 },
+35:               },
+36:             },
+37:             pattern: { type: 'string', description: 'Pattern for grep/search.' },
+38:             glob: { type: 'string', description: 'Optional glob filter for tree/search.' },
+39:             file_glob: { type: 'string', description: 'Optional file glob filter for search.' },
+40:             start_line: { type: 'number' },
+41:             around_line: { type: 'number', description: 'Read around this 1-based line. Uses before/after and avoids manual start_line math.' },
+42:             line: { type: 'number', description: 'Return one exact physical line without normal truncation; use with column/char_window/full_line for minified or long-line debugging.' },
+43:             line_number: { type: 'number', description: 'Alias for line.' },
+44:             column: { type: 'number', description: 'Optional 1-based column marker for exact physical-line reads.' },
+45:             char_window: { type: 'number', description: 'Character window around column for exact physical-line reads. Default 240.' },
+46:             char_before: { type: 'number', description: 'For grep/search: characters before each match in the returned match-local window.' },
+47:             char_after: { type: 'number', description: 'For grep/search: characters after each match in the returned match-local window.' },
+48:             full_line: { type: 'boolean', description: 'Return the full physical line for exact line reads. Use sparingly on very long lines.' },
+49:             show_full_line: { type: 'boolean', description: 'Alias for full_line.' },
+50:             before: { type: 'number', description: 'Lines before around_line or grep suggested reads. Default 40.' },
+51:             after: { type: 'number', description: 'Lines after around_line or grep suggested reads. Default 80.' },
+52:             num_lines: { type: 'number' },
+53:             max_lines: { type: 'number' },
+54:             full: { type: 'boolean' },
+55:             max_files: { type: 'number', description: 'For batch_read. Default 2, hard cap 8.' },
+56:             max_lines_per_file: { type: 'number', description: 'For batch_read. Default 80, hard cap 240 unless full:true is used intentionally.' },
+57:             content: { type: 'boolean', description: 'For batch_read. false/omitted returns summaries unless exact line windows are provided; true returns capped content.' },
+58:             mode: { type: 'string', enum: ['summary', 'content'], description: 'For batch_read. summary returns metadata/read hints; content returns capped content.' },
+59:             inline: { type: 'boolean', description: 'Allow large results to remain inline instead of being saved to a temp artifact. Use sparingly.' },
+60:             max_depth: { type: 'number', description: 'For tree/list. Default tree depth 2; list depth 1.' },
+61:             max_entries: { type: 'number', description: 'For tree/list. Default tree entries 180; list entries 250.' },
+62:             max_results: { type: 'number' },
+63:             context_lines: { type: 'number' },
+64:             context: { type: 'number' },
+65:             regex: { type: 'boolean', description: 'Opt into regex search. Grep/search default to literal matching.' },
+66:             literal: { type: 'boolean', description: 'Force literal search even if regex-looking characters are present.' },
+67:             case_insensitive: { type: 'boolean' },
+68:             query: { type: 'string', description: 'For stats/batch summaries, include likely relevant matches and suggested read windows.' },
+69:             exclude: { type: 'string' },
+70:             include_lockfiles: { type: 'boolean', description: 'Include lockfiles in search. Default false.' },
+71:             max_result_tokens: { type: 'number', description: 'Soft inline result budget. Default depends on action; overflow is saved as an artifact.' },
+72:             hard_max_result_tokens: { type: 'number', description: 'Hard result budget cap for max_result_tokens. Default 4000.' },
+73:             map: { type: 'boolean', description: 'For tree/list. Include compact repo-map header. Default true.' },
+74:           },
+75:         },
+76:       },
+77:     },
+78:     {
+79:       type: 'function',
+80:       function: {
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

@@ -1,0 +1,170 @@
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28871 lines) [window 8965-9044, truncated]:
+8965:     _renderMobileQueuedPromptsPanel(activeSid);
+8966:   }
+8967:   setBusy(!!__pmChat.activeRuns[requestedSession]?.busy);
+8968:   _renderMobileQueuedPromptsPanel(requestedSession);
+8969: 
+8970:   function buildMessageWithAttachments(text, files, uploadResults = []) {
+8971:     const msg = String(text || '').trim();
+8972:     const blocks = [];
+8973:     for (const f of files) {
+8974:       if (f.kind === 'text' && f.text) {
+8975:         blocks.push(`--- ${f.name} (${f.mimeType || 'text/plain'}, ${f.sizeLabel}) ---\n${String(f.text).slice(0, 12000)}`);
+8976:       } else if (f.kind !== 'image') {
+8977:         blocks.push(`[Attached file: ${f.name} (${f.mimeType || 'application/octet-stream'}, ${f.sizeLabel})]`);
+8978:       }
+8979:     }
+8980:     const uploadNote = _buildMobileFileContextNote(uploadResults);
+8981:     if (!blocks.length) return `${msg}${uploadNote}`;
+8982:     return `${msg || 'Please review the attached file(s).'}\n\n[Attached files]\n${blocks.join('\n\n')}${uploadNote}`;
+8983:   }
+8984: 
+8985:   function renderThreadNow() {
+8986:     _flushThreadRender(threadEl, body, requestedSession);
+8987:   }
+8988: 
+8989:   function renderThreadSoon() {
+8990:     if (!_scheduleMobileStreamingPatch(threadEl, body, requestedSession, 16)) {
+8991:       _scheduleThreadRender(threadEl, body, requestedSession, 16);
+8992:     }
+8993:   }
+8994: 
+8995:   function _currentChatVoiceSessionLabel() {
+8996:     const sid = String(requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
+8997:     if (sid === MOBILE_CHAT_SESSION_ID) return 'Mobile - New Chat';
+8998:     const firstText = String((__pmChat.threads?.[sid] || []).find((turn) => turn?.role === 'user')?.body?.text || '').trim();
+8999:     return firstText ? `Mobile - ${firstText.slice(0, 42)}` : 'Mobile - Chat';
+9000:   }
+9001: 
+9002:   function _setChatVoiceTarget() {
+9003:     const sid = String(requestedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+9004:     __pmVoice.targetSessionId = sid;
+9005:     __pmVoice.targetSessionLabel = _currentChatVoiceSessionLabel();
+9006:     __pmVoice.targetSessionChannel = 'mobile';
+9007:     __pmVoice.targetSessionForced = true;
+9008:     if (__pmVoice.activeVoiceRuntime && String(__pmVoice.activeVoiceRuntime.sessionId || '').trim() !== sid) {
+9009:       __pmVoice.activeVoiceRuntime.isStreamActive = false;
+9010:       __pmVoice.activeVoiceRuntime = null;
+9011:     }
+9012:     if (__pmRealtimeAgent?.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
+9013:       _stopMobileRealtimeAgentContextRefreshLoop();
+9014:       _mobileRealtimeAgentDisableAlwaysListening();
+9015:     }
+9016:   }
+9017: 
+9018:   function _setChatVoiceActive(active) {
+9019:     const enabled = !!active;
+9020:     const thread = Array.isArray(__pmChat.threads?.[requestedSession]) ? __pmChat.threads[requestedSession] : [];
+9021:     const newChatVoice = requestedSession === MOBILE_CHAT_SESSION_ID && thread.length === 0;
+9022:     form?.classList.toggle('is-voice-active', enabled);
+9023:     body?.classList.toggle('pm-chat-voice-occluded', enabled);
+9024:     document.body?.classList.toggle('pm-chat-voice-active', enabled);
+9025:     document.body?.classList.toggle('pm-chat-voice-new-chat', enabled && newChatVoice);
+9026:     document.body?.classList.toggle('pm-chat-voice-existing-chat', enabled && !newChatVoice);
+9027:     if (chatVoiceShell) chatVoiceShell.hidden = !enabled;
+9028:     if (chatVoiceHost) chatVoiceHost.hidden = !enabled;
+9029:     updateChatComposerSpace();
+9030:   }
+9031: 
+9032:   function updateChatComposerSpace() {
+9033:     requestAnimationFrame(() => {
+9034:       if (!body || !form) return;
+9035:       const scrollSnapshot = _mobileChatScrollSnapshot(body);
+9036:       const height = Math.ceil(form.getBoundingClientRect?.().height || 0);
+9037:       const queuedPanel = page?.querySelector?.('#pm-mobile-queued-prompts');
+9038:       const queuedHeight = queuedPanel && !queuedPanel.hidden
+9039:         ? Math.ceil(queuedPanel.getBoundingClientRect?.().height || 0)
+9040:         : 0;
+9041:       const goalHeight = goalStrip && !goalStrip.hidden
+9042:         ? Math.ceil(goalStrip.getBoundingClientRect?.().height || 0)
+9043:         : 0;
+9044:       const connectionHeight = connectionStatus && !connectionStatus.hidden
+[READ_TRUNCATED] Returned 80 of 28871 lines. Use start_line:9045, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (28871 lines) [window 5985-6064, truncated]:
+5985:     const currentBubble = currentEl.querySelector('.pm-bubble');
+5986:     const nextBubble = nextEl.querySelector('.pm-bubble');
+5987:     if (!currentBubble || !nextBubble) return false;
+5988:     const wasStreaming = currentStreaming;
+5989:     const isStreaming = nextStreaming;
+5990:     const finalizedThisPatch = wasStreaming && !isStreaming;
+5991:     const openProc = {};
+5992:     const closedProc = new Set();
+5993:     const openTraceGroups = {};
+5994:     const closedTraceGroups = new Set();
+5995:     const openTerminals = {};
+5996:     const stableVisionPreviews = {};
+5997:     const stableTraceSummaryLabels = {};
+5998:     let stablePendingImageBatch = null;
+5999:     let stableThinkingDots = null;
+6000:     const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
+6001:     const questionDrafts = _captureMobileQuestionDraftState(currentEl);
+6002:     try {
+6003:       currentEl.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
+6004:         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+6005:         if (key) stableVisionPreviews[key] = node;
+6006:       });
+6007:       currentEl.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key]').forEach((node) => {
+6008:         const groupKey = node.closest('details.pm-trace-tool-group')?.getAttribute('data-pm-trace-group') || '';
+6009:         const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
+6010:         if (groupKey && key) stableTraceSummaryLabels[groupKey] = { key, node };
+6011:       });
+6012:       stablePendingImageBatch = currentBubble.querySelector('.pm-generated-image-batch--pending');
+6013:       stableThinkingDots = currentBubble.querySelector('.pm-thinking-dots');
+6014:       currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
+6015:         if (d.open) {
+6016:           const full = d.querySelector('.pm-process-full');
+6017:           openProc[detailIndex] = { scrollTop: full ? full.scrollTop : 0 };
+6018:         } else {
+6019:           closedProc.add(detailIndex);
+6020:         }
+6021:       });
+6022:       currentEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
+6023:         const key = d.getAttribute('data-pm-trace-group') || String(detailIndex);
+6024:         if (finalizedThisPatch) {
+6025:           closedTraceGroups.add(key);
+6026:           return;
+6027:         }
+6028:         if (d.open) {
+6029:           openTraceGroups[key] = true;
+6030:         } else {
+6031:           closedTraceGroups.add(key);
+6032:         }
+6033:       });
+6034:       currentEl.querySelectorAll('[data-process-approval-host][data-terminal-open="1"]').forEach((host) => {
+6035:         const approvalId = String(host.getAttribute('data-process-approval-host') || '').trim();
+6036:         if (!approvalId || !host.parentElement) return;
+6037:         const toggle = host.parentElement.querySelector?.('[data-pm-process-action="load-approval"]') || null;
+6038:         openTerminals[approvalId] = {
+6039:           host,
+6040:           toggleText: toggle?.textContent || 'Close terminal',
+6041:         };
+6042:       });
+6043:     } catch {}
+6044:     currentBubble.innerHTML = nextBubble.innerHTML;
+6045:     try {
+6046:       currentBubble.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
+6047:         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+6048:         const stable = key ? stableVisionPreviews[key] : null;
+6049:         if (stable && stable !== node) node.replaceWith(stable);
+6050:       });
+6051:       currentBubble.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key]').forEach((node) => {
+6052:         const groupKey = node.closest('details.pm-trace-tool-group')?.getAttribute('data-pm-trace-group') || '';
+6053:         const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
+6054:         const stable = groupKey ? stableTraceSummaryLabels[groupKey] : null;
+6055:         if (stable?.node && stable.key === key && stable.node !== node) {
+6056:           node.replaceWith(stable.node);
+6057:         } else if (!stable || stable.key !== key) {
+6058:           node.classList.add('pm-trace-summary-swap');
+6059:         }
+6060:       });
+6061:       if (stablePendingImageBatch) {
+6062:         const nextPending = currentBubble.querySelector('.pm-generated-image-batch--pending');
+6063:         if (nextPending && nextPending !== stablePendingImageBatch) nextPending.replaceWith(stablePendingImageBatch);
+6064:       }
+[READ_TRUNCATED] Returned 80 of 28871 lines. Use start_line:6065, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- [batch truncated] ---
+Only first 2 files read. Re-run with remaining files if needed.

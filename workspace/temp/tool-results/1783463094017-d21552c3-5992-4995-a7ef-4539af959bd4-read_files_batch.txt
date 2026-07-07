@@ -1,0 +1,165 @@
+repos/PromSRC-compare/src/gateway/tool-builder.ts (1657 lines) [window 1-80, truncated]:
+1: // src/gateway/tool-builder.ts
+2: // Tool definitions and execution utilities — extracted from server-v2.ts (Step 13.1, Phase 3).
+3: // Exports: BuildToolsDeps, buildTools(), ToolResult, TaskControlResponse, ScheduleJobAction,
+4: //          normalizeScheduleJobAction, summarizeCronJob, normalizeDeliveryChannel,
+5: //          normalizeToolArgs, parseJsonLike, toStringRecord, parseLooseMap
+6: 
+7: import { getConfig } from '../config/config';
+8: import { getBrowserToolDefinitions } from './browser-tools';
+9: import { getDesktopToolDefinitions } from './desktop-tools';
+10: import { registerAgentBuilderTools } from './agents-runtime/agent-builder-integration';
+11: import { getFileWebMemoryTools } from './tools/defs/file-web-memory';
+12: import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
+13: import { getCisSystemTools } from './tools/defs/cis-system';
+14: import { getCreativeToolDefs } from './tools/defs/creative-tools';
+15: import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
+16: import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
+17: import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
+18: import { getPublicBuildAllowedCategories, isToolHiddenInPublicBuild } from '../runtime/distribution.js';
+19: 
+20: export interface BuildToolsDeps {
+21:   getMCPManager: () => any;
+22: }
+23: 
+24: // ─── Tool Category System ─────────────────────────────────────────────────────
+25: // Tools split into: core (always injected) + on-demand categories.
+26: // Categories are activated per-session via request_tool_category tool.
+27: 
+28: export const ALL_TOOL_CATEGORIES = [
+29:   'browser_automation',
+30:   'desktop_automation',
+31:   'agents_and_teams',
+32:   'prometheus_source_read',
+33:   'prometheus_source_write',
+34:   'workspace_write',
+35:   'advanced_memory',
+36:   'media_assets',
+37:   'automations',
+38:   'external_apps',
+39:   'integration_admin',
+40:   'social_intelligence',
+41:   'proposal_admin',
+42:   'mcp_server_tools',
+43:   'composite_tools',
+44:   'creative_basic',
+45:   'creative_image',
+46:   'creative_video',
+47:   'creative_hyperframes',
+48:   'creative_quality',
+49:   'skills',
+50:   'model_management',
+51:   'business',
+52: ] as const;
+53: export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
+54: type InternalToolCategory = ToolCategory;
+55: 
+56: export function buildConnectorStatus(): string {
+57:   ensurePrometheusExtensionRuntimeLoaded();
+58:   return getExtensionRuntimeRegistry().buildConnectorStatus();
+59: }
+60: 
+61: export function getRuntimeToolCategories(): ToolCategory[] {
+62:   return getPublicBuildAllowedCategories(ALL_TOOL_CATEGORIES) as ToolCategory[];
+63: }
+64: 
+65: const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
+66:   browser: 'browser_automation',
+67:   browser_automation: 'browser_automation',
+68:   desktop: 'desktop_automation',
+69:   desktop_automation: 'desktop_automation',
+70:   team_ops: 'agents_and_teams',
+71:   teams: 'agents_and_teams',
+72:   agents: 'agents_and_teams',
+73:   agents_and_teams: 'agents_and_teams',
+74:   source_read: 'prometheus_source_read',
+75:   prometheus_source_read: 'prometheus_source_read',
+76:   source_write: 'prometheus_source_write',
+77:   prometheus_source_write: 'prometheus_source_write',
+78:   file_ops: 'workspace_write',
+79:   files: 'workspace_write',
+80:   workspace_write: 'workspace_write',
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.
+
+repos/PromSRC-compare/src/gateway/tool-builder.ts (1657 lines) [window 400-479, truncated]:
+400:   'creative_retry_shot_until_pass',
+401:   'creative_lint_html_motion_clip',
+402:   'creative_measure_text',
+403:   'creative_text_fit_report',
+404:   'creative_composition_lint',
+405: ]);
+406: 
+407: const CREATIVE_HYPERFRAMES_TOOL_NAMES = new Set([
+408:   'creative_hyperframes_ops',
+409:   ...HYPERFRAMES_TOOL_NAMES,
+410:   'creative_list_hyperframes_components',
+411:   'creative_import_hyperframes_component',
+412:   'creative_sync_hyperframes_catalog',
+413:   'creative_apply_hyperframes_component',
+414:   'creative_overlay_hyperframes_on_video',
+415:   'creative_list_html_motion_templates',
+416:   'creative_apply_html_motion_template',
+417:   'creative_create_html_motion_clip',
+418:   'creative_save_html_motion_template',
+419:   'creative_save_html_motion_block',
+420:   'creative_promote_scene_to_template',
+421:   'creative_list_html_motion_blocks',
+422:   'creative_render_html_motion_block',
+423:   'creative_read_html_motion_clip',
+424:   'creative_patch_html_motion_clip',
+425:   'creative_restore_html_motion_revision',
+426:   'creative_render_html_motion_snapshot',
+427:   'creative_export_html_motion_clip',
+428: ]);
+429: 
+430: function getCreativeToolCategory(name: string): ToolCategory {
+431:   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return 'creative_basic';
+432:   if (CREATIVE_QUALITY_TOOL_NAMES.has(name)) return 'creative_quality';
+433:   if (CREATIVE_HYPERFRAMES_TOOL_NAMES.has(name)) return 'creative_hyperframes';
+434:   if (name.startsWith('hyperframes_')) return 'creative_hyperframes';
+435:   if (name.startsWith('image_') || name.startsWith('video_')) return 'creative_quality';
+436: 
+437:   const n = name.toLowerCase();
+438:   if (
+439:     /\b(video|shot|sequence|clip|composition|audio|voiceover|caption|transcribe|rough_cut|stitch|timeline|motion|music|sound|continuity)\b/.test(n)
+440:     || /video|shot|sequence|clip|composition|audio|voiceover|caption|transcribe|rough_cut|stitch|timeline|motion|music|sound|continuity/.test(n)
+441:   ) {
+442:     return 'creative_video';
+443:   }
+444:   if (
+445:     /\b(image|asset|layer|icon|ascii|generation)\b/.test(n)
+446:     || /image|asset|layer|icon|ascii|generation/.test(n)
+447:   ) {
+448:     return 'creative_image';
+449:   }
+450:   return 'creative_basic';
+451: }
+452: 
+453: const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
+454:   'web_search_single',
+455:   'web_search_multi',
+456:   'web_fetch_batch',
+457:   'send_telegram',
+458:   'browser_send_to_telegram',
+459:   'browser_doctor',
+460:   'browser_set_profile_target',
+461:   'browser_open',
+462:   'browser_snapshot',
+463:   'browser_list_tabs',
+464:   'browser_select_tab',
+465:   'browser_new_tab',
+466:   'browser_close_tab',
+467:   'browser_click',
+468:   'browser_fill',
+469:   'browser_upload_file',
+470:   'browser_press_key',
+471:   'browser_key',
+472:   'browser_type',
+473:   'browser_wait',
+474:   'browser_click_and_download',
+475:   'browser_scroll',
+476:   'browser_scroll_collect',
+477:   'browser_drag',
+478:   'browser_scroll_collect_v2',
+479:   'browser_close',
+[READ_TRUNCATED] Use start_line:480, num_lines:80 for the next chunk, or full:true only when needed.

@@ -38,6 +38,11 @@
       "path": "examples/2026-05-21-mobile-screenshot-updates.md",
       "type": "example",
       "description": "Raul's 2026-05-21 preference: send mobile/origin screenshots after visible focus/action steps during voice desktop smoke-test runs."
+    },
+    {
+      "path": "references/styles/voice-browser-desktop-smoke-test-2026-07-04.md",
+      "type": "doc",
+      "description": "Add style pattern to voice-browser-desktop-smoke-test"
     }
   ]
 }

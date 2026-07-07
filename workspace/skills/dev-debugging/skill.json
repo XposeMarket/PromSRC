@@ -69,6 +69,11 @@
       "path": "references/workflows/dev-debugging-2026-06-13.md",
       "type": "doc",
       "description": "Add workflow recipe to dev-debugging"
+    },
+    {
+      "path": "references/workflows/dev-debugging-2026-07-07.md",
+      "type": "doc",
+      "description": "Add workflow recipe to dev-debugging"
     }
   ]
 }

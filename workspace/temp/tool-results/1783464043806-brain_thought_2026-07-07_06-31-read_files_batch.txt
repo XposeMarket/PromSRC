@@ -1,0 +1,82 @@
+temp/tool-results/1783464041004-brain_thought_2026-07-07_06-31-read_files_batch.txt (111 lines) [window 1-80, truncated]:
+1: audit/cron/jobs/jobs.json (119 lines) [window 1-80, truncated]:
+2: 1: {
+3: 2:   "heartbeat": {
+4: 3:     "enabled": false,
+5: 4:     "intervalMinutes": 30,
+6: 5:     "activeHoursStart": 8,
+7: 6:     "activeHoursEnd": 22
+8: 7:   },
+9: 8:   "jobs": [
+10: 9:     {
+11: 10:       "id": "job_1781023570457_uvjbb",
+12: 11:       "name": "prometheus-x-research-replies",
+13: 12:       "prompt": "You are Mara (`x_account_operator_raulinvests_v1`), Raul's dedicated X/Twitter operator for @raulinvests. You are running the X research, replies, quote-repost, and repost workflow. The current strategy is growth-focused: average at least 25 high-quality replies per day, quote-repost more often, and add regular reposting without turning the account into generic engagement spam.\n\nIMPORTANT CURRENT RUNTIME GUARDRAIL:\n- Do NOT call `browser_snapshot` in this scheduled subagent job. Recent runs are failing immediately after `browser_snapshot` with `openai_codex API error 400: {\"detail\":\"Bad Request\"}`.\n- Prefer browser page text, accessible refs from normal browser o...[line truncated]
+14: 13:       "type": "recurring",
+15: 14:       "schedule": "0 */2 * * *",
+16: 15:       "sessionTarget": "isolated",
+17: 16:       "payloadKind": "agentTurn",
+18: 17:       "assignmentTarget": "subagent",
+19: 18:       "deliverToMainChannel": false,
+20: 19:       "enabled": false,
+21: 20:       "priority": 1,
+22: 21:       "delivery": "web",
+23: 22:       "lastRun": "2026-06-17T02:28:55.218Z",
+24: 23:       "lastResult": "Done. opened https://x.com/openclaw/status/2067024929607008286, Page: (1) OpenClaw🦞 on X: \"🦞 OpenClaw 2026.6.8 just dropped. 💬 Richer Telegra, Pressed \"r\". URL unchanged. Title unchanged. Focused element changed: yes. DOM c, Typed 159 chars into focused element. Snapshot refreshed (30 elements)., Pressed \"Control+Enter\". URL unchanged. Title unchanged. Focused element changed.",
+25: 24:       "lastDuration": 578766,
+26: 25:       "consecutiveErrors": 0,
+27: 26:       "deleteAfterRun": false,
+28: 27:       "nextRun": "2026-06-17T04:02:05.470Z",
+29: 28:       "status": "scheduled",
+30: 29:       "lastOutputSessionId": null,
+31: 30:       "createdAt": "2026-06-09T16:46:10.457Z",
+32: 31:       "subagent_id": "x_account_operator_raulinvests_v1",
+33: 32:       "tz": "UTC",
+34: 33:       "skillIds": [],
+35: 34:       "context_refs": [],
+36: 35:       "runAt": null
+37: 36:     },
+38: 37:     {
+39: 38:       "id": "job_1781023720991_vo76d",
+40: 39:       "name": "prometheus-x-posts",
+41: 40:       "prompt": "You are Mara (`x_account_operator_raulinvests_v1`), Raul's dedicated X/Twitter operator for @raulinvests. You are running the original X posting workflow. Original posts should continue, but the account's growth push is now driven mainly by the separate engagement job: at least 25 high-quality replies/day, plus more quote reposts and regular reposts.\n\nIMPORTANT CURRENT RUNTIME GUARDRAIL:\n- Do NOT call `browser_snapshot` in this scheduled subagent job. Recent runs are failing immediately after `browser_snapshot` with `openai_codex API error 400: {\"detail\":\"Bad Request\"}`.\n- Prefer browser page text, accessible refs from normal browser observations, direct status U...[line truncated]
+42: 41:       "type": "recurring",
+43: 42:       "schedule": "0 */3 * * *",
+44: 43:       "sessionTarget": "isolated",
+45: 44:       "payloadKind": "agentTurn",
+46: 45:       "assignmentTarget": "subagent",
+47: 46:       "deliverToMainChannel": false,
+48: 47:       "enabled": false,
+49: 48:       "priority": 1,
+50: 49:       "delivery": "web",
+51: 50:       "lastRun": "2026-06-17T02:30:10.555Z",
+52: 51:       "lastResult": "Done. Pressed \"Control+Enter\". URL changed: https://x.com/compose/post -> https://x.co, Page: (1) OpenClaw🦞 on X: \"🦞 OpenClaw 2026.6.8 just dropped. 💬 Richer Telegra, Pressed \"Escape\". URL unchanged. Title unchanged. Focused element changed: no. D, opened https://x.com/home, Page: (1) Home / X URL: https://x.com/home  === MAIN PAGE TEXT === To view keybo, Note saved [last_run_insight] (392 chars) -> intraday-notes.",
+53: 52:       "lastDuration": 674464,
+54: 53:       "consecutiveErrors": 0,
+55: 54:       "deleteAfterRun": false,
+56: 55:       "nextRun": "2026-06-17T03:03:28.313Z",
+57: 56:       "status": "scheduled",
+58: 57:       "lastOutputSessionId": null,
+59: 58:       "createdAt": "2026-06-09T16:48:40.991Z",
+60: 59:       "subagent_id": "x_account_operator_raulinvests_v1",
+61: 60:       "tz": "UTC",
+62: 61:       "skillIds": [],
+63: 62:       "context_refs": [],
+64: 63:       "runAt": ""
+65: 64:     },
+66: 65:     {
+67: 66:       "id": "job_1781533738853_j59oa",
+68: 67:       "name": "Raul Morning Trading Brief",
+69: 68:       "prompt": "You are Prom delivering Raul's pre-market morning trading brief. It is a weekday at 9:25 AM ET, 5 minutes before US cash open.\n\nOUTPUT RULE (critical): Your FINAL RESPONSE message IS the deliverable. Write the ENTIRE brief - every section below - as your final response text. Do NOT use delivery_send. Do NOT write a terse summary like \"Done, brief delivered\" - that defeats the purpose. The full brief, with all sections, greeting through discipline line, must be the literal final response. Use your tool calls only to GATHER data (web_search, fetch, show_stocks); then put everything into the final message.\n\nCONTEXT ON RAUL (use to shape the brief, do not dump it back ...[line truncated]
+70: 69:       "skillIds": [],
+71: 70:       "context_refs": [],
+72: 71:       "type": "recurring",
+73: 72:       "schedule": "25 9 * * 1-5",
+74: 73:       "tz": "America/New_York",
+75: 74:       "sessionTarget": "main",
+76: 75:       "payloadKind": "agentTurn",
+77: 76:       "assignmentTarget": "main",
+78: 77:       "deliverToMainChannel": true,
+79: 78:       "enabled": false,
+80: 79:       "priority": 2,
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

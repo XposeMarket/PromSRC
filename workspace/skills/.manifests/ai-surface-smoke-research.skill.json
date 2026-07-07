@@ -1,37 +1,26 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Raul asks Prometheus to run an AI surface smoke test across visible AI apps or web surfaces, such as focusing Codex/Claude, searching current AI chatter, checking Reddit/X/web results, and reporting what the AI ecosystem is saying.",
   "triggers": [
-    "AI smoke test",
-    "run an AI surface test",
-    "test Codex and Claude",
-    "focus Codex then search",
-    "browser desktop AI test",
-    "search Reddit for AI chatter",
-    "search X for AI chatter",
-    "Claude OpenClaw Hermes search",
-    "check current AI discussion",
-    "live AI chatter",
-    "AI research smoke test",
-    "compare AI app surfaces",
-    "run the AI browser test",
-    "summarize AI ecosystem buzz",
-    "smoke test AI research flow"
+    "ai smoke test",
+    "run an ai surface test",
+    "test codex and claude",
+    "focus codex then search",
+    "browser desktop ai test",
+    "search reddit for ai chatter",
+    "search x for ai chatter",
+    "claude openclaw hermes search",
+    "check current ai discussion",
+    "live ai chatter",
+    "ai research smoke test",
+    "compare ai app surfaces",
+    "run the ai browser test",
+    "summarize ai ecosystem buzz",
+    "smoke test ai research flow",
+    "x.com javascript disabled",
+    "screenshot delivery failed",
+    "browser doctor 9222",
+    "resume smoke test"
   ],
-  "categories": [
-    "research",
-    "browser",
-    "desktop",
-    "smoke-test",
-    "ai"
-  ],
-  "requiredTools": [
-    "browser_automation",
-    "desktop_automation",
-    "skills",
-    "web_search"
-  ],
-  "lifecycle": "active",
   "id": "ai-surface-smoke-research"
 }

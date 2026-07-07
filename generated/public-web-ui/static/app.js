@@ -328,6 +328,7 @@ const PAGE_TITLES = {
 };
 
 const PAGE_MODULES = {
+  chat: './pages/ChatPage.js?v=slash-command-style-align-v1',
   bgtasks: './pages/TasksPage.js',
   schedule: './pages/SchedulePage.js',
   teams: './pages/TeamsPage.js',
@@ -364,6 +365,7 @@ function activateLoadedPageMode(mode) {
   }
   if (mode === 'proposals') {
     if (typeof window.loadProposals === 'function') window.loadProposals();
+    if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
     const badge = document.getElementById('proposals-badge');
     if (badge) badge.style.display = 'none';
   }
@@ -443,7 +445,7 @@ export function setMode(mode) {
     _syncPageViewPositions();
   }
 
-  ensurePageModule(mode).then(() => activateLoadedPageMode(mode)).catch(() => {});
+  return ensurePageModule(mode).then(() => activateLoadedPageMode(mode)).catch(() => {});
 }
 
 // Legacy compatibility: old header buttons still broadcast to setMode via onclick

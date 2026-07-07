@@ -4,9 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
 <title>Prometheus</title>
-<link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
-<link rel="stylesheet" href="vendor/codemirror/theme/material-darker.min.css">
-<script>
+  <script>
   (() => {
     if (typeof window.__PROM_SHOULD_BOOT_MOBILE === 'function') return;
     function shouldBootMobile() {
@@ -38,11 +36,25 @@
     const loadExternalScript = (src, attrs = {}) => new Promise((resolve) => {
       const script = document.createElement('script');
       script.src = src;
-      script.async = true;
-      Object.entries(attrs).forEach(([key, value]) => script.setAttribute(key, value));
+      script.async = attrs.async === false ? false : true;
+      Object.entries(attrs).forEach(([key, value]) => {
+        if (key === 'async') return;
+        script.setAttribute(key, value);
+      });
       script.onload = () => resolve({ src, ok: true });
       script.onerror = () => resolve({ src, ok: false });
       document.head.appendChild(script);
+    });
+    const loadStyleIfMissing = (hrefMatch) => new Promise((resolve) => {
+      const existing = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+        .find((tag) => String(tag.getAttribute('href') || '').includes(hrefMatch));
+      if (existing) return resolve({ href: existing.getAttribute('href'), ok: true });
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = hrefMatch;
+      link.onload = () => resolve({ href: link.href, ok: true });
+      link.onerror = () => resolve({ href: link.href, ok: false });
+      document.head.appendChild(link);
     });
     try {
       const params = new URLSearchParams(window.location.search || '');
@@ -57,23 +69,124 @@
         return;
       }
     } catch {}
-    const codeMirrorReady = loadExternalScript('vendor/codemirror/codemirror.min.js')
-      .then(() => Promise.all([
-        'xml',
-        'css',
-        'javascript',
-        'htmlmixed',
-        'python',
-        'markdown',
-      ].map((mode) => loadExternalScript(`vendor/codemirror/mode/${mode}/${mode}.min.js`))));
+    const loadCodeMirror = async () => {
+      await loadExternalScript('vendor/codemirror/codemirror.min.js', { async: false });
+      await loadExternalScript('vendor/codemirror/mode/xml/xml.min.js', { async: false });
+      await loadExternalScript('vendor/codemirror/mode/css/css.min.js', { async: false });
+      await loadExternalScript('vendor/codemirror/mode/javascript/javascript.min.js', { async: false });
+      await loadExternalScript('vendor/codemirror/mode/htmlmixed/htmlmixed.min.js', { async: false });
+      await loadExternalScript('vendor/codemirror/mode/python/python.min.js', { async: false });
+      await loadExternalScript('vendor/codemirror/mode/markdown/markdown.min.js', { async: false });
+      await Promise.all([
+        loadStyleIfMissing('vendor/codemirror/codemirror.min.css'),
+        loadStyleIfMissing('vendor/codemirror/theme/material-darker.min.css'),
+      ]);
+    };
+    const markedReady = loadExternalScript('vendor/marked/marked.min.js');
     window.__PROM_EXTERNAL_LIBS_READY = Promise.allSettled([
-      codeMirrorReady,
-      loadExternalScript('vendor/marked/marked.min.js'),
+      markedReady,
+    ]);
+
+    const defineLoader = (name, loadFn) => {
+      if (typeof window[name] === 'function') return;
+      let pending = null;
+      window[name] = () => {
+        if (!pending) pending = Promise.resolve().then(() => loadFn());
+        return pending;
+      };
+    };
+    defineLoader('__PROM_LOAD_CODEMIRROR', loadCodeMirror);
+    defineLoader('__PROM_LOAD_ICONIFY', async () => Promise.all([loadExternalScript('vendor/iconify/iconify.min.js')]).then(() => undefined));
+    defineLoader('__PROM_LOAD_LOTTIE', async () => Promise.all([loadExternalScript('vendor/lottie-player/lottie-player.js')]).then(() => undefined));
+    defineLoader('__PROM_LOAD_FABRIC', async () => Promise.all([
       loadExternalScript('vendor/fabric/fabric.min.js'),
       loadExternalScript('vendor/gif/gif.js'),
-      loadExternalScript('vendor/iconify/iconify.min.js'),
-      loadExternalScript('vendor/lottie-player/lottie-player.js'),
-    ]);
+    ]).then(() => undefined));
+    defineLoader('__PROM_LOAD_GIF', async () => Promise.all([loadExternalScript('vendor/gif/gif.js')]).then(() => undefined));
+    defineLoader('__PROM_LOAD_CREATIVE_ASSETS', async () => Promise.all([
+      window.__PROM_LOAD_ICONIFY(),
+      window.__PROM_LOAD_LOTTIE(),
+      window.__PROM_LOAD_FABRIC(),
+    ]).then(() => undefined));
+
+    const makeModuleLoader = (importer) => {
+      let loader = null;
+      return () => {
+        if (loader) return loader;
+        loader = Promise.resolve()
+          .then(() => importer())
+          .catch((err) => {
+            loader = null;
+            throw err;
+          });
+        return loader;
+      };
+    };
+
+    window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./static/pages/SettingsPage.js'));
+    window.__PROM_LOAD_CONNECTIONS = makeModuleLoader(() => import('./static/pages/ConnectionsPage.js'));
+
+    const openSettingsShim = async function openSettingsShim(tab) {
+      try {
+        await window.__PROM_LOAD_SETTINGS();
+        const loadedFn = window.openSettings;
+        if (typeof loadedFn === 'function' && loadedFn !== openSettingsShim) {
+          return loadedFn(tab);
+        }
+      } catch (err) {
+        console.warn('[settings] Failed to load SettingsPage:', err);
+      }
+      const modal = document.getElementById('settings-modal');
+      if (modal) modal.style.display = 'flex';
+      return undefined;
+    };
+    openSettingsShim.__PROM_SHIM = true;
+    window.openSettings = openSettingsShim;
+
+    const setSettingsTabShim = async function setSettingsTabShim(tab) {
+      try {
+        await window.__PROM_LOAD_SETTINGS();
+        const loadedFn = window.setSettingsTab;
+        if (typeof loadedFn === 'function' && loadedFn !== setSettingsTabShim) {
+          return loadedFn(tab);
+        }
+      } catch (err) {
+        console.warn('[settings] Failed to load SettingsPage:', err);
+      }
+      return undefined;
+    };
+    setSettingsTabShim.__PROM_SHIM = true;
+    window.setSettingsTab = setSettingsTabShim;
+
+    const filterConnectorsShim = async function filterConnectorsShim(value) {
+      try {
+        await window.__PROM_LOAD_CONNECTIONS();
+        const loadedFn = window.filterConnectors;
+        if (typeof loadedFn === 'function' && loadedFn !== filterConnectorsShim) {
+          return loadedFn(value);
+        }
+      } catch (err) {
+        console.warn('[connectors] Failed to load ConnectionsPage:', err);
+      }
+      return undefined;
+    };
+    filterConnectorsShim.__PROM_SHIM = true;
+    window.filterConnectors = filterConnectorsShim;
+
+    const openAddPluginModalShim = async function openAddPluginModalShim() {
+      try {
+        await window.__PROM_LOAD_CONNECTIONS();
+        const loadedFn = window.openAddPluginModal;
+        if (typeof loadedFn === 'function' && loadedFn !== openAddPluginModalShim) {
+          return loadedFn();
+        }
+      } catch (err) {
+        console.warn('[connectors] Failed to load ConnectionsPage:', err);
+      }
+      return undefined;
+    };
+    openAddPluginModalShim.__PROM_SHIM = true;
+    window.openAddPluginModal = openAddPluginModalShim;
   })();
 </script>
 <!-- F2: External CSS (replaces inline <style> block) -->
@@ -108,7 +221,6 @@
 <link rel="stylesheet" href="static/styles/pages.css?v=generated-image-modal-v3">
 <link rel="stylesheet" href="static/styles/projects.css">
 <link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="static/styles/mobile.css?v=slash-command-style-align-v1">
 <link rel="stylesheet" href="static/styles/themes.css?v=blue-theme-1">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
@@ -180,6 +292,14 @@
       if (shouldBootMobile) {
         document.body.classList.add('pm-mobile-active');
         document.body.classList.remove('auth-pending');
+        const mobileCssTag = document.querySelector('link[href*="static/styles/mobile.css"]');
+        if (!mobileCssTag) {
+          const cssTag = document.createElement('link');
+          cssTag.rel = 'stylesheet';
+          cssTag.href = 'static/styles/mobile.css?v=slash-command-style-align-v1';
+          cssTag.dataset.promMobileStyle = '1';
+          document.head.appendChild(cssTag);
+        }
         if (hash.startsWith('mobile') || params.get('pair') || params.get('source') === 'pwa') {
           localStorage.setItem('pm_force_mobile', '1');
         }
@@ -6658,10 +6778,10 @@ async function saveAgentModelDefaults() {
 async function refreshAll() {
   if (typeof renderSessionsList === 'function') renderSessionsList();
   if (typeof updateStats === 'function') updateStats([]);
-  if (typeof loadSessionApprovals === 'function') loadSessionApprovals();
+
   if (typeof checkStatus === 'function') checkStatus();
   if (typeof loadSystemStats === 'function') loadSystemStats();
-  if (typeof loadInstalledSkills === 'function') loadInstalledSkills();
+
   if (typeof loadSearchSettingsSummary === 'function') loadSearchSettingsSummary();
   if (typeof refreshHeartbeatSummary === 'function') refreshHeartbeatSummary();
   if (typeof renderProgressPanel === 'function') renderProgressPanel();
@@ -7216,9 +7336,6 @@ window.addEventListener('DOMContentLoaded', () => {
     // Delay to ensure all <script type="module"> have executed and registered window.* exports
     setTimeout(() => {
     const isRenderWorker = window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled === true;
-    if (!isRenderWorker && typeof loadChatSessions === 'function') loadChatSessions().catch(() => {});
-    if (!isRenderWorker && typeof loadInstalledSkills === 'function') loadInstalledSkills().catch(() => {});
-    if (!isRenderWorker && typeof loadProjects === 'function') loadProjects().catch(() => {});
     if (typeof applyTheme === 'function') applyTheme(getInitialTheme());
     if (!isRenderWorker && typeof setupProcessAndRightScrollTracking === 'function') setupProcessAndRightScrollTracking();
     if (!isRenderWorker && typeof updateHeartbeatUI === 'function') updateHeartbeatUI();
@@ -7227,8 +7344,27 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!isRenderWorker && typeof updateQueuedPromptUI === 'function') updateQueuedPromptUI();
     if (!isRenderWorker) setInterval(checkStatus, 10000);
     if (!isRenderWorker) setInterval(loadSystemStats, 3000);
-    if (!isRenderWorker) setInterval(loadSessionApprovals, 8000);
-    if (!isRenderWorker && typeof setMode === 'function') setMode('chat');
+
+    if (!isRenderWorker) {
+      const chatModePromise = Promise.resolve(typeof setMode === 'function' ? setMode('chat') : undefined);
+      chatModePromise.finally(() => {
+        if (typeof window.loadChatSessions === 'function') {
+          window.__chatSessionsBootstrapped = true;
+          window.loadChatSessions().catch(() => {});
+        }
+        if (typeof window.__PROM_LOAD_CONNECTIONS === 'function') {
+          window.__PROM_LOAD_CONNECTIONS().then(() => {
+            if (window.__connectionsBootstrapped) return;
+            window.__connectionsBootstrapped = true;
+            if (typeof window.loadConnectionsState === 'function') {
+              window.loadConnectionsState().catch(() => {});
+            }
+          }).catch((err) => {
+            console.warn('[boot] connections bootstrap failed:', err);
+          });
+        }
+      });
+    }
     if (!isRenderWorker) window.useAgentMode = true;
     if (typeof canvasInitDrop === 'function') canvasInitDrop();
     if (typeof chatFileUploadInit === 'function') chatFileUploadInit();
@@ -7540,10 +7676,6 @@ let _errBackdrop = null;
     './static/utils.js',
     './static/ws.js',
     './static/app.js?v=sidebar-width-reset',
-    './static/pages/ChatPage.js?v=slash-command-style-align-v1',
-    './static/pages/ConnectionsPage.js',
-    './static/pages/SettingsPage.js',
-    './static/pages/ProjectsPage.js',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
     && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled;

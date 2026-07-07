@@ -3024,6 +3024,29 @@ function _mobileTraceGroupStableKey(group, index = 0) {
   return `trace_group_${String(group?.kind || 'group')}_${index}`;
 }
 
+function _markMobileLiveStreamMotion(rootEl, sessionKey) {
+  if (!rootEl) return;
+  const key = String(sessionKey || (typeof __pmChat !== 'undefined' && __pmChat?.activeSessionId) || 'chat');
+  const seenBySession = window.__pmMobileLiveStreamEntryIdsBySession || (window.__pmMobileLiveStreamEntryIdsBySession = {});
+  const seen = seenBySession[key] || (seenBySession[key] = new Set());
+  const segmentSeenBySession = window.__pmMobileLiveTraceSegmentIdsBySession || (window.__pmMobileLiveTraceSegmentIdsBySession = {});
+  const segmentSeen = segmentSeenBySession[key] || (segmentSeenBySession[key] = new Set());
+  try {
+    rootEl.querySelectorAll('[data-pm-live-entry-id]').forEach((node) => {
+      const id = String(node.getAttribute('data-pm-live-entry-id') || '').trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      node.classList.add('pm-live-stream-enter');
+    });
+    rootEl.querySelectorAll('.pm-trace-thought[data-pm-trace-group], details.pm-trace-tool-group[data-pm-trace-group]').forEach((node) => {
+      const id = String(node.getAttribute('data-pm-trace-group') || '').trim();
+      if (!id || segmentSeen.has(id)) return;
+      segmentSeen.add(id);
+      node.classList.add('pm-live-stream-enter');
+    });
+  } catch {}
+}
+
 function _mobileTraceGroups(entries) {
   const list = _mobileVisibleTraceEntries(entries);
   const groups = [];
@@ -3334,7 +3357,7 @@ function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent
   if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
   return `<div class="pm-trace-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
-      return `<div class="pm-trace-thought">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div>`;
+      return `<div class="pm-trace-thought" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div>`;
     }
     if (group.kind === 'compaction') {
       return group.entries.map(_renderMobileCompactionBreak).join('');
@@ -5475,7 +5498,9 @@ function _renderChatMessageHtml(m, index = -1) {
     if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
     if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
   }
-  const liveTraceHtml = m.streaming && (!answerStarted || isVoiceTraceTurn) && Array.isArray(m.liveTraceEntries)
+  const hasLiveTraceEntries = Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length > 0;
+  const showLiveWorkflowTrace = m.streaming && hasLiveTraceEntries;
+  const liveTraceHtml = showLiveWorkflowTrace
     ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
     : '';
   const hasLiveTrace = !!liveTraceHtml;
@@ -5995,7 +6020,6 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     const stableTraceSummaryLabels = {};
     let stablePendingImageBatch = null;
     let stableThinkingDots = null;
-    const stableLiveTraceGroups = {};
     const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
     const questionDrafts = _captureMobileQuestionDraftState(currentEl);
     try {
@@ -6010,10 +6034,6 @@ function _patchMobileThreadMessage(threadEl, message, index) {
       });
       stablePendingImageBatch = currentBubble.querySelector('.pm-generated-image-batch--pending');
       stableThinkingDots = currentBubble.querySelector('.pm-thinking-dots');
-      currentBubble.querySelectorAll('details.pm-trace-tool-group[data-pm-trace-live-current="1"]').forEach((node) => {
-        const groupKey = String(node.getAttribute('data-pm-trace-group') || '').trim();
-        if (groupKey) stableLiveTraceGroups[groupKey] = node;
-      });
       currentEl.querySelectorAll('details.pm-process-stream').forEach((d, detailIndex) => {
         if (d.open) {
           const full = d.querySelector('.pm-process-full');
@@ -6069,11 +6089,6 @@ function _patchMobileThreadMessage(threadEl, message, index) {
         const nextDots = currentBubble.querySelector('.pm-thinking-dots');
         if (nextDots && nextDots !== stableThinkingDots) nextDots.replaceWith(stableThinkingDots);
       }
-      Object.entries(stableLiveTraceGroups).forEach(([groupKey, stableNode]) => {
-        const selector = `details.pm-trace-tool-group[data-pm-trace-live-current="1"][data-pm-trace-group="${_pmCssEscape(groupKey)}"]`;
-        const nextGroup = currentBubble.querySelector(selector);
-        if (nextGroup && stableNode !== nextGroup) nextGroup.replaceWith(stableNode);
-      });
     } catch {}
     const nextActions = nextEl.querySelector('[data-msg-action]') ? nextEl.querySelectorAll('[data-msg-action]') : null;
     const currentActionsHost = currentEl.querySelector('.pm-msg-actions');
@@ -6093,6 +6108,11 @@ function _patchMobileThreadMessage(threadEl, message, index) {
       currentEl.querySelectorAll('details.pm-trace-tool-group').forEach((d, detailIndex) => {
         const key = d.getAttribute('data-pm-trace-group') || String(detailIndex);
         if (d.closest('.pm-trace-drawer[data-trace-completed="1"]')) {
+          d.removeAttribute('open');
+          return;
+        }
+        const isLiveCurrent = d.getAttribute('data-pm-trace-live-current') === '1';
+        if (!isLiveCurrent) {
           d.removeAttribute('open');
           return;
         }
@@ -6117,6 +6137,9 @@ function _patchMobileThreadMessage(threadEl, message, index) {
   });
   _wireMobileProcessRunActions(patchedEl);
   _wireMobileChatEnhancements(patchedEl);
+  try {
+    _markMobileLiveStreamMotion(patchedEl, String(__pmChat?.activeSessionId || ''));
+  } catch {}
   return true;
 }
 
@@ -10130,7 +10153,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
         _appendMobileProcess(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`, evt);
         _appendMobileLiveTrace(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`);
-        renderThreadSoon();
+        renderThreadNow();
         return 'streaming';
       }
       case 'tool_result': {
@@ -10148,7 +10171,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
         _appendMobileLiveTrace(aiTurn, evt.error ? 'error' : 'result', `${label}${evt.error ? ' failed' : ' complete'}`);
-        renderThreadSoon();
+        renderThreadNow();
         return 'streaming';
       }
       case 'vision_injected':
@@ -10167,7 +10190,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           _appendMobileProcess(aiTurn, 'info', progressText, evt);
           _appendMobileLiveTrace(aiTurn, 'tool', progressText);
         }
-        renderThreadSoon();
+        renderThreadNow();
         return 'streaming';
       }
       case 'canvas_present': {
@@ -10195,7 +10218,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           aiTurn.toolActivityStarted = true;
           const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
           _appendMobileLiveTrace(aiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
-          renderThreadSoon();
+          renderThreadNow();
         }
         return 'streaming';
       }

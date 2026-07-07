@@ -36134,7 +36134,22 @@ function toggleCanvasFullscreen() {
 function initCanvasEditor() {
   canvasEditorInitialized = true;
   const wrap = document.getElementById('canvas-editor-wrap');
-  if (!wrap || typeof CodeMirror === 'undefined') return;
+  if (!wrap) return;
+  if (typeof window.__PROM_LOAD_CODEMIRROR === 'function' && typeof CodeMirror === 'undefined') {
+    window.__PROM_LOAD_CODEMIRROR()
+      .then(() => {
+        if (typeof CodeMirror === 'undefined') {
+          console.warn('[chat] CodeMirror load returned without defining CodeMirror');
+          return;
+        }
+        initCanvasEditor();
+      })
+      .catch((err) => {
+        console.warn('[chat] CodeMirror load failed:', err);
+      });
+    return;
+  }
+  if (typeof CodeMirror === 'undefined') return;
   canvasEditor = CodeMirror(wrap, {
     value: '',
     mode: 'htmlmixed',
@@ -39331,6 +39346,30 @@ function getMainChatStreamLastSeq(sessionId, streamId = 'default') {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+const MAIN_CHAT_STREAM_CATCHUP_INTERVAL_MS = 3200;
+const MAIN_CHAT_STREAM_CATCHUP_EVENT_CAP = 120;
+const MAIN_CHAT_STREAM_TOOL_RESULT_SUMMARY_MAX = 420;
+
+function _isMainChatStreamCatchupSessionVisible(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return false;
+  if (sid !== String(window.activeChatSessionId || '').trim()) return false;
+  // Mobile PWA/WebView often reports document.hidden while the user is still in chat;
+  // keep HTTP catch-up alive for the active session on the mobile shell.
+  if (typeof document !== 'undefined' && document.body?.classList?.contains('pm-mobile-active')) return true;
+  return typeof document === 'undefined' || document.hidden !== true;
+}
+
+function summarizeToolResultForBackgroundSession(value, action = '') {
+  const summaryMax = MAIN_CHAT_STREAM_TOOL_RESULT_SUMMARY_MAX;
+  const normalizedAction = String(action || '').trim();
+  const raw = String(value || '').trim();
+  if (!raw) return '[tool result empty]';
+  if (raw.length <= summaryMax) return raw;
+  const actionPrefix = normalizedAction ? `[${normalizedAction}] ` : '';
+  return `${actionPrefix}${raw.slice(0, summaryMax)}… (${raw.length - summaryMax} chars truncated in background stream)`;
+}
+
 function applyMainChatStreamFrame(sessionId, frame) {
   if (!frame || typeof frame !== 'object') return;
   handleMainChatStreamEvent({
@@ -39346,6 +39385,7 @@ function applyMainChatStreamFrame(sessionId, frame) {
 async function catchUpMainChatStream(sessionId, options = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
+  if (!_isMainChatStreamCatchupSessionVisible(sid)) return null;
   try {
     const streamId = String(options.streamId || '').trim();
     const explicitAfter = Number(options.after);
@@ -39353,9 +39393,11 @@ async function catchUpMainChatStream(sessionId, options = {}) {
       ? Math.max(0, Math.floor(explicitAfter))
       : getMainChatStreamLastSeq(sid, streamId || 'default');
     const data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=${encodeURIComponent(String(after))}`, 2500);
-    const events = Array.isArray(data?.events) ? data.events : [];
+    const events = Array.isArray(data?.events)
+      ? data.events.slice(-MAIN_CHAT_STREAM_CATCHUP_EVENT_CAP)
+      : [];
     events.forEach((frame) => applyMainChatStreamFrame(sid, frame));
-    if (data?.active) scheduleMainChatStreamCatchup(sid);
+    if (data?.active && _isMainChatStreamCatchupSessionVisible(sid)) scheduleMainChatStreamCatchup(sid);
     return data;
   } catch {
     return null;
@@ -39365,13 +39407,15 @@ async function catchUpMainChatStream(sessionId, options = {}) {
 function scheduleMainChatStreamCatchup(sessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid) return;
+  if (!_isMainChatStreamCatchupSessionVisible(sid)) return;
   const timers = window._mainChatStreamCatchupTimers || (window._mainChatStreamCatchupTimers = {});
   if (timers[sid]) return;
   timers[sid] = setTimeout(async () => {
     delete timers[sid];
+    if (!_isMainChatStreamCatchupSessionVisible(sid)) return;
     const data = await catchUpMainChatStream(sid);
-    if (data?.active && window.activeChatSessionId === sid) scheduleMainChatStreamCatchup(sid);
-  }, 1800);
+    if (data?.active && _isMainChatStreamCatchupSessionVisible(sid)) scheduleMainChatStreamCatchup(sid);
+  }, MAIN_CHAT_STREAM_CATCHUP_INTERVAL_MS);
 }
 
 // ─── Cross-channel live update helpers ────────────────────────────────────────
@@ -39541,19 +39585,12 @@ function handleMainChatStreamEvent(msg = {}) {
     window._sessionThinking[sid] = true;
     streamState.currentTurnStartIndex = inferCurrentTurnProcessStartIndex(sess, content);
     streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
-    // Cross-channel live update: schedule auto-switch or show a toast.
-    // The switch is deferred via setTimeout(0) so it runs AFTER
-    // restoreActiveSessionIfStreamStoleFocus (which otherwise undoes the switch).
     if (!isViewing && _isExternalChannel(sid) && !_isMobileShellActive()) {
       const chLabel = sess.source || inferChannelFromSessionId(sid);
       const capturedContent = content;
-      if (_isDesktopIdle()) {
-        queueMicrotask(() => {
-          if (window.activeChatSessionId !== sid) {
-            _switchToChannelSession(sid);
-            showToast(`Live on ${chLabel}`, capturedContent ? capturedContent.slice(0, 80) : undefined, 'info', 3500);
-          }
-        });
+      const toastMessage = capturedContent ? capturedContent.slice(0, 80) : 'New activity.';
+      if (_isDesktopIdle() && !isViewing) {
+        _showChannelActivityToast(sid, chLabel, toastMessage);
       } else {
         _showChannelActivityToast(sid, chLabel, content);
       }
@@ -39622,8 +39659,12 @@ function handleMainChatStreamEvent(msg = {}) {
     streamState.toolActivityStarted = true;
     const action = String(evt.action || '').trim();
     const resultText = String(evt.result || '');
+    const isBackgroundSession = sid !== window.activeChatSessionId;
+    const safeResultText = isBackgroundSession
+      ? summarizeToolResultForBackgroundSession(resultText, action)
+      : resultText;
     const ok = evt.error === true ? false : !/^ERROR:/i.test(resultText);
-    const text = action ? formatToolResultForLog(action, resultText, ok, streamState) : resultText;
+    const text = action ? formatToolResultForLog(action, safeResultText, ok, streamState) : safeResultText;
     addSessionProcessEntry(sid, ok ? 'result' : 'error', text, evt.actor ? { actor: evt.actor } : undefined);
     appendLiveTraceToStreamState(streamState, ok ? 'result' : 'error', action ? `${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}` : text);
     renderIfViewing();

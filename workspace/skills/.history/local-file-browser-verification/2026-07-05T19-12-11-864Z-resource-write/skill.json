@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "local-file-browser-verification",
+  "name": "Local File Browser Verification",
+  "description": "Use this skill when the user asks Prometheus to test, manually verify, debug, smoke-test, open, inspect, or interact with a local HTML file, web artifact, small browser app, generated page, game, UI prototype, or static file in a real browser. Triggers on requests like: open this HTML and test it, start an HTTP server for this file, check the browser console, click the button and see what happens, manually verify this file, smoke test the local page, debug why the UI does not work, inspect console errors, take a screenshot of the local page, test this mobile HTML game, verify taps/clicks, run it in browser, use browser tools to test it, or check the DOM after clicking. Use this for local-file/browser workflows where visual state, console logs, network/runtime errors, DOM hit-testing, or actual UI interaction matter more than static code review.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "open this html and test it",
+    "start an http server for this file",
+    "check browser console",
+    "click the button and see what happens",
+    "manually verify this file",
+    "smoke test local page",
+    "debug why the ui does not work",
+    "inspect console errors",
+    "take a screenshot of the local page",
+    "test this mobile html game",
+    "verify taps and clicks",
+    "run it in browser",
+    "use browser tools to test it",
+    "check the dom after clicking",
+    "local html smoke test",
+    "browser verify local file"
+  ],
+  "categories": [
+    "browser-testing",
+    "local-files",
+    "debugging",
+    "qa",
+    "workflow"
+  ],
+  "requiredTools": [
+    "skill_list",
+    "skill_read",
+    "request_tool_category",
+    "browser_automation",
+    "desktop_automation",
+    "workspace_write",
+    "delivery_send_screenshot"
+  ],
+  "permissions": {
+    "browser": true,
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "templates/verification-report.md",
+      "type": "template",
+      "description": "Concise report template for local browser/file verification results."
+    },
+    {
+      "path": "references/hit-testing-debug-snippets.md",
+      "type": "doc",
+      "description": "Browser JS snippets for diagnosing covered buttons, intercepted clicks, and touch overlays."
+    }
+  ]
+}

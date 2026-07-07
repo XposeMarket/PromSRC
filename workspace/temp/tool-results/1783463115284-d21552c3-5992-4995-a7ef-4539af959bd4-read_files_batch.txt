@@ -1,0 +1,165 @@
+repos/PromSRC-compare/src/gateway/tool-builder.ts (1657 lines) [window 1255-1334, truncated]:
+1255:   if (agentBuilderEnabled) {
+1256:     registerAgentBuilderTools(toolDefs);
+1257:   }
+1258: 
+1259:   // ── connector_list: always-available connector discovery tool ─────────────
+1260:   toolDefs.push({
+1261:     type: 'function',
+1262:     function: {
+1263:       name: 'connector_list',
+1264:       description:
+1265:         'List all available connectors (Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, Google Analytics, Obsidian, X/Twitter, xAI/Grok when configured) and their connection status. ' +
+1266:         'Shows which connectors are connected and what tools are available for each. ' +
+1267:         'Use this before activating the external_apps category to check what\'s available.',
+1268:       parameters: { type: 'object', required: [], properties: {} },
+1269:     },
+1270:   });
+1271:   toolDefs.push(
+1272:     {
+1273:       type: 'function',
+1274:       function: {
+1275:         name: 'x_search_ops',
+1276:         description: 'Unified X/xAI search wrapper. Delegates to X API search/trends/space tools or xAI live/X search tools.',
+1277:         parameters: {
+1278:           type: 'object',
+1279:           required: ['action'],
+1280:           properties: {
+1281:             action: { type: 'string', enum: ['x_search', 'live_search', 'search_recent', 'search_all', 'search_spaces', 'get_trends', 'get_personalized_trends', 'get_space'] },
+1282:             query: { type: 'string' },
+1283:             q: { type: 'string' },
+1284:             space_id: { type: 'string' },
+1285:             id: { type: 'string' },
+1286:             max_results: { type: 'number' },
+1287:             max_search_results: { type: 'number' },
+1288:             since_id: { type: 'string' },
+1289:             until_id: { type: 'string' },
+1290:             next_token: { type: 'string' },
+1291:             pagination_token: { type: 'string' },
+1292:           },
+1293:         },
+1294:       },
+1295:     },
+1296:     {
+1297:       type: 'function',
+1298:       function: {
+1299:         name: 'x_posts',
+1300:         description: 'Unified X post/bookmark/like/repost wrapper. Mutating actions still use the existing X connector handlers and policy.',
+1301:         parameters: {
+1302:           type: 'object',
+1303:           required: ['action'],
+1304:           properties: {
+1305:             action: { type: 'string', enum: ['get_post', 'get_posts', 'create_post', 'delete_post', 'create_bookmark', 'delete_bookmark', 'get_bookmarks', 'like', 'unlike', 'get_liked_posts', 'get_liking_users', 'repost', 'unrepost', 'get_reposted_by', 'get_reposts_of_me'] },
+1306:             id: { type: 'string' },
+1307:             post_id: { type: 'string' },
+1308:             tweet_id: { type: 'string' },
+1309:             ids: { type: 'array', items: { type: 'string' } },
+1310:             text: { type: 'string' },
+1311:             reply_to_post_id: { type: 'string' },
+1312:             quote_post_id: { type: 'string' },
+1313:             max_results: { type: 'number' },
+1314:             pagination_token: { type: 'string' },
+1315:           },
+1316:         },
+1317:       },
+1318:     },
+1319:     {
+1320:       type: 'function',
+1321:       function: {
+1322:         name: 'x_users',
+1323:         description: 'Unified X user/profile/social graph wrapper.',
+1324:         parameters: {
+1325:           type: 'object',
+1326:           required: ['action'],
+1327:           properties: {
+1328:             action: { type: 'string', enum: ['me', 'get_user', 'get_user_by_username', 'get_user_posts', 'get_user_mentions', 'get_followers', 'get_following', 'follow', 'unfollow', 'mute', 'unmute', 'block', 'unblock'] },
+1329:             id: { type: 'string' },
+1330:             user_id: { type: 'string' },
+1331:             username: { type: 'string' },
+1332:             handle: { type: 'string' },
+1333:             max_results: { type: 'number' },
+1334:             pagination_token: { type: 'string' },
+[READ_TRUNCATED] Use start_line:1335, num_lines:80 for the next chunk, or full:true only when needed.
+
+temp/tool-results/1783463108821-d21552c3-5992-4995-a7ef-4539af959bd4-read_files_batch.txt (165 lines) [window 81-160, truncated]:
+81: 1259:   // ── connector_list: always-available connector discovery tool ─────────────
+82: [READ_TRUNCATED] Use start_line:1260, num_lines:80 for the next chunk, or full:true only when needed.
+83: 
+84: repos/PromSRC-compare/src/gateway/tool-builder.ts (1657 lines) [window 900-979, truncated]:
+85: 900: const COMPOSITE_MANAGEMENT_TOOL_NAMES = new Set([
+86: 901:   'create_composite',
+87: 902:   'get_composite',
+88: 903:   'edit_composite',
+89: 904:   'delete_composite',
+90: 905:   'list_composites',
+91: 906: ]);
+92: 907: 
+93: 908: function isSavedCompositeToolName(name: string): boolean {
+94: 909:   try {
+95: 910:     return loadComposites().has(name);
+96: 911:   } catch {
+97: 912:     return false;
+98: 913:   }
+99: 914: }
+100: 915: 
+101: 916: export function getToolCategory(name: string): InternalToolCategory | null {
+102: 917:   // Keep these always available as core runtime tools.
+103: 918:   if (name === 'browser_send_to_telegram') return null;
+104: 919:   if (name === 'delivery_send' || name === 'delivery_send_screenshot') return null;
+105: 920:   if (name === 'connector_list') return null; // core tool — always available
+106: 921:   if (name === 'generate_image' || name === 'generate_video') return null;
+107: 922:   if (name === 'chat_with_subagent') return null; // core direct-chat tool for standalone subagents
+108: 923:   if (name === 'agent_run_ops') return null; // core run/recovery bridge for subagent autopilot
+109: 924:   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+110: 925:   if (name === 'save_site_shortcut') return 'browser_automation';
+111: 926:   if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test') return 'browser_automation';
+112: 927:   if (name.startsWith('browser_')) return 'browser_automation';
+113: 928:   if (name.startsWith('desktop_')) return 'desktop_automation';
+114: 929:   if (EXTERNAL_APP_WRAPPER_TOOL_NAMES.has(name)) return 'external_apps';
+115: 930:   if (name.startsWith('connector_')) return 'external_apps';
+116: 931:   if (name.startsWith('x_api_')) return 'external_apps';
+117: 932:   if (name.startsWith('mcp__')) return 'mcp_server_tools';
+118: 933:   if (name.startsWith('vercel_')) return 'integration_admin';
+119: 934:   if (TEAM_OPS_TOOL_NAMES.has(name)) return 'agents_and_teams';
+120: 935:   if (DEV_ONLY_SOURCE_READ_TOOL_NAMES.has(name)) return 'prometheus_source_read';
+121: 936:   if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'prometheus_source_write';
+122: 937:   if (COMMAND_RUNNER_TOOL_NAMES.has(name)) return 'workspace_write';
+123: 938:   if (FILE_OPS_TOOL_NAMES.has(name)) return 'workspace_write';
+124: 939:   if (MEMORY_TOOL_NAMES.has(name)) return 'advanced_memory';
+125: 940:   if (MEDIA_TOOL_NAMES.has(name)) return 'media_assets';
+126: 941:   if (CREATIVE_VIDEO_QA_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+127: 942:   if (HYPERFRAMES_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+128: 943:   if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+129: 944:   if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
+130: 945:   if (name.startsWith('skill_') && name !== 'skill_list' && name !== 'skill_read') return 'skills';
+131: 946:   if (SKILL_AUTHORING_TOOL_NAMES.has(name)) return 'skills';
+132: 947:   if (MODEL_MANAGEMENT_TOOL_NAMES.has(name)) return 'model_management';
+133: 948:   if (BUSINESS_TOOL_NAMES.has(name)) return 'business';
+134: 949:   if (name.startsWith('creative_')) return getCreativeToolCategory(name);
+135: 950:   if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
+136: 951:   if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';
+137: 952:   if (PROPOSAL_ADMIN_TOOL_NAMES.has(name)) return 'proposal_admin';
+138: 953:   if (COMPOSITE_MANAGEMENT_TOOL_NAMES.has(name) || isSavedCompositeToolName(name)) return 'composite_tools';
+139: 954:   return null; // null = core tool, always included
+140: 955: }
+141: 956: 
+142: 957: const TOOL_BUILD_CACHE_TTL_MS = 30_000;
+143: 958: const TOOL_BUILD_CACHE_MAX_ENTRIES = 64;
+144: 959: const INCLUDE_DIRECT_CONNECTOR_TOOL_SCHEMAS =
+145: 960:   String(process.env.PROMETHEUS_DIRECT_CONNECTOR_TOOL_SCHEMAS || '').trim() === '1';
+146: 961: const DYNAMIC_TOOL_SURFACE_CATEGORIES = new Set<string>([
+147: 962:   'mcp_server_tools',
+148: 963:   'composite_tools',
+149: 964: ]);
+150: 965: const toolBuildCache = new Map<string, { at: number; tools: any[] }>();
+151: 966: 
+152: 967: function stableCategoryKey(categories: Set<string>): string {
+153: 968:   return Array.from(categories).sort().join(',');
+154: 969: }
+155: 970: 
+156: 971: function trimToolBuildCache(): void {
+157: 972:   while (toolBuildCache.size > TOOL_BUILD_CACHE_MAX_ENTRIES) {
+158: 973:     const firstKey = toolBuildCache.keys().next().value;
+159: 974:     if (!firstKey) return;
+160: 975:     toolBuildCache.delete(firstKey);
+[READ_TRUNCATED] Use start_line:161, num_lines:80 for the next chunk, or full:true only when needed.
