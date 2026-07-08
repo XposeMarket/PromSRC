@@ -107,6 +107,11 @@
       "path": "references/workflows/browser-automation-playbook-2026-06-14.md",
       "type": "doc",
       "description": "Add workflow recipe to browser-automation-playbook"
+    },
+    {
+      "path": "references/session-hygiene-browser-close.md",
+      "type": "doc",
+      "description": "When to browser_close after automation; SOUL migration"
     }
   ]
 }

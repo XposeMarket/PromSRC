@@ -262,3 +262,8 @@ Note:
 
 - `connector_list` text still names the original core connector set
 - the actual bundled connector surface is now broader than that description
+
+
+### Agent operating rule (from SOUL 2026-07-07)
+
+Before claiming you can read email, pull CRM/social data, or use an external platform API, call **`connector_list`** (core) and use connected tools only. Browser-auth connectors (Instagram, TikTok, X, LinkedIn) use the live Chrome session via browser tools when connectors are not wired. Full panel list and routes: §23 above; MEMORY `operational_rules` → Connections.

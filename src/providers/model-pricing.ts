@@ -60,6 +60,7 @@ const BUILT_IN_RULES: PricingRule[] = [
   { provider: /^anthropic$/i, model: /haiku/i, input: 1.00, output: 5.00, cacheRead: 0.10, cacheWrite: 1.25 },
 
   { provider: /^xai$/i, model: /^(grok-build-0\.1|grok-code-fast)/i, input: 1.00, output: 2.00, cacheRead: 0.20 },
+  { provider: /^xai$/i, model: /^grok-4\.5/i, input: 2.00, output: 6.00, cacheRead: 0.20 },
   { provider: /^xai$/i, model: /^grok-4\.(?:3|20)|^grok-latest/i, input: 1.25, output: 2.50, cacheRead: 0.20 },
   { provider: /^xai$/i, model: /grok/i, input: 1.25, output: 2.50, cacheRead: 0.20 },
   { provider: /^gemini$/i, model: /flash|lite/i, input: 0.35, output: 1.05 },

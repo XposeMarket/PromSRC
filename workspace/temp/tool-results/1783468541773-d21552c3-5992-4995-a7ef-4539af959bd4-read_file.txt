@@ -1,0 +1,183 @@
+skills/x-browser-automation-playbook/SKILL.md (265 lines) [window 1-180, truncated]:
+1: # X (Twitter) Browser Automation Playbook
+2: 
+3: Use this file before doing work on X.com.
+4: 
+5: This skill covers the tested browser flows for interaction on X **and** the routing rule that plain X status URL retrieval should begin with `web_fetch`.
+6: 
+7: ---
+8: 
+9: ## Core Rules
+10: 
+11: - Chrome profile is persistent and is often already logged in, but do not assume auth. If X redirects to login, complete login first before any posting flow.
+12: - `browser_open`, `browser_fill`, `browser_wait`, and `browser_click` all return a fresh snapshot automatically. Do **not** call `browser_snapshot` immediately after any of them.
+13: - **Posting guardrail:** only use a posting path (`x_post`, `x_post_with_image`, `x_post_with_images`, manual composer fill, or submit-button click) when the user explicitly asked/confirmed that a real post should be published. If the user wants a draft only, do not use live-composer fill paths.
+14: - **Preferred posting path:** use the saved composite tools first — `x_post` for text-only posts, `x_post_with_image` for a single image, and `x_post_with_images` for multiple images. Only fall back to the manual browser path when the relevant composite is unavailable, incompatible with the requested flow, or the user explicitly wants direct browser control.
+15: - Never use `browser_navigate` — it does not exist. Use `browser_open`.
+16: - `browser_type` exists and is used for contenteditable/rich-text areas. For standard inputs, use `browser_fill`.
+17: - **For X post or thread URLs that the user wants to read/fetch, start with `web_fetch` and stop there unless the user explicitly asks for more.** Browser is for interaction; `web_fetch` is the default retrieval path for X URL content.
+18: - **For several X post/thread URLs, use `web_fetch_batch` first.** Treat each URL independently and open the browser only for interaction, auth-specific context, or failed/insufficient fetch output.
+19: - **For X posts with image attachment during posting, prefer clipboard-image paste on Windows:** `desktop_set_clipboard({ file_path: "<absolute-path>", mode: "image" })`, focus the composer, then `desktop_press_key("Ctrl+V")`.
+20: - **Speed rule:** prefer bulk or keyboard workflows over repeated click/snapshot loops.
+21: - **Snapshot rule:** only call `browser_snapshot()` when you need new @refs after text-only tools or when state is unclear.
+22: - **Composer warning:** on live X reply/post composers, `browser_fill` can act as a side-effectful post path rather than a safe draft step. Treat it as publish-capable. Use it only when posting is authorized.
+23: - **Scroll guard warning:** the automation layer can block repeated blind `browser_scroll(...)` calls until you interact with the page first. Do one real grounding action — for example click a tweet/composer/search box or focus a meaningful element — before manual scrolling. If the goal is collection rather than direct interaction, prefer `browser_scroll_collect(...)` over repeated single scroll calls.
+24: 
+25: ---
+26: 
+27: ## Fast Defaults (Use These First)
+28: 
+29: - **Read/fetch an X post URL:** `web_fetch({ url: "<x post url>" })`
+30: - **Read/fetch several X post URLs:** `web_fetch_batch({ urls: ["<x post url>", "..."] })`
+31: - **If `web_fetch` returned the content cleanly:** answer from it and stop
+32: - **Collection on X.com:** `browser_scroll_collect({ scrolls: 8-15, multiplier: 1.75, delay_ms: 1200-2000 })`
+33: - **Liking:** keyboard flow = `j` navigation + `browser_get_focused_item()` verification + `l` like
+34: - **Posting:** prefer `x_post` for text-only, `x_post_with_image` for one image, and `x_post_with_images` for multi-image posts; otherwise use the manual browser fallback below
+35: - **Bookmarks:** `browser_open("https://x.com/home")`, then either click **Bookmarks** in the left panel or use the shortcut sequence `g` then `b` with `browser_press_key("g")` followed by `browser_press_key("b")`
+36: - **Avoid waste:** no redundant snapshots between tools that already return one
+37: 
+38: ---
+39: 
+40: ## Routing Boundaries & Precedence
+41: 
+42: Use these routing rules to avoid overlap and mis-selection:
+43: 
+44: - **X-specific interactive/social actions → this skill.**
+45:   - Examples: compose/post tweets, like/reply/retweet/quote workflows, opening bookmarks, X feed interaction loops, X-specific keyboard shortcuts.
+46: - **Plain X status URL retrieval → start with `web_fetch`.**
+47:   - If `web_fetch` already returned the text/thread content, do not escalate further by default.
+48: - **Multiple plain X status URLs → start with `web_fetch_batch`.**
+49:   - Use browser only for URLs whose fetched result is empty, blocked, or where Raul asks for live interaction/context.
+50: - **Local or already-downloaded video understanding → `video-analysis-and-transcription`.**
+51:   - Examples: watch this saved clip, transcribe this downloaded MP4, summarize what happens in this X video after download.
+52: - **General browser workflows across non-X sites → `browser-automation-playbook`.**
+53: - **Static extraction/crawl/data collection tasks outside X → `web-scraper`.**
+54: 
+55: **Precedence order for ambiguous prompts:**
+56: 1. If the target is X.com user interaction (post/like/reply/retweet/quote/open bookmarks), use this skill.
+57: 2. If the target is an X post/thread URL and the user wants it fetched/read, run `web_fetch` first.
+58: 3. If the target file is already local and the real job is watch/transcribe/summarize, route to `video-analysis-and-transcription`.
+59: 4. If the task is generic browser automation on any site, use `browser-automation-playbook`.
+60: 5. If the task is extraction-first on non-X sites, use `web-scraper` unless explicit X interaction actions are requested.
+61: 
+62: ---
+63: 
+64: ## Playbook 1: Fetch an X Post or Thread via `web_fetch`
+65: 
+66: Use this when the user says things like **webfetch this**, **fetch this tweet**, **read this X post**, or **pull this thread**.
+67: 
+68: 1. Run `web_fetch({ url: "https://x.com/<user>/status/<id>" })`
+69: 2. Read the returned X-aware payload
+70: 3. Inspect fields like:
+71:    - `count`
+72:    - `tweets`
+73:    - post text
+74:    - author / handle / timestamps
+75:    - metrics if present
+76:    - media hints if present
+77: 4. If the returned payload already gives the text needed, answer from that directly without opening the browser
+78: 5. Stop there unless the user explicitly asks for download, analysis, or interaction
+79: 
+80: For several X URLs:
+81: 
+82: 1. Run `web_fetch_batch({ urls: ["https://x.com/<user>/status/<id>", "..."] })`
+83: 2. Read the per-URL result objects
+84: 3. Answer with one concise status/content block per URL
+85: 4. Escalate only the failed or insufficient URLs to browser, and only if the user needs more than the batch retrieved
+86: 
+87: ### Default rule
+88: 
+89: For a normal X URL fetch request, **`web_fetch` is the complete path**. For a list of X URLs, **`web_fetch_batch` is the complete first path**.
+90: 
+91: Do not turn it into a browser flow unless:
+92: - `web_fetch` failed or returned unusable output, or
+93: - the user asked for something beyond simple retrieval
+94: 
+95: ---
+96: 
+97: ## Playbook 2: Compose & Post a Tweet
+98: 
+99: ### Preferred composite-first path
+100: 
+101: Choose the posting tool by payload before reaching for manual browser automation:
+102: 
+103: 1. **Text-only post:** run `x_post({ post_text: "your tweet text" })`
+104: 2. **Single-image post:** run `x_post_with_image({ post_text: "your tweet text", image_path: "<workspace path>" })`
+105: 3. **Multi-image post:** run `x_post_with_images({ post_text: "your tweet text", image_paths: "[\"path1\",\"path2\"]" })`
+106: 4. Confirm the composite completed without auth, upload, or element-ref errors
+107: 5. If needed, verify the posted state afterward
+108: 
+109: **Why this is preferred:** these saved X composites are the default stable path for posting and should be used before opening X manually. They already encode the verified posting workflow and reduce unnecessary browser steering.
+110: 
+111: ### Manual browser path when the relevant composite is unavailable or the user wants direct browser control
+112: 
+113: 1. `browser_open("https://x.com/home")`
+114: 2. Find the inline composer textbox (preferred) or use `n` only if the user specifically wants modal composer
+115: 3. Only target an element explicitly marked `[INPUT]` for `browser_fill`. Ignore nearby decorative `div`s such as visible “What’s happening?” prompt text.
+116: 4. If the composer is a standard `[INPUT]`, use `browser_fill(<composer_ref>, "your tweet text")`; if it is contenteditable, click it first then use `browser_type("your tweet text")`
+117: 5. If a submit button is still present in the refreshed snapshot, click it immediately
+118: 6. `browser_wait(1500-2500)` and confirm posted state
+119: 
+120: **Important:** on some live X composer states, `browser_fill` can itself complete the publish flow. Do **not** use this path for drafts. Use it only when the user explicitly wants to post.
+121: 
+122: ### Image attachment guidance
+123: 
+124: - For **one image**, prefer `x_post_with_image`
+125: - For **multiple images**, prefer `x_post_with_images`
+126: - Use the manual clipboard/upload/browser flow only as a fallback when the composite path cannot satisfy the request
+127: 
+128: Fallback-only manual image path:
+129: 1. Ensure the target image already exists locally
+130: 2. `desktop_set_clipboard({ file_path: "<absolute-path>", mode: "image" })`
+131: 3. Open/focus the X composer
+132: 4. `desktop_press_key("Ctrl+V")`
+133: 5. Wait for the attachment preview to appear before submitting
+134: 6. Then post normally
+135: 
+136: Do not assume generic file-drop clipboard payloads work on X. Native image clipboard data is the intended fallback path.
+137: 
+138: **Char limit:** Keep tweets under 280 characters. Count before filling.
+139: 
+140: ---
+141: 
+142: ## Playbook 3: Search & Collect Tweets (Bulk Fast Mode)
+143: 
+144: Use `browser_scroll_collect` for bulk tweet collection — one call replaces many scroll/snapshot round-trips.
+145: 
+146: 1. `browser_open("https://x.com/search?q=<encoded_query>&f=live")`
+147: 2. Optional quick read of initial visible tweets
+148: 3. `browser_scroll_collect({ scrolls: 10, direction: "down", multiplier: 1.75, delay_ms: 1500, max_chars: 50000 })`
+149: 4. Parse returned text for tweet content, authors, timestamps, engagement counts
+150: 
+151: **Tuning guidance:**
+152: - Need speed: reduce to `scrolls: 8`, `delay_ms: 1200`
+153: - Need depth: increase to `scrolls: 15`, `delay_ms: 2000`
+154: 
+155: **Key points:**
+156: - `browser_scroll_collect` returns raw text, **not** a DOM snapshot. If you need to interact afterward, call `browser_snapshot()` once to restore @refs.
+157: - If manual `browser_scroll(...)` is blocked before any page interaction, click or focus a meaningful X surface first (tweet card, search box, composer, or another real element), then retry. Do not sit in a blind-scroll loop.
+158: - If per-scroll new chars trend to 0, the feed segment is exhausted.
+159: 
+160: **Good search query patterns:**
+161: - `(<brand keyword> OR <competitor keyword>) -from:<your_handle>`
+162: - `("<brand phrase>" OR "<category phrase>") -from:<your_handle>`
+163: - `"<category keyword>" automation -from:<your_handle>`
+164: 
+165: ---
+166: 
+167: ## Playbook 4: Like Tweets from Search Results (Keyboard Fast Mode)
+168: 
+169: Use this mode when liking multiple tweets quickly and safely.
+170: 
+171: 1. `browser_open("https://x.com/search?q=<encoded_query>&f=live")`
+172: 2. Press `j` to move focus to next tweet candidate
+173: 3. Call `browser_get_focused_item()` to verify author/text relevance and avoid ads or pinned noise
+174: 4. Press `l` via `browser_press_key("l")` to like focused tweet
+175: 5. Repeat steps 2–4 until target count reached (typically 5–10/run)
+176: 6. Every few likes, or if unsure, call `browser_get_focused_item()` again for validation
+177: 
+178: **Notes:**
+179: - This is faster and more stable than hunting Like buttons with repeated @ref click cycles.
+180: - Skip duplicates/non-target tweets by pressing `j` again without liking.
+[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.
+[READ_TRUNCATED] Returned 180 of 265 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

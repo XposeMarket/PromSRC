@@ -11062,16 +11062,13 @@ body.pm-mobile-active #settings-save-btn {
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  border: 1px solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
+  border: none;
+  outline: none;
   border-radius: 10px;
   background:
     linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.01) 52%, rgba(234,106,31,.018));
   backdrop-filter: blur(var(--pm-lg-header-blur, 1.5px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 1.5px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
-  box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.42),
-    0 6px 16px rgba(40,28,16,.16),
-    0 1px 4px rgba(40,28,16,.08);
   color: var(--pm-text);
   font: inherit;
   font-size: 14px;
@@ -11091,9 +11088,9 @@ body.pm-mobile-active #settings-save-btn {
   inset: 0;
   border-radius: 10px;
   pointer-events: none;
-  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-border-alpha, .11));
+  border: none;
   mix-blend-mode: soft-light;
-  opacity: var(--pm-lg-border-opacity, .25);
+  opacity: 0;
 }
 
 .pm-chat-settings-menu-item:not(:last-child) {
@@ -11104,13 +11101,12 @@ body.pm-mobile-active #settings-save-btn {
 .pm-chat-settings-menu-item:hover {
   background:
     linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.03) 52%, rgba(234,106,31,.03));
-  border-color: var(--pm-border);
 }
 
 .pm-chat-settings-menu-item:focus-visible {
-  outline: 2px solid rgba(234,106,31,.35);
-  outline-offset: 1px;
+  outline: none;
 }
+
 @keyframes pm-chat-settings-popover {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }

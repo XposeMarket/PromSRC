@@ -11,6 +11,7 @@ This skill covers the tested browser flows for interaction on X **and** the rout
 - Chrome profile is persistent and is often already logged in, but do not assume auth. If X redirects to login, complete login first before any posting flow.
 - `browser_open`, `browser_fill`, `browser_wait`, and `browser_click` all return a fresh snapshot automatically. Do **not** call `browser_snapshot` immediately after any of them.
 - **Posting guardrail:** only use a posting path (`x_post`, `x_post_with_image`, `x_post_with_images`, manual composer fill, or submit-button click) when the user explicitly asked/confirmed that a real post should be published. If the user wants a draft only, do not use live-composer fill paths.
+- **Scheduled X jobs (Mara):** cron, composer refs (`tweetTextarea_0`, `tweetButtonInline`), `schedule.cron` — **references/scheduled-x-jobs-and-composer.md**. Copy: **references/no-em-dash-x-copy.md**.
 - **Preferred posting path:** use the saved composite tools first — `x_post` for text-only posts, `x_post_with_image` for a single image, and `x_post_with_images` for multiple images. Only fall back to the manual browser path when the relevant composite is unavailable, incompatible with the requested flow, or the user explicitly wants direct browser control.
 - Never use `browser_navigate` — it does not exist. Use `browser_open`.
 - `browser_type` exists and is used for contenteditable/rich-text areas. For standard inputs, use `browser_fill`.

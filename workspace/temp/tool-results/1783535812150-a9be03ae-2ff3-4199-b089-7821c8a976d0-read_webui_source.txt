@@ -1,0 +1,613 @@
+web-ui/src/mobile/mobile-model-badge.js (612 lines) [window 1-612]:
+1: // mobile-model-badge.js — interactive header model badge for Prometheus Mobile.
+2: //
+3: // The header used to show a static "Online" pill. It now shows the *current
+4: // main-chat model* (truncated to a friendly short name) while keeping the same
+5: // green/red gateway online/offline dot.
+6: //
+7: //   • TAP            → reasoning / thinking-level sheet for the ACTIVE provider
+8: //                      (mirrors the desktop composer reasoning controls).
+9: //   • PRESS-AND-HOLD → haptic buzz + quick provider→model switch sheet, limited
+10: //                      to providers the user actually has saved credentials for.
+11: //
+12: // Haptics: iOS Safari has no Web Vibration API. The working trick (per the
+13: // 2026 iOS 26.5 discussion) is a *native* `<input type="checkbox" switch>`:
+14: // a real tap that toggles it emits a system haptic. We embed one, invisibly,
+15: // inside every badge so the physical touch buzzes natively, and we also fire
+16: // `navigator.vibrate` (Android) + a programmatic toggle at the long-press
+17: // threshold as best-effort. All paths degrade silently.
+18: 
+19: import { mobileGatewayFetch } from './mobile-api.js';
+20: 
+21: // ── Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ──
+22: const BUILTIN_LABELS = {
+23:   ollama: 'Ollama (local)',
+24:   llama_cpp: 'llama.cpp (local)',
+25:   lm_studio: 'LM Studio (local)',
+26:   openai: 'OpenAI',
+27:   openai_codex: 'OpenAI Codex',
+28:   anthropic: 'Anthropic Claude',
+29:   perplexity: 'Perplexity',
+30:   gemini: 'Google Gemini',
+31:   xai: 'xAI Grok',
+32: };
+33: 
+34: const BUILTIN_STATIC_MODELS = {
+35:   openai: ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+36:   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+37:   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+38:   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+39:   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
+40:   xai: ['grok-build-0.1', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-4.5', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent'],
+41: };
+42: 
+43: // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
+44: const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
+45: const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
+46: const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+47: const PERPLEXITY_EFFORT_OPTIONS = ['', 'low', 'medium', 'high'];
+48: const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
+49: const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
+50: const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+51: 
+52: // ── Caches ───────────────────────────────────────────────────────────────────
+53: let _llmCache = null;            // full llm config { provider, providers }
+54: let _catalogCache = null;        // [{ id, name, runtime, ... }]
+55: let _credentialedIds = null;     // [providerId, ...]
+56: 
+57: function _esc(s) {
+58:   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+59:     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+60:   ));
+61: }
+62: 
+63: // ── Friendly model-name truncation ───────────────────────────────────────────
+64: // claude-haiku-4-5-20251001 → "Claude Haiku 4.5"
+65: // gpt-5.5 → "GPT 5.5"   ·   grok-4.20-reasoning → "Grok 4.20"
+66: export function prettifyModelName(model, provider) {
+67:   const raw = String(model || '').trim();
+68:   const providerId = String(provider || '').trim().toLowerCase();
+69:   if (!raw) return _providerLabel(providerId) || 'Model';
+70:   let s = raw.toLowerCase();
+71:   // Drop date stamps like -20251001 / 20250514.
+72:   s = s.replace(/-?20\d{6}\b/g, '');
+73:   // Drop trailing qualifier words that add noise on a tiny badge.
+74:   s = s.replace(/-(reasoning|non-reasoning|latest|preview|exp|instruct|thinking|online)\b/g, '');
+75:   s = s.replace(/-\d{4}\b/g, '');
+76:   // Strip the redundant "claude-" family prefix (anthropic).
+77:   s = s.replace(/^claude-/, '');
+78:   // Version dashes between digits become dots: 4-5 → 4.5.
+79:   s = s.replace(/(\d)-(\d)/g, '$1.$2');
+80:   // Remaining separators → spaces.
+81:   s = s.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+82:   if (!s) s = raw;
+83: 
+84:   if (/^gpt\b/.test(s)) {
+85:     s = s.replace(/^gpt\b/i, 'GPT');
+86:   } else if (/^o\d\b/.test(s)) {
+87:     s = s.toUpperCase();
+88:   } else if (providerId === 'anthropic' || /^(opus|sonnet|haiku)\b/.test(s)) {
+89:     s = s.replace(/^(opus|sonnet|haiku)\b/i, 'Claude $1');
+90:   } else if (providerId === 'gemini' || /^gemini\b/.test(s)) {
+91:     s = s.replace(/^gemini\b/i, 'Gemini');
+92:   } else if (providerId === 'xai' || /^grok\b/.test(s)) {
+93:     s = s.replace(/^grok\b/i, 'Grok');
+94:   } else if (providerId === 'perplexity' || /^sonar\b/.test(s)) {
+95:     s = s.replace(/^sonar\b/i, 'Sonar');
+96:   } else {
+97:     s = s.replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
+98:   }
+99: 
+100:   s = s.replace(/\bmini\b/gi, 'mini')
+101:     .replace(/\b(Pro|Flash|Lite|Build|Codex|Max|Haiku|Opus|Sonnet|Deep|Research|Multi|Agent)\b/gi, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+102:     .replace(/\s+/g, ' ')
+103:     .trim();
+104:   if (s.length > 24) s = s.slice(0, 23).trim() + '…';
+105:   return s;
+106: }
+107: 
+108: // ── Haptic feedback ──────────────────────────────────────────────────────────
+109: function _ensureHapticSwitch() {
+110:   let sw = document.getElementById('pm-haptic-switch');
+111:   if (!sw) {
+112:     sw = document.createElement('input');
+113:     sw.type = 'checkbox';
+114:     sw.setAttribute('switch', '');     // iOS native switch styling = haptic on toggle
+115:     sw.id = 'pm-haptic-switch';
+116:     sw.setAttribute('aria-hidden', 'true');
+117:     sw.tabIndex = -1;
+118:     sw.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+119:     document.body.appendChild(sw);
+120:   }
+121:   return sw;
+122: }
+123: 
+124: export function pmHaptic(strength = 12) {
+125:   try { if (navigator.vibrate) navigator.vibrate(strength); } catch {}
+126:   // Programmatic toggle of a native iOS switch — best-effort earlier buzz.
+127:   try { const sw = _ensureHapticSwitch(); sw.checked = !sw.checked; } catch {}
+128: }
+129: 
+130: // Give an arbitrary button the same real iOS haptic the model badge has: a native
+131: // `<input switch>` overlay sits on top of the button so the user's physical tap
+132: // toggles it (system haptic), then we forward the activation to the real control.
+133: // The overlay is a sibling (inside a wrapper) — not a child — so it survives the
+134: // button's innerHTML being rewritten (the send button morphs send↔voice↔abort).
+135: export function attachMobileButtonHaptic(btn, activate) {
+136:   if (!btn || btn.dataset.pmHaptic === '1') return;
+137:   btn.dataset.pmHaptic = '1';
+138:   let host = btn.parentElement;
+139:   if (!host || !host.classList.contains('pm-haptic-host')) {
+140:     host = document.createElement('span');
+141:     host.className = 'pm-haptic-host';
+142:     btn.parentNode.insertBefore(host, btn);
+143:     host.appendChild(btn);
+144:   }
+145:   const sw = document.createElement('input');
+146:   sw.type = 'checkbox';
+147:   sw.setAttribute('switch', '');
+148:   sw.className = 'pm-haptic-switch-overlay';
+149:   sw.setAttribute('aria-hidden', 'true');
+150:   sw.tabIndex = -1;
+151:   host.appendChild(sw);
+152:   sw.addEventListener('click', () => {
+153:     pmHaptic(10);
+154:     try { typeof activate === 'function' ? activate() : btn.click(); } catch {}
+155:   });
+156: }
+157: 
+158: // ── Data loaders ─────────────────────────────────────────────────────────────
+159: async function _loadLlm(force) {
+160:   if (_llmCache && !force) return _llmCache;
+161:   try {
+162:     const d = await mobileGatewayFetch('/api/settings/provider');
+163:     _llmCache = d?.llm || { provider: 'ollama', providers: {} };
+164:   } catch {
+165:     _llmCache = _llmCache || { provider: 'ollama', providers: {} };
+166:   }
+167:   return _llmCache;
+168: }
+169: 
+170: async function _loadCatalog(force) {
+171:   if (_catalogCache && !force) return _catalogCache;
+172:   try {
+173:     const d = await mobileGatewayFetch('/api/extensions/catalog?kind=provider');
+174:     _catalogCache = Array.isArray(d?.items) ? d.items : [];
+175:   } catch {
+176:     _catalogCache = Object.keys(BUILTIN_LABELS).map((id) => ({ id, name: BUILTIN_LABELS[id], runtime: {} }));
+177:   }
+178:   return _catalogCache;
+179: }
+180: 
+181: async function _loadCredentialedIds(force) {
+182:   if (_credentialedIds && !force) return _credentialedIds;
+183:   try {
+184:     const d = await mobileGatewayFetch('/api/settings/credentialed-model-providers');
+185:     _credentialedIds = Array.isArray(d?.providers) ? d.providers.map(String) : [];
+186:   } catch {
+187:     _credentialedIds = [];
+188:   }
+189:   return _credentialedIds;
+190: }
+191: 
+192: function _providerLabel(id) {
+193:   const item = (_catalogCache || []).find((p) => p.id === id);
+194:   return item?.name || BUILTIN_LABELS[id] || id;
+195: }
+196: 
+197: function _modelsForProvider(provider) {
+198:   const item = (_catalogCache || []).find((p) => p.id === provider);
+199:   const out = [];
+200:   const push = (arr) => { if (Array.isArray(arr)) for (const m of arr) { const s = String(m?.name || m || '').trim(); if (s && !out.includes(s)) out.push(s); } };
+201:   push(item?.runtime?.options?.staticModels);
+202:   push(BUILTIN_STATIC_MODELS[provider]);
+203:   const def = item?.config?.defaults?.model;
+204:   if (def && !out.includes(String(def))) out.unshift(String(def));
+205:   return out;
+206: }
+207: 
+208: function _activeModel(llm) {
+209:   const provider = String(llm?.provider || 'ollama');
+210:   const model = String(llm?.providers?.[provider]?.model || '');
+211:   return { provider, model };
+212: }
+213: 
+214: function _modelDetail(detail = {}) {
+215:   const modelRef = String(detail?.modelRef || '').trim();
+216:   const slashIdx = modelRef.indexOf('/');
+217:   const provider = String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim();
+218:   const model = String(detail?.model || (slashIdx > 0 ? modelRef.slice(slashIdx + 1) : modelRef) || '').trim();
+219:   return { provider, model };
+220: }
+221: 
+222: function _setBadgeLabel(label) {
+223:   const safe = String(label || '').trim() || 'Online';
+224:   window.__pmModelBadgeLabel = safe;
+225:   document.querySelectorAll('.pm-model-badge .pm-model-badge-label').forEach((el) => {
+226:     el.textContent = safe;
+227:   });
+228:   return safe;
+229: }
+230: 
+231: // ── Badge label refresh ──────────────────────────────────────────────────────
+232: export async function refreshMobileModelBadge(force = false, modelChangeDetail = null) {
+233:   const eventModel = _modelDetail(modelChangeDetail || {});
+234:   if (eventModel.model || eventModel.provider) {
+235:     const label = _setBadgeLabel(prettifyModelName(eventModel.model, eventModel.provider));
+236:     // switch_model is turn-scoped and does not mutate /api/settings/provider, so
+237:     // keep the streamed active-model label instead of overwriting it from config.
+238:     if (String(modelChangeDetail?.sourceEventType || '') === 'model_switched') {
+239:       _llmCache = null;
+240:       return label;
+241:     }
+242:   }
+243:   const llm = await _loadLlm(force);
+244:   const { provider, model } = _activeModel(llm);
+245:   return _setBadgeLabel(prettifyModelName(model, provider));
+246: }
+247: 
+248: // Seed text used by renderMobileHeader so the badge isn't empty on first paint.
+249: export function mobileModelBadgeSeedLabel() {
+250:   return window.__pmModelBadgeLabel || 'Online';
+251: }
+252: 
+253: // ── Model popover plumbing ────────────────────────────────────────────────────
+254: function _closeSheet() {
+255:   const scrim = document.getElementById('pm-msheet-scrim');
+256:   const sheet = document.getElementById('pm-msheet');
+257:   sheet?.__pmModelSheetCleanup?.();
+258:   if (scrim) scrim.classList.remove('open');
+259:   if (sheet) sheet.classList.remove('open');
+260:   setTimeout(() => {
+261:     if (scrim) scrim.remove();
+262:     if (sheet) sheet.remove();
+263:   }, 220);
+264: }
+265: 
+266: function _positionSheetNearBadge(sheet) {
+267:   if (!sheet) return;
+268:   const margin = 10;
+269:   const badge = document.querySelector('.pm-model-badge');
+270:   const rect = badge?.getBoundingClientRect?.();
+271:   const width = Math.min(360, Math.max(280, window.innerWidth - margin * 2));
+272:   const center = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+273:   const left = Math.max(margin, Math.min(window.innerWidth - width - margin, center - width / 2));
+274:   const preferredTop = rect ? rect.bottom + 10 : Math.max(70, Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 70);
+275:   const top = Math.max(margin, Math.min(preferredTop, window.innerHeight - 260));
+276:   const maxHeight = Math.max(240, window.innerHeight - top - margin);
+277:   sheet.style.setProperty('--pm-msheet-left', `${left}px`);
+278:   sheet.style.setProperty('--pm-msheet-top', `${top}px`);
+279:   sheet.style.setProperty('--pm-msheet-width', `${width}px`);
+280:   sheet.style.setProperty('--pm-msheet-max-height', `${maxHeight}px`);
+281: }
+282: 
+283: function _openSheet(titleHtml, bodyHtml) {
+284:   _closeSheetImmediate();
+285:   const scrim = document.createElement('div');
+286:   scrim.id = 'pm-msheet-scrim';
+287:   scrim.className = 'pm-msheet-scrim';
+288:   const sheet = document.createElement('div');
+289:   sheet.id = 'pm-msheet';
+290:   sheet.className = 'pm-msheet';
+291:   sheet.setAttribute('role', 'dialog');
+292:   sheet.setAttribute('aria-modal', 'true');
+293:   sheet.innerHTML = `
+294:     <div class="pm-msheet-handle"></div>
+295:     <div class="pm-msheet-head">
+296:       <div class="pm-msheet-title">${titleHtml}</div>
+297:       <button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>
+298:     </div>
+299:     <div class="pm-msheet-body" id="pm-msheet-body">${bodyHtml}</div>
+300:   `;
+301:   document.body.appendChild(scrim);
+302:   document.body.appendChild(sheet);
+303:   _positionSheetNearBadge(sheet);
+304:   const reposition = () => _positionSheetNearBadge(sheet);
+305:   requestAnimationFrame(() => { scrim.classList.add('open'); sheet.classList.add('open'); });
+306:   scrim.addEventListener('click', _closeSheet);
+307:   sheet.querySelector('.pm-msheet-close')?.addEventListener('click', _closeSheet);
+308:   sheet.addEventListener('selectstart', (event) => {
+309:     event.preventDefault();
+310:     event.stopPropagation();
+311:   }, true);
+312:   sheet.addEventListener('contextmenu', (event) => {
+313:     event.preventDefault();
+314:     event.stopPropagation();
+315:   }, true);
+316:   window.addEventListener('resize', reposition, { passive: true });
+317:   window.visualViewport?.addEventListener?.('resize', reposition, { passive: true });
+318:   sheet.__pmModelSheetCleanup = () => {
+319:     window.removeEventListener('resize', reposition);
+320:     window.visualViewport?.removeEventListener?.('resize', reposition);
+321:   };
+322:   return sheet;
+323: }
+324: 
+325: function _closeSheetImmediate() {
+326:   document.getElementById('pm-msheet')?.__pmModelSheetCleanup?.();
+327:   document.getElementById('pm-msheet-scrim')?.remove();
+328:   document.getElementById('pm-msheet')?.remove();
+329: }
+330: 
+331: function _setSheetBody(html) {
+332:   const body = document.getElementById('pm-msheet-body');
+333:   if (body) body.innerHTML = html;
+334:   return body;
+335: }
+336: 
+337: function _setSheetTitle(html) {
+338:   const t = document.querySelector('#pm-msheet .pm-msheet-title');
+339:   if (t) t.innerHTML = html;
+340: }
+341: 
+342: function _toast(msg, kind) {
+343:   try { window.pmToast ? window.pmToast(msg, kind) : null; } catch {}
+344: }
+345: 
+346: // ── TAP: reasoning / thinking sheet for the active provider ──────────────────
+347: async function _openReasoningSheet() {
+348:   _openSheet('Reasoning', '<div class="pm-msheet-loading">Loading…</div>');
+349:   const llm = await _loadLlm(true);
+350:   const { provider } = _activeModel(llm);
+351:   const cfg = (llm.providers || {})[provider] || {};
+352:   _renderReasoningBody(provider, cfg);
+353: }
+354: 
+355: function _renderReasoningBody(provider, cfg) {
+356:   _setSheetTitle(`Reasoning · <span class="pm-msheet-sub">${_esc(_providerLabel(provider))}</span>`);
+357: 
+358:   let options = null;
+359:   if (provider === 'openai') options = EFFORT_OPTIONS;
+360:   else if (provider === 'openai_codex') options = CODEX_EFFORT_OPTIONS;
+361:   else if (provider === 'perplexity') options = PERPLEXITY_EFFORT_OPTIONS;
+362:   else if (provider === 'xai') {
+363:     const model = String(cfg.model || '').trim();
+364:     options = /^grok-4\.20-multi-agent(?:-|$)/i.test(model) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS;
+365:   }
+366:   else if (provider === 'anthropic') options = ANTHROPIC_EFFORT_OPTIONS;
+367: 
+368:   if (!options) {
+369:     _setSheetBody(`<div class="pm-msheet-empty">${_esc(_providerLabel(provider))} has no adjustable reasoning levels.</div>`);
+370:     return;
+371:   }
+372: 
+373:   const current = String(cfg.reasoning_effort || '').trim();
+374:   const labelFor = (v) => {
+375:     if (!v) return (provider === 'anthropic' || provider === 'xai') ? 'Provider default' : 'None';
+376:     if (v === 'xhigh') return 'Extra high';
+377:     return v.charAt(0).toUpperCase() + v.slice(1);
+378:   };
+379:   const rows = options.map((v) => `
+380:     <button type="button" class="pm-msheet-row" data-effort="${_esc(v)}">
+381:       <span class="pm-msheet-row-label">${_esc(labelFor(v))}</span>
+382:       ${v === current ? '<span class="pm-msheet-check">✓</span>' : ''}
+383:     </button>`).join('');
+384: 
+385:   const anthropicToggle = provider === 'anthropic'
+386:     ? `<label class="pm-msheet-toggle">
+387:          <span>Extended thinking</span>
+388:          <input type="checkbox" id="pm-msheet-extthink" ${cfg.extended_thinking === true ? 'checked' : ''} />
+389:        </label>
+390:        <label class="pm-msheet-toggle">
+391:          <span>Fast mode<br><span class="pm-msheet-toggle-hint">Faster output · Opus 4.6/4.7/4.8</span></span>
+392:          <input type="checkbox" id="pm-msheet-fastmode" ${cfg.fast_mode === true ? 'checked' : ''} />
+393:        </label>`
+394:     : '';
+395: 
+396:   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>${anthropicToggle}`);
+397:   if (!body) return;
+398: 
+399:   body.querySelectorAll('[data-effort]').forEach((btn) => {
+400:     btn.addEventListener('click', async () => {
+401:       const effort = btn.getAttribute('data-effort') || '';
+402:       const extEl = document.getElementById('pm-msheet-extthink');
+403:       const fastEl = document.getElementById('pm-msheet-fastmode');
+404:       await _saveReasoning(provider, {
+405:         reasoning_effort: effort,
+406:         ...(provider === 'anthropic' ? {
+407:           extended_thinking: !!(extEl && extEl.checked),
+408:           fast_mode: !!(fastEl && fastEl.checked),
+409:         } : {}),
+410:       });
+411:     });
+412:   });
+413:   document.getElementById('pm-msheet-extthink')?.addEventListener('change', async (e) => {
+414:     await _saveReasoning(provider, { extended_thinking: !!e.target.checked }, { keepOpen: true });
+415:   });
+416:   document.getElementById('pm-msheet-fastmode')?.addEventListener('change', async (e) => {
+417:     await _saveReasoning(provider, { fast_mode: !!e.target.checked }, { keepOpen: true });
+418:   });
+419: }
+420: 
+421: async function _saveReasoning(provider, patch, { keepOpen = false } = {}) {
+422:   try {
+423:     const llm = await _loadLlm(true);
+424:     const existing = (llm.providers || {})[provider] || {};
+425:     const merged = { ...existing, ...patch };
+426:     if (merged.reasoning_effort === '') delete merged.reasoning_effort;
+427:     await mobileGatewayFetch('/api/settings/provider', {
+428:       method: 'POST',
+429:       body: JSON.stringify({ llm: { provider, providers: { [provider]: merged } } }),
+430:     });
+431:     await _loadLlm(true);
+432:     _toast('Reasoning updated', 'success');
+433:     if (!keepOpen) _closeSheet();
+434:     else {
+435:       const fresh = (_llmCache.providers || {})[provider] || {};
+436:       _renderReasoningBody(provider, fresh);
+437:     }
+438:   } catch (err) {
+439:     _toast(err?.message || 'Could not save reasoning', 'error');
+440:   }
+441: }
+442: 
+443: // ── HOLD: provider → model switch sheet ──────────────────────────────────────
+444: async function _openSwitchSheet() {
+445:   _openSheet('Switch model', '<div class="pm-msheet-loading">Loading providers…</div>');
+446:   await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
+447:   _renderProviderList();
+448: }
+449: 
+450: function _renderProviderList() {
+451:   _setSheetTitle('Switch model');
+452:   const { provider: activeProvider } = _activeModel(_llmCache);
+453:   const ids = (_credentialedIds || []).slice();
+454:   // Keep a stable, builtin-first ordering.
+455:   const order = Object.keys(BUILTIN_LABELS);
+456:   ids.sort((a, b) => {
+457:     const ia = order.indexOf(a); const ib = order.indexOf(b);
+458:     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+459:   });
+460: 
+461:   if (!ids.length) {
+462:     _setSheetBody('<div class="pm-msheet-empty">No providers with saved credentials. Add an API key or connect a provider in Settings.</div>');
+463:     return;
+464:   }
+465: 
+466:   const rows = ids.map((id) => `
+467:     <button type="button" class="pm-msheet-row" data-provider="${_esc(id)}">
+468:       <span class="pm-msheet-row-label">${_esc(_providerLabel(id))}</span>
+469:       ${id === activeProvider ? '<span class="pm-msheet-dot" title="Current"></span>' : ''}
+470:       <span class="pm-msheet-chev">›</span>
+471:     </button>`).join('');
+472:   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+473:   if (!body) return;
+474:   body.querySelectorAll('[data-provider]').forEach((btn) => {
+475:     btn.addEventListener('click', () => _renderModelList(btn.getAttribute('data-provider')));
+476:   });
+477: }
+478: 
+479: function _renderModelList(provider) {
+480:   const { provider: activeProvider, model: activeModel } = _activeModel(_llmCache);
+481:   _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> ${_esc(_providerLabel(provider))}`);
+482:   const models = _modelsForProvider(provider);
+483: 
+484:   let rows = models.map((m) => {
+485:     const isActive = provider === activeProvider && m === activeModel;
+486:     return `<button type="button" class="pm-msheet-row" data-model="${_esc(m)}">
+487:       <span class="pm-msheet-row-label">${_esc(prettifyModelName(m, provider))}</span>
+488:       ${isActive ? '<span class="pm-msheet-check">✓</span>' : ''}
+489:     </button>`;
+490:   }).join('');
+491:   if (!models.length) {
+492:     rows = '<div class="pm-msheet-empty">No known models — fetch them from Settings ▸ Models.</div>';
+493:   }
+494:   const body = _setSheetBody(`<div class="pm-msheet-rows pm-msheet-model-rows">${rows}</div>`);
+495:   document.getElementById('pm-msheet-back')?.addEventListener('click', _renderProviderList);
+496:   if (!body) return;
+497:   body.querySelectorAll('[data-model]').forEach((btn) => {
+498:     btn.addEventListener('click', () => _switchModel(provider, btn.getAttribute('data-model')));
+499:   });
+500: }
+501: 
+502: async function _switchModel(provider, model) {
+503:   if (!provider || !model) return;
+504:   try {
+505:     await mobileGatewayFetch('/api/settings/model', {
+506:       method: 'POST',
+507:       body: JSON.stringify({ provider, model }),
+508:     });
+509:     _llmCache = null; // force refresh
+510:     _toast(`Model → ${prettifyModelName(model, provider)}`, 'success');
+511:     _closeSheet();
+512:     await refreshMobileModelBadge(true);
+513:     try { window.dispatchEvent(new CustomEvent('pm-model-changed', { detail: { provider, model } })); } catch {}
+514:   } catch (err) {
+515:     _toast(err?.message || 'Could not switch model', 'error');
+516:   }
+517: }
+518: 
+519: // ── Press / long-press gesture wiring (delegated, attached once) ─────────────
+520: let _wired = false;
+521: const LONG_PRESS_MS = 480;
+522: const MOVE_CANCEL_PX = 12;
+523: 
+524: export function initMobileModelBadge() {
+525:   if (_wired) return;
+526:   _wired = true;
+527: 
+528:   let pressTimer = null;
+529:   let longFired = false;
+530:   let startX = 0;
+531:   let startY = 0;
+532:   let pressBadge = null;
+533:   let suppressNextClick = false;
+534: 
+535:   const findBadge = (target) => (target?.closest ? target.closest('.pm-model-badge') : null);
+536:   const setSuppressNativeSelection = (on) => {
+537:     document.documentElement.classList.toggle('pm-model-badge-pressing', !!on);
+538:     document.body?.classList?.toggle('pm-model-badge-pressing', !!on);
+539:   };
+540: 
+541:   document.addEventListener('pointerdown', (e) => {
+542:     const badge = findBadge(e.target);
+543:     if (!badge) return;
+544:     e.preventDefault();
+545:     longFired = false;
+546:     pressBadge = badge;
+547:     setSuppressNativeSelection(true);
+548:     startX = e.clientX; startY = e.clientY;
+549:     if (pressTimer) clearTimeout(pressTimer);
+550:     pressTimer = setTimeout(() => {
+551:       pressTimer = null;
+552:       longFired = true;
+553:       pmHaptic(18);
+554:       _openSwitchSheet();
+555:     }, LONG_PRESS_MS);
+556:   });
+557: 
+558:   document.addEventListener('pointermove', (e) => {
+559:     if (!pressTimer) return;
+560:     if (Math.abs(e.clientX - startX) > MOVE_CANCEL_PX || Math.abs(e.clientY - startY) > MOVE_CANCEL_PX) {
+561:       clearTimeout(pressTimer); pressTimer = null; pressBadge = null; setSuppressNativeSelection(false);
+562:     }
+563:   });
+564: 
+565:   const cancel = () => {
+566:     if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+567:     pressBadge = null;
+568:     setSuppressNativeSelection(false);
+569:   };
+570:   document.addEventListener('pointerup', (e) => {
+571:     const badge = pressBadge;
+572:     const wasLong = longFired;
+573:     const moved = Math.abs(e.clientX - startX) > MOVE_CANCEL_PX || Math.abs(e.clientY - startY) > MOVE_CANCEL_PX;
+574:     cancel();
+575:     if (badge && !wasLong && !moved) {
+576:       suppressNextClick = true;
+577:       _openReasoningSheet();
+578:       setTimeout(() => { suppressNextClick = false; }, 350);
+579:     }
+580:   });
+581:   document.addEventListener('pointercancel', cancel);
+582:   document.addEventListener('selectstart', (e) => {
+583:     if (pressBadge || findBadge(e.target)) {
+584:       e.preventDefault();
+585:       e.stopPropagation();
+586:     }
+587:   }, true);
+588:   document.addEventListener('contextmenu', (e) => {
+589:     if (pressBadge || findBadge(e.target)) {
+590:       e.preventDefault();
+591:       e.stopPropagation();
+592:     }
+593:   }, true);
+594: 
+595:   document.addEventListener('click', (e) => {
+596:     const badge = findBadge(e.target);
+597:     if (!badge) return;
+598:     if (suppressNextClick) { e.preventDefault(); e.stopPropagation(); return; }
+599:     if (longFired) { e.preventDefault(); e.stopPropagation(); longFired = false; return; }
+600:     _openReasoningSheet();
+601:   });
+602: 
+603:   // Keep the label fresh on navigation and when the model changes elsewhere.
+604:   window.addEventListener('hashchange', () => { refreshMobileModelBadge(false).catch(() => {}); });
+605:   window.addEventListener('pm-model-changed', (event) => {
+606:     const detail = event?.detail || {};
+607:     refreshMobileModelBadge(true, detail).catch(() => {});
+608:   });
+609: 
+610:   refreshMobileModelBadge(true).catch(() => {});
+611: }
+612: 

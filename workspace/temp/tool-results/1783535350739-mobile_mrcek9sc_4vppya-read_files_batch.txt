@@ -1,0 +1,147 @@
+--- web-ui/src/mobile/mobile-model-badge.js ---
+web-ui/src/mobile/mobile-model-badge.js (612 lines) [window 157-216, truncated]:
+157: 
+158: // ── Data loaders ─────────────────────────────────────────────────────────────
+159: async function _loadLlm(force) {
+160:   if (_llmCache && !force) return _llmCache;
+161:   try {
+162:     const d = await mobileGatewayFetch('/api/settings/provider');
+163:     _llmCache = d?.llm || { provider: 'ollama', providers: {} };
+164:   } catch {
+165:     _llmCache = _llmCache || { provider: 'ollama', providers: {} };
+166:   }
+167:   return _llmCache;
+168: }
+169: 
+170: async function _loadCatalog(force) {
+171:   if (_catalogCache && !force) return _catalogCache;
+172:   try {
+173:     const d = await mobileGatewayFetch('/api/extensions/catalog?kind=provider');
+174:     _catalogCache = Array.isArray(d?.items) ? d.items : [];
+175:   } catch {
+176:     _catalogCache = Object.keys(BUILTIN_LABELS).map((id) => ({ id, name: BUILTIN_LABELS[id], runtime: {} }));
+177:   }
+178:   return _catalogCache;
+179: }
+180: 
+181: async function _loadCredentialedIds(force) {
+182:   if (_credentialedIds && !force) return _credentialedIds;
+183:   try {
+184:     const d = await mobileGatewayFetch('/api/settings/credentialed-model-providers');
+185:     _credentialedIds = Array.isArray(d?.providers) ? d.providers.map(String) : [];
+186:   } catch {
+187:     _credentialedIds = [];
+188:   }
+189:   return _credentialedIds;
+190: }
+191: 
+192: function _providerLabel(id) {
+193:   const item = (_catalogCache || []).find((p) => p.id === id);
+194:   return item?.name || BUILTIN_LABELS[id] || id;
+195: }
+196: 
+197: function _modelsForProvider(provider) {
+198:   const item = (_catalogCache || []).find((p) => p.id === provider);
+199:   const out = [];
+200:   const push = (arr) => { if (Array.isArray(arr)) for (const m of arr) { const s = String(m?.name || m || '').trim(); if (s && !out.includes(s)) out.push(s); } };
+201:   push(item?.runtime?.options?.staticModels);
+202:   push(BUILTIN_STATIC_MODELS[provider]);
+203:   const def = item?.config?.defaults?.model;
+204:   if (def && !out.includes(String(def))) out.unshift(String(def));
+205:   return out;
+206: }
+207: 
+208: function _activeModel(llm) {
+209:   const provider = String(llm?.provider || 'ollama');
+210:   const model = String(llm?.providers?.[provider]?.model || '');
+211:   return { provider, model };
+212: }
+213: 
+214: function _modelDetail(detail = {}) {
+215:   const modelRef = String(detail?.modelRef || '').trim();
+216:   const slashIdx = modelRef.indexOf('/');
+[READ_TRUNCATED] Returned 60 of 612 lines. Use start_line:217, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/components/agent-model-picker.js ---
+web-ui/src/components/agent-model-picker.js (419 lines) [window 40-119, truncated]:
+40: const BUILTIN_STATIC_MODELS = {
+41:   openai:       ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+42:   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+43:   anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+44:   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+45:   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+46:   xai:          ['grok-build-0.1', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-4.5', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent'],
+47: };
+48: 
+49: const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
+50: const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
+51: const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+52: const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
+53: const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
+54: const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+55: const ANTHROPIC_BUDGETS = [2048, 5000, 10000, 16000, 24000, 32000];
+56: 
+57: function _providerSortRank(id) {
+58:   const idx = BUILTIN_PROVIDER_IDS.indexOf(id);
+59:   return idx >= 0 ? idx : BUILTIN_PROVIDER_IDS.length + 100;
+60: }
+61: 
+62: // ── Caches ──────────────────────────────────────────────────────────────────
+63: let _llmCache = null;
+64: let _catalogCache = null;       // [{ id, name, runtime, ui, ... }]
+65: let _catalogPromise = null;
+66: let _liveModelCache = {};       // providerId -> [model, ...] (from /api/models/test)
+67: 
+68: async function _fetchCatalog(force) {
+69:   if (_catalogCache && !force) return _catalogCache;
+70:   if (!_catalogPromise || force) {
+71:     _catalogPromise = api('/api/extensions/catalog?kind=provider')
+72:       .then((d) => {
+73:         let items = Array.isArray(d?.items) ? d.items.slice() : [];
+74:         items.sort((a, b) => {
+75:           const r = _providerSortRank(a.id) - _providerSortRank(b.id);
+76:           if (r !== 0) return r;
+77:           return String(a.name || a.id).localeCompare(String(b.name || b.id));
+78:         });
+79:         _catalogCache = items;
+80:         return items;
+81:       })
+82:       .catch(() => {
+83:         // Fallback: synthesize the eight builtins so the picker still works.
+84:         _catalogCache = BUILTIN_PROVIDER_IDS.map((id) => ({
+85:           id, name: BUILTIN_LABELS[id] || id, runtime: {}, ui: {},
+86:         }));
+87:         return _catalogCache;
+88:       });
+89:   }
+90:   return _catalogPromise;
+91: }
+92: 
+93: async function _fetchLlm(force) {
+94:   if (_llmCache && !force) return _llmCache;
+95:   try {
+96:     const d = await api('/api/settings/provider');
+97:     _llmCache = d?.llm || { providers: {} };
+98:   } catch {
+99:     _llmCache = { providers: {} };
+100:   }
+101:   return _llmCache;
+102: }
+103: 
+104: function _getCatalogItem(providerId) {
+105:   return (_catalogCache || []).find((p) => p.id === providerId) || null;
+106: }
+107: 
+108: function _getModelsForProvider(providerId) {
+109:   const item = _getCatalogItem(providerId);
+110:   const fromCatalog = item?.runtime?.options?.staticModels;
+111:   const fromBuiltin = BUILTIN_STATIC_MODELS[providerId];
+112:   const fromLive = _liveModelCache[providerId];
+113:   const merged = [];
+114:   const push = (arr) => { if (Array.isArray(arr)) for (const m of arr) if (m && !merged.includes(String(m))) merged.push(String(m)); };
+115:   push(fromLive);
+116:   push(fromCatalog);
+117:   push(fromBuiltin);
+118:   // Catalog default model
+119:   const def = item?.config?.defaults?.model;
+[READ_TRUNCATED] Returned 80 of 419 lines. Use start_line:120, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

@@ -2294,7 +2294,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
       text: nextProbeText,
       time: probe?.time || _nowTime(),
     };
-    if (_mobileTraceThoughtCoveredByEarlier(message, nextProbeText)) {
+    if (_mobileLiveTraceCompactionEnabled(message) && _mobileTraceThoughtCoveredByEarlier(message, nextProbeText)) {
       delete message._pmTraceThoughtProbe;
       return;
     }
@@ -2312,19 +2312,21 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
     last.text = _appendMobileStreamingText(last.text || '', content);
     if (isThoughtLike) {
       last.text = _dedupeMobileTraceProseText(last.text);
-      if (_mobileTraceThoughtCoveredByEarlier(message, last.text, last)) {
-        message.liveTraceEntries.pop();
+      if (_mobileLiveTraceCompactionEnabled(message)) {
+        if (_mobileTraceThoughtCoveredByEarlier(message, last.text, last)) {
+          message.liveTraceEntries.pop();
+        }
+        _compactMobileTraceThoughtEntries(message);
       }
-      _compactMobileTraceThoughtEntries(message);
     }
   } else {
     const trimmed = content.trim();
     if (!trimmed) return;
     if (last && last.type === normalizedType && String(last.text || '').trim() === trimmed) return;
-    if (isThoughtLike && _mobileTraceThoughtCoveredByEarlier(message, trimmed)) return;
+    if (isThoughtLike && _mobileLiveTraceCompactionEnabled(message) && _mobileTraceThoughtCoveredByEarlier(message, trimmed)) return;
     if (isThoughtLike) {
       _pushMobileTraceThoughtEntry(message, normalizedType, _dedupeMobileTraceProseText(trimmed));
-      _compactMobileTraceThoughtEntries(message);
+      if (_mobileLiveTraceCompactionEnabled(message)) _compactMobileTraceThoughtEntries(message);
     }
     else {
       message.liveTraceEntries.push({
@@ -2696,6 +2698,26 @@ function _moveMobileAnswerTextIntoTrace(message, type = 'think') {
 
 function _moveMobileVisibleAnswerIntoWorkflowTrace(message) {
   _moveMobileAnswerTextIntoTrace(message, message?.toolActivityStarted ? 'think' : 'preamble');
+}
+
+function _shouldRouteMobileTokenToLiveTrace(message) {
+  if (!message || message.finalResponseStarted) return false;
+  const mode = String(message.agentExecutionMode || '').trim();
+  if (mode === 'chat') return false;
+  return !message.toolActivityStarted;
+}
+
+function _moveMobileWorkflowBubbleBeforeTool(message) {
+  if (!message) return;
+  if (!message.toolActivityStarted) {
+    _moveMobilePreToolAnswerIntoPreamble(message);
+    return;
+  }
+  _moveMobileAnswerTextIntoTrace(message, 'think');
+}
+
+function _mobileLiveTraceCompactionEnabled(message) {
+  return message?.streaming !== true;
 }
 
 function _renderMobileLiveTracePreview(entry) {
@@ -9244,13 +9266,17 @@ void main() {
       case 'token':
         if (evt.text) {
           const chunk = String(evt.text);
-          _appendMobileVisualStreamToken(aiTurn, chunk, scheduleSideRenderSoon);
+          if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
+            _appendMobileLiveTrace(aiTurn, 'preamble', chunk, { append: true });
+          } else {
+            _appendMobileVisualStreamToken(aiTurn, chunk, scheduleSideRenderSoon);
+          }
         }
         scheduleSideRenderSoon();
         return 'streaming';
       case 'agent_mode':
         aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
-        if (aiTurn.agentExecutionMode === 'execute') _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        if (aiTurn.agentExecutionMode === 'execute') _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
         scheduleSideRenderSoon();
         return 'streaming';
@@ -9267,7 +9293,7 @@ void main() {
       case 'heartbeat':
       case 'tool_progress':
         if (String(evt.type || '') === 'tool_progress') {
-          _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+          _moveMobileWorkflowBubbleBeforeTool(aiTurn);
           aiTurn.toolActivityStarted = true;
           _collectMediaFromToolEvent(aiTurn, evt);
         }
@@ -9287,7 +9313,7 @@ void main() {
           renderMobileSideSheet();
           return 'streaming';
         }
-        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileProcess(aiTurn, 'tool', _mobileToolLabel(evt), evt);
         _appendMobileLiveTrace(aiTurn, 'tool', _mobileToolLabel(evt));
@@ -9301,7 +9327,7 @@ void main() {
           renderMobileSideSheet();
           return 'streaming';
         }
-        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`, evt);
@@ -9309,7 +9335,7 @@ void main() {
         renderMobileSideSheet();
         return 'streaming';
       case 'vision_injected':
-        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileVisionTrace(aiTurn, evt);
         renderMobileSideSheet();
@@ -10105,13 +10131,17 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       case 'token':
         if (evt.text) {
           const chunk = String(evt.text);
-          _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
+          if (_shouldRouteMobileTokenToLiveTrace(aiTurn)) {
+            _appendMobileLiveTrace(aiTurn, 'preamble', chunk, { append: true });
+          } else {
+            _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
+          }
         }
         renderThreadSoon();
         return 'streaming';
       case 'agent_mode':
         aiTurn.agentExecutionMode = String(evt.mode || aiTurn.agentExecutionMode || '').trim();
-        if (aiTurn.agentExecutionMode === 'execute') _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        if (aiTurn.agentExecutionMode === 'execute') _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         if (evt.mode) _appendMobileProcess(aiTurn, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`, evt);
         renderThreadSoon();
         return 'streaming';
@@ -10147,7 +10177,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           renderThreadSoon();
           return 'streaming';
         }
-        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
@@ -10164,7 +10194,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           renderThreadSoon();
           return 'streaming';
         }
-        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
@@ -10175,13 +10205,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         return 'streaming';
       }
       case 'vision_injected':
-        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileVisionTrace(aiTurn, evt);
         renderThreadSoon();
         return 'streaming';
       case 'tool_progress': {
-        _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+        _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         _collectMediaFromToolEvent(aiTurn, evt);
         const messageText = String(evt.message || '').trim();
@@ -10214,7 +10244,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         const modelEvent = evt.event && typeof evt.event === 'object' ? evt.event : {};
         const eventType = String(modelEvent.type || '').trim();
         if (eventType === 'tool_call_start' || eventType === 'tool_call_done') {
-          _moveMobileVisibleAnswerIntoWorkflowTrace(aiTurn);
+          _moveMobileWorkflowBubbleBeforeTool(aiTurn);
           aiTurn.toolActivityStarted = true;
           const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
           _appendMobileLiveTrace(aiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);

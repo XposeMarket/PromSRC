@@ -1,0 +1,177 @@
+self/02-startup-runtime.md (176 lines) [window 1-176]:
+1: ## 2) Startup, Config Root, and Workspace Resolution
+2: 
+3: - Config/workspace resolution is centralized in `src/config/config.ts`
+4: - Config dir precedence:
+5:   - `PROMETHEUS_DATA_DIR/.prometheus`
+6:   - project-local `.prometheus/`
+7:   - `~/.prometheus/`
+8: - Default workspace path is sibling to the config dir unless `PROMETHEUS_WORKSPACE_DIR` overrides it
+9: - Legacy `.localclaw` data is migrated forward into `.prometheus`
+10: - Default config version in source is `1.0.2`
+11: 
+12: ## 3) Canonical Runtime Surfaces
+13: 
+14: - `src/gateway/core/startup.ts` owns startup boot orchestration
+15: - `src/gateway/routes/chat.router.ts` owns `/api/chat`, tool loop execution, plan discipline, SSE streaming, browser/vision nudges, and mode-specific prompting
+16: - `src/gateway/session.ts` owns session history, rolling summaries, workspace binding, persisted `creativeMode`, and recent tool-context fallback helpers
+17: - `src/gateway/context/model-context.ts` owns provider-aware context profiles, token estimates, and compaction/input budget math
+18: - `src/gateway/tool-observations.ts` owns persisted compact tool observations for future-turn context and compaction
+19: - `src/gateway/prompt-context.ts` builds the dynamic tool/memory/project prompt blocks
+20: - `src/gateway/tool-builder.ts` assembles the tool surface from core tools, category tools, connector tools, composites, and MCP tools
+21: - `src/gateway/browser-tools.ts` is the browser automation/runtime state system
+22: - `src/gateway/routes/canvas.router.ts` owns canvas files, Creative mode state, Creative assets, HTML Motion, render jobs, scene save/export, and creative project publishing
+23: - `src/gateway/tasks/background-task-runner.ts` is the autonomous task executor
+24: - `src/gateway/mcp-manager.ts` is the MCP client/config manager
+25: - `src/gateway/comms/telegram-channel.ts` is the canonical Telegram bridge and command handler
+26: - `src/gateway/routes/account.router.ts` owns Supabase account login, encrypted persisted sessions, subscription checks, and account access gating
+27: - `src/gateway/routes/hub.router.ts` powers the Hub usage page for skill usage, tool heatmaps, skill content previews, and achievement stubs
+28: - `src/gateway/routes/obsidian.router.ts` owns the local Obsidian bridge API
+29: - `src/gateway/routes/migration.router.ts` owns legacy workspace/data migration previews and execution
+30: - `src/gateway/routes/processes.router.ts` exposes the managed process supervisor API
+31: - `src/gateway/routes/coding.router.ts` exposes coding workspace/session, diff, branch, stage, and commit operations
+32: - `src/gateway/routes/onboarding.router.ts` owns account-scoped onboarding/tutorial/model/memory-seed state
+33: 
+34: ## 3A) Account/Auth Gate and Router Mounting
+35: 
+36: The gateway now mounts almost all application routes behind both gateway auth and account-login checks in `src/gateway/server-v2.ts`.
+37: 
+38: Account facts from `src/gateway/routes/account.router.ts`:
+39: 
+40: - Supabase sessions are kept in memory and persisted encrypted through the vault key `account.supabase.session`
+41: - legacy `auth-session.json` is migrated into the vault and removed
+42: - Prometheus is free to use; access requires a valid Supabase-authenticated account session, not Stripe or a subscription row
+43: - `subscriptionActive`, `purchaseActive`, and `accessActive` remain as backward-compatible response fields and are true for any verified account session
+44: - `/api/account/status?strict=1` performs a blocking account verification/refresh path
+45: - expired sessions with refresh tokens are refreshed optimistically in normal status checks
+46: 
+47: Account routes currently include:
+48: 
+49: - `GET /api/account/config`
+50: - `GET /api/account/status`
+51: - `POST /api/account/login`
+52: - `POST /api/account/login/password`
+53: - `POST /api/account/logout`
+54: - `POST /api/account/refresh`
+55: 
+56: WebSocket connections are closed with policy code `1008` when the account is not logged in. They no longer require subscription/admin entitlement.
+57: 
+58: Account-gated router mounts currently include:
+59: 
+60: - skills, tasks, channels, teams, settings, goals, proposals, audit log, connections, extensions
+61: - canvas, projects, memory, Obsidian, Hub, migration, processes, coding, chat, onboarding
+62: ## 3B) Mobile Pairing, QR Codes, HTTPS, and Tailscale Remote Access
+63: 
+64: Mobile pairing is implemented as a desktop-approved device enrollment flow, not as a shared browser login.
+65: 
+66: Canonical source files:
+67: 
+68: - backend store: `src/gateway/pairing/pairing-store.ts`
+69: - backend REST routes: `src/gateway/routes/pairing.router.ts`
+70: - gateway auth gate: `src/gateway/gateway-auth.ts`
+71: - router mount order and HTTP/HTTPS listener setup: `src/gateway/server-v2.ts`
+72: - HTTP/HTTPS server behavior and redirect handling: `src/gateway/core/server.ts`
+73: - desktop Pairing settings UI: `web-ui/src/pages/SettingsPage.js`
+74: - mobile PWA pairing UI: `web-ui/src/mobile/mobile-pages.js`
+75: - generated public UI mirrors: `generated/public-web-ui/static/pages/SettingsPage.js` and `generated/public-web-ui/static/mobile/mobile-pages.js`
+76: 
+77: Current pairing model:
+78: 
+79: - `POST /api/pairing/qr` creates a short-lived pairing challenge, returns an SVG QR, a `pairUrl`, and a human `pairCode`.
+80: - The QR URL encodes the long random challenge code as `/?pair=<code>#mobile/pair`.
+81: - The desktop UI also displays a human code such as `PAIR-Q4SD-4HZ2`.
+82: - `getChallengeByCode(...)` accepts the long QR code, `PAIR-XXXX-XXXX`, `PAIRXXXXXXXX`, or just `XXXXXXXX`.
+83: - Mobile claims the challenge through `POST /api/pairing/claim`.
+84: - The claim creates a pending desktop approval request and broadcasts `pairing_pending`.
+85: - Desktop approval calls `POST /api/pairing/approve`.
+86: - Mobile polls `GET /api/pairing/poll/:requestId` until approval returns a one-time plaintext `deviceToken`.
+87: - The phone stores the token in localStorage as `pm_device_token`; later mobile API calls send it as `X-Pairing-Token`.
+88: - Paired devices are persisted in `.prometheus/paired-devices.json` with token hashes only, not plaintext tokens.
+89: - Pairing challenges and pending requests are in-memory only; they intentionally expire and do not survive gateway restarts.
+90: - Challenge TTL is five minutes; pending request TTL is ten minutes.
+91: - Device revocation/removal happens through `PATCH/DELETE /api/pairing/devices/:id`.
+92: 
+93: Important auth/mounting behavior:
+94: 
+95: - `pairingRouter` must be mounted before any `app.use('/', requireGatewayAuth, ...)` router group in `src/gateway/server-v2.ts`.
+96: - Express middleware attached as `app.use('/', requireGatewayAuth, accountRouter)` runs before route matching inside `accountRouter`; placing it before pairing will block `/api/pairing/claim` with `Unauthorized: configure gateway.auth.token to enable remote access`.
+97: - `src/gateway/gateway-auth.ts` intentionally lets these account bootstrap routes through without a gateway token: `GET /api/account/config`, `GET /api/account/status`, `POST /api/account/login`, and `POST /api/account/login/password`.
+98: - `gateway-auth.ts` verifies `X-Pairing-Token` and `?pt=` before checking the configured gateway token. This lets approved mobile devices work over LAN or Tailscale even when `gateway.auth.token` is absent.
+99: - Non-loopback, unpaired API access is still blocked when no gateway auth token is configured.
+100: - `POST /api/pairing/claim` also checks the server-side Prometheus account session via `getSessionStatus()` and requires `authenticated`. Pairing is therefore "phone logs into a free Prometheus account, then desktop approves the device."
+101: 
+102: iOS/Safari/PWA behavior that drove the dual route:
+103: 
+104: - iOS Safari and an Add-to-Home-Screen PWA do not reliably share the same browser storage container.
+105: - A user can be logged in and paired in Safari, add the app to the Home Screen, and then find the Home Screen app starts with fresh storage.
+106: - Scanning a QR with the iPhone Camera app opens Safari, not the already-installed Home Screen PWA.
+107: - For that reason pairing must support both QR scanning and manual pair-code entry inside the Home Screen app.
+108: - The mobile pair page with no `?pair=` code shows a pair-code input and internally redirects to `/?pair=<typedCode>#mobile/pair` so the normal claim/login/approval path is reused.
+109: - If the phone already has a valid token, `/api/pairing/me` skips the pairing dance and navigates to mobile chat.
+110: - On approval, mobile writes `pm_force_mobile=1` as a sticky mobile-mode hint so refresh/restart recovery does not dump the phone into the desktop UI.
+111: 
+112: LAN, HTTPS, and camera constraints:
+113: 
+114: - Plain LAN pairing requires `gateway.host` to be `0.0.0.0` or `::`; `127.0.0.1` only works from the desktop itself.
+115: - Current local config has `gateway.host: "0.0.0.0"`.
+116: - Safari browser camera/microphone APIs require a secure context. Plain `http://<LAN-IP>:18789` can load the app, but in-browser camera scanning and reliable mobile microphone capture need HTTPS.
+117: - Gateway HTTPS is configured under `gateway.https` and served by a second listener from `server-v2.ts` when a PFX or key/cert exists.
+118: - Current local config has HTTPS enabled on port `18790` with `certs/gateway-mobile.pfx` and passphrase `prometheus-local-dev`.
+119: - `GET /api/pairing/certificate` serves the configured `.cer` file for installing/trusting the local gateway certificate on mobile devices.
+120: - When HTTPS is enabled, `_resolvePairingOrigin(...)` prefers `https://<LAN-IP>:<httpsPort>` for generated QR URLs unless remote access overrides it.
+121: - The plain HTTP listener redirects non-API/static GETs to HTTPS when an HTTPS listener exists.
+122: - `core/server.ts` must not redirect requests that arrived through an HTTPS-terminating proxy. It checks `x-forwarded-proto: https` so Tailscale Funnel public HTTPS requests are not redirected to an unreachable local `:18790` URL.
+123: 
+124: Tailscale / remote access model:
+125: 
+126: - Remote access is an optional layer on top of local pairing, not a replacement for device approval.
+127: - Config lives at `gateway.remoteAccess`.
+128: - Defaults in `src/config/config.ts`: `{ enabled: false, mode: "tailscale-funnel", publicUrl: "" }`.
+129: - Current local config has remote access enabled with mode `tailscale-funnel` and public URL `https://fonso-pc.tailca7310.ts.net`.
+130: - When remote access is enabled with a valid `https://` origin, `/api/pairing/qr` encodes that public URL in the QR instead of the LAN IP.
+131: - The response still includes `lanOrigins` for visibility and fallback.
+132: - `GET /api/pairing/remote-access` reports current remote access config.
+133: - `PUT /api/pairing/remote-access` saves `{ enabled, mode, publicUrl }` after validating that enabled remote access uses a full HTTPS origin.
+134: - `GET /api/pairing/tailscale/status` shells out to the local `tailscale` CLI, checks `tailscale version`, parses `tailscale status --json`, suggests `https://<Self.DNSName>`, and inspects `tailscale funnel status` for active localhost ports.
+135: - The Settings Pairing UI has a Detect Tailscale action, a "Use this URL" helper, and tells the user to run a command like `tailscale funnel <port>` when Funnel is not active.
+136: - If remote access is on, the Pairing UI shows a "Remote access ON" badge and generates a new QR against the public URL.
+137: 
+138: Security sharp edge to preserve:
+139: 
+140: - `pairingRouter` is currently mounted before gateway auth so unpaired phones can claim challenges.
+141: - That also means remote-access configuration/device-management endpoints in the pairing router are not individually protected by `requireGatewayAuth` at the router mount layer.
+142: - Do not casually expose a Funnel/public URL without understanding this. A hardening pass should make desktop management endpoints loopback/account-gated while keeping only `qr`, `claim`, `poll`, certificate download, and `me` available as needed for pairing.
+143: - A leaked QR/human code is not a credential by itself because desktop approval is still required, but it can create pending approval prompts.
+144: 
+145: Tailscale First-Time Setup Runbook (Windows):
+146: 
+147: 1. **Verify Tailscale is logged in** — open PowerShell and run `tailscale status`. You should see your machine's MagicDNS hostname (e.g. `fonso-pc.tailca7310.ts.net`). If not connected, run `tailscale up`.
+148: 2. **Enable Funnel in the admin console** — Funnel is off by default for every tailnet. Go to [login.tailscale.com/admin](https://login.tailscale.com/admin) → your machine → enable Funnel. Without this step the CLI command will error.
+149: 3. **Expose the gateway port** — run `tailscale funnel 18789` in PowerShell (use the actual port from `gateway.port` if changed). This creates a public `https://` route to `localhost:18789`. Run `tailscale funnel status` to confirm the port is listed.
+150: 4. **Configure remote access in the UI** — in the desktop app go to Settings → Pairing → Remote Access section:
+151:    - Click **Detect Tailscale** — the UI calls `GET /api/pairing/tailscale/status`, checks the CLI, and shows your hostname plus a **"Use this URL"** button.
+152:    - Click **"Use this URL"** — fills in `https://<your-machine>.tail…ts.net`.
+153:    - Set mode to **Tailscale Funnel**, check **Enable**.
+154:    - Click **Save** (calls `PUT /api/pairing/remote-access`).
+155: 5. **Regenerate the QR** — click **Regenerate QR** (or the refresh button). The response from `POST /api/pairing/qr` will now use the public Tailscale URL; a blue **"Remote access ON"** badge appears.
+156: 6. **Pair the phone** — scan the QR from iPhone Safari (or enter the human pair code in the Home Screen PWA), then approve the request on the desktop.
+157: 
+158: Windows-specific notes:
+159: - The `tailscale` binary added by the Windows installer may not be in `%PATH%` for all shells. If `_runTailscaleCli` fails (installed=false in `/api/pairing/tailscale/status`), add the Tailscale install dir (typically `C:\Program Files\Tailscale`) to `PATH` and restart the gateway.
+160: - The binary-search helpers in `workspace/oss agents/openclaw/src/infra/tailscale.ts` only probe macOS paths; they are not used by the desktop gateway, which calls `tailscale` directly via `spawn('tailscale', ...)` in `src/gateway/routes/pairing.router.ts:_runTailscaleCli`.
+161: - Tailscale Funnel on Windows keeps running as a system service even after the terminal closes; it persists until you run `tailscale funnel reset`.
+162: - The `x-forwarded-proto: https` check in `core/server.ts` ensures that Tailscale's HTTPS termination does not trigger the HTTP→HTTPS redirect loop (the gateway stays on plain HTTP internally; Tailscale handles TLS).
+163: 
+164: Self-edit verification checklist for pairing/remote access:
+165: 
+166: - After changing `src/gateway/*` TypeScript, run `npm run build:backend` or `npm run build`; the live gateway often serves `dist/gateway/server-v2.js`, so source edits alone are not live.
+167: - After changing `web-ui/src/*`, run `npm run sync:web-ui` and `npm run check:web-ui` or `npm run build`.
+168: - If the running gateway is serving generated web files on Windows, stop it before `npm run sync:web-ui` if generation fails with `EBUSY`.
+169: - Restart the gateway after backend changes.
+170: - Smoke-test QR creation: `POST http://127.0.0.1:18789/api/pairing/qr` should return `pairUrl`, `pairCode`, `lanOrigins`, `remoteAccess`, and `qrSvg`.
+171: - Smoke-test manual code claim from the phone/LAN origin by posting `{ code: pairCode, deviceName, deviceFingerprint }` to `/api/pairing/claim`; it should return `{ success: true, requestId, expiresAt }`.
+172: - Clean up smoke-test pending requests with `/api/pairing/deny`.
+173: - Verify protected LAN APIs still return 401 without `X-Pairing-Token`.
+174: - Verify an approved mobile token reaches protected APIs through `X-Pairing-Token`.
+175: - Verify old QR pages are not reused after challenge expiration or gateway restart.
+176: 

@@ -1,0 +1,125 @@
+--- web-ui/src/mobile/mobile-settings.js ---
+web-ui/src/mobile/mobile-settings.js (864 lines) [window 41-75, truncated]:
+41: function modelOptions(provider, models) {
+42:   return (models || []).map((model) => ({ value: model, label: prettifyModelName(model, provider) }));
+43: }
+44: 
+45: function input(id, value = '', attrs = '') {
+46:   return `<input class="pm-input" id="${escapeHtml(id)}" value="${escapeHtml(value || '')}" ${attrs} />`;
+47: }
+48: 
+49: function textarea(id, value = '', attrs = '') {
+50:   return `<textarea class="pm-textarea" id="${escapeHtml(id)}" ${attrs}>${escapeHtml(value || '')}</textarea>`;
+51: }
+52: 
+53: function toggleRow(id, label, checked, help = '') {
+54:   return `<div class="pm-settings-toggle-row">
+55:     <div><strong>${escapeHtml(label)}</strong>${help ? `<span>${escapeHtml(help)}</span>` : ''}</div>
+56:     <button class="pm-toggle ${checked ? 'on' : ''}" id="${escapeHtml(id)}" data-toggle-bool="${escapeHtml(id)}" aria-label="${escapeHtml(label)}" aria-pressed="${checked ? 'true' : 'false'}"></button>
+57:   </div>`;
+58: }
+59: 
+60: function boolValue(page, id) {
+61:   return page.querySelector(`#${CSS.escape(id)}`)?.classList.contains('on') === true;
+62: }
+63: 
+64: function val(page, id) {
+65:   return String(page.querySelector(`#${CSS.escape(id)}`)?.value || '').trim();
+66: }
+67: 
+68: function arrFromCsv(value) {
+69:   return String(value || '').split(',').map(s => s.trim()).filter(Boolean);
+70: }
+71: 
+72: function linesFromValue(value) {
+73:   return String(value || '').split('\n').map(s => s.trim()).filter(Boolean);
+74: }
+75: 
+[READ_TRUNCATED] Returned 35 of 864 lines. Use start_line:76, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-model-badge.js ---
+web-ui/src/mobile/mobile-model-badge.js (612 lines) [window 1-80, truncated]:
+1: // mobile-model-badge.js — interactive header model badge for Prometheus Mobile.
+2: //
+3: // The header used to show a static "Online" pill. It now shows the *current
+4: // main-chat model* (truncated to a friendly short name) while keeping the same
+5: // green/red gateway online/offline dot.
+6: //
+7: //   • TAP            → reasoning / thinking-level sheet for the ACTIVE provider
+8: //                      (mirrors the desktop composer reasoning controls).
+9: //   • PRESS-AND-HOLD → haptic buzz + quick provider→model switch sheet, limited
+10: //                      to providers the user actually has saved credentials for.
+11: //
+12: // Haptics: iOS Safari has no Web Vibration API. The working trick (per the
+13: // 2026 iOS 26.5 discussion) is a *native* `<input type="checkbox" switch>`:
+14: // a real tap that toggles it emits a system haptic. We embed one, invisibly,
+15: // inside every badge so the physical touch buzzes natively, and we also fire
+16: // `navigator.vibrate` (Android) + a programmatic toggle at the long-press
+17: // threshold as best-effort. All paths degrade silently.
+18: 
+19: import { mobileGatewayFetch } from './mobile-api.js';
+20: 
+21: // ── Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ──
+22: const BUILTIN_LABELS = {
+23:   ollama: 'Ollama (local)',
+24:   llama_cpp: 'llama.cpp (local)',
+25:   lm_studio: 'LM Studio (local)',
+26:   openai: 'OpenAI',
+27:   openai_codex: 'OpenAI Codex',
+28:   anthropic: 'Anthropic Claude',
+29:   perplexity: 'Perplexity',
+30:   gemini: 'Google Gemini',
+31:   xai: 'xAI Grok',
+32: };
+33: 
+34: const BUILTIN_STATIC_MODELS = {
+35:   openai: ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+36:   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+37:   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+38:   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+39:   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
+40:   xai: ['grok-build-0.1', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-4.5', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent'],
+41: };
+42: 
+43: // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
+44: const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
+45: const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
+46: const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+47: const PERPLEXITY_EFFORT_OPTIONS = ['', 'low', 'medium', 'high'];
+48: const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
+49: const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
+50: const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+51: 
+52: // ── Caches ───────────────────────────────────────────────────────────────────
+53: let _llmCache = null;            // full llm config { provider, providers }
+54: let _catalogCache = null;        // [{ id, name, runtime, ... }]
+55: let _credentialedIds = null;     // [providerId, ...]
+56: 
+57: function _esc(s) {
+58:   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+59:     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+60:   ));
+61: }
+62: 
+63: // ── Friendly model-name truncation ───────────────────────────────────────────
+64: // claude-haiku-4-5-20251001 → "Claude Haiku 4.5"
+65: // gpt-5.5 → "GPT 5.5"   ·   grok-4.20-reasoning → "Grok 4.20"
+66: export function prettifyModelName(model, provider) {
+67:   const raw = String(model || '').trim();
+68:   const providerId = String(provider || '').trim().toLowerCase();
+69:   if (!raw) return _providerLabel(providerId) || 'Model';
+70:   let s = raw.toLowerCase();
+71:   // Drop date stamps like -20251001 / 20250514.
+72:   s = s.replace(/-?20\d{6}\b/g, '');
+73:   // Drop trailing qualifier words that add noise on a tiny badge.
+74:   s = s.replace(/-(reasoning|non-reasoning|latest|preview|exp|instruct|thinking|online)\b/g, '');
+75:   s = s.replace(/-\d{4}\b/g, '');
+76:   // Strip the redundant "claude-" family prefix (anthropic).
+77:   s = s.replace(/^claude-/, '');
+78:   // Version dashes between digits become dots: 4-5 → 4.5.
+79:   s = s.replace(/(\d)-(\d)/g, '$1.$2');
+80:   // Remaining separators → spaces.
+[READ_TRUNCATED] Returned 80 of 612 lines. Use start_line:81, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- [batch truncated] ---
+Only first 2 files read. Re-run with remaining files if needed.

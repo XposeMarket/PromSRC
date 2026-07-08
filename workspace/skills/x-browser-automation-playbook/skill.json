@@ -90,6 +90,11 @@
       "path": "references/workflows/x-browser-automation-playbook-2026-06-14.md",
       "type": "doc",
       "description": "Add workflow recipe to x-browser-automation-playbook"
+    },
+    {
+      "path": "references/no-em-dash-x-copy.md",
+      "type": "doc",
+      "description": "X content style rule for posts and replies"
     }
   ]
 }

@@ -1,0 +1,242 @@
+web-ui/src/mobile/mobile-pages.js (28932 lines) [window 7480-7719, truncated]:
+7480: }
+7481: 
+7482: async function _restoreMobileWorkspaceCheckpoint(checkpointId, button = null) {
+7483:   const id = String(checkpointId || '').trim();
+7484:   if (!id) return;
+7485:   const approved = window.confirm?.('Restore this turn checkpoint?\n\nThis will put every changed file back to its state before that Prometheus turn.') ?? false;
+7486:   if (!approved) return;
+7487:   const btn = button && typeof button === 'object' ? button : null;
+7488:   if (btn) {
+7489:     btn.disabled = true;
+7490:     btn.classList.add('is-loading');
+7491:   }
+7492:   try {
+7493:     const result = await mobileGatewayFetch('/api/canvas/history/restore', {
+7494:       method: 'POST',
+7495:       body: JSON.stringify({ checkpoint_id: id, confirm: true }),
+7496:       timeoutMs: 30000,
+7497:     });
+7498:     const touched = (Array.isArray(result?.restored) ? result.restored.length : 0) + (Array.isArray(result?.deleted) ? result.deleted.length : 0);
+7499:     pmToast(touched ? `Restored ${touched} path${touched === 1 ? '' : 's'}` : 'Restored checkpoint', 'success');
+7500:   } catch (err) {
+7501:     pmToast(`Restore failed: ${String(err?.message || err)}`, 'error');
+7502:   } finally {
+7503:     if (btn) {
+7504:       btn.disabled = false;
+7505:       btn.classList.remove('is-loading');
+7506:     }
+7507:   }
+7508: }
+7509: 
+7510: function _wireMobileCheckpointRestoreButtons(root = document) {
+7511:   root?.querySelectorAll?.('[data-pm-restore-checkpoint]')?.forEach((button) => {
+7512:     if (button.dataset.pmRestoreCheckpointWired === '1') return;
+7513:     button.dataset.pmRestoreCheckpointWired = '1';
+7514:     button.addEventListener('click', (event) => {
+7515:       event.preventDefault();
+7516:       event.stopPropagation();
+7517:       _restoreMobileWorkspaceCheckpoint(button.getAttribute('data-pm-restore-checkpoint') || '', button);
+7518:     });
+7519:   });
+7520: }
+7521: 
+7522: function _wireMobileFileChangeRows(root = document) {
+7523:   root?.querySelectorAll?.('[data-pm-file-change-path]')?.forEach((row) => {
+7524:     if (row.dataset.pmFileChangeWired === '1') return;
+7525:     row.dataset.pmFileChangeWired = '1';
+7526:     row.addEventListener('click', (event) => {
+7527:       event.preventDefault();
+7528:       event.stopPropagation();
+7529:       const path = row.getAttribute('data-pm-file-change-path') || '';
+7530:       const name = row.getAttribute('data-pm-file-change-name') || path.split(/[\\/]/).pop() || 'File';
+7531:       const kind = row.getAttribute('data-pm-file-change-kind') || _mobileMediaKind({ path, name });
+7532:       _openMobileMediaTarget({
+7533:         kind,
+7534:         path,
+7535:         name,
+7536:         openMode: 'diff',
+7537:         src: path ? _mobileMediaUrl({ path }, 'inline') : '',
+7538:         download: path ? _mobileMediaUrl({ path }, 'download') : '',
+7539:       });
+7540:     });
+7541:   });
+7542: }
+7543: 
+7544: export function renderChatPage(page, { navigate, sessionId = null }) {
+7545:   _installMobileApprovalBridge();
+7546:   // A bare mobile chat route reopens the last explicitly opened chat. The New
+7547:   // Chat button clears that remembered id, so only that action lands on the
+7548:   // unsaved mobile_default draft with starter cards.
+7549:   const rememberedSession = sessionId ? '' : _readMobileLastChatSession();
+7550:   let requestedSession = String(sessionId || rememberedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+7551:   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
+7552:   __pmChat.activeSessionId = requestedSession;
+7553:   if (requestedSession === MOBILE_CHAT_SESSION_ID) {
+7554:     _clearMobileDraftSessionState();
+7555:   }
+7556:   if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+7557:   _activeMobileThread();
+7558:   const closeMenu = () => {
+7559:     const pop = document.getElementById('pm-chat-settings-popover');
+7560:     const overlay = document.getElementById('pm-chat-settings-popover-overlay');
+7561:     if (overlay) overlay.remove();
+7562:     if (pop) pop.remove();
+7563:   };
+7564: 
+7565:   const openSettingsMenu = () => {
+7566:     const existingPop = document.getElementById('pm-chat-settings-popover');
+7567:     const existingOverlay = document.getElementById('pm-chat-settings-popover-overlay');
+7568:     if (existingPop) existingPop.remove();
+7569:     if (existingOverlay) existingOverlay.remove();
+7570: 
+7571:     const overlay = document.createElement('button');
+7572:     overlay.type = 'button';
+7573:     overlay.id = 'pm-chat-settings-popover-overlay';
+7574:     overlay.className = 'pm-chat-settings-popover-overlay';
+7575:     overlay.addEventListener('click', () => closeMenu(), { passive: true });
+7576:     overlay.addEventListener('touchstart', () => closeMenu(), { passive: true });
+7577: 
+7578:     const pop = document.createElement('div');
+7579:     pop.id = 'pm-chat-settings-popover';
+7580:     pop.className = 'pm-chat-settings-popover';
+7581:     pop.setAttribute('aria-label', 'Chat settings menu');
+7582:     pop.innerHTML = `
+7583:       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-notifications" type="button" data-action="notifications">Notifications</button>
+7584:       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-files" type="button" data-action="files">Files</button>
+7585:       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-permissions" type="button" data-action="permissions">Permissions</button>
+7586:       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-open" type="button" data-action="settings">Settings</button>
+7587:     `;
+7588: 
+7589:     const openSettings = (tab = '') => {
+7590:       closeMenu();
+7591:       const target = tab ? `#mobile/settings/${encodeURIComponent(tab)}` : '#mobile/settings';
+7592:       if (typeof page.openSettings === 'function' && !tab) page.openSettings();
+7593:       else if (typeof window.pmOpenSettings === 'function') {
+7594:         const opened = window.pmOpenSettings(tab || undefined);
+7595:         if (!opened) navigate?.(target);
+7596:       }
+7597:       else if (typeof window.openSettings === 'function') window.openSettings(tab || undefined);
+7598:       else navigate?.(target);
+7599:     };
+7600: 
+7601:     pop.querySelector('#pm-chat-settings-permissions')?.addEventListener('click', () => {
+7602:       closeMenu();
+7603:       requestAnimationFrame(() => openSettings('security'));
+7604:     }, { passive: true });
+7605: 
+7606:     pop.querySelector('#pm-chat-settings-open')?.addEventListener('click', () => {
+7607:       closeMenu();
+7608:       requestAnimationFrame(() => openSettings());
+7609:     }, { passive: true });
+7610: 
+7611:     pop.querySelector('#pm-chat-settings-notifications')?.addEventListener('click', () => {
+7612:       closeMenu();
+7613:       requestAnimationFrame(() => {
+7614:         _toggleMobileChatPushNotifications().catch(() => {});
+7615:       });
+7616:     }, { passive: true });
+7617: 
+7618:     pop.querySelector('#pm-chat-settings-files')?.addEventListener('click', () => {
+7619:       closeMenu();
+7620:       requestAnimationFrame(() => {
+7621:         handleBrowseCommand('').catch((err) => pmToast(err?.message || String(err || 'Could not open files'), 'error'));
+7622:       });
+7623:     }, { passive: true });
+7624: 
+7625:     document.body.appendChild(overlay);
+7626:     document.body.appendChild(pop);
+7627:     _refreshMobileChatPushButton().catch(() => {});
+7628:     _prefetchBrowseRoot().catch(() => {});
+7629:   };
+7630: 
+7631:   const header = renderMobileHeader({
+7632:     title: requestedSession === MOBILE_CHAT_SESSION_ID ? 'New Chat' : 'Chat',
+7633:     online: true,
+7634:     hideTitle: true,
+7635:     hideBrand: true,
+7636:     rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.compose}</button>`,
+7637:   });
+7638:   page.innerHTML = `
+7639:     ${header}
+7640:     ${renderMobileContextChip()}
+7641:     <div class="pm-body pm-chat-body" id="pm-chat-body">
+7642:       <div class="pm-chat-thread" id="pm-chat-thread"></div>
+7643:     </div>
+7644:     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
+7645:     <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
+7646:     <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
+7647:     <div class="pm-chat-connection-status" id="pm-chat-connection-status" hidden aria-live="polite">
+7648:       <span class="pm-chat-connection-spinner" aria-hidden="true"></span>
+7649:       <span class="pm-chat-connection-text">Reconnecting to Prometheus</span>
+7650:     </div>
+7651:     <form class="pm-composer" id="pm-composer">
+7652:       <span class="pm-glass-lens" aria-hidden="true"></span>
+7653:       <span class="pm-glass-border" aria-hidden="true"></span>
+7654:       <div class="pm-chat-slash-popover" id="pm-chat-slash-popover" hidden></div>
+7655:       <div class="pm-skill-trigger-pill" id="pm-skill-trigger-pill" hidden aria-live="polite"></div>
+7656:       <div class="pm-attach-tray" id="pm-attach-tray" hidden></div>
+7657:       <button type="button" class="pm-command-chip" id="pm-chat-command-chip" hidden aria-label="Clear slash command">
+7658:         <span class="pm-command-chip-token"></span>
+7659:         <span class="pm-command-chip-clear" aria-hidden="true">&times;</span>
+7660:       </button>
+7661:       <div class="pm-composer-row">
+7662:         <label class="pm-icon-btn pm-attach-native-btn" id="pm-attach-btn" aria-label="Attach files" role="button" tabindex="0">
+7663:           ${ICONS.paperclip}
+7664:           <input id="pm-file-input" class="pm-native-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" />
+7665:         </label>
+7666:         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
+7667:           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
+7668:           <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+7669:         </div>
+7670:         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
+7671:         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
+7672:       </div>
+7673:       <div class="pm-chat-voice-shell" id="pm-chat-voice-shell" hidden>
+7674:         <button type="button" class="pm-chat-voice-camera" id="pm-chat-voice-camera" aria-label="Attach realtime camera or photos">${ICONS.paperclip}</button>
+7675:         <button type="button" class="pm-chat-voice-close" id="pm-chat-voice-close" aria-label="Exit voice mode">&times;</button>
+7676:         <div class="pm-chat-voice-inline" id="pm-chat-voice-inline" hidden></div>
+7677:       </div>
+7678:     </form>
+7679:     <div class="pm-attach-sheet" id="pm-attach-sheet" hidden>
+7680:       <div class="pm-attach-sheet-scrim" id="pm-attach-sheet-scrim"></div>
+7681:       <section class="pm-attach-sheet-panel" aria-label="Attach">
+7682:         <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="files">
+7683:           <span>${ICONS.paperclip}</span>
+7684:           <strong>Files</strong>
+7685:         </button>
+7686:         <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="camera">
+7687:           <span>${ICONS.image}</span>
+7688:           <strong>Camera</strong>
+7689:         </button>
+7690:       </section>
+7691:     </div>
+7692:     <div class="pm-camera-capture" id="pm-camera-capture" hidden>
+7693:       <video class="pm-camera-video" id="pm-camera-video" autoplay muted playsinline></video>
+7694:       <div class="pm-camera-status" id="pm-camera-status">Opening camera...</div>
+7695:       <div class="pm-camera-record-timer" id="pm-camera-record-timer" hidden>0.0s</div>
+7696:       <div class="pm-camera-topbar">
+7697:         <button type="button" class="pm-camera-icon" id="pm-camera-close" aria-label="Close camera">&times;</button>
+7698:         <button type="button" class="pm-camera-icon" id="pm-camera-flip" aria-label="Flip camera">${ICONS.refresh}</button>
+7699:       </div>
+7700:       <div class="pm-camera-controls">
+7701:         <button type="button" class="pm-camera-shutter pm-camera-wave-shutter" id="pm-camera-shutter" aria-label="Capture image">
+7702:           <span class="pm-camera-wave-ambient" aria-hidden="true"></span>
+7703:           <span class="pm-camera-wave-line" aria-hidden="true"></span>
+7704:           <canvas class="pm-camera-strands-orb-canvas" id="pm-camera-strands-orb-canvas" aria-hidden="true"></canvas>
+7705:           <span class="pm-camera-glass-glint" aria-hidden="true"></span>
+7706:           <span class="pm-camera-record-core" aria-hidden="true"></span>
+7707:         </button>
+7708:       </div>
+7709:     </div>
+7710:     <div class="pm-mobile-side-sheet" id="pm-mobile-side-sheet" role="dialog" aria-modal="true" aria-label="Side chat">
+7711:       <div class="pm-mobile-side-scrim" id="pm-mobile-side-scrim"></div>
+7712:       <section class="pm-mobile-side-panel" id="pm-mobile-side-panel">
+7713:         <div class="pm-mobile-side-handle" id="pm-mobile-side-handle"></div>
+7714:         <header class="pm-mobile-side-header">
+7715:           <button type="button" class="pm-mobile-side-close" id="pm-mobile-side-close" aria-label="Close side chat">&times;</button>
+7716:           <div class="pm-mobile-side-title-wrap">
+7717:             <strong id="pm-mobile-side-title">Side Chat</strong>
+7718:             <span id="pm-mobile-side-subtitle">Prometheus · Mobile</span>
+7719:           </div>
+[READ_TRUNCATED] Returned 240 of 28932 lines. Use start_line:7720, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

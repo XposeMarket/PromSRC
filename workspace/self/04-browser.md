@@ -105,3 +105,7 @@ Browser-vs-web routing after the 2026-06-05 batch research update:
 - if the task is several known URLs with no interaction requirement, use `web_fetch({ urls: [...] })` before opening browser tabs
 - if the task is one X/Twitter status URL, use `web_fetch({ url })` first; if it is several X/Twitter status URLs, use `web_fetch({ urls: [...] })` first
 - escalate from web fetch tools to browser tools only when output is empty, blocked, noisy/nav-only, JS-rendered, auth-specific, or the user explicitly asked to operate the website
+
+## 9A) Session hygiene (browser_close)
+
+After a standalone browser task completes, call `browser_close` unless the user asked to keep the browser open for immediate follow-up. Reduces CDP port conflicts and wedged Chrome profiles. Migrated from workspace SOUL.md 2026-07-07; skill resource: `browser-automation-playbook` → `references/session-hygiene-browser-close.md`.

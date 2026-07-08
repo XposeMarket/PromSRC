@@ -9,6 +9,10 @@ version: 1.0.0
 
 Don't guess git commands. Use this reference for all git and GitHub CLI operations.
 
+## Prometheus public installer release
+
+Owner-approved publish flow and token hygiene: read **references/prometheus-public-release-pointer.md** → **workspace/self/18-public-release.md**. Do not store `GH_TOKEN` in memory or chat.
+
 ---
 
 ## Status & Inspection

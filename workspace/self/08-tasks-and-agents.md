@@ -1,5 +1,11 @@
 ## 16) Tasks, Background Agents, and Autonomous Runs
 
+### Display names (user-facing)
+
+- Refer to subagents by **display name** (`identity.displayName` / `name`), not technical `id`, in answers and summaries. Use `agent_id` only in tool calls.
+- Refresh roster via `agent_list` when uncertain.
+- Example: **Mara** (`x_account_operator_raulinvests_v1`) — @raulinvests; **entities/projects/mara-x-account-operator.md**.
+
 Current task statuses in `task-store.ts`:
 
 - `queued`

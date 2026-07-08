@@ -1,0 +1,262 @@
+self/21-runtime-prompt-map.md (461 lines) [window 1-260, truncated]:
+1: ## 37) Runtime Prompt Map (All Agent Surfaces)
+2: 
+3: Last verified against `src/gateway/routes/chat.router.ts`, `src/gateway/prompt-context.ts`, `src/gateway/tasks/background-task-runner.ts`, `src/gateway/scheduling/cron-scheduler.ts`, `src/gateway/teams/*`, `src/gateway/agents-runtime/subagent-manager.ts`, `src/gateway/boot.ts`, `src/gateway/brain/brain-runner.ts`, and `src/config/soul-loader.ts` on: 2026-06-08.
+4: 
+5: This file is the source-verified map of **where runtime prompts live**, **what each agent/runtime receives**, and **what overlaps**. It supplements [03-execution-and-prompting.md](03-execution-and-prompting.md), which describes layers at a high level but does not enumerate every surface, file, or injection difference.
+6: 
+7: ---
+8: 
+9: ## 1) The single assembly funnel
+10: 
+11: Almost every live agent turn goes through one function:
+12: 
+13: - **Entry:** `src/gateway/routes/chat.router.ts` — `handleChat()` at line 1756
+14: - **Default mode:** `executionMode = 'interactive'` (line 1764)
+15: 
+16: Each turn's system message is built from **four layers**:
+17: 
+18: | Layer | Source file | Lines | What it is |
+19: |-------|-------------|-------|------------|
+20: | 1. Execution-mode block | `src/gateway/routes/chat.router.ts` | 3105–3158 | `EXECUTION MODE: …` per mode |
+21: | 2. Core base policy | `src/gateway/routes/chat.router.ts` | 3160–3199 | "You are Prom…", creative/browser/team routing, plan protocol |
+22: | 3. Personality / memory / tools | `src/gateway/prompt-context.ts` | 964–1320 | `[USER]`, `[SOUL]`, `[MEMORY]`, `[TOOLS]`, skills, CIS, retrieved memory |
+23: | 4. Per-run caller overlay | various (see §4) | — | task context, team dispatch, schedule owner, boot, etc. |
+24: 
+25: Final system-prompt assembly (`buildSystemPrompt`):
+26: 
+27: - **File:** `src/gateway/routes/chat.router.ts`
+28: - **Lines:** 3201–3212
+29: 
+30: **Ordering difference (important):**
+31: 
+32: - **`team_subagent`:** `baseSystemPrompt` → model block → recent tool log → **personalityCtx** → **callerContext** → browser state
+33: - **Everything else:** `baseSystemPrompt` → model block → recent tool log → **callerContext** → browser state → **personalityCtx** → onboarding block (if applicable)
+34: 
+35: `buildPersonalityContext()` is called at `chat.router.ts:3070` before `buildSystemPrompt()`.
+36: 
+37: ---
+38: 
+39: ## 2) Workspace and config files that feed prompts
+40: 
+41: These are the **on-disk instruction sources** the runtime reads:
+42: 
+43: | File | Path | Loaded by | Injected into |
+44: |------|------|-----------|---------------|
+45: | Config soul | `src/config/soul.md` or `.prometheus/soul.md` | `loadSoul()` — `src/config/soul-loader.ts:70–72` | `[PROMETHEUS_SOUL]` in interactive, switch_model, voice, proposal execution |
+46: | USER.md | `workspace/USER.md` | `loadFullMemoryProfile()` — `prompt-context.ts:429–451` | Main chat, background_agent, team_manager, team_subagent, switch_model, voice, scheduled subagent-owner |
+47: | SOUL.md | `workspace/SOUL.md` | same | Same as USER (with mode-specific exceptions below) |
+48: | MEMORY.md | `workspace/MEMORY.md` | same | Same, with per-path char caps |
+49: | BUSINESS.md | `workspace/BUSINESS.md` | `loadBusinessContextProfile()` — `prompt-context.ts:394–396` | When business context mode is enabled for the session |
+50: | Intraday notes | `workspace/memory/YYYY-MM-DD-intraday-notes.md` | `prompt-context.ts:1219–1222` | Interactive main chat; skipped for background_agent and all autonomous paths |
+51: | AGENTS.md | `workspace/AGENTS.md` | `loadWorkspaceBootstrap()` — `soul-loader.ts:247–249` | **Not main chat.** Used by Realtime voice + legacy reactor path |
+52: | TOOLS.md | `workspace/TOOLS.md` | referenced in `buildToolsContext()` — `prompt-context.ts:864` | Hint only ("read_file('TOOLS.md')"), not full file inject in main chat |
+53: | BOOT.md | `workspace/BOOT.md` | boot snapshot `prompt-context.ts:339–372`; voice `prompt-context.ts:1051` | Boot startup user message; voice agent |
+54: | HEARTBEAT.md | per-agent workspace | `heartbeat-runner.ts:449–458` | Inlined into heartbeat **user message** |
+55: | VOICEAGENT.md | `workspace/VOICEAGENT.md` | `loadVoiceAgentMemory()` — `prompt-context.ts:385–392` | Voice/realtime only |
+56: | Subagent role | `.prometheus/subagents/<id>/system_prompt.md` | `subagent-manager.ts:425–477` (written), `483–520` (read into user prompt) | **User turn**, not system prompt |
+57: | Team agent role | team-scoped `system_prompt.md` | `team-dispatch-runtime.ts:330–335` | In `callerContext` |
+58: 
+59: **Correction vs older docs:** `workspace/AGENTS.md` is **not** auto-injected into main-chat `handleChat` turns. Main chat gets USER/SOUL/MEMORY via `buildPersonalityContext`, not `loadWorkspaceBootstrap`.
+60: 
+61: ---
+62: 
+63: ## 3) Layer 2 — core base policy (shared by almost everyone)
+64: 
+65: **File:** `src/gateway/routes/chat.router.ts`
+66: 
+67: | Block | Lines |
+68: |-------|-------|
+69: | Execution mode blocks | 3105–3158 |
+70: | Teach mode block | 3171–3182 |
+71: | Creative / HyperFrames / debugging routing | 3168–3170 |
+72: | Team routing policy | 3184–3189 |
+73: | Base identity + execution policy (`buildBaseSystemPrompt`) | 3191–3199 |
+74: | Model capability block | 2398–2411 |
+75: | Onboarding overlay | `onboarding/meet-prompt.ts:8–105` (appended when `onboarding_*` session) |
+76: 
+77: Everyone routed through `handleChat` gets `buildBaseSystemPrompt()` unless on the local-LLM `switch_model` shortcut path.
+78: 
+79: ### Execution mode system blocks (line 3105)
+80: 
+81: | Mode | Lines | Summary |
+82: |------|-------|---------|
+83: | `background_task` | 3106–3112 | Autonomous; no clarifying questions |
+84: | `proposal_execution` | 3114–3120 | Execute approved scope only; no new proposals |
+85: | `background_agent` | 3122–3127 | Ephemeral parallel agent |
+86: | `heartbeat` | 3129–3133 | Concise checks only |
+87: | `cron` | 3135–3140 | Scheduled; no side effects unless prompt says so |
+88: | `team_subagent` | 3142–3148 | Team task; escalate to manager via `talk_to_manager` |
+89: | `team_manager` | 3150–3156 | Managed team; dispatch/verify/update memory |
+90: 
+91: ### Plan protocol differences (line 3163)
+92: 
+93: - **`background_agent`:** `bg_plan_declare` / `bg_plan_advance` — not `declare_plan`
+94: - **`proposal_execution`:** fixed task plan; `step_complete` only
+95: - **Default (incl. main chat):** do not `declare_plan` unless user asks for a plan
+96: 
+97: ---
+98: 
+99: ## 4) Layer 3 — `buildPersonalityContext` paths
+100: 
+101: **File:** `src/gateway/prompt-context.ts:964–1320`
+102: 
+103: This is the main branching logic for memory, tools, and skills.
+104: 
+105: ### Path: `local_llm` (tiny local primary)
+106: 
+107: - **Lines:** 983–992
+108: - **Gets:** condensed `USER.md`, optional `[BUSINESS]`, active skills, delegation block from `src/config/local-model-prompts.ts:96–118`
+109: - **Skips:** SOUL, MEMORY, full tool blocks, config soul
+110: 
+111: ### Path: `teach_mode`
+112: 
+113: - **Lines:** 995–1017
+114: - **Triggered by:** `[TEACH_SESSION]` in caller context (`chat.router.ts:3067`)
+115: - **Gets:** `[USER]`, `[SOUL]`, full `buildToolsContext()` with browser forced on, skills
+116: 
+117: ### Path: `voice_agent`
+118: 
+119: - **Lines:** 1030–1087
+120: - **Gets:** config soul, USER, SOUL, BUSINESS, MEMORY, VOICEAGENT, BOOT, `self/index.md`, `self/06-image-voice.md`, project, CIS, retrieved memory, intraday, skills
+121: 
+122: ### Path: `switch_model` (cloud handoff from local primary)
+123: 
+124: - **Lines:** 1090–1119
+125: - **Gets:** config soul, USER, SOUL, BUSINESS, MEMORY, clean tool menu (no inherited session categories), CIS, retrieved memory, skills
+126: 
+127: ### Path: `team_subagent`
+128: 
+129: - **Lines:** 1121–1151
+130: - **Gets:** USER (3k cap), SOUL (4k), MEMORY (5k), BUSINESS, tools, CIS, skills
+131: - **Skips:** config soul (`[PROMETHEUS_SOUL]`), long-term memory search, intraday notes
+132: - **Note:** may fall back to main workspace for memory files if team workspace differs (lines 1124–1127)
+133: 
+134: ### Path: Autonomous (`background_task`, `proposal_execution`, `cron`, `heartbeat`)
+135: 
+136: - **Lines:** 1155–1212
+137: - **Gets:** BUSINESS, SOUL, MEMORY (varies), project, tools, CIS, skills
+138: - **Explicitly excludes (comments at 1163–1176):**
+139:   - `USER.md` — all autonomous modes
+140:   - `AGENTS.md` — all autonomous modes
+141:   - intraday notes — all autonomous modes
+142: - **Proposal-specific (1157–1162):** config soul as `[PROMETHEUS_SOUL]` only; workspace `MEMORY.md` excluded
+143: 
+144: ### Path: Interactive (default)
+145: 
+146: - **Lines:** 1215–1320 (tiered by `historyLength`)
+147: - **Used by:** main chat, `team_manager`, `background_agent`, boot, scheduled subagent-owner
+148: - **Gets:** config soul, USER, SOUL, BUSINESS, MEMORY (8k), project, full `buildToolsContext()`, CIS, retrieved memory search (interactive + background_agent only — line 1020), intraday notes (skipped for `background_agent` — line 1221), skills, `self/index.md` reference hint
+149: 
+150: ### Tool instruction corpus (shared across most paths)
+151: 
+152: | Block | File | Lines |
+153: |-------|------|-------|
+154: | `TOOL_BLOCKS` (per-category policies) | `prompt-context.ts` | 659–737 |
+155: | `CATEGORY_POLICIES` | `prompt-context.ts` | 753–787 |
+156: | `buildToolsContext()` menu + routing | `prompt-context.ts` | 795–925 |
+157: | Skills turn hint | `skills-manager.ts` | 839–875 (`buildTurnContext`) |
+158: | Active pinned skills | `prompt-context.ts` | 939–958 (`buildActiveSkillsContext`) |
+159: 
+160: Workspace tool surface note: `workspace_write` is wrapper-first. The exposed model schema should prefer `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`; granular file/git/run/safety/code-nav tools remain executable compatibility handlers but are hidden from normal schema injection.
+161: 
+162: Prometheus dev source note: `prometheus_source_read` exposes `dev_source_read`; `prometheus_source_write` exposes `dev_source_edit` only after the existing approval/category gate. Granular src/web-ui/prom-root read/write tools remain executable compatibility handlers but are hidden from normal schema injection.
+163: 
+164: Browser/desktop note: `browser_automation` exposes `browser_session`, `browser_observe`, `browser_act`, and `browser_extract`; `desktop_automation` exposes `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background`. Granular browser/desktop tools remain executable compatibility handlers but are hidden from normal schema injection.
+165: 
+166: External/agents/Creative note: `external_apps` exposes X/xAI wrappers (`x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, `x_admin`) and `vercel_ops` for the large bundled connectors; `agents_and_teams` exposes `agent_ops`, `agent_chat_ops`, `team_ops_wrapper`, and `team_collab_ops`; Creative buckets expose `creative_project`, `creative_scene`, `creative_image_ops`, `creative_video_ops`, `creative_hyperframes_ops`, and `creative_quality_ops`. Granular tools remain executable compatibility handlers but are hidden from normal schema injection.
+167: 
+168: Realtime voice note: `buildVoiceToolDefinitions()` in `src/gateway/routes/chat.router.ts` is also wrapper-first. The exposed voice schema uses `voice_ops`, `voice_browser`, and `voice_desktop`, plus canonical `skill_*` and rich `show_*` card tools. Granular `voice_web_*`, `voice_browser_*`, `voice_desktop_*`, screenshot/status, and simple generation tools remain executable compatibility handlers behind wrapper normalization.
+169: 
+170: ### Prompt-cache split
+171: 
+172: Volatile vs stable parts are joined with `PROMPT_CACHE_MARKER` via `assembleContext()` — `prompt-context.ts:23–35`. Adapters strip the marker before sending to the model.
+173: 
+174: ---
+175: 
+176: ## 5) Layer 4 — per-runtime caller overlays and entry points
+177: 
+178: ### 5A) Main Chat (Prometheus interactive)
+179: 
+180: | Component | File:lines |
+181: |-----------|------------|
+182: | Entry | `chat.router.ts` — default `executionMode='interactive'` at 1764 |
+183: | System assembly | `chat.router.ts:3070–3218` |
+184: | Memory injection | `prompt-context.ts:1215–1320` |
+185: | Onboarding | `onboarding/meet-prompt.ts:8–105` |
+186: | Boot startup | `boot.ts:100–108` user msg; snapshot via `prompt-context.ts:339–372` |
+187: | Self-reflection suffix | `config/self-reflection.ts:18–49` (when `write_note` available) |
+188: | Context compaction (isolated) | `chat.router.ts:1477–1528` — separate `ContextCompactor`, no persona |
+189: 
+190: **Main chat gets the fullest stack:** config soul + USER + SOUL + MEMORY + tools + skills + intraday + memory search + all base routing policies.
+191: 
+192: ### 5B) Background tasks
+193: 
+194: | Component | File:lines |
+195: |-----------|------------|
+196: | Runner | `background-task-runner.ts:1379` |
+197: | Mode | `background-task-runner.ts:2094` → `'background_task'` (unless team/proposal/subagent) |
+198: | Caller context | `background-task-runner.ts:594–691` — `[BACKGROUND TASK CONTEXT]` |
+199: | Personality | `prompt-context.ts:1155–1212` (autonomous) |
+200: 
+201: **Overlaps with main chat:** SOUL, MEMORY, `buildToolsContext`, skills, base routing.  
+202: **Does not get:** USER, AGENTS, intraday, long-term memory search.
+203: 
+204: ### 5C) Proposal execution
+205: 
+206: | Component | File:lines |
+207: |-----------|------------|
+208: | Mode | `background-task-runner.ts:2094` → `'proposal_execution'` |
+209: | Execution block | `chat.router.ts:3114–3120` |
+210: | Caller context | `background-task-runner.ts:595–623` — `PROPOSAL EXECUTION PROTOCOL` |
+211: | Personality | `prompt-context.ts:1157–1162` — config soul only, no workspace MEMORY |
+212: 
+213: ### 5D) Scheduled jobs (cron)
+214: 
+215: Three distinct paths:
+216: 
+217: #### Prometheus-owned schedule
+218: 
+219: | Component | File:lines |
+220: |-----------|------------|
+221: | Prompt assembly | `cron-scheduler.ts:1101–1114` — job prompt + schedule memory + self-reflection |
+222: | Execution | `cron-scheduler.ts:1581–1589` → `handleChat(..., 'cron')` |
+223: | Personality | `prompt-context.ts:1155–1212` (autonomous) |
+224: 
+225: Gets SOUL + MEMORY (no USER), cron execution block, schedule-learned context in user message.
+226: 
+227: #### Subagent-owned schedule
+228: 
+229: | Component | File:lines |
+230: |-----------|------------|
+231: | Identity load | `cron-scheduler.ts:185–200` — `system_prompt.md` → `AGENTS.md` → `HEARTBEAT.md` |
+232: | Caller context | `cron-scheduler.ts:203–220` — `[SUBAGENT CHAT CONTEXT]` |
+233: | Execution | `cron-scheduler.ts:1364–1380` → **`'interactive'`** (not `cron`) |
+234: 
+235: **Important:** subagent-owned scheduled runs use the **full interactive personality path** (USER + SOUL + MEMORY + config soul), not the lean cron path. Subagent identity is inlined in `callerContext`.
+236: 
+237: #### Team-owned schedule
+238: 
+239: | Component | File:lines |
+240: |-----------|------------|
+241: | Manager prompt | `cron-scheduler.ts:1173` + `buildScheduledTeamRunPrompt()` ~507 |
+242: | Manager execution | `team-coordinator.ts:629–637` → `'team_manager'` |
+243: 
+244: ### 5E) Standalone subagents (`spawn_subagent`)
+245: 
+246: | Component | File:lines |
+247: |-----------|------------|
+248: | Role file written | `subagent-manager.ts:425–477` |
+249: | Task prompt (user turn) | `subagent-manager.ts:483–520` |
+250: | Task created | `subagent-manager.ts:237–249` with `subagentProfile` |
+251: | Execution mode | `background-task-runner.ts:2094` → `'background_agent'` |
+252: | Plan protocol | `chat.router.ts:3163–3164` — `bg_plan_*` |
+253: 
+254: Role instructions live in the **user message**. System prompt still gets interactive-tier personality (USER + SOUL + MEMORY + config soul + tools) because `background_agent` is not in the autonomous list.
+255: 
+256: Fallback (no handleChat): `task-runner.ts:519–532` — tiny isolated system string.
+257: 
+258: ### 5F) Ephemeral `background_spawn`
+259: 
+260: | Component | File:lines |
+[READ_TRUNCATED] Returned 260 of 461 lines. Use start_line:261, num_lines:260 for the next chunk, or pass full:true only when the whole file is truly needed.

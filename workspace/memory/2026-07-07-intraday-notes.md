@@ -43,3 +43,19 @@ Mobile live trace UX (preamble + tool streams): (1) Stopped openLiveCurrent from
 ### [TASK] 2026-07-07T22:45:06.540Z
 _Source: Mobile chat session; session: mobile_mrb8ki5t_spoxzq; origin: Mobile app_
 AI smoke test 2026-07-07 mobile_mrb8ki5t: Codex+Claude windows not found (only Notepad/PowerShell). Browser doctor OK; Reddit scroll_collect ~6k chars on Claude OpenClaw Hermes AI; X live search 9 tweets. Browser closed.
+
+### [DEV_EDIT_COMPLETE] 2026-07-07T23:00:26.013Z
+_Source: Mobile chat session; session: mobile_mrb8qtbc_j5c2c1; origin: Mobile app_
+After prom push 711299a: mobile preamble Pass A+B in web-ui/src/mobile/mobile-pages.js — _shouldRouteMobileTokenToLiveTrace routes pre-tool tokens to live trace (preamble append); _moveMobileWorkflowBubbleBeforeTool on tool boundaries (pre-tool → _moveMobilePreToolAnswerIntoPreamble, post-tool → think); _mobileLiveTraceCompactionEnabled skips fragment dedupe/compaction while streaming. Main + side chat token handlers updated. dev_edit_mrb8yyzt_f00f5793 applied live + sync.
+
+### [TASK] 2026-07-07T23:28:19.250Z
+_Source: Main chat session; session: d21552c3-5992-4995-a7ef-4539af959bd4; origin: Mobile app_
+SOUL slim-down 2026-07-07: SOUL.md 61→34 lines. Moved rules to MEMORY operational_rules, skill resources (browser-automation, file-surgery, interactive-visuals, x-browser), self/04-browser §9A, self/13-memory, self/index note; USER em-dash preference added.
+
+### [TASK] 2026-07-07T23:47:33.185Z
+_Source: Main chat session; session: d21552c3-5992-4995-a7ef-4539af959bd4; origin: Mobile app_
+USER slim-down 2026-07-07: USER.md ~86→40 lines. Moved internals to MEMORY operational_rules, dev-debugging/local-lead-hunting/file-surgery refs, self/13-memory.md. Presented USER in canvas on request.
+
+### [TASK] 2026-07-07T23:57:03.451Z
+_Source: Main chat session; session: d21552c3-5992-4995-a7ef-4539af959bd4; origin: Mobile app_
+MEMORY hygiene batch 2026-07-07: migrated release/UI/X/Xpose/Mara blocks from MEMORY to self/17-local-ui-verification, git-workflow ref, x-browser scheduled-x-jobs ref, xpose-market-lead-gen entity, self/08 display names; trimmed MEMORY key_decisions + operational_rules + project_memory X lines.

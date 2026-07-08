@@ -1,0 +1,262 @@
+src/gateway/agents-runtime/subagent-executor.ts (19720 lines) [window 14260-14519, truncated]:
+14260:           args,
+14261:           result: JSON.stringify(out, null, 2),
+14262:           error: !out.success,
+14263:         };
+14264:       }
+14265: 
+14266:       case 'automation_dashboard': {
+14267:         const out = automationDashboardTool(deps.cronScheduler, args);
+14268:         return {
+14269:           name,
+14270:           args,
+14271:           result: JSON.stringify(out, null, 2),
+14272:           error: !out.success,
+14273:         };
+14274:       }
+14275: 
+14276:       case 'spawn_subagent': {
+14277:         // Spawn a specialized sub-agent with restricted tool set
+14278:         // This is used by primary agents to delegate work to secondary specialists
+14279:         try {
+14280:           const subagentId = String(args.subagent_id || '').trim();
+14281:           const taskPrompt = String(args.task_prompt || '').trim();
+14282:           const runNow = args.run_now !== false;
+14283:           const contextData = args.context_data && typeof args.context_data === 'object' ? args.context_data : undefined;
+14284:           let createIfMissing = args.create_if_missing && typeof args.create_if_missing === 'object' ? { ...args.create_if_missing } : undefined;
+14285: 
+14286:           // from_role: hydrate create_if_missing from the role registry
+14287:           const fromRole = args.from_role ? String(args.from_role).trim().toLowerCase() : null;
+14288:           if (fromRole) {
+14289:             try {
+14290:               const configDir = getConfig().getConfigDir ? getConfig().getConfigDir() : path.join(process.cwd(), '.prometheus');
+14291:               const registryPath = path.join(configDir, 'agents', `${fromRole}.json`);
+14292:               if (fs.existsSync(registryPath)) {
+14293:                 const roleDef = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+14294:                 const specialization = String(args.specialization || createIfMissing?.teamAssignment || createIfMissing?.teamRole || '').trim();
+14295:                 const roleName = String(roleDef.name || fromRole.charAt(0).toUpperCase() + fromRole.slice(1)).trim();
+14296:                 const derivedTeamRole = String(createIfMissing?.teamRole || '').trim()
+14297:                   || (specialization
+14298:                     ? specialization.split(/[.!?\n]/)[0].replace(/^focus on\s+/i, '').slice(0, 80)
+14299:                     : roleName);
+14300:                 const derivedDescription = String(createIfMissing?.description || '').trim()
+14301:                   || (specialization || roleDef.description || '');
+14302:                 const combinedSystemInstructions = [
+14303:                   `[BASE PRESET ROLE - ${roleName}]`,
+14304:                   String(roleDef.system_prompt || '').trim(),
+14305:                   ``,
+14306:                   `[SUBAGENT SPECIALIZATION - ${derivedTeamRole}]`,
+14307:                   specialization || 'No specialization was provided. Infer the assignment from the direct task message.',
+14308:                   ``,
+14309:                   `When the specialization conflicts with the generic preset, follow the specialization while preserving the preset's quality bar and deliverable discipline.`,
+14310:                 ].filter(Boolean).join('\n');
+14311:                 // Merge registry definition into create_if_missing (caller fields take priority)
+14312:                 createIfMissing = {
+14313:                   name: createIfMissing?.name,
+14314:                   description: derivedDescription,
+14315:                   system_instructions: createIfMissing?.system_instructions || combinedSystemInstructions,
+14316: 	                  forbidden_tools: createIfMissing?.forbidden_tools || [],
+14317:                   constraints: createIfMissing?.constraints || [],
+14318:                   success_criteria: createIfMissing?.success_criteria || `Complete the assigned task and post the done signal.`,
+14319:                   max_steps: createIfMissing?.max_steps || 20,
+14320:                   model: createIfMissing?.model || roleDef.model || undefined,
+14321:                   roleType: fromRole,
+14322:                   teamRole: derivedTeamRole,
+14323:                   teamAssignment: String(createIfMissing?.teamAssignment || specialization || '').trim(),
+14324:                   baseRolePrompt: String(roleDef.system_prompt || '').trim(),
+14325:                 };
+14326:               } else {
+14327:                 console.warn(`[spawn_subagent] Role registry file not found: ${registryPath}`);
+14328:               }
+14329:             } catch (roleErr: any) {
+14330:               console.warn(`[spawn_subagent] Failed to load role "${fromRole}": ${roleErr.message}`);
+14331:             }
+14332:           }
+14333: 
+14334:           if (createIfMissing) {
+14335:             if (args.personality_style !== undefined && createIfMissing.personality_style === undefined) {
+14336:               createIfMissing.personality_style = String(args.personality_style || '').trim();
+14337:             }
+14338:             if (args.name_style !== undefined && createIfMissing.name_style === undefined) {
+14339:               createIfMissing.name_style = String(args.name_style || '').trim();
+14340:             }
+14341:           }
+14342: 
+14343:           if (!subagentId) {
+14344:             return { name, args, result: 'spawn_subagent requires subagent_id', error: true };
+14345:           }
+14346:           if (runNow && !taskPrompt) {
+14347:             return { name, args, result: 'spawn_subagent requires task_prompt when run_now=true', error: true };
+14348:           }
+14349: 
+14350:           // Get workspace path from config
+14351:           const workspacePath = getConfig().getConfig().workspace?.path || process.cwd();
+14352: 
+14353:           // Create SubagentManager with broadcast + deps.handleChat (Piece 3)
+14354:           const subagentMgr = new SubagentManager(workspacePath, deps.broadcastWS, deps.handleChat, deps.telegramChannel);
+14355: 
+14356:           // Call the subagent (creates if missing)
+14357:           const result = await subagentMgr.callSubagent(
+14358:             {
+14359:               subagent_id: subagentId,
+14360:               task_prompt: taskPrompt,
+14361:               run_now: runNow,
+14362:               context_data: contextData,
+14363:               create_if_missing: createIfMissing,
+14364:             },
+14365:             sessionId // parent task ID (session context)
+14366:           );
+14367: 
+14368:           return {
+14369:             name,
+14370:             args,
+14371:             result: JSON.stringify(result, null, 2),
+14372:             error: false,
+14373:           };
+14374:         } catch (err: any) {
+14375:           return { name, args, result: `spawn_subagent error: ${err.message}`, error: true };
+14376:         }
+14377:       }
+14378: 
+14379:       case 'team_manage': {
+14380:         try {
+14381:           const action = String(args.action || '').trim().toLowerCase();
+14382:           if (!action) {
+14383:             return { name, args, result: 'team_manage requires action: list|create|set_allowed_work_paths|start|trigger_review|dispatch|pause|resume', error: true };
+14384:           }
+14385: 
+14386:           if (action === 'list') {
+14387:             const teams = listManagedTeams().map((t) => ({
+14388:               id: t.id,
+14389:               name: t.name,
+14390:               description: t.description,
+14391:               emoji: t.emoji,
+14392:               subagentIds: t.subagentIds,
+14393:               allowedWorkPaths: Array.isArray((t as any).allowedWorkPaths) ? (t as any).allowedWorkPaths : [],
+14394:               teamContext: String(t.teamContext || '').slice(0, 220),
+14395:               reviewTrigger: t.manager.reviewTrigger,
+14396:               paused: t.manager?.paused === true,
+14397:               lastReviewAt: t.manager.lastReviewAt || null,
+14398:               totalRuns: t.totalRuns || 0,
+14399:             }));
+14400:             return {
+14401:               name,
+14402:               args,
+14403:               result: JSON.stringify({ success: true, action: 'list', count: teams.length, teams }, null, 2),
+14404:               error: false,
+14405:             };
+14406:           }
+14407: 
+14408:           if (action === 'delete') {
+14409:             const teamId = String(args.team_id || args.teamId || '').trim();
+14410:             if (!teamId) return { name, args, result: 'team_manage(delete) requires team_id', error: true };
+14411:             if (args.confirm !== true) {
+14412:               return { name, args, result: 'team_manage(delete) requires confirm=true because this permanently deletes the managed team, team workspace files, and member agents by default.', error: true };
+14413:             }
+14414:             const result = deleteTeamCompletely({
+14415:               teamId,
+14416:               cronScheduler: deps.cronScheduler,
+14417:               broadcastTeamEvent: deps.broadcastTeamEvent,
+14418:               deleteAgents: args.delete_agents !== false && args.deleteAgents !== false,
+14419:             });
+14420:             return {
+14421:               name,
+14422:               args,
+14423:               result: JSON.stringify(result, null, 2),
+14424:               error: result.success !== true,
+14425:             };
+14426:           }
+14427: 
+14428:           if (action === 'create') {
+14429:             const teamName = String(args.name || '').trim();
+14430:             const teamContext = String(args.team_context || args.teamContext || args.purpose || '').trim();
+14431:             if (!teamName || !teamContext) {
+14432:               return { name, args, result: 'team_manage(create) requires name and team_context (or purpose)', error: true };
+14433:             }
+14434: 
+14435:             const requestedIds = Array.isArray(args.subagent_ids)
+14436:               ? args.subagent_ids.map((v: any) => deps.sanitizeAgentId(v)).filter(Boolean)
+14437:               : [];
+14438:             const memberIds = new Set<string>(requestedIds);
+14439:             const createdSubagents: Array<{ subagent_id: string; status: string }> = [];
+14440: 
+14441:             // create_subagents path is disabled — agents must be pre-created via spawn_subagent(run_now:false)
+14442:             if (Array.isArray(args.create_subagents) && args.create_subagents.length > 0) {
+14443:               return {
+14444:                 name, args,
+14445:                 result: 'ERROR: create_subagents is not supported. CORRECT WORKFLOW:\n  STEP 1: Call spawn_subagent(subagent_id, run_now:false, create_if_missing:{...}) for each agent.\n  STEP 2: Then call team_manage(action:"create", subagent_ids:[...those IDs...]).\nRetry from STEP 1.',
+14446:                 error: true,
+14447:               };
+14448:             }
+14449: 
+14450:             const finalIds = Array.from(memberIds);
+14451:             if (finalIds.length === 0) {
+14452:               return { name, args, result: 'team_manage(create) requires at least one subagent_id. WORKFLOW: create agents first with spawn_subagent(run_now:false), then pass their IDs here.', error: true };
+14453:             }
+14454:             const missing = finalIds.filter((id) => !getAgentById(id));
+14455:             if (missing.length > 0) {
+14456:               return { name, args, result: `Unknown subagent_ids: ${missing.join(', ')}`, error: true };
+14457:             }
+14458: 
+14459:             const rawTrigger = String(args.review_trigger || '').trim().toLowerCase();
+14460:             const reviewTrigger = (['after_each_run', 'after_all_runs', 'daily', 'manual'].includes(rawTrigger)
+14461:               ? rawTrigger
+14462:               : 'after_each_run') as 'after_each_run' | 'after_all_runs' | 'daily' | 'manual';
+14463: 
+14464:             const purposeStr = args.purpose ? String(args.purpose).slice(0, 1000) : undefined;
+14465:             const allowedWorkPaths = Array.isArray(args.allowed_work_paths)
+14466:               ? args.allowed_work_paths.map((v: any) => String(v).trim()).filter(Boolean)
+14467:               : Array.isArray(args.allowedWorkPaths)
+14468:                 ? args.allowedWorkPaths.map((v: any) => String(v).trim()).filter(Boolean)
+14469:                 : [];
+14470: 	            const team = createManagedTeam({
+14471:               name: teamName.slice(0, 80),
+14472:               description: String(args.description || '').slice(0, 300),
+14473:               emoji: String(args.emoji || '🏠').slice(0, 4),
+14474:               subagentIds: finalIds,
+14475:               purpose: purposeStr,
+14476:               teamContext: teamContext.slice(0, 1000),
+14477:               managerSystemPrompt: String(
+14478:                 args.manager_system_prompt || `You are the manager of the "${teamName}" team. Your purpose is: ${purposeStr || teamContext}`
+14479:               ).slice(0, 2000),
+14480:               managerModel: args.manager_model ? String(args.manager_model) : undefined,
+14481:               allowedWorkPaths,
+14482:               reviewTrigger,
+14483: 	              originatingSessionId: args.originating_session_id ? String(args.originating_session_id) : undefined,
+14484: 	            });
+14485:             const claimedSubagents = finalIds
+14486:               .map((id) => ({ subagent_id: id, ...(claimAgentForTeamWorkspace(team.id, id) || {}) }))
+14487:               .filter((entry) => !!entry.identityPath);
+14488: 	            deps.bindTeamNotificationTargetFromSession(team.id, sessionId, 'team_manage:create');
+14489: 
+14490:             // Default false — team must be explicitly started via trigger_review or the Start button.
+14491:             // Auto-kickoff was removed: teams should wait for the user to assign a first task.
+14492:             const kickoffInitial = args.kickoff_initial_review === true;
+14493:             const kickoffSecondsRaw = Number(args.kickoff_after_seconds);
+14494:             const kickoffSeconds = Number.isFinite(kickoffSecondsRaw)
+14495:               ? Math.max(5, Math.min(300, Math.floor(kickoffSecondsRaw)))
+14496:               : 30;
+14497:             const kickoffAt = kickoffInitial ? Date.now() + (kickoffSeconds * 1000) : null;
+14498:             if (kickoffInitial) {
+14499:               setTimeout(() => {
+14500:                 triggerManagerReview(team.id, deps.broadcastTeamEvent).catch(err =>
+14501:                   console.error('[Teams] Initial manager review failed:', err?.message || err)
+14502:                 );
+14503:               }, kickoffSeconds * 1000);
+14504:             }
+14505: 
+14506:             deps.broadcastTeamEvent({
+14507:               type: 'team_created',
+14508:               teamId: team.id,
+14509:               teamName: team.name,
+14510:               teamEmoji: team.emoji,
+14511:               subagentIds: team.subagentIds,
+14512:               kickoffAt,
+14513:             });
+14514: 
+14515:             return {
+14516:               name,
+14517:               args,
+14518:               result: JSON.stringify({
+14519:                 success: true,
+[READ_TRUNCATED] Returned 260 of 19720 lines. Use start_line:14520, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

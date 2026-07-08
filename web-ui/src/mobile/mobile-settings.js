@@ -2,6 +2,50 @@ import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobi
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
 import { prettifyModelName } from './mobile-model-badge.js';
 
+// Fallback model lists when /api/extensions/catalog is unavailable.
+// Keep xAI order aligned with the xAI extension staticModels catalog.
+const BUILTIN_STATIC_MODELS = {
+  openai: ['gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1'],
+  openai_codex: ['gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'],
+  anthropic: ['claude-fable-5','claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-5','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-4-5-20251001'],
+  perplexity: ['sonar-pro','sonar','sonar-reasoning-pro','sonar-reasoning','sonar-deep-research'],
+  gemini: ['gemini-2.5-pro','gemini-2.5-flash','gemini-2.5-flash-lite','gemini-2.0-flash','gemini-1.5-pro','gemini-1.5-flash'],
+  xai: ['grok-4.5','grok-composer-2.5-fast','grok-4.3','grok-4.3-latest','grok-latest','grok-4.20-0309-reasoning','grok-4.20-0309-non-reasoning','grok-4.20-multi-agent-0309','grok-4.20-multi-agent','grok-build-0.1'],
+};
+
+let _providerCatalogCache = null;
+
+async function loadProviderCatalog(force = false) {
+  if (_providerCatalogCache && !force) return _providerCatalogCache;
+  try {
+    const data = await mobileGatewayFetch('/api/extensions/catalog?kind=provider');
+    _providerCatalogCache = Array.isArray(data?.items) ? data.items : [];
+  } catch {
+    _providerCatalogCache = _providerCatalogCache || [];
+  }
+  return _providerCatalogCache;
+}
+
+function modelsForProvider(provider, currentModel = '') {
+  const id = String(provider || '').trim();
+  const item = (_providerCatalogCache || []).find((p) => p && p.id === id) || null;
+  const out = [];
+  const push = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const entry of arr) {
+      const model = String((entry && entry.name) || entry || '').trim();
+      if (model && !out.includes(model)) out.push(model);
+    }
+  };
+  // Prefer extension catalog order (source of truth), then builtin fallback.
+  push(item && item.runtime && item.runtime.options && item.runtime.options.staticModels);
+  push(BUILTIN_STATIC_MODELS[id]);
+  const selected = String(currentModel || '').trim();
+  if (selected && !out.includes(selected)) out.unshift(selected);
+  return out;
+}
+
+
 const SECTIONS = [
   { id: 'heartbeat', title: 'Heartbeat', icon: 'clock', desc: 'Background heartbeat cadence and instructions.' },
   { id: 'search', title: 'Search', icon: 'target', desc: 'Preferred web search provider.' },
@@ -175,6 +219,7 @@ async function renderModels(content, page) {
     mobileGatewayFetch('/api/settings/provider'),
     mobileGatewayFetch('/api/settings/session').catch(() => null),
     loadGatewayStatus().catch(() => null),
+    loadProviderCatalog(),
   ]);
   const llm = providerData?.llm || {};
   const active = llm.provider || 'ollama';
@@ -317,20 +362,20 @@ function renderProviderFields(provider, cfg = {}) {
   if (provider === 'openai') {
     return `
       ${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="sk-..."'))}
-      ${field('Model', select(modelId, modelOptions(provider, ['gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1']), cfg.model || 'gpt-5.5'))}
+      ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gpt-5.5')), cfg.model || 'gpt-5.5'))}
       ${field('Reasoning Effort', select(effortId, efforts.slice(0, 5), cfg.reasoning_effort || ''))}
     `;
   }
   if (provider === 'openai_codex') {
     return `
-      ${field('Model', select(modelId, modelOptions(provider, ['gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'], cfg.model || 'gpt-5.5'))}
+      ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gpt-5.5')), cfg.model || 'gpt-5.5'))}
       ${field('Reasoning Effort', select(effortId, efforts, cfg.reasoning_effort || ''))}
       <div class="pm-settings-callout">Connect or disconnect the ChatGPT account from Credentials/Auth controls on desktop if OAuth needs renewal.</div>
     `;
   }
   if (provider === 'anthropic') {
     return `
-      ${field('Model', select(modelId, modelOptions(provider, ['claude-fable-5','claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-5','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-4-5-20251001']), cfg.model || 'claude-sonnet-5'))}
+      ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'claude-sonnet-5')), cfg.model || 'claude-sonnet-5'))}
       ${field('Thinking Effort', select(effortId, anthropicEfforts, cfg.reasoning_effort || ''))}
       ${toggleRow('pm-anthropic-thinking', 'Extended thinking', cfg.extended_thinking === true)}
       ${toggleRow('pm-anthropic-fast', 'Fast mode (Opus 4.6/4.7/4.8)', cfg.fast_mode === true)}
@@ -338,17 +383,17 @@ function renderProviderFields(provider, cfg = {}) {
     `;
   }
   if (provider === 'perplexity') {
-    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="pplx-..."'))}${field('Model', select(modelId, modelOptions(provider, ['sonar-pro','sonar','sonar-reasoning-pro','sonar-reasoning','sonar-deep-research']), cfg.model || 'sonar-pro'))}${field('Reasoning Effort', select(effortId, ['', 'low', 'medium', 'high'].map(v => ({ value: v, label: v || 'none' })), cfg.reasoning_effort || ''))}`;
+    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="pplx-..."'))}${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'sonar-pro')), cfg.model || 'sonar-pro'))}${field('Reasoning Effort', select(effortId, ['', 'low', 'medium', 'high'].map(v => ({ value: v, label: v || 'none' })), cfg.reasoning_effort || ''))}`;
   }
   if (provider === 'xai') {
     const xaiEffortValues = /^grok-4\.20-multi-agent(?:-|$)/i.test(String(cfg.model || '').trim())
       ? ['', 'low', 'medium', 'high', 'xhigh']
       : ['', 'none', 'low', 'medium', 'high'];
     const xaiEfforts = xaiEffortValues.map(v => ({ value: v, label: v === 'xhigh' ? 'extra high' : (v || 'provider default') }));
-    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="xai-..."'))}${field('Model', select(modelId, modelOptions(provider, ['grok-build-0.1','grok-composer-2.5-fast','grok-4.3','grok-4.3-latest','grok-latest','grok-4.20-0309-reasoning','grok-4.20-0309-non-reasoning','grok-4.20-multi-agent-0309','grok-4.20-multi-agent']), cfg.model || 'grok-4.3'))}${field('Reasoning Effort', select(effortId, xaiEfforts, cfg.reasoning_effort || ''))}${field('Endpoint', input(endpointId, cfg.endpoint || '', 'placeholder="https://api.x.ai/v1"'))}`;
+    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="xai-..."'))}${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'grok-4.3')), cfg.model || 'grok-4.3'))}${field('Reasoning Effort', select(effortId, xaiEfforts, cfg.reasoning_effort || ''))}${field('Endpoint', input(endpointId, cfg.endpoint || '', 'placeholder="https://api.x.ai/v1"'))}`;
   }
   if (provider === 'gemini') {
-    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="AIza..."'))}${field('Model', select(modelId, modelOptions(provider, ['gemini-2.5-pro','gemini-2.5-flash','gemini-2.5-flash-lite','gemini-2.0-flash','gemini-1.5-pro','gemini-1.5-flash']), cfg.model || 'gemini-2.5-pro'))}`;
+    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="AIza..."'))}${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gemini-2.5-pro')), cfg.model || 'gemini-2.5-pro'))}`;
   }
   return `${field('Model', input(modelId, cfg.model || '', 'placeholder="Provider model"'))}${field('Endpoint', input(endpointId, cfg.endpoint || '', 'placeholder="Optional endpoint"'))}`;
 }

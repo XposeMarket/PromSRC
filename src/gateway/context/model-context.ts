@@ -49,6 +49,7 @@ const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: Kn
   { provider: /^(perplexity)$/i, model: /^sonar/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
   { provider: /^(xai)$/i, model: /^grok-composer/i, profile: { contextWindowTokens: 200000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(xai)$/i, model: /^(grok-build-0\.1|grok-code-fast(?:-1)?(?:-\d{4})?)$/i, profile: { contextWindowTokens: 256000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^(xai)$/i, model: /^grok-4\.5(?:-latest)?$/i, profile: { contextWindowTokens: 500000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(xai)$/i, model: /^(grok-4\.3(?:-latest)?|grok-latest)$/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(xai)$/i, model: /^grok-4\.20-(?:.*non-reasoning)/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: false } },
   { provider: /^(xai)$/i, model: /^grok-4\.20(?:$|-)/i, profile: { contextWindowTokens: 1000000, maxOutputTokens: 8192, tokenizer: 'openai', supportsReasoningTokens: true } },

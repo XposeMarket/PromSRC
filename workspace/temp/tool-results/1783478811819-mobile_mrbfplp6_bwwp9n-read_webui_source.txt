@@ -1,0 +1,222 @@
+web-ui/src/mobile/mobile-pages.js (28932 lines) [window 22880-23099, truncated]:
+22880:       <span class="pm-team-name">${escapeHtml(t.name)}</span>
+22881:       <span class="pm-team-agents">${ICONS.users} ${t.agents} agents</span>
+22882:     </button>
+22883:   `;
+22884: }
+22885: 
+22886: function teamsSkeletonHtml() {
+22887:   const tile = `<div class="pm-team-tile" style="opacity:.55"><span class="pm-house" style="opacity:.4">🏠</span><span class="pm-team-name" style="background:rgba(0,0,0,.06);color:transparent;border-radius:6px;height:16px;width:80%;">loading</span></div>`;
+22888:   return `<div class="pm-team-grid">${tile.repeat(4)}</div>`;
+22889: }
+22890: 
+22891: export async function renderTeamsPage(page, { navigate }) {
+22892:   const extras = `
+22893:     <span class="pm-count-pill" id="pm-teams-count">…</span>
+22894:     <span class="pm-spacer"></span>
+22895:     <button class="pm-icon-btn" id="pm-teams-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>
+22896:   `;
+22897:   const header = renderMobileHeader({ title: 'Teams', online: false, extras });
+22898:   page.innerHTML = `
+22899:     ${header}
+22900:     <div class="pm-body" id="pm-teams-body">${teamsSkeletonHtml()}</div>
+22901:   `;
+22902:   wireHeaderActions(page, {});
+22903: 
+22904:   const body = page.querySelector('#pm-teams-body');
+22905:   const countEl = page.querySelector('#pm-teams-count');
+22906:   const refresh = page.querySelector('#pm-teams-refresh');
+22907: 
+22908:   async function paint() {
+22909:     let teams = [];
+22910:     try {
+22911:       teams = await loadMobileTeams();
+22912:     } catch (err) {
+22913:       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.users}</div><h2>Couldn’t load teams</h2><p>${escapeHtml(err.message || 'Network error')}</p></div>`;
+22914:       countEl.textContent = '0 teams';
+22915:       return;
+22916:     }
+22917: 
+22918:     countEl.textContent = `${teams.length} team${teams.length === 1 ? '' : 's'}`;
+22919:     if (!teams.length) {
+22920:       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.users}</div><h2>No teams yet</h2><p>Create your first team from the desktop app.</p></div>`;
+22921:       return;
+22922:     }
+22923: 
+22924:     const featured = teams.find(t => t.featured) || teams[0];
+22925:     let detail = null;
+22926:     try { detail = await loadMobileTeamDetail(featured.id); } catch {}
+22927: 
+22928:     const previewHtml = detail ? `
+22929:       <div class="pm-team-preview">
+22930:         <div class="pm-team-preview-head">
+22931:           <span class="pm-mini-house">${escapeHtml(detail.emoji || '🏠')}</span>
+22932:           <h3>${escapeHtml(detail.name)}</h3>
+22933:           <button class="pm-pill-btn" data-go="${escapeHtml(detail.id)}">View Team ${ICONS.chev}</button>
+22934:         </div>
+22935:         <div style="font-size:13px;color:var(--pm-muted);font-weight:700;margin-top:4px;">Team members</div>
+22936:         <div class="pm-chip-row">
+22937:           ${detail.members.map(m => `<span class="pm-member-chip"><span class="pm-avatar" style="background:${m.color}">${m.avatar}</span>${escapeHtml(m.name)}</span>`).join('')}
+22938:         </div>
+22939:         <div class="pm-divider"></div>
+22940:         <div class="pm-row"><span>🗂️ Workspace</span><span style="color:var(--pm-muted)">${escapeHtml(detail.workspace)} ${ICONS.chev}</span></div>
+22941:         <div class="pm-divider"></div>
+22942:         <div class="pm-row" style="flex-direction:column;align-items:stretch;gap:4px;">
+22943:           <div style="display:flex;justify-content:space-between;align-items:center;">
+22944:             <strong>Progress</strong>
+22945:             <span style="color:var(--pm-muted)">Recent runs <b style="color:var(--pm-text)">${detail.runsDone} / ${detail.runsTotal} runs</b></span>
+22946:           </div>
+22947:           <div class="pm-progress"><span style="width:${detail.runsTotal ? Math.round((detail.runsDone/detail.runsTotal)*100) : 0}%"></span></div>
+22948:         </div>
+22949:       </div>
+22950:     ` : '';
+22951: 
+22952:     body.innerHTML = `
+22953:       <div class="pm-team-grid">${teams.map(teamTileHtml).join('')}</div>
+22954:       ${previewHtml}
+22955:     `;
+22956:     body.querySelectorAll('[data-team]').forEach(btn => {
+22957:       btn.addEventListener('click', () => navigate(`#mobile/teams/${btn.getAttribute('data-team')}`));
+22958:     });
+22959:     body.querySelectorAll('[data-go]').forEach(btn => {
+22960:       btn.addEventListener('click', () => navigate(`#mobile/teams/${btn.getAttribute('data-go')}`));
+22961:     });
+22962:   }
+22963: 
+22964:   refresh.addEventListener('click', () => {
+22965:     invalidateTeamsCache();
+22966:     body.innerHTML = teamsSkeletonHtml();
+22967:     paint();
+22968:   });
+22969: 
+22970:   await paint();
+22971: }
+22972: 
+22973: /* ---------------- TEAM DETAIL ---------------- */
+22974: function teamDetailSkeleton() {
+22975:   return `
+22976:     <div class="pm-detail-head"><span class="pm-house-icon">🏠</span><h1 style="background:rgba(0,0,0,.06);color:transparent;border-radius:8px;height:24px;flex:1;">loading</h1></div>
+22977:     <div class="pm-detail-sub">…</div>
+22978:     <div class="pm-action-row">
+22979:       <button class="pm-action-btn primary">${ICONS.play} Start Run</button>
+22980:       <button class="pm-action-btn">${ICONS.pause} Pause</button>
+22981:       <button class="pm-action-btn">${ICONS.brain} Review</button>
+22982:       <button class="pm-action-btn danger">${ICONS.trash} Delete</button>
+22983:     </div>
+22984:     <div class="pm-card" style="opacity:.5"><div class="pm-card-head">${ICONS.target} Purpose</div><div class="pm-card-body">Loading team…</div></div>
+22985:   `;
+22986: }
+22987: 
+22988: export async function renderTeamDetailPage(page, { teamId, navigate, initialTab = '' }) {
+22989:   // Paint shell + skeleton first
+22990:   page.innerHTML = `
+22991:     <header class="pm-header">
+22992:       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
+22993:       <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
+22994:       <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+22995:     </header>
+22996:     <div class="pm-body" id="pm-detail-body">${teamDetailSkeleton()}</div>
+22997:   `;
+22998:   wireHeaderActions(page, { onBack: () => navigate('#mobile/teams') });
+22999: 
+23000:   const body = page.querySelector('#pm-detail-body');
+23001: 
+23002:   let t = null;
+23003:   try {
+23004:     t = await loadMobileTeamDetail(teamId);
+23005:   } catch (err) {
+23006:     body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.users}</div><h2>Couldn’t load team</h2><p>${escapeHtml(err.message || 'Network error')}</p></div>`;
+23007:     return;
+23008:   }
+23009:   if (!t) {
+23010:     body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.users}</div><h2>Team not found</h2><p>This team isn’t available right now.</p></div>`;
+23011:     return;
+23012:   }
+23013: 
+23014:   const tabs = ['Context','Subagents','Workspace','Memory','Runs','Team Chat'];
+23015:   body.innerHTML = `
+23016:     <div class="pm-detail-head">
+23017:       <span class="pm-house-icon" style="color:#d8473a">${escapeHtml(t.emoji || '🎟️')}</span>
+23018:       <h1>${escapeHtml(t.name)}</h1>
+23019:       <button class="pm-icon-btn pm-overflow" aria-label="More">${ICONS.dots}</button>
+23020:     </div>
+23021:     <div class="pm-detail-sub">${t.subagents} subagents · ${t.totalRuns} total runs</div>
+23022: 
+23023:     <div class="pm-action-row">
+23024:       <button class="pm-action-btn primary" data-act="start">${ICONS.play} Start Run</button>
+23025:       <button class="pm-action-btn"          data-act="pause">${t.paused ? ICONS.play + ' Resume' : ICONS.pause + ' Pause'}</button>
+23026:       <button class="pm-action-btn"          data-act="review">${ICONS.brain} Review</button>
+23027:       <button class="pm-action-btn danger"   data-act="delete">${ICONS.trash} Delete</button>
+23028:     </div>
+23029: 
+23030:     <div class="pm-tabs" role="tablist">
+23031:       ${tabs.map((tab, i) => `<button class="${i === 0 ? 'active' : ''}" data-tab="${tab}">${escapeHtml(tab)}</button>`).join('')}
+23032:     </div>
+23033: 
+23034:     <div id="pm-tab-slot"></div>
+23035: 
+23036:     <div id="pm-context-slot">
+23037:     <div class="pm-team-preview">
+23038:       <div class="pm-team-preview-head">
+23039:         <span class="pm-mini-house">${escapeHtml(t.emoji || '🏠')}</span>
+23040:         <h3>${escapeHtml(t.name)}</h3>
+23041:       </div>
+23042:       <div style="font-size:13px;color:var(--pm-muted);">${t.subagents} subagents · ${t.totalRuns} total runs</div>
+23043:       <div class="pm-chip-row">
+23044:         ${t.members.map(m => `<span class="pm-member-chip"><span class="pm-avatar" style="background:${m.color}">${m.avatar}</span>${escapeHtml(m.name)}</span>`).join('')}
+23045:       </div>
+23046:     </div>
+23047: 
+23048:     <div class="pm-card">
+23049:       <div class="pm-card-head" style="display:flex;justify-content:space-between;align-items:center;">
+23050:         <span>${ICONS.target} Purpose</span>
+23051:         <button class="pm-show-more" data-toggle-purpose>Show more ▾</button>
+23052:       </div>
+23053:       <div class="pm-card-body" data-purpose data-collapsed="1" style="display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(t.purpose)}</div>
+23054:     </div>
+23055: 
+23056:     <div class="pm-card-grid">
+23057:       <div class="pm-card">
+23058:         <div class="pm-card-head">${ICONS.check} Current Task / Goal</div>
+23059:         <div class="pm-card-body">${escapeHtml(t.currentTask)}</div>
+23060:       </div>
+23061:       <div class="pm-card">
+23062:         <div class="pm-card-head">${ICONS.clock} Last Run</div>
+23063:         <div class="pm-card-body strong">${escapeHtml(t.lastRun)}</div>
+23064:       </div>
+23065:       <div class="pm-card">
+23066:         <div class="pm-card-head">${ICONS.users} Member States</div>
+23067:         <div class="pm-card-body">${escapeHtml(t.memberStates)}</div>
+23068:       </div>
+23069:       <div class="pm-card">
+23070:         <div class="pm-card-head">${ICONS.send} Active Dispatches</div>
+23071:         <div class="pm-card-body">${escapeHtml(t.dispatches)}</div>
+23072:       </div>
+23073:     </div>
+23074: 
+23075:     <div class="pm-card">
+23076:       <div class="pm-card-head">${ICONS.doc} Context &amp; Reference</div>
+23077:       <div class="pm-card-body" style="margin-bottom:10px;">Each save adds a new card. Cards are injected into manager + subagent runtime context.</div>
+23078:       <input class="pm-input" id="pm-ref-title" placeholder="Reference title (e.g. Brand Voice, API URL, Posting Rules)" />
+23079:       <textarea class="pm-textarea" id="pm-ref-body" placeholder="Reference content…"></textarea>
+23080:       <div class="pm-row-buttons">
+23081:         <button class="pm-btn ghost" disabled title="Upload coming soon">${ICONS.upload} Upload File</button>
+23082:         <button class="pm-btn primary" data-save-ref>${ICONS.check} Save</button>
+23083:       </div>
+23084:     </div>
+23085: 
+23086:     <div class="pm-card">
+23087:       <div class="pm-card-head" style="display:flex;justify-content:space-between;align-items:center;">
+23088:         <span>📁 Workspace Preview</span>
+23089:         <a href="#mobile/teams/${escapeHtml(teamId)}/workspace" style="color:var(--pm-orange);font-weight:700;text-decoration:none;font-size:13px;">Open Workspace ›</a>
+23090:       </div>
+23091:       <div class="pm-card-body">${escapeHtml(t.workspace)}</div>
+23092:     </div>
+23093:     </div><!-- /pm-context-slot -->
+23094:   `;
+23095: 
+23096:   // Tabs: swap visible content between context (default) and other tabs.
+23097:   const contextSlot = body.querySelector('#pm-context-slot');
+23098:   const tabSlot     = body.querySelector('#pm-tab-slot');
+23099: 
+[READ_TRUNCATED] Returned 220 of 28932 lines. Use start_line:23100, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

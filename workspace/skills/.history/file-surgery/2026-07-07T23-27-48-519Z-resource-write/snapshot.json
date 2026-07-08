@@ -1,0 +1,12 @@
+{
+  "skillId": "file-surgery",
+  "reason": "resource-write",
+  "createdAt": "2026-07-07T23:27:48.523Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\file-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "f2e1858dc402caab"
+}

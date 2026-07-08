@@ -1,0 +1,183 @@
+self/08-tasks-and-agents.md (185 lines) [window 1-180, truncated]:
+1: ## 16) Tasks, Background Agents, and Autonomous Runs
+2: 
+3: Current task statuses in `task-store.ts`:
+4: 
+5: - `queued`
+6: - `running`
+7: - `paused`
+8: - `stalled`
+9: - `needs_assistance`
+10: - `awaiting_user_input`
+11: - `complete`
+12: - `failed`
+13: - `waiting_subagent`
+14: 
+15: Important pause reasons include:
+16: 
+17: - `awaiting_user_input`
+18: - `awaiting_command_approval`
+19: - `recovering_from_build_error`
+20: - `preempted_by_chat`
+21: - `heartbeat_cycle`
+22: - `blocked_on_repair`
+23: 
+24: Other current task facts:
+25: 
+26: - proposal execution state records `standard`, `task_trigger`, `verification`, `artifact_run`, `dev_src_self_edit`, and `dev_src_self_edit_repair`
+27: - tasks can carry mutation scope, build verification state, live baselines, promotion status, repair context, and team execution state
+28: - background task runner uses `step_complete` progression, stall nudges, and task-scoped workspace binding
+29: - proposal tasks are run with a proposal-specific runtime mode and session ID
+30: - task delivery knows how to report team proposal results back into team chat
+31: 
+32: Paused task recovery ownership and chat surfaces:
+33: 
+34: - paused/failed recovery is task-owned, not only session-owned
+35: - main/background tasks recover through the main paused-task chat and can resume, rerun, cancel, or accept more user guidance as the main agent
+36: - standalone subagent Home chat is no longer a task-recovery trap. Normal user messages, voice turns, and handoff/tool conversations with the subagent stay in the subagent Home/chat thread.
+37: - standalone subagent task recovery now lives under the subagent Runs tab/task card detail, using the task's `recoveryConversation` as the canonical thread.
+38: - completed subagent run cards remain readable in Runs, but only recovery-eligible tasks expose the recovery composer.
+39: - team subagent tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat, the team room, or the matching member direct thread
+40: - team manager/executor tasks recover through the same task recovery conversation whether the user speaks in the task panel/main paused-task chat or team manager/team chat
+41: - `task-recovery.ts` still includes owner reply sessions for main task sessions, team member room/direct sessions, and team manager/coordinator sessions; standalone subagent recovery should be entered explicitly through run routes rather than inferred from Home chat.
+42: - `task-router.ts` owns explicit recovery handling through `handleTaskRecoveryMessage`. Standalone subagent recovery turns should not be mirrored into the Home chat store.
+43: - `channels.router.ts` exposes explicit standalone subagent run APIs: `GET /api/agents/:id/runs`, `GET /api/agents/:id/runs/:taskId`, and `POST /api/agents/:id/runs/:taskId/recovery`.
+44: - `channels.router.ts` direct standalone subagent chat routes should stay conversational and should not intercept a Home chat turn into a blocked task just because that subagent owns a paused run.
+45: - `teams.router.ts` intercepts team room/member/manager chat turns when the addressed team or member owns a blocked task, then routes the turn through task recovery instead of starting unrelated team work
+46: - `TaskRecoveryConversationTurn.source` includes `subagent_chat` and `team_chat` so the task panel can preserve where guidance came from; standalone subagent run recovery should use `subagent_chat` only as source metadata, not as permission to pollute Home chat history
+47: - `TaskRecoveryConversationTurn.attachmentPreviews` can persist uploaded image/video/file preview metadata for recovery turns.
+48: - explicit subagent run recovery accepts `attachmentPreviews`, builds runtime attachment context, forwards vision attachments to `handleChat`, and persists the visible user message separately from the attachment-expanded runtime prompt
+49: - recovery assistant sessions stay constrained to recovery: they may discuss the paused task, synthesize resume guidance, or trigger resume/rerun/cancel, but should not do unrelated work from that recovery session
+50: - `subagent-chat-store.ts` must filter persisted `task_recovery` messages out of Home chat history so old merged recovery turns do not reappear as duplicate/garbled subagent preambles
+51: 
+52: Proposal sandbox lifecycle details that are now implemented:
+53: 
+54: - a sandboxed proposal must complete a successful build before promotion back into the live repo
+55: - successful build verification is currently recorded after a successful `run_command` of `npm run build`, `npm run tsc`, or canonicalized `npm run build:backend` for dev-src sandboxes
+56: - if a later mutating tool runs, previous build verification is cleared and must be re-earned
+57: - promotion status is tracked as `pending`, `promoted`, or `failed`
+58: - promotion copies only the approved scoped files back into the live repo
+59: - if promotion metadata is incomplete, the task pauses for assistance instead of guessing
+60: 
+61: Build-failure handling for proposal execution is now more structured:
+62: 
+63: - build failures are detected during proposal execution
+64: - the failure is stored in `proposalExecution.buildFailure`
+65: - the runner tries to auto-create a scoped repair proposal using:
+66:   - original affected files
+67:   - files referenced directly in the build output
+68: - when a repair proposal is created, the original task pauses with `blocked_on_repair`
+69: - a repair task can inherit the repaired sandbox, resolve the blocked failure, and auto-complete the previously failed build step
+70: - once a build failure is recorded, direct source edits are frozen
+71: - if an automatic repair proposal already exists, further repair writing is blocked
+72: - if auto-repair proposal creation fails, the system allows exactly one manual `write_proposal` repair follow-up from inside that failed proposal context
+73: - after a manual repair proposal is created, that escape hatch is closed and the task remains frozen pending review
+74: - repair proposals are intentionally narrow: they should fix the captured build failure, not continue the original implementation
+75: - if another file is required, the repair task must stop and create another scoped repair proposal instead of silently expanding scope
+76: - environment-level sandbox failures are treated separately from scoped source repair failures and pause for assistance rather than creating a misleading code repair
+77: 
+78: ## 17) Standalone Subagents, Team Subagents, Managers, and Coordinator
+79: 
+80: Prometheus now has multiple agent layers, not one generic "subagent" concept.
+81: 
+82: Wrapper surface note:
+83: 
+84: - `agents_and_teams` is wrapper-first for most model-facing agent/team operations. Use `agent_ops` for spawn/list/info/update/delete/deploy analysis team, `agent_chat_ops` for standalone subagent and agent chat turns/watches, `team_ops_wrapper` for managed team/coordinator/dispatch operations, and `team_collab_ops` for in-team collaboration actions.
+85: - Granular agent/team tools remain executable compatibility handlers behind `normalizeAgentTeamWrapperTool(...)` and the capability executors, so task ownership, team state, recovery routing, approval/audit behavior, and background run tracking stay centralized.
+86: 
+87: Standalone subagents:
+88: 
+89: - created or ensured with `spawn_subagent`
+90: - can be persisted and reused by ID
+91: - can be hydrated from role templates:
+92:   - `planner`
+93:   - `orchestrator`
+94:   - `researcher`
+95:   - `analyst`
+96:   - `builder`
+97:   - `operator`
+98:   - `verifier`
+99: - are messaged directly with `message_subagent`
+100: - Home chat is the long-lived conversational thread for direct user/subagent chat, voice-originated subagent turns, and main-agent handoff/tool messages to that subagent.
+101: - Runs are separate task records, not extra Home chat turns. Use the subagent Runs tab for task cards, status, prompt/output/progress/process detail, and explicit recovery chat.
+102: - standalone subagent task cards must copy the configured agent model into `TaskRecord.executorProvider`; otherwise `background_agent` execution falls through to mode defaults such as `background_spawn`/`main_chat` and can run on the wrong provider
+103: - can be installed locally from signed/versioned marketplace Agent Profile Packs; imported profiles carry `marketplaceProfile` provenance, install under `.prometheus/subagents/<agent-id>`, preserve attached skill IDs, and can be uninstalled only through marketplace-pack-aware deletion that refuses non-marketplace agents
+104: 
+105: 
+106: 
+107: Managed teams:
+108: 
+109: - main-chat entry point is `ask_team_coordinator`
+110: - main chat is explicitly told not to call `team_manage` directly for managed team work
+111: - runtime execution modes include `team_manager` and `team_subagent`
+112: - shared tools include:
+113:   - `dispatch_team_agent`
+114:   - `request_team_member_turn`
+115:   - `get_agent_result`
+116:   - `post_to_team_chat`
+117:   - `message_main_agent`
+118:   - `reply_to_team`
+119:   - `manage_team_goal`
+120: 
+121: Team lifecycle management:
+122: 
+123: - `team_manage` supports `list`, `create`, `start`, `update`, `delete`, `trigger_review`, `dispatch`, `pause`, `resume`
+124: 
+125: There are two separate tool-profile systems to keep straight.
+126: 
+127: `ToolProfile` from `src/tools/registry.ts` is used by the standalone tool registry schema/filtering layer and currently includes:
+128: 
+129: - `minimal`
+130: - `coding`
+131: - `web`
+132: - `desktop`
+133: - `full`
+134: 
+135: Subagent allowlist profiles from `SUBAGENT_PROFILES` in `src/tools/registry.ts` currently include:
+136: 
+137: - `file_editor`
+138: - `researcher`
+139: - `shell_runner`
+140: - `reader_only`
+141: - `code_writer`
+142: - `analyst`
+143: - `web_agent`
+144: - `scraper`
+145: 
+146: Subagent profile facts:
+147: 
+148: - `getSubagentToolFilter(profile)` returns an explicit allowlist for known profiles
+149: - unknown or missing profiles return `undefined`, which means no filter/full access
+150: - profile allowlists now include supervised process tools where appropriate: `run_command_supervised`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit`
+151: - `code_writer`, `web_agent`, and `scraper` include `generate_video` as well as `generate_image`
+152: - the `subagent_spawn` schema in `tool-builder.ts` still advertises only `file_editor`, `researcher`, `shell_runner`, and `reader_only`, even though the registry has broader profile names for other runtime paths
+153: 
+154: ## 18) Manager vs Subagent Spawn Strategy
+155: 
+156: There are two different parallel-work strategies in the runtime:
+157: 
+158: - when `orchestration.subagent_mode = false`, the runtime exposes `delegate_to_specialist`
+159: - when `orchestration.subagent_mode = true`, it exposes `subagent_spawn`
+160: 
+161: So "standalone subagents" and "team subagents" are real separate concepts, and the runtime can also expose a lighter specialist-delegation mode instead of full child spawning.
+162: 
+163: ## 19) Deploy Analysis Tool
+164: 
+165: `deploy_analysis_team` is a real core tool, not a category-gated extra.
+166: 
+167: Current intended behavior from tool definitions:
+168: 
+169: - one-shot GTM/site analysis for a URL
+170: - deploys background specialists for:
+171:   - business profiling
+172:   - SEO discovery
+173:   - social reputation
+174:   - browser funnel testing
+175:   - CRO/messaging critique
+176:   - technical auditing
+177:   - competitive positioning
+178: 
+179: Important note:
+180: 
+[READ_DEFAULT_CAP] Whole-file reads are capped by default to control context usage.
+[READ_TRUNCATED] Returned 180 of 185 lines. Use start_line:181, num_lines:180 for the next chunk, or pass full:true only when the whole file is truly needed.

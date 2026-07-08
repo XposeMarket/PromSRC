@@ -37,7 +37,7 @@ const BUILTIN_STATIC_MODELS = {
   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
-  xai: ['grok-build-0.1', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent'],
+  xai: ['grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
 };
 
 // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
@@ -198,6 +198,7 @@ function _modelsForProvider(provider) {
   const item = (_catalogCache || []).find((p) => p.id === provider);
   const out = [];
   const push = (arr) => { if (Array.isArray(arr)) for (const m of arr) { const s = String(m?.name || m || '').trim(); if (s && !out.includes(s)) out.push(s); } };
+  // Catalog order is source of truth; builtin fills gaps only.
   push(item?.runtime?.options?.staticModels);
   push(BUILTIN_STATIC_MODELS[provider]);
   const def = item?.config?.defaults?.model;

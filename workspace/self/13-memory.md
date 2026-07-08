@@ -9,6 +9,13 @@ Classic memory roots:
 - `MEMORY.md`
 - daily notes
 - intraday notes
+- `BUSINESS.md` (optional session injection via `business_context_mode`)
+- `workspace/entities/` (per-entity markdown under clients/, projects/, vendors/, contacts/, social/)
+- `workspace/events/pending.json` (cross-session event queue; not a memory root file but operational continuity)
+
+Workspace SOUL vs MEMORY vs skills [2026-07-07]: **SOUL.md** is lean persona + action-first + owner authority + memory routing pointers. Runbooks for BUSINESS, entities, connectors, events, browser_close, and file-tool routing live in **MEMORY.md** `operational_rules` and matching **skills** / **self/** sections.
+
+**USER.md** (2026-07-07 slim): Raul's identity, communication preferences, and active projects only — not Prometheus internals. Codex handoff, Xpose lead-hunt mechanics, self-edit rules, gateway QA, daytrading reminder window, and tool/skill runbooks live in **MEMORY.md** `operational_rules` / `project_memory` and matching **skills** (**dev-debugging**, **local-lead-hunting**, **src-edit-proposal-rigor**, **file-surgery** references).
 
 Current memory tools:
 

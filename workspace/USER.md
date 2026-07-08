@@ -1,6 +1,4 @@
-
-
-> Prom builds this file over time.
+> Raul's profile — identity, communication style, and projects. Prometheus runbooks, tools, and workflows live in **MEMORY.md**, **skills**, and **workspace/self/**.
 
 ---
 
@@ -9,77 +7,34 @@
 - Platform: Windows 11
 - Stack: TypeScript / Node.js
 - Version control: Git
+- Creator of Prometheus; dev-server builds have broader capabilities than the public Electron app — use that for internal feasibility/UX reasoning only. [2026-04-22]
 
-
-- Raul is the developer/creator of Prometheus and runs sessions on a privileged dev-server build with broader capabilities than the intended Electron/public app runtime; treat dev-server access as internal-only context when reasoning about feasibility and UX. [2026-04-22]
 ## accounts
 
 ## communication_style
-- Friendly - Proactive. Likes when Prometheus looks for things to do proactively and offers help
-- User is highly sensitive to token/usage cost and prefers very brief responses for pricing/cost questions. [2026-03-18]
+- Friendly and proactive — likes Prom to notice useful next steps and offer help.
+- Token/cost sensitive on pricing questions — keep those answers very brief. [2026-03-18]
 - Responds well to polished interactive outputs. [2026-03-18]
-- Proposal quality requirement (March 2026): proposals must be fully concrete and execution-ready; user rejects conceptual/pseudocode wording (e.g., 'conceptual' snippets) and wants absolute, word-for-word specificity.
- [2026-03-22]
-- Reconfirmed strongly on 2026-03-27: user wants conversational turns to avoid unnecessary tool calls and gets frustrated when tools are called for casual chat; respond directly unless explicit execution is requested.
- [2026-03-27]
-- For Xpose Market positioning and lead-gen messaging, prefers targeting local businesses without explicitly naming Frederick, Maryland.
- [2026-04-10]
-- On Xpose Market website work, user wants implementation to begin directly once alignment is clear, with brief confirmations before action when requested (e.g. tool availability checks). 
-[2026-04-10]
-- When repo/file state is in question, Raul prefers direct verification and continuation over speculative back-and-forth; verify the real state, then either continue the work or attach the directory to the repo. 
-[2026-04-10]
-- For lead-searching workflows, user wants a full browser-driven process using live business listings (e.g. Google Maps), website/SEO analysis, and deterministic qualification — not generic web-search-only research. User also wants all collected evidence/data saved to workspace files during execution so nothing is lost, and wants this captured as a reusable skill. 
-[2026-04-11]
-- Desktop/Codex workflow note [2026-04-25]:
- Raul identified the Codex new-chat control coordinates as (75,75). When operating the Codex app via desktop automation, use fresh screenshots and coordinate-based clicks; for starting a new Codex chat, click around x=75,y=75 when the Codex window/screenshot coordinate space matches the visible app. 
-[2026-04-25]
-- For Xpose Market lead-hunt workflow, Raul's required flow is: first read the existing `workspace/Xpose Market` markdown file to match its format; then use browser automation to open Google Maps in Frederick, MD and find potential business candidates; then use `background_spawn` (not durable subagents/tasks) to analyze each candidate's business and website. Each background agent must get page text, open the website themselves, visually inspect with screenshots/scrolling, extract concrete data/evidence, and update the Xpose Market markdown file in workspace accordingly. 
-[2026-04-27]
-- For Xpose Market lead-hunt background_spawn website-screening agents, each background agent must open and operate its own browser session/tab for visual inspection, screenshots, scrolling, and page text. They must not rely on or manipulate Prom's active/main browser session while Prom continues using Google Maps to find more candidates. 
-[2026-04-27]
-- Codex desktop app shortcut note 
-[2026-04-27]: Ctrl+N opens a new chat in the Codex desktop app. When operating Codex via desktop automation, prefer this shortcut for starting a new chat unless the UI/state makes a coordinate click safer. 
-[2026-04-27]
-- For simple desktop navigation requests like “scroll up in my Codex chat,” Raul expects immediate desktop execution, not discussion. Use the active desktop/Codex context and keep the response silent/brief after acting unless verification matters. 
-[2026-05-16]
-- For future voice-driven browser/desktop smoke-test style runs, Raul wants screenshots sent to his mobile/origin surface whenever Prometheus performs visible desktop actions such as focusing Codex, Claude, or other apps, unless he explicitly says not to. Capture a fresh screenshot after meaningful focus/action steps and send it so he can see what happened. 
-[2026-05-21]
+- Proposals must be fully concrete and execution-ready; rejects conceptual or pseudocode-only snippets. [2026-03-22]
+- On casual chat, respond directly — avoid unnecessary tool calls unless execution is clearly requested. [2026-03-27]
+- Generated X/Twitter posts and replies: no em dashes (—); use periods, commas, colons, or hyphens. [2026-07-07]
+- Xpose positioning: target local businesses without explicitly naming Frederick, Maryland in messaging unless asked. [2026-04-10]
+- When repo or file state is unclear, verify the real state then continue — not speculative back-and-forth. [2026-04-10]
+- Xpose website work: implement once aligned; brief confirmations when he requests them. [2026-04-10]
+- Local lead hunting: browser-first live listings, saved evidence, qualification — see skill **local-lead-hunting** (incl. Xpose Market flow). [2026-04-11]
+- Desktop: screenshot-grounded automation; **execute immediately** on simple navigation (e.g. scroll Codex) — stay brief/silent after acting unless verification matters. [2026-05-16] [2026-07-07]
+- Codex desktop handoff mechanics: **dev-debugging** skill only (not this file). [2026-07-07]
+- Creative/HyperFrames: avoid purple-blue-cyan gradient “AI SaaS” aesthetics unless brand-required; prefer editorial, industrial, real UI, physical materials. [2026-05-24–25]
+- Creative video: slower scene holds for readable text; landscape default for Prometheus release-thread / promo clips unless he asks portrait. [2026-05-28] [2026-06-05]
+- High-consideration shopping: Product Carousel Builder — consensus models first, then product search for live prices. [2026-06-05]
+- Voice/browser-desktop smoke tests: send fresh screenshots to origin after visible desktop focus/actions unless he says not to. [2026-05-21]
+- Agent choices: use **ask_prometheus_questions** for decisions that block work — not prose option lists (see MEMORY `operational_rules`). [2026-06-15]
+- Prometheus internals fixes: default **request_dev_source_edit**; read **workspace/self/** and open live UI to verify — see **src-edit-proposal-rigor** and MEMORY. [2026-06-16–17]
 
-- Creative/HyperFrames visual taste correction
- [2026-05-24]:
- Raul liked the HyperFrames-only Voice Mode promo overall, but called out purple/blue hues, gradients, and generic AI-video visual language as unacceptable AI tells. For future promo/video work, avoid purple-blue/cyan gradient SaaS aesthetics unless brand-required; use more human art direction (editorial, industrial, print, real UI, physical materials). Rounded panels are a softer AI tell when overused, but can still work if purposeful and not generic glass/card overload. [2026-05-25]
-- Creative artifact presentation correction [2026-05-27]:
- Only use `present_file` automatically for Creative Mode / editable video/image artifacts such as HyperFrames, HTML Motion, Creative canvas/video exports, or similar creative-workspace outputs. Do not automatically `present_file` one-shot xAI/OpenAI `generate_image` or `generate_video` outputs because those provider generations already auto-present to Raul; just report the saved path unless Raul explicitly asks to open/present/send it. [2026-05-27]
-- Creative video pacing correction [2026-05-28]:
- Raul liked the HyperFrames composite-tools clip style, but said scenes transitioned too quickly for viewers to read. For future Creative/HyperFrames promo/explainer videos, slow scenes down, hold readable text longer, and prioritize comprehension over rapid cinematic cuts unless Raul explicitly asks for fast pacing. 
- [2026-05-28]
-- Creative video preference [2026-06-05]:
- For Prometheus release-thread / promo HyperFrames videos going forward, use landscape mode by default unless Raul explicitly asks for vertical/portrait. [2026-06-05]
-- Shopping/product-research correction [2026-06-05]:
-For high-consideration shopping recommendations, Raul prefers the `Product Carousel Builder` research-first path: identify current consensus models first, then product-search exact candidates for live prices.
-
-- Rule [2026-06-10]: 
-Between 5:00 PM and 5:00 AM, if Raul texts, periodically check whether he is daytrading and gently remind him he should not be trading at those hours. Log the exact time of every reminder in this entry (or a linked note) so the same reminder is not repeated in every conversation or thread. Applies only during those hours; do not remind outside that window or more than once per active session unless new evidence appears. [2026-06-10]
-- Desktop automation correction [2026-06-11]: 
-When testing or using desktop app buttons, prefer actual screenshot-anchored mouse clicks for visible buttons. Use desktop_press_key/window_press_key only for real keyboard shortcuts or when the user explicitly asks for keyboard input. Do not use modifier-clicks unless the UI/task truly requires Shift/Ctrl/Alt.
-[2026-06-11]
-- Prometheus self-documentation path correction [2026-06-13]:
- When updating self/reference docs for Prometheus source changes, the docs live under workspace/self/ (workspace-relative), not project-root self/ or src/web-ui. Use workspace file tools such as list_directory/read_file on workspace/self before proposing or editing matching docs. [2026-06-13]
-- Hard rule [2026-06-15]: When Prometheus needs Raul to choose, confirm, or supply a missing constraint, it MUST use the ask_prometheus_questions tool (tappable option cards) instead of asking in plain prose. Raul built the question card specifically so he can tap instead of type, especially on mobile. Treat a prose "do you want A or B?" or a bulleted list of clarifying questions as a defect. Only exception: a single trivial inline yes/no mid-flow where opening a card would be heavier than the question. Do not ask at all when Raul wants Prom's judgment (recommend, don't bounce options back), is venting, or already gave detailed constraints — decide and move. [2026-06-15]
-- For Prometheus src/ self-edits/fixes, Raul wants Prom to use the request_dev_source_edit fast route (dev edits), NOT full write_proposal proposals. Default to request_dev_source_edit when he asks Prom to fix its own source. [2026-06-16]
-- Rule [2026-06-16]: Before investigating or editing anything internal to Prometheus (self edits, fixes, bugs, improvements), always first read workspace/self/ and the correlated file(s) for that area. Combine this with opening the live UI (desktop http://127.0.0.1:18789/ or mobile http://127.0.0.1:18789/#mobile/chat) via browser/desktop tools to verify/reproduce the issue and confirm the fix. [2026-06-17]
-- Rule [2026-06-16]: After making ANY Prometheus self edit (src/ or web-ui/ changes, fixes, internal improvements), always update the correlated docs under workspace/self/ accordingly so the self-documentation stays in sync with the code. Updating self/ is part of finishing the edit, not optional. [2026-06-17]
-- When Prometheus is doing any tool-using work, Raul wants Prometheus to notice, record, and report any errors or suggested improvements for any tools used, including reliability, accuracy, speed, latency, cost, token usage, UX, and overall improvement opportunities. Include this even if the main task succeeds. [2026-07-02]
-
-- Skill-reading correction [2026-07-02]: When skill matches are noisy or only keyword-triggered, Raul wants Prometheus to read only genuinely relevant skills based on title/description/task fit, not blindly read every matched skill just because a trigger word matched. Prefer filtering for actual relevance and note when mandatory-match behavior overfires. [2026-07-02]
-- Update: Keep USER.md broad for preference only. Raul prefers screenshot-grounded desktop automation and direct execution for simple desktop navigation. Detailed Codex handoff procedure (Ctrl+N flow, typed prompt + Enter, maximize Codex, screenshot proof to Telegram, write_note, 2-minute timer check, and Codex new-chat fallback at x=75,y=75) is now maintained in the Dev Debugging skill runtime instructions, not USER. [2026-07-07]
 ## projects
-- Created a company called Xpose Market, a marketing/website creation agency intended to sell programs, websites, and related services. Wants to start actually generating exposure and leads for it. [2026-04-10]
-- Is also a day trader and wants help developing that side as well, especially around emotional pressure during trading. [2026-04-10]
-- Wants to grow social media presence, specifically on X/Twitter. [2026-04-10]
-- Spends most time coding and making programs, but built Prometheus so it can increasingly act as a real personal assistant and reduce how much manual coding/admin work is needed. [2026-04-10]
-- Lives in Frederick, Maryland and wants to start Xpose Market lead generation by targeting local small businesses there first. [2026-04-10]
-- Current business priority: rebuild Xpose Market into a client-converting agency website and start generating leads soon. [2026-04-10]
-- As of 2026-04-11, user wants to rebuild the entire team system from scratch and establish three standing teams: Xpose Website Rebuild, Xpose Lead Generation, and a nightly code bug-hunter team. [2026-04-11]
-- Prometheus voice preference as of 2026-05-15: Raul selected Cedar as the current voice because it sounded most normal, but he prefers a deeper, Greek-mythology/Prometheus-like voice if available. Evidence: `audit/chats/transcripts/a0489bd8-06a4-4204-b491-28b7fb447ac2.md:47-55`. [2026-05-16]
-- Trading psychology pattern (identified 2026-06-15, Raul's own words): Raul knows his daily bias and reads direction correctly, but loses on EXECUTION STATE, not analysis. Recurring daily pattern: NY open (9:30 ET) tape speeds up → he gets nervous → hold times collapse from 1-10 min (his winning trades) down to 23-42 seconds (his losing trades) → he abandons his own bias and takes counter-trend SHORTS / sub-minute revenge scalps that stop him out. Key tell: his losers run ~2x the size of his winners (winners +$11 to +$108, losers -$90 to -$217.50). 2026-06-15 example: correctly called NQ up day (+3%), was long all 20 trades, early trades green, then back-half panic flips after 9:52 turned a ~+$1k overnight position into -$47 in account (a giveback, not a blowup). His stated self-diagnosis: "when it gets fast in the morning with NYC open I get nervous and trade different" and "I keep getting stopped out fucking short and it blows me." Agreed guardrail: NO entries in first 15 min of NY open (9:30-9:45) — watch only, let range establish, trade the pullback holds that align with bias. The problem is state/discipline at open, NOT skill or bias. Surface this back to him before market open as a reminder of the trap. [2026-06-15]
+- **Xpose Market** — marketing/website agency; priority is a client-converting site and lead gen; local small businesses first (Frederick area operationally). [2026-04-10]
+- Grow social presence on **X/Twitter**. [2026-04-10]
+- **Day trading** — wants support around emotional pressure and execution discipline (NY open pattern in MEMORY). [2026-04-10] [2026-06-15]
+- Spends most time coding; built Prometheus to act as a real assistant and cut manual coding/admin. [2026-04-10]
+- Intent (2026-04-11): standing teams for Xpose website rebuild, Xpose lead gen, and nightly code bug-hunt — confirm current setup in MEMORY/automation if needed.
+- Voice preference: Cedar sounded most normal; prefers a deeper Prometheus/myth tone if available. [2026-05-16]

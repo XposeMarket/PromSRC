@@ -45,6 +45,7 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 32 | Prometheus Mobile App Maintenance Reference | [16-mobile-app.md](16-mobile-app.md) |
 | 32A | Mobile Liquid Glass UI Reference and Dev Slider Restore Notes | [24-mobile-liquid-glass.md](24-mobile-liquid-glass.md) |
 | 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
+| — | Local UI URLs, `?desktop=1`, self-edit live verification | [17-local-ui-verification.md](17-local-ui-verification.md) |
 | 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
 | 35 | Onboarding System, Replay, Dev Test, Migration Boundary | [19-onboarding-system.md](19-onboarding-system.md) |
 | 36 | Rich Chat Artifacts (cards), Data Tools, Voice Integration | [20-rich-artifacts.md](20-rich-artifacts.md) |
@@ -68,3 +69,9 @@ Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realti
 ## Maintenance
 
 When editing, change only the file that owns the affected section. Keep root `SELF.md` in sync as the monolithic historical source-of-truth and sync target, unless this split copy is formally promoted to primary later. Follow §31 Maintenance Rule: verify against actual source files before updating.
+
+## Workspace persona files (USER / SOUL / MEMORY)
+
+- **SOUL.md** (2026-07-07 slim): persona, conversational turns, action-first, owner authority, memory routing, light pointers only. Operational runbooks → **MEMORY.md** `operational_rules`, **skills**, and section files above.
+- **USER.md** (2026-07-07 slim): identity, communication_style, projects only — internals → MEMORY, skills, **self/13-memory.md**.
+- **MEMORY.md**: durable history, decisions, migrated runbooks, operational rules.
