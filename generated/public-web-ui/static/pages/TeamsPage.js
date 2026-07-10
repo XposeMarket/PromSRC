@@ -13,7 +13,7 @@
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 import { api } from '../api.js';
-import { escHtml, bgtToast, timeAgo, showToast, showConfirm } from '../utils.js';
+import { escHtml, renderMd, bgtToast, timeAgo, showToast, showConfirm } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 
 // ── Stubs for cross-module globals not yet migrated ──────────────
@@ -395,8 +395,8 @@ function renderTeamChatTextWithMentions(text, teamOrId, options = {}) {
   const mentions = findTeamChatMentions(raw, teamOrId);
   const renderPlain = (input) => escHtml(String(input || '')).replace(/\n/g, '<br>');
   if (!mentions.length) {
-    if (options.markdown && typeof marked !== 'undefined') {
-      return marked.parse(raw);
+    if (options.markdown) {
+      return renderMd(raw);
     }
     return renderPlain(raw);
   }
@@ -413,8 +413,8 @@ function renderTeamChatTextWithMentions(text, teamOrId, options = {}) {
   }
   rebuilt += raw.slice(cursor);
 
-  let html = options.markdown && typeof marked !== 'undefined'
-    ? marked.parse(rebuilt)
+  let html = options.markdown
+    ? renderMd(rebuilt)
     : renderPlain(rebuilt);
   for (const entry of placeholders) {
     html = html.split(entry.token).join(renderTeamChatMentionHtml(entry.mention));

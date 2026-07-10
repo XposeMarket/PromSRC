@@ -1,7 +1,7 @@
 /**
  * HyperFrames preview iframe host (parent side of the bridge).
  *
- * Hosts a sandboxed same-origin iframe that runs the official @hyperframes/core
+ * Hosts an opaque-origin sandboxed iframe that runs the official @hyperframes/core
  * runtime IIFE (injected by src/gateway/creative/hyperframes-bridge.ts:
  * wrapForIframePreview). Communicates with the runtime via postMessage using
  * the documented protocol:
@@ -36,7 +36,7 @@ export function createHyperframesPreview(options = {}) {
   const {
     mount,
     html = '',
-    sandbox = 'allow-scripts allow-same-origin',
+    sandbox = 'allow-scripts allow-downloads',
     width,
     height,
     onPick = () => {},

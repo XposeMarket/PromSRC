@@ -131,11 +131,16 @@ const logLines = [];
 
 export function log(text, type = 'log') {
   const ts = new Date().toLocaleTimeString();
-  logLines.push({ text: `[${ts}] ${text}`, type });
+  logLines.push({ text: `[${ts}] ${String(text ?? '')}`, type: String(type || 'log').replace(/[^a-z0-9_-]/gi, '') || 'log' });
   if (logLines.length > 100) logLines.shift();
   const lp = document.getElementById('log-panel');
   if (lp) {
-    lp.innerHTML = logLines.map(l => `<div class="log-line ${l.type}">${l.text}</div>`).join('');
+    lp.replaceChildren(...logLines.map((line) => {
+      const entry = document.createElement('div');
+      entry.className = `log-line ${line.type}`;
+      entry.textContent = line.text;
+      return entry;
+    }));
     lp.scrollTop = lp.scrollHeight;
   }
 }
@@ -421,7 +426,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
 
   resolveMermaid()
     .then((mm) => {
-      mm.initialize({startOnLoad:false,theme:'${mermaidTheme}',securityLevel:'loose',themeVariables:{background:'transparent',primaryBackground:'transparent'}});
+      mm.initialize({startOnLoad:false,theme:'${mermaidTheme}',securityLevel:'strict',htmlLabels:false,themeVariables:{background:'transparent',primaryBackground:'transparent'}});
       const run = mm.run
         ? mm.run({ querySelector: '#mm-graph' })
         : Promise.resolve(mm.init(undefined, graphEl));
@@ -449,9 +454,27 @@ function escapeAttr(value) {
   return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-function visualIframeResizeHandler(maxHeight = 10000) {
-  const boundedMaxHeight = Math.max(280, Number(maxHeight) || 10000);
-  return `(function(f){try{var d=f.contentDocument,w=f.contentWindow;if(!d||!w)return;var de=d.documentElement,b=d.body,last=0,stable=0,polls=0,raf=0,minH=280;if(f._pmVisualResizeTimer)clearInterval(f._pmVisualResizeTimer);if(f._pmVisualResizeObserver)try{f._pmVisualResizeObserver.disconnect()}catch(e){}function measure(){var prevH=f.style.height,prevMin=f.style.minHeight;f.style.height=minH+'px';f.style.minHeight=minH+'px';void f.offsetHeight;var h=Math.max(de?de.scrollHeight:0,b?b.scrollHeight:0,de?de.offsetHeight:0,b?b.offsetHeight:0,minH);f.style.height=prevH;f.style.minHeight=prevMin;return Math.min(Math.max(minH,Math.ceil(h)+16),${boundedMaxHeight})}function apply(){raf=0;var h=measure();if(Math.abs(h-last)<2){stable++;return}stable=0;last=h;f.style.height=h+'px';f.style.minHeight=h+'px'}function queue(){if(!raf)raf=w.requestAnimationFrame?w.requestAnimationFrame(apply):setTimeout(apply,16)}if('ResizeObserver'in w){var ro=new w.ResizeObserver(queue);if(b)ro.observe(b);if(de)ro.observe(de);f._pmVisualResizeObserver=ro}queue();f._pmVisualResizeTimer=setInterval(function(){polls++;queue();if((stable>=3&&polls>=4)||polls>=12){clearInterval(f._pmVisualResizeTimer);f._pmVisualResizeTimer=null}},250);setTimeout(queue,60);setTimeout(queue,250);setTimeout(queue,1000);}catch(e){}})(this)`;
+function injectVisualResizeBridge(srcdoc) {
+  const bridge = `<script>(function(){var last=0;function send(){try{var d=document.documentElement,b=document.body;var h=Math.min(10000,Math.max(280,d?d.scrollHeight:0,b?b.scrollHeight:0,d?d.offsetHeight:0,b?b.offsetHeight:0));if(Math.abs(h-last)>1){last=h;parent.postMessage({type:'prometheus:visual-resize',height:h},'*')}}catch(e){}}if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',send);setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
+  const html = String(srcdoc || '');
+  return /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, `${bridge}</body>`) : `${html}${bridge}`;
+}
+
+function installVisualMessageBridge() {
+  if (window.__PROM_VISUAL_MESSAGE_BRIDGE_INSTALLED__) return;
+  window.__PROM_VISUAL_MESSAGE_BRIDGE_INSTALLED__ = true;
+  window.addEventListener('message', (event) => {
+    const data = event?.data;
+    if (!data || data.type !== 'prometheus:visual-resize') return;
+    const height = Number(data.height);
+    if (!Number.isFinite(height)) return;
+    const frame = Array.from(document.querySelectorAll('iframe[data-prom-visual="true"]'))
+      .find((candidate) => candidate.contentWindow === event.source);
+    if (!frame) return;
+    const bounded = Math.min(10000, Math.max(280, Math.ceil(height) + 16));
+    frame.style.height = `${bounded}px`;
+    frame.style.minHeight = `${bounded}px`;
+  });
 }
 
 function buildPartialHtmlPreviewCode(partialCode) {
@@ -500,22 +523,22 @@ function buildPartialHtmlSrcdoc(partialCode, isDark) {
 }
 
 export function buildVisualIframe(lang, code) {
+  installVisualMessageBridge();
   const id = 'vis_' + Math.random().toString(36).slice(2);
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const srcdoc = buildVisualSrcdoc(lang, code, isDark);
+  const srcdoc = injectVisualResizeBridge(buildVisualSrcdoc(lang, code, isDark));
   const encoded = escapeAttr(srcdoc);
   const escapedLang = lang.replace(/"/g, '');
   const escapedCode = escapeAttr(code);
   const minHeight = 280;
-  const onloadHandler = visualIframeResizeHandler();
   return `<div class="visual-block" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
   <iframe
     id="${id}"
+    data-prom-visual="true"
     srcdoc="${encoded}"
-    sandbox="allow-scripts allow-same-origin allow-downloads"
+    sandbox="allow-scripts allow-downloads"
     style="width:100%;min-height:${minHeight}px;border:none;display:block;background:transparent"
     loading="lazy"
-    onload="${onloadHandler}"
   ><\/iframe>
 <\/div>`;
 }
@@ -542,17 +565,32 @@ function buildPartialVisual(lang, partialCode) {
 
 // ─── Markdown Renderer ────────────────────────────────────────
 
+export function sanitizeHtml(html) {
+  const source = String(html || '');
+  const purifier = typeof window !== 'undefined' ? window.DOMPurify : null;
+  if (!purifier || typeof purifier.sanitize !== 'function') return escHtml(source);
+  return purifier.sanitize(source, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'option', 'svg', 'math', 'link', 'meta', 'base'],
+    FORBID_ATTR: ['style', 'srcdoc', 'formaction', 'xlink:href'],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: true,
+    RETURN_TRUSTED_TYPE: false,
+  });
+}
+
 export function renderMd(text) {
   if (!text) return '';
   try {
     const visuals = [];
+    const placeholderPrefix = `PROMVISUAL${Math.random().toString(36).slice(2)}X`;
 
     // Match COMPLETE fenced visual blocks
     const FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*?)```/g;
     let withPlaceholders = String(text).replace(FENCE_RE, (_, lang, code) => {
       const idx = visuals.length;
       visuals.push({ lang: lang.toLowerCase(), code: code.trim(), partial: false });
-      return `\x00VISUAL_${idx}\x00`;
+      return `${placeholderPrefix}${idx}END`;
     });
 
     // Detect a trailing INCOMPLETE (streaming) code block — no closing fence yet.
@@ -562,13 +600,14 @@ export function renderMd(text) {
     if (openMatch) {
       const idx = visuals.length;
       visuals.push({ lang: openMatch[1].toLowerCase(), code: openMatch[2], partial: true });
-      withPlaceholders = withPlaceholders.slice(0, openMatch.index) + `\x00VISUAL_${idx}\x00`;
+      withPlaceholders = withPlaceholders.slice(0, openMatch.index) + `${placeholderPrefix}${idx}END`;
     }
 
-    let html = marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false });
+    let html = sanitizeHtml(marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false }));
 
     if (visuals.length) {
-      html = html.replace(/\x00VISUAL_(\d+)\x00/g, (_, i) => {
+      const placeholderRe = new RegExp(`${placeholderPrefix}(\\d+)END`, 'g');
+      html = html.replace(placeholderRe, (_, i) => {
         const v = visuals[+i];
         if (!v) return '';
         return v.partial ? buildPartialVisual(v.lang, v.code) : buildVisualIframe(v.lang, v.code);
@@ -585,6 +624,8 @@ export function renderMd(text) {
 // ─── Expose on window for inline script and HTML onclick handlers ────────────
 window.escHtml = escHtml;
 window.escapeHtml = escHtml;
+window.sanitizeHtml = sanitizeHtml;
+window.renderMd = renderMd;
 window.timeAgo = timeAgo;
 window.fmtPercent = fmtPercent;
 window.fmtMemoryGb = fmtMemoryGb;

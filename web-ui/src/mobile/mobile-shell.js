@@ -1,6 +1,6 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
-import { timeAgo } from '../utils.js';
+import { renderMd, timeAgo } from '../utils.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
 
@@ -2000,7 +2000,7 @@ export function initMobileCanvasSheet() {
       } else if (isLiveWebCanvasFile(tab)) {
         tab.interactionMode = 'interact';
         const liveSrc = canvasWorkspaceUrl(tab);
-        bodyEl.innerHTML = canvasLiveFrameHtml(`<iframe src="${escapeHtml(liveSrc)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock allow-downloads" referrerpolicy="same-origin"></iframe>`);
+        bodyEl.innerHTML = canvasLiveFrameHtml(`<iframe src="${escapeHtml(liveSrc)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-downloads" referrerpolicy="no-referrer"></iframe>`);
       } else if (tab.openMode === 'diff' && isCanvasCodeExt(getCanvasFileExt(tab)) && tab._canvasPreviewView !== 'full') {
         // Opened from the end-of-turn diff card: default to the collapsed,
         // syntax-highlighted edited-regions view (Codex-style). The Preview
@@ -2435,8 +2435,8 @@ function canvasTextDocHtml(ext, content, opts = {}) {
     }
   `;
   let inner;
-  if (e === 'md' && typeof window !== 'undefined' && window.marked && typeof window.marked.parse === 'function') {
-    inner = window.marked.parse(String(content || ''), { breaks: true, gfm: true, mangle: false, headerIds: false });
+  if (e === 'md') {
+    inner = renderMd(String(content || ''));
   } else if (isCanvasCodeExt(e)) {
     const lines = String(content || '').replace(/\n$/, '').split('\n');
     const changed = Array.isArray(opts.changedRanges) ? opts.changedRanges : [];
@@ -2479,7 +2479,7 @@ async function renderCanvasCodePreview(bodyEl, tab) {
   if (!path) return;
   bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">Loading diff\u2026</div>';
   const renderDoc = (docHtml) => {
-    bodyEl.innerHTML = `<div class="pm-canvas-textframe-wrap"><iframe class="pm-canvas-textframe" title="${escapeHtml(tab.name || 'File')}" sandbox="allow-same-origin"></iframe></div>`;
+    bodyEl.innerHTML = `<div class="pm-canvas-textframe-wrap"><iframe class="pm-canvas-textframe" title="${escapeHtml(tab.name || 'File')}" sandbox></iframe></div>`;
     const frame = bodyEl.querySelector('iframe.pm-canvas-textframe');
     if (frame) frame.srcdoc = docHtml;
     resetCanvasZoom(bodyEl);
@@ -2541,7 +2541,7 @@ function renderCanvasTextInto(bodyEl, tab) {
   const ext = getCanvasFileExt(tab);
   const path = String(tab.path || '');
   const show = (docHtml) => {
-    bodyEl.innerHTML = `<div class="pm-canvas-textframe-wrap"><iframe class="pm-canvas-textframe" title="${escapeHtml(tab.name || 'File')}" sandbox="allow-same-origin"></iframe></div>`;
+    bodyEl.innerHTML = `<div class="pm-canvas-textframe-wrap"><iframe class="pm-canvas-textframe" title="${escapeHtml(tab.name || 'File')}" sandbox></iframe></div>`;
     const frame = bodyEl.querySelector('iframe.pm-canvas-textframe');
     if (frame) frame.srcdoc = docHtml;
     resetCanvasZoom(bodyEl);

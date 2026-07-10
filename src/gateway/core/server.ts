@@ -206,6 +206,8 @@ function tryRawWebStaticFastPath(req: http.IncomingMessage, res: http.ServerResp
     push(path.join(root, 'node_modules', '@chenglou', 'pretext', 'dist'), pathname.slice('/vendor/pretext/'.length));
   } else if (pathname.startsWith('/vendor/jspdf/')) {
     push(path.join(root, 'node_modules', 'jspdf', 'dist'), pathname.slice('/vendor/jspdf/'.length));
+  } else if (pathname.startsWith('/vendor/dompurify/')) {
+    push(path.join(root, 'node_modules', 'dompurify', 'dist'), pathname.slice('/vendor/dompurify/'.length));
   } else {
     push(webUiRoot, pathname);
   }

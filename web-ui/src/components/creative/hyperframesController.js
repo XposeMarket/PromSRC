@@ -129,7 +129,7 @@ export function createHyperframesController(options = {}) {
     if (!studioFrame) {
       mount.innerHTML = '';
       studioFrame = document.createElement('iframe');
-      studioFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-downloads');
+      studioFrame.setAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
       studioFrame.className = 'creative-hyperframes-studio-frame';
       studioFrame.title = element.title || element.meta?.compositionId || 'HyperFrames Studio';
       studioFrame.style.cssText = 'display:block;width:100%;height:100%;border:0;background:#080a12;';

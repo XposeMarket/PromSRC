@@ -100,6 +100,7 @@ function copyPublicWebVendorAssets() {
     copyVendorFile(`node_modules/codemirror/mode/${mode}/${mode}.js`, `codemirror/mode/${mode}/${mode}.min.js`);
   }
   copyVendorFile('node_modules/marked/marked.min.js', 'marked/marked.min.js');
+  copyVendorFile('node_modules/dompurify/dist/purify.min.js', 'dompurify/purify.min.js');
   copyVendorFile('web-ui/vendor/fabric/fabric.min.js', 'fabric/fabric.min.js');
   copyVendorFile('node_modules/gif.js/dist/gif.js', 'gif/gif.js');
   copyVendorFile('node_modules/gif.js/dist/gif.worker.js', 'gif/gif.worker.js');

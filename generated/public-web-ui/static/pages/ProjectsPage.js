@@ -32,6 +32,24 @@ let _currentProjectSessionId = null; // session currently open in chat
 
 // ─── Init ───────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
+  const list = document.getElementById('projects-list');
+  if (list && list.dataset.delegatedActions !== 'true') {
+    list.dataset.delegatedActions = 'true';
+    list.addEventListener('click', (event) => {
+      const target = event.target?.closest?.('[data-project-action]');
+      if (!target || !list.contains(target)) return;
+      const action = String(target.dataset.projectAction || '');
+      const projectId = String(target.dataset.projectId || '');
+      const sessionId = String(target.dataset.sessionId || '');
+      if (!projectId) return;
+      if (target.tagName === 'BUTTON') event.stopPropagation();
+      if (action === 'toggle') window.toggleProjectCard(projectId);
+      else if (action === 'new-session') void window.newProjectSession(projectId);
+      else if (action === 'delete-project') void window.confirmDeleteProject(projectId, String(target.dataset.projectName || ''));
+      else if (action === 'open-session' && sessionId) void window.openProjectSession(projectId, sessionId);
+      else if (action === 'delete-session' && sessionId) void window.confirmDeleteProjectSession(projectId, sessionId, String(target.dataset.sessionTitle || ''));
+    });
+  }
   setTimeout(() => {
     loadProjects();
   }, 400);
@@ -194,16 +212,14 @@ function renderProjectCard(p) {
   return `
 <div class="project-card${isOpen ? ' open' : ''}${_currentProjectSessionId && (p.sessions||[]).find(s=>s.id===_currentProjectSessionId) ? ' active-project' : ''}"
      id="proj-card-${p.id}">
-  <div class="project-card-header" onclick="toggleProjectCard('${p.id}')">
+  <div class="project-card-header" data-project-action="toggle" data-project-id="${escHtmlLocal(p.id)}">
     <div class="project-card-icon">🗂</div>
     <div class="project-card-meta">
       <div class="project-card-name">${escHtmlLocal(p.name)}</div>
       <div class="project-card-sub">${sessionCount} session${sessionCount !== 1 ? 's' : ''} · ${lastActive}</div>
     </div>
-    <button class="project-card-add-btn" title="New chat in project"
-      onclick="event.stopPropagation();newProjectSession('${p.id}')">+</button>
-    <button class="project-card-delete-btn" title="Delete project"
-      onclick="event.stopPropagation();confirmDeleteProject('${p.id}','${escHtmlLocal(p.name)}')">
+    <button class="project-card-add-btn" title="New chat in project" data-project-action="new-session" data-project-id="${escHtmlLocal(p.id)}">+</button>
+    <button class="project-card-delete-btn" title="Delete project" data-project-action="delete-project" data-project-id="${escHtmlLocal(p.id)}" data-project-name="${escHtmlLocal(p.name)}">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
     </button>
     <span class="project-card-chevron">&#9660;</span>
@@ -220,12 +236,11 @@ function renderProjectSessionItem(projectId, s) {
   const when = s.updatedAt ? timeAgo(s.updatedAt) : '';
   return `
 <div class="project-session-item${isActive ? ' active-session' : ''}"
-     onclick="openProjectSession('${projectId}','${s.id}')">
+     data-project-action="open-session" data-project-id="${escHtmlLocal(projectId)}" data-session-id="${escHtmlLocal(s.id)}">
   <span class="project-session-dot"></span>
   <span class="project-session-name">${escHtmlLocal(title)}</span>
   <span class="project-session-time">${when}</span>
-  <button class="project-session-delete-btn" title="Delete session"
-    onclick="event.stopPropagation();confirmDeleteProjectSession('${projectId}','${s.id}','${escHtmlLocal(title)}')">✕</button>
+  <button class="project-session-delete-btn" title="Delete session" data-project-action="delete-session" data-project-id="${escHtmlLocal(projectId)}" data-session-id="${escHtmlLocal(s.id)}" data-session-title="${escHtmlLocal(title)}">✕</button>
 </div>`;
 }
 
@@ -536,6 +551,18 @@ function getFileIcon(filename) {
 function renderFileGrid(files, projectId) {
   const grid = document.getElementById('project-file-grid');
   if (!grid) return;
+  if (grid.dataset.delegatedActions !== 'true') {
+    grid.dataset.delegatedActions = 'true';
+    grid.addEventListener('click', (event) => {
+      const target = event.target?.closest?.('[data-project-file-action="open"]');
+      if (!target || !grid.contains(target)) return;
+      void window.openProjectFileInCanvas(
+        String(target.dataset.projectId || ''),
+        String(target.dataset.fileId || ''),
+        String(target.dataset.fileName || ''),
+      );
+    });
+  }
 
   if (!files.length) {
     grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--muted);font-size:11px;padding:16px 0">No knowledge files yet.<br>Upload files to build project context.</div>`;
@@ -543,7 +570,7 @@ function renderFileGrid(files, projectId) {
   }
 
   grid.innerHTML = files.map(f => `
-    <div class="project-file-card" onclick="openProjectFileInCanvas('${projectId}','${f.id}','${escHtmlLocal(f.name)}')" title="${escHtmlLocal(f.name)}">
+    <div class="project-file-card" data-project-file-action="open" data-project-id="${escHtmlLocal(projectId)}" data-file-id="${escHtmlLocal(f.id)}" data-file-name="${escHtmlLocal(f.name)}" title="${escHtmlLocal(f.name)}">
       <div class="project-file-icon">${getFileIcon(f.name)}</div>
       <div class="project-file-name">${escHtmlLocal(f.name)}</div>
     </div>

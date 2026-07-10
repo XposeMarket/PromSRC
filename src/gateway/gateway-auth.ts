@@ -3,6 +3,7 @@ import type { CorsOptions } from 'cors';
 import type { NextFunction, Request, Response } from 'express';
 import type { PrometheusConfig } from '../types';
 import { getConfig } from '../config/config';
+import { evaluateCreativeRenderGrant } from './security/scoped-render-auth';
 
 /** Typed accessor for the gateway config block — avoids untyped `as any` reads. */
 function getGatewayConfig(): PrometheusConfig['gateway'] {
@@ -18,6 +19,7 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 type GatewayRequestLike = {
+  method?: string;
   headers?: Record<string, any>;
   ip?: string;
   socket?: { remoteAddress?: string | null };
@@ -142,6 +144,13 @@ export function evaluateGatewayRequest(
   if (!isGatewayAuthEnabled()) return { ok: true };
   if (isPublicAccountAuthRoute(req)) return { ok: true };
 
+  const renderGrant = evaluateCreativeRenderGrant(req);
+  if (renderGrant.present) {
+    return renderGrant.ok
+      ? { ok: true }
+      : { ok: false, status: 401, message: 'Unauthorized: render credential is invalid, expired, or outside its job scope.' };
+  }
+
   // A paired mobile device counts as authenticated — its token is opaque,
   // single-tenant, and revocable from the desktop pairing panel. Verified
   // BEFORE the configured gateway token so paired devices work over LAN
@@ -208,7 +217,7 @@ export function buildGatewayCorsOptions(): CorsOptions {
       callback(null, isTrustedGatewayOrigin(origin));
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token', 'X-Pairing-Token'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token', 'X-Pairing-Token', 'X-Prometheus-Render-Token'],
     optionsSuccessStatus: 204,
   };
 }

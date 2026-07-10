@@ -8,7 +8,7 @@
  */
 
 import { api } from '../api.js';
-import { escHtml } from '../utils.js';
+import { escHtml, renderMd } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 
 const SKILL_DESKTOP_ICON = `
@@ -1279,9 +1279,7 @@ async function openHubSkillModal(id) {
       `;
     let html;
     try {
-      html = (window.marked && typeof window.marked.parse === 'function')
-        ? window.marked.parse(md)
-        : `<pre>${escHtml(md)}</pre>`;
+      html = renderMd(md);
     } catch {
       html = `<pre>${escHtml(md)}</pre>`;
     }

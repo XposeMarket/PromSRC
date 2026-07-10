@@ -27,7 +27,15 @@ import { hookBus } from '../hooks';
 import { browserPreviewScreenshot } from '../browser-tools';
 import { sessionCanvasFiles, addCanvasFile, removeCanvasFile } from './canvas-state';
 import { getVault } from '../../security/vault';
-import { evaluateGatewayRequest, resolveGatewayAuthToken } from '../gateway-auth';
+import { evaluateGatewayRequest } from '../gateway-auth';
+import {
+  CREATIVE_RENDER_AUTH_HEADER,
+  issueCreativePreviewGrant,
+  issueCreativeRenderGrant,
+  issueWorkspacePreviewGrant,
+  revokeCreativeRenderGrant,
+  shouldAttachCreativeRenderGrant,
+} from '../security/scoped-render-auth';
 import { resolvePrometheusRoot, isPublicDistributionBuild } from '../../runtime/distribution';
 import {
   type CreativeRenderJobRecord as NormalizedCreativeRenderJobRecord,
@@ -1630,9 +1638,9 @@ async function startCreativeRenderWorker(storage: ReturnType<typeof resolveCreat
         record.error = null;
         broadcastCreativeRenderJobUpdate(storage, record);
 
-        const token = resolveGatewayAuthToken();
         const baseUrl = getGatewayBaseUrl();
-        const workerUrl = `${baseUrl}/api/canvas/creative-render-ui/index.html?creativeRenderWorker=1&jobId=${encodeURIComponent(record.id)}&sessionId=${encodeURIComponent(record.sessionId)}&root=${encodeURIComponent(record.storageRoot || storage.rootAbsPath)}&gatewayBaseUrl=${encodeURIComponent(baseUrl)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+        const workerUrl = `${baseUrl}/api/canvas/creative-render-ui/index.html?creativeRenderWorker=1&jobId=${encodeURIComponent(record.id)}&sessionId=${encodeURIComponent(record.sessionId)}&root=${encodeURIComponent(record.storageRoot || storage.rootAbsPath)}&gatewayBaseUrl=${encodeURIComponent(baseUrl)}`;
+        const renderGrant = issueCreativeRenderGrant(record.id, 30 * 60 * 1000);
 
         try {
           browser = await launchCreativeRenderBrowser();
@@ -1643,6 +1651,19 @@ async function startCreativeRenderWorker(storage: ReturnType<typeof resolveCreat
             },
           });
           page = await context.newPage();
+          await page.route(`${baseUrl}/**`, async (route: any) => {
+            const request = route.request();
+            if (!shouldAttachCreativeRenderGrant(renderGrant, request.method(), request.url())) {
+              await route.continue();
+              return;
+            }
+            await route.continue({
+              headers: {
+                ...request.headers(),
+                [CREATIVE_RENDER_AUTH_HEADER]: renderGrant,
+              },
+            });
+          });
           await page.goto(workerUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
           const timeoutMs = Math.max(180000, (Number(record.exportOptions?.durationMs) || 0) * 6 + 90000);
@@ -1706,6 +1727,7 @@ async function startCreativeRenderWorker(storage: ReturnType<typeof resolveCreat
           broadcastCreativeRenderJobUpdate(storage, erroredRecord);
           return;
         } finally {
+          revokeCreativeRenderGrant(renderGrant);
           try { await page?.close(); } catch {}
           try { await context?.close(); } catch {}
           try { await browser?.close(); } catch {}
@@ -2669,7 +2691,7 @@ function resolveHtmlMotionAudioAttachment(
   return null;
 }
 
-function getHtmlMotionAssetPublicUrl(asset: any, options: { sessionId: string; htmlPath: string; root?: string; absolute?: boolean }): string {
+function getHtmlMotionAssetPublicUrl(asset: any, options: { sessionId: string; htmlPath: string; root?: string; absolute?: boolean; renderToken?: string }): string {
   if (asset?.dataUrl) return String(asset.dataUrl);
   if (asset?.url) return String(asset.url);
   const params = new URLSearchParams({
@@ -2678,10 +2700,19 @@ function getHtmlMotionAssetPublicUrl(asset: any, options: { sessionId: string; h
     asset: String(asset?.id || ''),
   });
   if (options.root) params.set('root', options.root);
-  const token = resolveGatewayAuthToken();
-  if (token) params.set('token', token);
+  if (options.renderToken) params.set('renderToken', options.renderToken);
   const url = `/api/canvas/html-motion-clip/asset?${params.toString()}`;
   return options.absolute ? `${getGatewayBaseUrl()}${url}` : url;
+}
+
+function attachCreativePreviewGrant(params: URLSearchParams): string {
+  const renderToken = issueCreativePreviewGrant({
+    sessionId: String(params.get('sessionId') || ''),
+    htmlPath: String(params.get('path') || ''),
+    root: String(params.get('root') || ''),
+  });
+  params.set('renderToken', renderToken);
+  return renderToken;
 }
 
 const HTML_MOTION_FLOW_RUNTIME = String.raw`
@@ -2828,6 +2859,37 @@ const HTML_MOTION_FLOW_RUNTIME = String.raw`
   }
   window.__PROMETHEUS_APPLY_HTML_MOTION_FLOW__ = applyFlow;
   window.__PROMETHEUS_SCHEDULE_HTML_MOTION_FLOW__ = scheduleFlow;
+  window.addEventListener('message', function(event){
+    if (event.source !== window.parent) return;
+    var data = event.data;
+    if (!data || data.type !== 'prometheus:html-motion-control') return;
+    var timeMs = Math.max(0, Number(data.timeMs) || 0);
+    window.__PROMETHEUS_HTML_MOTION_TIME_MS__ = Math.round(timeMs);
+    window.__PROMETHEUS_HTML_MOTION_TIME_SECONDS__ = timeMs / 1000;
+    try {
+      window.dispatchEvent(new CustomEvent('prometheus-html-motion-seek', {
+        detail: { timeMs: Math.round(timeMs), timeSeconds: timeMs / 1000, playing: data.playing === true }
+      }));
+    } catch {}
+    try {
+      if (typeof document.getAnimations === 'function') {
+        document.getAnimations({ subtree:true }).forEach(function(animation){
+          try {
+            animation.currentTime = Math.round(timeMs);
+            if (data.playing === true) animation.play(); else animation.pause();
+          } catch {}
+        });
+      }
+    } catch {}
+    var style = document.getElementById('prometheus-html-motion-playstate-style');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'prometheus-html-motion-playstate-style';
+      (document.head || document.documentElement).appendChild(style);
+    }
+    style.textContent = data.playing === true ? '' : '*,*::before,*::after{animation-play-state:paused!important;}';
+    scheduleFlow();
+  });
   try {
     var observer = new MutationObserver(function(records){
       for (var i = 0; i < records.length; i += 1) {
@@ -2854,7 +2916,7 @@ function injectHtmlMotionFlowRuntime(html: string): string {
   return `${source}${HTML_MOTION_FLOW_RUNTIME}`;
 }
 
-function renderHtmlMotionClipHtml(storage: ReturnType<typeof resolveCreativeStorage>, htmlPath: string, manifest: any, options: { sessionId: string; root?: string; absoluteUrls?: boolean }): string {
+function renderHtmlMotionClipHtml(storage: ReturnType<typeof resolveCreativeStorage>, htmlPath: string, manifest: any, options: { sessionId: string; root?: string; absoluteUrls?: boolean; renderToken?: string }): string {
   let html = fs.readFileSync(htmlPath, 'utf-8');
   const htmlRelPath = buildCreativeStorageRelativePath(storage.workspacePath, htmlPath);
   const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
@@ -2867,6 +2929,7 @@ function renderHtmlMotionClipHtml(storage: ReturnType<typeof resolveCreativeStor
       htmlPath: htmlRelPath,
       root: options.root,
       absolute: options.absoluteUrls === true,
+      renderToken: options.renderToken,
     });
     const escaped = url.replace(/\\/g, '/');
     html = html
@@ -2881,6 +2944,7 @@ function renderHtmlMotionClipHtml(storage: ReturnType<typeof resolveCreativeStor
       htmlPath: htmlRelPath,
       root: options.root,
       absolute: options.absoluteUrls === true,
+      renderToken: options.renderToken,
     }),
   ]))).replace(/</g, '\\u003c');
   if (/<\/head>/i.test(html)) {
@@ -5458,6 +5522,7 @@ router.get('/api/canvas/html-motion-clip/preview', requireGatewayAuthAllowQueryT
       sessionId,
       root: String(req.query?.root || '').trim(),
       absoluteUrls: false,
+      renderToken: String(req.query?.renderToken || '').trim(),
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
@@ -5600,8 +5665,7 @@ router.post('/api/canvas/html-motion-clip/inspect', (req: any, res: any, next: a
         path: buildCreativeStorageRelativePath(storage.workspacePath, absPath),
         root: String(req.body?.root || '').trim(),
       });
-      const token = resolveGatewayAuthToken();
-      if (token) params.set('token', token);
+      attachCreativePreviewGrant(params);
       previewUrl = `${getGatewayBaseUrl()}/api/canvas/html-motion-clip/preview?${params.toString()}`;
     } else if (html) {
       manifest = req.body?.manifest && typeof req.body.manifest === 'object' ? req.body.manifest : req.body;
@@ -5748,8 +5812,7 @@ router.post('/api/canvas/html-motion-clip/snapshot', (req: any, res: any, next: 
       path: relPath,
       root: String(req.body?.root || '').trim(),
     });
-    const token = resolveGatewayAuthToken();
-    if (token) params.set('token', token);
+    attachCreativePreviewGrant(params);
     const frames = await captureHtmlMotionFrames({
       url: `${getGatewayBaseUrl()}/api/canvas/html-motion-clip/preview?${params.toString()}`,
       width,
@@ -5821,8 +5884,7 @@ router.post('/api/canvas/html-motion-clip/export', (req: any, res: any, next: an
       path: sourceRelPath,
       root: String(req.body?.root || '').trim(),
     });
-    const token = resolveGatewayAuthToken();
-    if (token) params.set('token', token);
+    attachCreativePreviewGrant(params);
     let preExportInspect: Awaited<ReturnType<typeof inspectHtmlMotionPage>> | null = null;
     const previewUrl = `${getGatewayBaseUrl()}/api/canvas/html-motion-clip/preview?${params.toString()}`;
     if (req.body?.skipSpatialQa !== true) {
@@ -7814,7 +7876,7 @@ router.post('/api/canvas/hyperframes/catalog/import', (req: any, res: any, next:
 // These routes are ONLY called by the Telegram channel's file browser.
 // They do not touch handleChat, sessions, SSE streams, or any main chat state.
 
-// GET /preview?path=<rel>&token=<tok>
+// GET /preview?path=<rel> (headless callers use a scoped render header)
 // Serves any workspace file as renderable HTML. HTML files are served as-is;
 // other text types are wrapped in a clean styled HTML template.
 router.get('/preview', async (req: any, res: any) => {
@@ -7909,7 +7971,7 @@ router.get('/preview', async (req: any, res: any) => {
 }</pre></body></html>`);
 });
 
-// GET /api/preview/screenshot?path=<rel>&token=<tok>
+// GET /api/preview/screenshot?path=<rel>
 // Takes a full-page screenshot of the /preview route for a given file and
 // returns the chunks as base64-encoded PNGs. Called only by Telegram.
 router.get('/api/preview/screenshot', (req: any, res: any, next: any) => {
@@ -7924,17 +7986,20 @@ router.get('/api/preview/screenshot', (req: any, res: any, next: any) => {
   if (!relPath) { res.status(400).json({ error: 'path required' }); return; }
 
   const cfg = getConfig().getConfig() as any;
-  const token = resolveGatewayAuthToken();
   const port = Number(cfg?.gateway?.port || 18789);
   const host = '127.0.0.1'; // always localhost — preview is internal only
-  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
-  const previewUrl = `http://${host}:${port}/preview?path=${encodeURIComponent(relPath)}${tokenParam}`;
+  const previewUrl = `http://${host}:${port}/preview?path=${encodeURIComponent(relPath)}`;
+  const renderGrant = issueWorkspacePreviewGrant(relPath);
 
   try {
-    const chunks = await browserPreviewScreenshot(previewUrl, 1200, 10);
+    const chunks = await browserPreviewScreenshot(previewUrl, 1200, 10, {
+      requestHeaders: { [CREATIVE_RENDER_AUTH_HEADER]: renderGrant },
+    });
     res.json({ success: true, chunks, total: chunks.length });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    revokeCreativeRenderGrant(renderGrant);
   }
 });
 

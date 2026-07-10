@@ -22390,9 +22390,18 @@ function updateCreativeTimelinePlayheadDom() {
 function syncCreativeHtmlMotionTimelinePosition(atMs = creativeTimelineMs, options = {}) {
   const frame = document.getElementById('creative-html-motion-frame');
   const win = frame?.contentWindow;
-  const doc = frame?.contentDocument;
-  if (!frame || !win || !doc) return;
+  if (!frame || !win) return;
   const timeMs = Math.max(0, Number(atMs) || 0);
+  try {
+    win.postMessage({
+      type: 'prometheus:html-motion-control',
+      timeMs: Math.round(timeMs),
+      playing: options.playing === true,
+    }, '*');
+  } catch {}
+  let doc = null;
+  try { doc = frame.contentDocument; } catch {}
+  if (!doc) return;
   try {
     win.__PROMETHEUS_HTML_MOTION_TIME_MS__ = Math.round(timeMs);
     win.__PROMETHEUS_HTML_MOTION_TIME_SECONDS__ = timeMs / 1000;
@@ -27842,7 +27851,7 @@ function renderCreativeHtmlMotionStageStudioV3(stage) {
       title="${escHtml(clip.title || 'HTML motion clip')}"
       src="${escHtml(previewUrl)}"
       data-clip-url="${escHtml(previewUrl)}"
-      sandbox="allow-scripts allow-same-origin"
+      sandbox="allow-scripts allow-downloads"
       style="display:block;width:100%;height:100%;border:0;background:${escHtml(background)};pointer-events:auto;"
     ></iframe>
   `;
@@ -36422,10 +36431,9 @@ async function canvasUpdatePreview() {
   const isDesignMode = normalizeCreativeMode(window.currentCreativeMode) === 'design';
 
   frame.onload = null;
-  if (tab.isBinary) frame.removeAttribute('sandbox');
-  else frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-
   const useProjectPreview = isDesignMode && !!canvasProjectRoot && !tab.isImage && !tab.isBinary;
+  const isScriptedPreview = useProjectPreview || isHtmlFile(tab.name) || content.trim().startsWith('<');
+  frame.setAttribute('sandbox', isScriptedPreview ? 'allow-scripts allow-downloads' : 'allow-downloads');
   if (useProjectPreview) {
     const previewPath = getDesignPreviewEntryPath(tab);
     if (previewPath) {
@@ -36463,8 +36471,8 @@ async function canvasUpdatePreview() {
               font-size: 10px; color: #888; background: rgba(0,0,0,0.45);
               padding: 3px 8px; border-radius: 4px; }
     </style></head><body>
-      <img src="${content}" alt="${tab.name}" onload="document.querySelector('.info').textContent=this.naturalWidth+'×'+this.naturalHeight">
-      <div class="info">loading...</div>
+      <img src="${escHtml(content)}" alt="${escHtml(tab.name)}">
+      <div class="info">Image preview</div>
     </body></html>`;
     return;
   }
@@ -36514,9 +36522,9 @@ async function canvasUpdatePreview() {
     return;
   }
 
-  if (ext === 'md' && typeof marked !== 'undefined') {
+  if (ext === 'md') {
     frame.removeAttribute('src');
-    const rendered = marked.parse(content, { breaks: true, gfm: true, mangle: false, headerIds: false });
+    const rendered = renderMd(content);
     frame.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       body{font-family:system-ui,sans-serif;line-height:1.7;padding:24px 32px;max-width:800px;margin:0 auto;color:#17243b}
       h1,h2,h3{font-weight:700;margin:16px 0 8px} code{background:#f0f4fb;padding:2px 6px;border-radius:4px;font-size:0.88em}

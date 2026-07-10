@@ -6,7 +6,7 @@
  */
 
 import { api } from '../api.js';
-import { escHtml, bgtToast, timeAgo, showToast } from '../utils.js';
+import { escHtml, renderMd, bgtToast, timeAgo, showToast } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
@@ -994,7 +994,7 @@ function renderSubagentTraceEntry(entry) {
   const type = String(entry?.type || 'info').toLowerCase();
   const text = String(entry?.text || entry?.content || '').trim();
   if (type === 'preamble' || type === 'think' || type === 'assistant') {
-    return `<div class="live-turn-prose live-turn-${escHtml(type)}"><div class="live-turn-md">${typeof marked !== 'undefined' ? marked.parse(normalizeSubagentTraceProseText(text)) : escHtml(normalizeSubagentTraceProseText(text))}</div></div>`;
+    return `<div class="live-turn-prose live-turn-${escHtml(type)}"><div class="live-turn-md">${renderMd(normalizeSubagentTraceProseText(text))}</div></div>`;
   }
   const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
   return `<div class="live-turn-segment live-turn-${escHtml(type)}"><span>${escHtml(label)}</span><div class="live-turn-text">${escHtml(text)}</div></div>`;
@@ -2013,7 +2013,7 @@ function renderSubagentRunRecovery(task, agentId) {
             ${!isUser ? `<div class="msg-role">Recovery · <span style="font-weight:400;opacity:.75">${timeAgo(turn?.timestamp || Date.now())}</span></div>` : ''}
             <div class="msg-content ${isUser ? '' : 'markdown-body'}">
               ${renderSubagentAttachmentPreviews(attachments, agentId, `run_${taskId}_${turn?.timestamp || ''}`)}
-              ${isUser ? escHtml(turn?.content || '') : (typeof marked !== 'undefined' ? marked.parse(String(turn?.content || '')) : escHtml(turn?.content || ''))}
+              ${isUser ? escHtml(turn?.content || '') : renderMd(String(turn?.content || ''))}
             </div>
           </div>
         </div>`;
@@ -2151,7 +2151,7 @@ function renderSubagentChatTab(agent) {
     const visibleContent = stripSubagentUploadNote(m.content, attachments);
     const contentHtml = isUser
       ? `<div class="msg-content">${!isDirectUserMessage ? `<div style="font-size:11px;font-weight:800;margin-bottom:6px;opacity:0.78">${label}${source ? ` · ${source}` : ''}</div>` : ''}${renderSubagentAttachmentPreviews(attachments, agent.id, m.id)}${visibleContent ? escHtml(visibleContent) : ''}</div>`
-      : `<div class="msg-content markdown-body">${typeof marked !== 'undefined' ? marked.parse(m.content) : escHtml(m.content)}</div>`;
+      : `<div class="msg-content markdown-body">${renderMd(m.content)}</div>`;
     const workHtml = !isUser ? renderSubagentWorkTimer(m, durationSec) : '';
     const traceDrawerHtml = !isUser ? renderSubagentTraceDrawer(m) : '';
     const metaHtml = stepCount ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${stepCount} steps${durationSec ? ` · ${formatSubagentElapsedSeconds(durationSec)}` : ''}</div>` : '';

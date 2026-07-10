@@ -130,6 +130,7 @@ HyperFrames integration:
 HyperFrames canvas/editor behavior added in May 2026:
 
 - `web-ui/src/components/creative/hyperframesController.js` mounts source-backed HyperFrames clips into iframe previews via `createHyperframesPreview`.
+- HyperFrames and HTML-motion preview iframes are opaque-origin (`allow-scripts` without `allow-same-origin`). Playback/seek state crosses the boundary through validated `postMessage` contracts; direct parent access to untrusted preview DOM is not an acceptable shortcut.
 - If `element.meta.html` is missing, the controller now hydrates source HTML from `element.meta.projectPath + element.meta.entryFile` through `/api/canvas/file`; do not overwrite a project-backed clip with empty `html`.
 - `web-ui/src/pages/ChatPage.js` passes both `post` and `get` API helpers into HyperFrames controllers so the preview can recover source-backed clips after session rehydrate.
 - HyperFrames refresh/lint/QA/export/snapshot code paths should call the same source resolver (`ensureHyperframesElementSourceHtml`) so project-backed clips work even when the scene snapshot only stores `projectPath` and `entryFile`.

@@ -281,4 +281,13 @@ Do not mix mobile changes into a desktop web UI fix unless the shared file truly
 - Cross-surface streams have two paths: websocket/main-chat stream events and retained stream catch-up. Debug both before assuming the model/tool loop failed.
 - Generated media previews should use `/api/canvas/inline?path=...` for browser playback, not download-style URLs.
 - Account/auth/pairing logic is security-sensitive. Do not loosen gateway auth, pairing approval, OAuth credential handling, command approvals, or source-edit approvals as part of a UI cleanup.
+
+## Untrusted content boundary
+
+- `web-ui/src/utils.js::renderMd()` is the only supported Markdown-to-HTML path. It runs `marked` output through the vendored DOMPurify allowlist before trusted visual placeholders are restored. Direct `marked.parse(...)` output must never be assigned to `innerHTML` or `srcdoc`.
+- Scripted Markdown visuals, HTML/SVG blocks, workspace/project previews, mobile live-canvas pages, HTML motion, and HyperFrames previews must use an opaque-origin sandbox. Never combine `allow-scripts` with `allow-same-origin` for content that can include model, imported, workspace, or user HTML.
+- Cross-frame behavior uses narrow, source-checked `postMessage` messages. Do not regain iframe DOM access by restoring `allow-same-origin`; extend the validated bridge instead.
+- Headless creative workers use `src/gateway/security/scoped-render-auth.ts`. The gateway bearer must not appear in worker/preview URLs, `location.search`, page globals, or injected fetch wrappers. Worker grants are random, expiring, job-bound, header-only credentials; HTML-motion query grants can read only their exact preview and asset path.
+- Data must not be interpolated into inline event-handler JavaScript. Use `data-*` attributes plus delegated `addEventListener` handlers, as `ProjectsPage.js` does for arbitrary project/file names.
+- Run `npm run test:untrusted-content-boundary` after changing Markdown, preview iframes, creative render authentication, or dynamic event binding.
 - Mobile router and mobile CSS are present in the same bundle. Desktop fixes should not rely on `body.pm-mobile-active`; that class means the mobile shell has taken over.

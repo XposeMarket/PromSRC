@@ -20,6 +20,7 @@ const GENERATED_VENDOR_FILES = [
   'vendor/codemirror/mode/markdown/markdown.min.js',
   'vendor/codemirror/mode/python/python.min.js',
   'vendor/marked/marked.min.js',
+  'vendor/dompurify/purify.min.js',
   'vendor/fabric/fabric.min.js',
   'vendor/gif/gif.js',
   'vendor/gif/gif.worker.js',

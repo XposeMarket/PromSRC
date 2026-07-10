@@ -9446,6 +9446,7 @@ export async function browserPreviewScreenshot(
   url: string,
   chunkHeight = 1200,
   maxChunks = 10,
+  options: { requestHeaders?: Record<string, string> } = {},
 ): Promise<PreviewChunk[]> {
   // Get (or launch) Chrome using the same logic as normal browser tools.
   // Using a dedicated session ID keeps this page completely separate from
@@ -9458,6 +9459,14 @@ export async function browserPreviewScreenshot(
   const page: PwPage = await session.context.newPage();
 
   try {
+    const requestHeaders = options.requestHeaders && typeof options.requestHeaders === 'object'
+      ? options.requestHeaders
+      : {};
+    if (Object.keys(requestHeaders).length) {
+      await page.route(url, async (route: any) => {
+        await route.continue({ headers: { ...route.request().headers(), ...requestHeaders } });
+      });
+    }
     // Clean 1280px viewport — matches a standard desktop browser width.
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });

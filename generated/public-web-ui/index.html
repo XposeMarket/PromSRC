@@ -67,12 +67,13 @@
       const params = new URLSearchParams(window.location.search || '');
       const creativeRenderWorker = params.get('creativeRenderWorker') === '1';
       if (!creativeRenderWorker && window.__PROM_SHOULD_BOOT_MOBILE?.()) {
-        const markedReady = loadExternalScript('vendor/marked/marked.min.js')
+        const purifierReady = loadExternalScript('vendor/dompurify/purify.min.js');
+        const markedReady = purifierReady.then(() => loadExternalScript('vendor/marked/marked.min.js'))
           .then((result) => {
             try { window.dispatchEvent(new CustomEvent('prometheus:markdown-ready', { detail: result })); } catch {}
             return result;
           });
-        window.__PROM_EXTERNAL_LIBS_READY = Promise.allSettled([markedReady]);
+        window.__PROM_EXTERNAL_LIBS_READY = Promise.allSettled([purifierReady, markedReady]);
         return;
       }
     } catch {}
@@ -89,8 +90,10 @@
         loadStyleIfMissing('vendor/codemirror/theme/material-darker.min.css'),
       ]);
     };
-    const markedReady = loadExternalScript('vendor/marked/marked.min.js');
+    const purifierReady = loadExternalScript('vendor/dompurify/purify.min.js');
+    const markedReady = purifierReady.then(() => loadExternalScript('vendor/marked/marked.min.js'));
     window.__PROM_EXTERNAL_LIBS_READY = Promise.allSettled([
+      purifierReady,
       markedReady,
     ]);
 
@@ -246,33 +249,13 @@
     const params = new URLSearchParams(window.location.search || '');
     const creativeRenderWorker = params.get('creativeRenderWorker') === '1';
     const gatewayBaseUrl = String(params.get('gatewayBaseUrl') || window.location.origin || '').trim().replace(/\/+$/, '');
-    const token = String(params.get('token') || '').trim();
     window.__PROM_CREATIVE_RENDER_CONTEXT = creativeRenderWorker ? {
       enabled: true,
       jobId: String(params.get('jobId') || '').trim(),
       sessionId: String(params.get('sessionId') || '').trim(),
       root: String(params.get('root') || '').trim(),
       gatewayBaseUrl,
-      token,
     } : null;
-    if (!creativeRenderWorker || !gatewayBaseUrl || !token || typeof window.fetch !== 'function') return;
-    const nativeFetch = window.fetch.bind(window);
-    window.fetch = (input, init = {}) => {
-      const inputUrl = typeof input === 'string'
-        ? input
-        : (input instanceof Request ? input.url : String(input || ''));
-      const shouldPrefix = inputUrl.startsWith('/api/') || inputUrl.startsWith('/ws');
-      const targetUrl = shouldPrefix ? `${gatewayBaseUrl}${inputUrl}` : inputUrl;
-      const request = input instanceof Request ? input : null;
-      const headers = new Headers(init.headers || (request ? request.headers : undefined) || {});
-      if (targetUrl.startsWith(gatewayBaseUrl)) {
-        headers.set('Authorization', `Bearer ${token}`);
-      }
-      return nativeFetch(targetUrl, {
-        ...init,
-        headers,
-      });
-    };
   })();
 </script>
 <script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>
@@ -3286,7 +3269,7 @@
           </div>
           <div id="canvas-preview-stage" style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:18px;overflow:hidden">
             <div id="canvas-preview-device-frame" style="position:relative;width:100%;height:100%;flex-shrink:0">
-              <iframe id="canvas-preview-frame" style="display:none;border:none;width:100%;height:100%;min-height:0;background:#fff;transform-origin:top left" sandbox="allow-scripts allow-same-origin"></iframe>
+              <iframe id="canvas-preview-frame" style="display:none;border:none;width:100%;height:100%;min-height:0;background:#fff;transform-origin:top left" sandbox="allow-scripts allow-downloads"></iframe>
             </div>
           </div>
         </div>
