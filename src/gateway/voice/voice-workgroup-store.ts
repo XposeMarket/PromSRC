@@ -2,6 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import {
+  assertSafeStorageId,
+  isSafeStorageId,
+  resolveConfinedStoragePath,
+  storageFilePath,
+} from '../storage/storage-paths';
 
 export type VoiceWorkgroupMode = 'parallel' | 'sequential';
 export type VoiceWorkgroupDelivery = 'report_each' | 'grouped_summary' | 'task_panel_only';
@@ -30,7 +36,7 @@ export interface VoiceWorkgroupRecord {
 }
 
 function getWorkgroupsDir(): string {
-  return path.join(getConfig().getConfigDir(), 'voice-workgroups');
+  return resolveConfinedStoragePath(getConfig().getConfigDir(), 'voice-workgroups', { label: 'voice workgroups directory' });
 }
 
 function ensureWorkgroupsDir(): void {
@@ -38,7 +44,7 @@ function ensureWorkgroupsDir(): void {
 }
 
 function workgroupPath(id: string): string {
-  return path.join(getWorkgroupsDir(), `${id}.json`);
+  return storageFilePath(getWorkgroupsDir(), id, '.json', 'voice workgroup id');
 }
 
 function normalizeMode(value: unknown): VoiceWorkgroupMode {
@@ -67,9 +73,13 @@ function computeStatus(workers: VoiceWorkgroupWorker[]): VoiceWorkgroupStatus {
 
 export function saveVoiceWorkgroup(record: VoiceWorkgroupRecord): VoiceWorkgroupRecord {
   ensureWorkgroupsDir();
+  const id = assertSafeStorageId(record.id, 'voice workgroup id');
+  const parentSessionId = assertSafeStorageId(record.parentSessionId, 'parent session id');
   const workers = Array.isArray(record.workers) ? record.workers : [];
   const next: VoiceWorkgroupRecord = {
     ...record,
+    id,
+    parentSessionId,
     mode: normalizeMode(record.mode),
     delivery: normalizeDelivery(record.delivery),
     workers,
@@ -103,8 +113,7 @@ export function createVoiceWorkgroup(params: {
 }
 
 export function loadVoiceWorkgroup(id: string): VoiceWorkgroupRecord | null {
-  const cleanId = String(id || '').trim();
-  if (!cleanId) return null;
+  const cleanId = assertSafeStorageId(id, 'voice workgroup id');
   const filePath = workgroupPath(cleanId);
   if (!fs.existsSync(filePath)) return null;
   try {
@@ -118,11 +127,11 @@ export function loadVoiceWorkgroup(id: string): VoiceWorkgroupRecord | null {
           index: Number.isFinite(Number(worker?.index)) ? Number(worker.index) : index,
           status: String(worker?.status || 'queued').trim() || 'queued',
           createdAt: Number.isFinite(Number(worker?.createdAt)) ? Number(worker.createdAt) : Date.now(),
-        })).filter((worker: VoiceWorkgroupWorker) => worker.taskId)
+        })).filter((worker: VoiceWorkgroupWorker) => isSafeStorageId(worker.taskId))
       : [];
     return {
-      id: String(parsed.id || cleanId),
-      parentSessionId: String(parsed.parentSessionId || '').trim(),
+      id: cleanId,
+      parentSessionId: isSafeStorageId(parsed.parentSessionId) ? String(parsed.parentSessionId).trim() : 'default',
       sourceTranscript: String(parsed.sourceTranscript || '').trim() || undefined,
       source: String(parsed.source || '').trim() || undefined,
       mode: normalizeMode(parsed.mode),
@@ -140,8 +149,7 @@ export function loadVoiceWorkgroup(id: string): VoiceWorkgroupRecord | null {
 export function addVoiceWorkgroupWorker(workgroupId: string, worker: Omit<VoiceWorkgroupWorker, 'createdAt'> & { createdAt?: number }): VoiceWorkgroupRecord | null {
   const record = loadVoiceWorkgroup(workgroupId);
   if (!record) return null;
-  const taskId = String(worker.taskId || '').trim();
-  if (!taskId) return record;
+  const taskId = assertSafeStorageId(worker.taskId, 'task id');
   const nextWorker: VoiceWorkgroupWorker = {
     taskId,
     title: String(worker.title || '').trim() || `Worker ${record.workers.length + 1}`,
@@ -159,7 +167,7 @@ export function addVoiceWorkgroupWorker(workgroupId: string, worker: Omit<VoiceW
 export function updateVoiceWorkgroupWorkerStatus(workgroupId: string, taskId: string, status: string): VoiceWorkgroupRecord | null {
   const record = loadVoiceWorkgroup(workgroupId);
   if (!record) return null;
-  const cleanTaskId = String(taskId || '').trim();
+  const cleanTaskId = assertSafeStorageId(taskId, 'task id');
   const cleanStatus = String(status || '').trim();
   if (!cleanTaskId || !cleanStatus) return record;
   let changed = false;
@@ -173,11 +181,13 @@ export function updateVoiceWorkgroupWorkerStatus(workgroupId: string, taskId: st
 
 export function listVoiceWorkgroupsForSession(parentSessionId: string): VoiceWorkgroupRecord[] {
   const sid = String(parentSessionId || '').trim();
-  if (!sid) return [];
+  if (!isSafeStorageId(sid)) return [];
   ensureWorkgroupsDir();
   return fs.readdirSync(getWorkgroupsDir())
     .filter((file) => file.endsWith('.json'))
-    .map((file) => loadVoiceWorkgroup(path.basename(file, '.json')))
+    .map((file) => path.basename(file, '.json'))
+    .filter((id) => isSafeStorageId(id))
+    .map((id) => loadVoiceWorkgroup(id))
     .filter((record): record is VoiceWorkgroupRecord => !!record && record.parentSessionId === sid)
     .sort((a, b) => b.createdAt - a.createdAt);
 }

@@ -21,6 +21,7 @@ import { updateResumeContext, type TaskStatus } from '../tasks/task-store';
 import { getErrorAudit } from '../../security/error-audit';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
 import { buildTaskPauseSnapshot, formatTaskPauseSnapshot } from '../tasks/task-recovery';
+import { isStorageBoundaryError } from '../storage/storage-paths';
 
 
 export const router = Router();
@@ -990,3 +991,11 @@ function _makeBroadcastForTask(taskId: string): (data: object) => void {
 // Having them here too caused duplicate route registration where the first
 // router registered in Express would silently shadow the other, creating
 // inconsistent approval/dispatch behavior depending on Express mount order.
+
+router.use((err: any, _req: any, res: any, next: any) => {
+  if (!isStorageBoundaryError(err)) {
+    next(err);
+    return;
+  }
+  res.status(400).json({ success: false, error: err.message });
+});

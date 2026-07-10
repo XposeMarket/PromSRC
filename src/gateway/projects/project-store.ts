@@ -27,6 +27,13 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config.js';
+import { deleteSession } from '../session.js';
+import {
+  assertSafeStorageId,
+  isSafeStorageId,
+  resolveConfinedStoragePath,
+  storageFilePath,
+} from '../storage/storage-paths.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,7 +47,7 @@ export interface ProjectSession {
 export interface ProjectKnowledgeFile {
   id: string;
   name: string;
-  path: string;       // absolute path on disk
+  path: string;       // derived absolute path on disk (legacy metadata is never trusted directly)
   relPath: string;    // relative to project knowledge dir
   sizeBytes: number;
   tokens: number;     // estimated token count
@@ -61,19 +68,30 @@ export interface Project {
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
 function getProjectsDir(): string {
-  return path.join(getConfig().getConfigDir(), 'projects');
+  return resolveConfinedStoragePath(getConfig().getConfigDir(), 'projects', { label: 'projects directory' });
 }
 
 function getProjectFile(id: string): string {
-  return path.join(getProjectsDir(), `${id}.json`);
+  return storageFilePath(getProjectsDir(), id, '.json', 'project id');
 }
 
 export function getProjectWorkspaceDir(id: string): string {
-  return path.join(getConfig().getWorkspacePath(), 'projects', id);
+  const projectId = assertSafeStorageId(id, 'project id');
+  const projectsRoot = resolveConfinedStoragePath(getConfig().getWorkspacePath(), 'projects', { label: 'project workspace root' });
+  fs.mkdirSync(projectsRoot, { recursive: true });
+  return resolveConfinedStoragePath(projectsRoot, projectId, { label: 'project workspace' });
 }
 
 export function getProjectKnowledgeDir(id: string): string {
-  return path.join(getProjectWorkspaceDir(id), 'knowledge');
+  const workspaceDir = getProjectWorkspaceDir(id);
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  return resolveConfinedStoragePath(workspaceDir, 'knowledge', { label: 'project knowledge directory' });
+}
+
+export function getProjectKnowledgeFilePath(projectId: string, relativeName: string): string {
+  return resolveConfinedStoragePath(getProjectKnowledgeDir(projectId), relativeName, {
+    label: 'project knowledge file',
+  });
 }
 
 function ensureProjectDirs(id: string): void {
@@ -93,15 +111,25 @@ function estimateTokens(content: string): number {
 }
 
 function saveProject(project: Project): void {
+  project.id = assertSafeStorageId(project.id, 'project id');
   ensureProjectDirs(project.id);
   fs.writeFileSync(getProjectFile(project.id), JSON.stringify(project, null, 2), 'utf-8');
 }
 
 function loadProjectFromDisk(id: string): Project | null {
-  const file = getProjectFile(id);
+  const projectId = assertSafeStorageId(id, 'project id');
+  const file = getProjectFile(projectId);
   if (!fs.existsSync(file)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8')) as Project;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Project;
+    return {
+      ...parsed,
+      id: projectId,
+      sessions: Array.isArray(parsed.sessions)
+        ? parsed.sessions.filter((session) => isSafeStorageId(session?.id))
+        : [],
+      knowledge: Array.isArray(parsed.knowledge) ? parsed.knowledge : [],
+    };
   } catch (e: any) {
     console.error(`[ProjectStore] Failed to load project ${id}:`, e?.message);
     return null;
@@ -116,7 +144,9 @@ export function listProjects(): Project[] {
   const projects: Project[] = [];
   for (const file of fs.readdirSync(dir)) {
     if (!file.endsWith('.json')) continue;
-    const p = loadProjectFromDisk(file.replace('.json', ''));
+    const id = file.slice(0, -5);
+    if (!isSafeStorageId(id)) continue;
+    const p = loadProjectFromDisk(id);
     if (p) projects.push(p);
   }
   return projects.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -132,7 +162,7 @@ export function createProject(name: string): Project {
   ensureProjectDirs(id);
 
   // Seed CONTEXT.md
-  const contextPath = path.join(getProjectWorkspaceDir(id), 'CONTEXT.md');
+  const contextPath = resolveConfinedStoragePath(getProjectWorkspaceDir(id), 'CONTEXT.md', { label: 'project context file' });
   if (!fs.existsSync(contextPath)) {
     fs.writeFileSync(contextPath, [
       `# ${name}`,
@@ -183,7 +213,7 @@ export function updateProject(
   if (updates.memorySnapshot !== undefined) {
     project.memorySnapshot = updates.memorySnapshot;
     // Mirror into CONTEXT.md Memory Snapshot section
-    const contextPath = path.join(getProjectWorkspaceDir(id), 'CONTEXT.md');
+    const contextPath = resolveConfinedStoragePath(getProjectWorkspaceDir(id), 'CONTEXT.md', { label: 'project context file' });
     try {
       const existing = fs.existsSync(contextPath) ? fs.readFileSync(contextPath, 'utf-8') : '';
       const marker = '## Memory Snapshot';
@@ -207,10 +237,8 @@ export function deleteProject(id: string): boolean {
   if (!project) return false;
 
   // Delete all owned session files
-  const sessionsDir = path.join(getConfig().getConfigDir(), 'sessions');
   for (const sess of project.sessions) {
-    const sessionFile = path.join(sessionsDir, `${sess.id}.json`);
-    if (fs.existsSync(sessionFile)) { try { fs.unlinkSync(sessionFile); } catch {} }
+    try { deleteSession(sess.id); } catch {}
   }
 
   // Delete workspace folder
@@ -236,11 +264,13 @@ export function addSessionToProject(
   sessionId: string,
   title: string = 'New chat'
 ): Project | null {
+  assertSafeStorageId(projectId, 'project id');
+  const safeSessionId = assertSafeStorageId(sessionId, 'session id');
   const project = loadProjectFromDisk(projectId);
   if (!project) return null;
-  if (project.sessions.some(s => s.id === sessionId)) return project;
+  if (project.sessions.some(s => s.id === safeSessionId)) return project;
   const now = Date.now();
-  project.sessions.unshift({ id: sessionId, title, createdAt: now, updatedAt: now });
+  project.sessions.unshift({ id: safeSessionId, title, createdAt: now, updatedAt: now });
   project.updatedAt = now;
   saveProject(project);
   return project;
@@ -251,9 +281,11 @@ export function updateProjectSessionTitle(
   sessionId: string,
   title: string
 ): void {
+  assertSafeStorageId(projectId, 'project id');
+  const safeSessionId = assertSafeStorageId(sessionId, 'session id');
   const project = loadProjectFromDisk(projectId);
   if (!project) return;
-  const sess = project.sessions.find(s => s.id === sessionId);
+  const sess = project.sessions.find(s => s.id === safeSessionId);
   if (sess) {
     sess.title = title;
     sess.updatedAt = Date.now();
@@ -266,22 +298,45 @@ export function removeSessionFromProject(
   projectId: string,
   sessionId: string
 ): Project | null {
+  assertSafeStorageId(projectId, 'project id');
+  const safeSessionId = assertSafeStorageId(sessionId, 'session id');
   const project = loadProjectFromDisk(projectId);
   if (!project) return null;
-  project.sessions = project.sessions.filter(s => s.id !== sessionId);
+  if (!project.sessions.some((session) => session.id === safeSessionId)) return null;
+  project.sessions = project.sessions.filter(s => s.id !== safeSessionId);
   project.updatedAt = Date.now();
   saveProject(project);
-
-  const sessionFile = path.join(getConfig().getConfigDir(), 'sessions', `${sessionId}.json`);
-  if (fs.existsSync(sessionFile)) { try { fs.unlinkSync(sessionFile); } catch {} }
+  deleteSession(safeSessionId);
   return project;
 }
 
 export function findProjectBySessionId(sessionId: string): Project | null {
+  if (!isSafeStorageId(sessionId)) return null;
   return listProjects().find(p => p.sessions.some(s => s.id === sessionId)) || null;
 }
 
 // ─── Knowledge Files ─────────────────────────────────────────────────────────
+
+function resolveKnowledgeFilePath(
+  projectId: string,
+  file: ProjectKnowledgeFile,
+): { path: string; relPath: string } | null {
+  const knowledgeDir = getProjectKnowledgeDir(projectId);
+  const candidates: string[] = [];
+  if (typeof file?.relPath === 'string' && file.relPath.trim()) candidates.push(file.relPath.trim());
+  if (typeof file?.path === 'string' && file.path.trim()) {
+    candidates.push(path.relative(knowledgeDir, path.resolve(file.path)));
+  }
+  for (const relative of candidates) {
+    try {
+      const resolved = resolveConfinedStoragePath(knowledgeDir, relative, { label: 'project knowledge file' });
+      return { path: resolved, relPath: path.relative(knowledgeDir, resolved).split(path.sep).join('/') };
+    } catch {
+      // Ignore tampered/legacy candidates that are not confined to this project.
+    }
+  }
+  return null;
+}
 
 export function addKnowledgeFile(
   projectId: string,
@@ -289,19 +344,26 @@ export function addKnowledgeFile(
   absPath: string,
   sizeBytes: number
 ): ProjectKnowledgeFile | null {
+  assertSafeStorageId(projectId, 'project id');
   const project = loadProjectFromDisk(projectId);
   if (!project) return null;
 
   const knowledgeDir = getProjectKnowledgeDir(projectId);
-  const relPath = path.relative(knowledgeDir, absPath);
+  const relPath = path.relative(knowledgeDir, path.resolve(absPath));
+  const resolvedPath = resolveConfinedStoragePath(knowledgeDir, relPath, { label: 'project knowledge file' });
 
   let tokens = 0;
-  try { tokens = estimateTokens(fs.readFileSync(absPath, 'utf-8')); }
+  try { tokens = estimateTokens(fs.readFileSync(resolvedPath, 'utf-8')); }
   catch { tokens = Math.ceil(sizeBytes / 4); }
 
   const kf: ProjectKnowledgeFile = {
     id: 'kf_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12),
-    name, path: absPath, relPath, sizeBytes, tokens, addedAt: Date.now(),
+    name: path.basename(name),
+    path: resolvedPath,
+    relPath: relPath.split(path.sep).join('/'),
+    sizeBytes,
+    tokens,
+    addedAt: Date.now(),
   };
 
   project.knowledge = project.knowledge.filter(f => f.name !== name);
@@ -317,7 +379,9 @@ export function removeKnowledgeFile(projectId: string, fileId: string): boolean 
   if (!project) return false;
   const file = project.knowledge.find(f => f.id === fileId);
   if (!file) return false;
-  if (fs.existsSync(file.path)) { try { fs.unlinkSync(file.path); } catch {} }
+  const resolved = resolveKnowledgeFilePath(projectId, file);
+  if (!resolved) return false;
+  if (fs.existsSync(resolved.path)) { try { fs.unlinkSync(resolved.path); } catch {} }
   project.knowledge = project.knowledge.filter(f => f.id !== fileId);
   project.updatedAt = Date.now();
   saveProject(project);
@@ -327,15 +391,21 @@ export function removeKnowledgeFile(projectId: string, fileId: string): boolean 
 export function listKnowledgeFiles(projectId: string): ProjectKnowledgeFile[] {
   const project = loadProjectFromDisk(projectId);
   if (!project) return [];
-  return project.knowledge.filter(f => fs.existsSync(f.path));
+  return project.knowledge.flatMap((file) => {
+    const resolved = resolveKnowledgeFilePath(projectId, file);
+    if (!resolved || !fs.existsSync(resolved.path)) return [];
+    return [{ ...file, path: resolved.path, relPath: resolved.relPath }];
+  });
 }
 
 export function getKnowledgeFileContent(projectId: string, fileId: string): string | null {
   const project = loadProjectFromDisk(projectId);
   if (!project) return null;
   const file = project.knowledge.find(f => f.id === fileId);
-  if (!file || !fs.existsSync(file.path)) return null;
-  try { return fs.readFileSync(file.path, 'utf-8'); } catch { return null; }
+  if (!file) return null;
+  const resolved = resolveKnowledgeFilePath(projectId, file);
+  if (!resolved || !fs.existsSync(resolved.path)) return null;
+  try { return fs.readFileSync(resolved.path, 'utf-8'); } catch { return null; }
 }
 
 // ─── Context Injection ────────────────────────────────────────────────────────
@@ -364,7 +434,7 @@ export function buildProjectContextBlock(sessionId: string): string | null {
   }
 
   // CONTEXT.md
-  const contextPath = path.join(getProjectWorkspaceDir(project.id), 'CONTEXT.md');
+  const contextPath = resolveConfinedStoragePath(getProjectWorkspaceDir(project.id), 'CONTEXT.md', { label: 'project context file' });
   if (fs.existsSync(contextPath)) {
     try {
       const content = fs.readFileSync(contextPath, 'utf-8').trim();

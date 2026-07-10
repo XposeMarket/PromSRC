@@ -29,6 +29,8 @@ Important pause reasons include:
 
 Other current task facts:
 
+- task IDs are opaque storage IDs validated by `src/gateway/storage/storage-paths.ts`; task JSON, evidence bus, session/checkpoint cleanup, and index reconstruction must never concatenate request IDs directly into paths
+- invalid task IDs surface as HTTP 400 through the storage-boundary error handler, and `npm run test:storage-boundaries` verifies out-of-store deletion remains impossible
 - proposal execution state records `standard`, `task_trigger`, `verification`, `artifact_run`, `dev_src_self_edit`, and `dev_src_self_edit_repair`
 - tasks can carry mutation scope, build verification state, live baselines, promotion status, repair context, and team execution state
 - background task runner uses `step_complete` progression, stall nudges, and task-scoped workspace binding

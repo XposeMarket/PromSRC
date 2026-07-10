@@ -14,6 +14,12 @@ import { getConfig } from '../../config/config';
 import { listLiveRuntimes } from '../live-runtime-registry';
 import type { ProposalRepairContext } from '../proposals/repair-context.js';
 import type { ProposalTeamExecution } from '../proposals/proposal-store.js';
+import {
+  assertSafeStorageId,
+  isSafeStorageId,
+  resolveConfinedStoragePath,
+  storageFilePath,
+} from '../storage/storage-paths.js';
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Evidence Bus Types Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
@@ -396,17 +402,17 @@ function getStateBaseDir(): string {
 }
 
 function getTasksDir(): string {
-  const base = path.join(getStateBaseDir(), TASKS_DIR_NAME);
+  const base = resolveConfinedStoragePath(getStateBaseDir(), TASKS_DIR_NAME, { label: 'tasks directory' });
   fs.mkdirSync(base, { recursive: true });
   return base;
 }
 
 function taskFilePath(id: string): string {
-  return path.join(getTasksDir(), `${id}.json`);
+  return storageFilePath(getTasksDir(), id, '.json', 'task id');
 }
 
 function indexFilePath(): string {
-  return path.join(getTasksDir(), '_index.json');
+  return resolveConfinedStoragePath(getTasksDir(), '_index.json', { label: 'task index' });
 }
 
 function defaultTaskIndex(): TaskIndex {
@@ -459,7 +465,7 @@ function normalizeTaskRuntimeProgress(input: any): TaskRuntimeProgressState | un
 
 function normalizeTaskSummary(input: any): TaskSummary | null {
   const id = String(input?.id || '').trim();
-  if (!id) return null;
+  if (!isSafeStorageId(id)) return null;
   const rawStatus = String(input?.status || '').toLowerCase();
   const status: TaskStatus =
     rawStatus === 'queued'
@@ -558,7 +564,7 @@ function loadIndex(): TaskIndex {
 
     // Backward compatibility: older builds persisted the index as string[].
     if (Array.isArray(parsed)) {
-      const ids = parsed.filter((v): v is string => typeof v === 'string');
+      const ids = parsed.filter((v): v is string => typeof v === 'string' && isSafeStorageId(v));
       taskIndexCache = { ids: Array.from(new Set(ids)), summaries: {}, updatedAt: Date.now() };
       return taskIndexCache;
     }
@@ -566,7 +572,7 @@ function loadIndex(): TaskIndex {
     if (parsed && typeof parsed === 'object') {
       const record = parsed as { ids?: unknown; summaries?: unknown; updatedAt?: unknown };
       const ids = Array.isArray(record.ids)
-        ? record.ids.filter((v): v is string => typeof v === 'string')
+        ? record.ids.filter((v): v is string => typeof v === 'string' && isSafeStorageId(v))
         : [];
       const summaries: Record<string, TaskSummary> = {};
       if (record.summaries && typeof record.summaries === 'object') {
@@ -625,6 +631,7 @@ function saveIndex(index: TaskIndex): void {
 }
 
 function addToIndex(id: string): void {
+  id = assertSafeStorageId(id, 'task id');
   const idx = loadIndex();
   if (!idx.ids.includes(id)) {
     idx.ids.push(id);
@@ -633,6 +640,7 @@ function addToIndex(id: string): void {
 }
 
 function removeFromIndex(id: string): void {
+  id = assertSafeStorageId(id, 'task id');
   const idx = loadIndex();
   idx.ids = idx.ids.filter(i => i !== id);
   delete idx.summaries[id];
@@ -728,6 +736,7 @@ function rebuildTaskIndex(): TaskIndex {
     .filter((f) => f.endsWith('.json') && f !== '_index.json' && !f.endsWith('.bus.json'));
   for (const file of files) {
     const id = file.slice(0, -5);
+    if (!isSafeStorageId(id)) continue;
     const summary = buildTaskSummaryFromFile(id);
     if (!summary) continue;
     idx.ids.push(summary.id);
@@ -851,10 +860,12 @@ export function createTask(params: {
 }
 
 export function loadTask(id: string): TaskRecord | null {
-  const p = taskFilePath(id);
+  const taskId = assertSafeStorageId(id, 'task id');
+  const p = taskFilePath(taskId);
   if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8')) as TaskRecord;
+    const task = JSON.parse(fs.readFileSync(p, 'utf-8')) as TaskRecord;
+    return { ...task, id: taskId };
   } catch {
     return null;
   }
@@ -1121,9 +1132,10 @@ export function listTasks(filter?: { status?: TaskStatus[] }): TaskRecord[] {
 }
 
 export function deleteTask(id: string): boolean {
-  const p = taskFilePath(id);
+  const taskId = assertSafeStorageId(id, 'task id');
+  const p = taskFilePath(taskId);
   const idx = loadIndex();
-  const inIndex = idx.ids.includes(id);
+  const inIndex = idx.ids.includes(taskId);
   let removedAny = false;
 
   if (fs.existsSync(p)) {
@@ -1137,20 +1149,22 @@ export function deleteTask(id: string): boolean {
 
   // Always remove from index to prevent stale list entries.
   if (inIndex) {
-    removeFromIndex(id);
+    removeFromIndex(taskId);
     removedAny = true;
   }
 
   // Remove evidence bus for this task.
-  deleteEvidenceBus(id);
+  deleteEvidenceBus(taskId);
 
   // Remove related task artifacts created by background execution.
   const base = getStateBaseDir();
+  const taskSessionsDir = resolveConfinedStoragePath(base, 'sessions', { label: 'task session directory' });
+  const fileOpDir = resolveConfinedStoragePath(base, path.join('jobs', 'file-op-v2'), { label: 'task checkpoint directory' });
   const relatedFiles = [
-    path.join(base, 'sessions', `task_${id}.json`),
-    path.join(base, 'jobs', 'file-op-v2', `task_${id}.json`),
+    resolveConfinedStoragePath(taskSessionsDir, `task_${taskId}.json`, { label: 'task session file' }),
+    resolveConfinedStoragePath(fileOpDir, `task_${taskId}.json`, { label: 'task checkpoint file' }),
     // Backward-compat for older/alternate checkpoint naming.
-    path.join(base, 'jobs', 'file-op-v2', `${id}.json`),
+    storageFilePath(fileOpDir, taskId, '.json', 'task checkpoint id'),
   ];
   for (const file of relatedFiles) {
     if (!fs.existsSync(file)) continue;
@@ -1170,14 +1184,16 @@ export function deleteTask(id: string): boolean {
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Evidence Bus Store Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function busFilePath(taskId: string): string {
-  return path.join(getTasksDir(), `${taskId}.bus.json`);
+  return storageFilePath(getTasksDir(), taskId, '.bus.json', 'task id');
 }
 
 export function loadEvidenceBus(taskId: string): EvidenceBus | null {
-  const p = busFilePath(taskId);
+  const safeTaskId = assertSafeStorageId(taskId, 'task id');
+  const p = busFilePath(safeTaskId);
   if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8')) as EvidenceBus;
+    const bus = JSON.parse(fs.readFileSync(p, 'utf-8')) as EvidenceBus;
+    return { ...bus, taskId: safeTaskId };
   } catch {
     return null;
   }

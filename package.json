@@ -16,6 +16,7 @@
     "test:hyperframes-roundtrip": "node scripts/test-hyperframes-roundtrip.mjs",
     "test:hyperframes-catalog": "node scripts/test-hyperframes-catalog-pipeline.mjs",
     "test:pairing-admin-boundary": "npm run build:backend && node scripts/test-pairing-admin-boundary.mjs",
+    "test:storage-boundaries": "npm run build:backend && node scripts/test-storage-boundaries.mjs",
     "patch:hyperframes-esm": "node scripts/patch-hyperframes-esm.mjs",
     "test:creative-command-bus": "npm run build && node scripts/test-creative-command-bus.js",
     "postbuild": "node scripts/copy-extension-descriptors.js",

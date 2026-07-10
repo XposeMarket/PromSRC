@@ -12,6 +12,12 @@ import { stripInternalToolNotes } from './comms/reply-processor';
 import { resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
 import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
+import {
+  assertSafeStorageId,
+  isSafeStorageId,
+  resolveConfinedStoragePath,
+  storageFilePath,
+} from './storage/storage-paths';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -292,7 +298,7 @@ function ensureSessionDir(): void {
 }
 
 function sessionIndexPath(): string {
-  return path.join(SESSION_DIR, '_index.json');
+  return resolveConfinedStoragePath(SESSION_DIR, '_index.json', { label: 'session index' });
 }
 
 function scrubPersistedText(value: string | undefined | null): string {
@@ -626,7 +632,7 @@ function normalizeMainChatGoalHistory(input: any, sessionId: string): MainChatGo
 }
 
 function getSessionPath(id: string): string {
-  return path.join(SESSION_DIR, `${id}.json`);
+  return storageFilePath(SESSION_DIR, id, '.json', 'session id');
 }
 
 function defaultSessionIndex(): SessionIndex {
@@ -635,7 +641,7 @@ function defaultSessionIndex(): SessionIndex {
 
 function normalizeSessionSummary(input: any): SessionSummary | null {
   const id = String(input?.id || '').trim();
-  if (!id) return null;
+  if (!isSafeStorageId(id)) return null;
   if (INTERNAL_SESSION_ID_RE.test(id)) return null;
   const createdAt = Number(input?.createdAt);
   const lastActiveAt = Number(input?.lastActiveAt);
@@ -898,6 +904,7 @@ function removeSessionSummary(id: string): void {
 }
 
 function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
+  if (!isSafeStorageId(sessionId)) return null;
   if (INTERNAL_SESSION_ID_RE.test(sessionId)) return null;
   const filePath = getSessionPath(sessionId);
   if (!fs.existsSync(filePath)) return null;
@@ -917,7 +924,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       ? data.channel
       : inferChannelFromSessionId(sessionId);
     return {
-      id: String(data?.id || sessionId),
+      id: sessionId,
       channel,
       createdAt: Number.isFinite(Number(data?.createdAt)) ? Number(data.createdAt) : Date.now(),
       lastActiveAt: Number.isFinite(Number(data?.lastActiveAt)) ? Number(data.lastActiveAt) : Date.now(),
@@ -950,6 +957,7 @@ function rebuildSessionIndex(): SessionIndex {
   const files = fs.readdirSync(SESSION_DIR).filter((f) => f.endsWith('.json') && f !== '_index.json');
   for (const file of files) {
     const sessionId = file.slice(0, -5);
+    if (!isSafeStorageId(sessionId)) continue;
     const summary = buildSessionSummaryFromFile(sessionId);
     if (summary && summary.messageCount > 0) {
       index.summaries[summary.id] = summary;
@@ -1018,6 +1026,7 @@ export function listSessionSummaries(input?: Session['channel'] | SessionListOpt
 }
 
 function readSessionFileForSearch(sessionId: string): Session | null {
+  if (!isSafeStorageId(sessionId)) return null;
   const cached = sessions.get(sessionId);
   if (cached) return cached;
   const filePath = getSessionPath(sessionId);
@@ -1025,7 +1034,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
   try {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     return {
-      id: String(data?.id || sessionId),
+      id: sessionId,
       history: Array.isArray(data?.history) ? data.history : [],
       workspace: typeof data?.workspace === 'string' ? data.workspace : getConfig().getWorkspacePath(),
       channel: data?.channel || inferChannelFromSessionId(sessionId),
@@ -1109,7 +1118,7 @@ export function searchSessionSummaries(
 
 export function sessionExists(id: string): boolean {
   const sessionId = String(id || '').trim();
-  return !!sessionId && fs.existsSync(getSessionPath(sessionId));
+  return isSafeStorageId(sessionId) && fs.existsSync(getSessionPath(sessionId));
 }
 
 export function touchSession(id: string, options: { channel?: Session['channel']; title?: string } = {}): Session {
@@ -1296,10 +1305,10 @@ function appendCompactionArtifacts(
       ...(cleanExtra || {}),
     };
 
-    const jsonlPath = path.join(compactionDir, `${sessionId}.jsonl`);
+    const jsonlPath = storageFilePath(compactionDir, sessionId, '.jsonl', 'session id');
     fs.appendFileSync(jsonlPath, JSON.stringify(payload) + '\n', 'utf-8');
 
-    const mdPath = path.join(compactionDir, `${sessionId}.md`);
+    const mdPath = storageFilePath(compactionDir, sessionId, '.md', 'session id');
     const mdLines = [
       `### [${kind.toUpperCase()}_COMPACTION] ${ts}`,
       `- Base message count: ${baseMessageCount}`,
@@ -1342,10 +1351,10 @@ function appendTranscriptArtifacts(
       content: cleanContent,
     };
 
-    const jsonlPath = path.join(transcriptDir, `${sessionId}.jsonl`);
+    const jsonlPath = storageFilePath(transcriptDir, sessionId, '.jsonl', 'session id');
     fs.appendFileSync(jsonlPath, JSON.stringify(payload) + '\n', 'utf-8');
 
-    const mdPath = path.join(transcriptDir, `${sessionId}.md`);
+    const mdPath = storageFilePath(transcriptDir, sessionId, '.md', 'session id');
     const mdLines = [
       `### [${iso}] ${msg.role}${opts?.synthetic ? ' [synthetic]' : ''}`,
       '',
@@ -1563,23 +1572,24 @@ export interface AddMessageResult {
 }
 
 export function getSession(id: string): Session {
-  if (sessions.has(id)) {
-    return sessions.get(id)!;
+  const sessionId = assertSafeStorageId(id, 'session id');
+  if (sessions.has(sessionId)) {
+    return sessions.get(sessionId)!;
   }
 
   ensureSessionDir();
-  const filePath = getSessionPath(id);
+  const filePath = getSessionPath(sessionId);
 
   if (fs.existsSync(filePath)) {
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       const session: Session = {
-        id: data.id || id,
+        id: sessionId,
         history: Array.isArray(data.history) ? data.history : [],
         workspace: data.workspace || getConfig().getWorkspacePath(),
         title: typeof data.title === 'string' ? data.title : undefined,
         autoTitleLocked: data.autoTitleLocked === true,
-        channel: data.channel || inferChannelFromSessionId(id),
+        channel: data.channel || inferChannelFromSessionId(sessionId),
         createdAt: data.createdAt || Date.now(),
         lastActiveAt: data.lastActiveAt || Date.now(),
         lastAssistantAt: Number.isFinite(Number(data.lastAssistantAt)) ? Number(data.lastAssistantAt) : undefined,
@@ -1617,10 +1627,10 @@ export function getSession(id: string): Session {
           ? data.canvasProjectLabel
           : null,
         canvasProjectLink: normalizeCanvasProjectLink(data.canvasProjectLink),
-        mainChatGoal: normalizeMainChatGoal(data.mainChatGoal, id),
-        mainChatGoalHistory: normalizeMainChatGoalHistory(data.mainChatGoalHistory, id),
+        mainChatGoal: normalizeMainChatGoal(data.mainChatGoal, sessionId),
+        mainChatGoalHistory: normalizeMainChatGoalHistory(data.mainChatGoalHistory, sessionId),
       };
-      sessions.set(id, session);
+      sessions.set(sessionId, session);
       return session;
     } catch {
       // Corrupted file, create new session
@@ -1628,12 +1638,12 @@ export function getSession(id: string): Session {
   }
 
   const session: Session = {
-    id,
+    id: sessionId,
     history: [],
     workspace: getConfig().getWorkspacePath(),
     title: undefined,
     autoTitleLocked: false,
-    channel: inferChannelFromSessionId(id),
+    channel: inferChannelFromSessionId(sessionId),
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
     lastAssistantAt: undefined,
@@ -1658,8 +1668,8 @@ export function getSession(id: string): Session {
     mainChatGoal: null,
     mainChatGoalHistory: [],
   };
-  sessions.set(id, session);
-  saveSession(id);
+  sessions.set(sessionId, session);
+  saveSession(sessionId);
   return session;
 }
 
@@ -1671,9 +1681,10 @@ export function getSessionsByChannel(channel: Session['channel']): Session[] {
     return result;
   }
   
-  const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json'));
+  const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json') && f !== '_index.json');
   for (const file of files) {
     const sessionId = file.slice(0, -5); // remove .json
+    if (!isSafeStorageId(sessionId)) continue;
     try {
       const session = getSession(sessionId);
       if (session.channel === channel) {
@@ -2162,8 +2173,7 @@ export function markSessionReadForMobile(id: string, readAt: number = Date.now()
 
 
 export function deleteSession(id: string): boolean {
-  const sessionId = String(id || '').trim();
-  if (!sessionId) return false;
+  const sessionId = assertSafeStorageId(id, 'session id');
   sessions.delete(sessionId);
   const existing = sessionSaveTimers.get(sessionId);
   if (existing) {
@@ -2207,6 +2217,7 @@ export function consolidateLegacyAutomatedSessions(): number {
   const legacyByJob = new Map<string, Array<{ id: string; ts: number }>>();
   for (const file of files) {
     const id = file.slice(0, -5);
+    if (!isSafeStorageId(id)) continue;
     const m = /^auto_(.+)_(\d{10,})$/i.exec(id);
     if (!m) continue;
     const jobId = m[1];
@@ -2290,10 +2301,16 @@ export function cleanupSessions(nowMs: number = Date.now()): { deleted: number; 
   try {
     const files = fs.readdirSync(SESSION_DIR).filter((f) => f.endsWith('.json') && f !== '_index.json');
     for (const file of files) {
-      scanned++;
       const id = file.replace(/\.json$/i, '');
+      if (!isSafeStorageId(id)) continue;
+      scanned++;
       if (!AUTO_SESSION_ID_RE.test(id)) continue;
-      const filePath = path.join(SESSION_DIR, file);
+      let filePath: string;
+      try {
+        filePath = getSessionPath(id);
+      } catch {
+        continue;
+      }
       let st: fs.Stats;
       try {
         st = fs.statSync(filePath);

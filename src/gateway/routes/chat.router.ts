@@ -70,6 +70,7 @@ import { getAgentTeamScheduleTools } from '../tools/defs/agent-team-schedule';
 import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { buildProjectContextBlock, findProjectBySessionId, removeSessionFromProject } from '../projects/project-store.js';
+import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
 import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundAbort, listActiveBackgroundIdsForSession } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
@@ -1336,6 +1337,20 @@ export function initChatRouter(deps: ChatRouterDeps): void {
 }
 
 export const router = express.Router();
+
+function requireSafeSessionParam(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const key = Object.prototype.hasOwnProperty.call(req.params, 'sessionId') ? 'sessionId' : 'id';
+  try {
+    req.params[key] = assertSafeStorageId(req.params[key], 'session id');
+    next();
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Invalid session id.' });
+  }
+}
+
+function storageAwareStatus(error: unknown): number {
+  return isStorageBoundaryError(error) ? 400 : 500;
+}
 
 type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent';
 type ReasoningOptions = {
@@ -15004,7 +15019,7 @@ function composeVoiceAgentNarration(contextPacket: Record<string, any>, options:
   return { action: voiceReply ? 'reply' : 'no_reply', voiceReply, signature };
 }
 
-router.get('/api/mobile/chat/stream/:sessionId', (req, res) => {
+router.get('/api/mobile/chat/stream/:sessionId', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || '').trim();
     if (!sessionId) {
@@ -15047,7 +15062,7 @@ router.get('/api/mobile/chat/stream/:sessionId', (req, res) => {
       events: frames,
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: String(err?.message || err) });
+    res.status(storageAwareStatus(err)).json({ success: false, error: String(err?.message || err) });
   }
 });
 
@@ -15067,7 +15082,7 @@ router.get('/api/mobile/chat/runs', (_req, res) => {
   }
 });
 
-router.get('/api/mobile/chat/runs/:sessionId', (req, res) => {
+router.get('/api/mobile/chat/runs/:sessionId', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || '').trim();
     if (!sessionId) {
@@ -15134,7 +15149,8 @@ router.get('/api/mobile/commands/stop-targets', (_req, res) => {
 
 router.post('/api/mobile/commands/stop-now', (req, res) => {
   try {
-    const sessionId = String(req.body?.sessionId || '').trim();
+    const requestedSessionId = String(req.body?.sessionId || '').trim();
+    const sessionId = requestedSessionId ? assertSafeStorageId(requestedSessionId, 'session id') : '';
     const runtimeId = String(req.body?.runtimeId || req.body?.id || '').trim();
     const runtimeById = runtimeId ? getLiveRuntime(runtimeId) : null;
     const target = runtimeById?.kind === 'main_chat'
@@ -15209,7 +15225,7 @@ router.post('/api/mobile/commands/screenshot', async (req, res) => {
     req.setTimeout?.(120_000);
     res.setTimeout?.(120_000);
     req.socket?.setTimeout?.(120_000);
-    const sessionId = String(req.body?.sessionId || 'mobile_default').trim() || 'mobile_default';
+    const sessionId = assertSafeStorageId(String(req.body?.sessionId || 'mobile_default').trim() || 'mobile_default', 'session id');
     const target = String(req.body?.target || 'desktop').trim().toLowerCase();
     const captureDesktop = async (options: any) => {
       const result = await desktopScreenshotWithHistory(sessionId, { ...options, skipOcr: true });
@@ -15341,7 +15357,7 @@ router.post('/api/mobile/commands/screenshot', async (req, res) => {
 router.post('/api/voice-agent/context', (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const originalUserPrompt = String(body.originalUserPrompt || body.transcript || body.userInterruptionTranscript || '').trim();
     const voiceTarget = normalizeVoiceAgentTarget(body);
     const contextPacket = buildVoiceWorkerContextPacket(sessionId, body);
@@ -15357,7 +15373,7 @@ router.post('/api/voice-agent/context', (req, res) => {
   }
 });
 
-router.get('/api/voice-agent/context/:sessionId', (req, res) => {
+router.get('/api/voice-agent/context/:sessionId', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || 'default').trim() || 'default';
     const query = req.query as any;
@@ -15379,7 +15395,7 @@ router.get('/api/voice-agent/context/:sessionId', (req, res) => {
 router.post('/api/voice-agent/narrate', (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const contextPacket = body.contextPacket && typeof body.contextPacket === 'object'
       ? body.contextPacket
       : buildVoiceWorkerContextPacket(sessionId, body);
@@ -15419,6 +15435,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
   try {
     const requestStartedAt = Date.now();
     const body = req.body || {};
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const realtimeAgentInput = isRealtimeVoiceAgentInputRequest(body);
     // Streaming mode: client sends { stream: true } and consumes SSE.
     // Server emits one `chunk` event per sentence as the model generates the
@@ -15454,7 +15471,6 @@ router.post('/api/voice-agent/input', async (req, res) => {
       emittedChunkTexts.push(trimmed);
       writeSseEvent('chunk', { seq: chunkSeq, text: trimmed });
     };
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
     const transcript = String(body.transcript || body.userInterruptionTranscript || body.message || '').trim();
     const voiceTarget = normalizeVoiceAgentTarget(body);
     const classification = classifyVoiceInterruption(transcript);
@@ -15745,7 +15761,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
     }
   } catch (err: any) {
     if (!res.headersSent) {
-      res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+      res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
     } else {
       try {
         res.write(`data: ${JSON.stringify({ type: 'error', error: String(err?.message || err) })}\n\n`);
@@ -16084,7 +16100,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
 router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const voiceTarget = normalizeVoiceAgentTarget(body);
     const authCandidates = await getRealtimeAgentAuthCandidates();
     if (!authCandidates.length) {
@@ -16285,7 +16301,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       sessionConfig: { type: 'realtime', model, voice, speed },
     });
   } catch (err: any) {
-    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
 });
 
@@ -16464,7 +16480,7 @@ router.get('/api/realtime/xai/status', (_req, res) => {
 router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const voiceTarget = normalizeVoiceAgentTarget(body);
     const authCandidates = await getXaiRealtimeAuthCandidates();
     if (!authCandidates.length) {
@@ -16577,7 +16593,7 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       sessionConfig: { type: 'realtime', model, voice, speed },
     });
   } catch (err: any) {
-    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
 });
 
@@ -16657,14 +16673,14 @@ router.get('/api/voice-agent/workgroups/:id', (req, res) => {
     }
     res.json({ ok: true, success: true, workgroup });
   } catch (err: any) {
-    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
 });
 
 router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const tasks = normalizeVoiceDispatchTasks(body);
     if (!tasks.length) {
       res.status(400).json({ ok: false, success: false, error: 'dispatch_prometheus_worker requires task or tasks[].' });
@@ -16767,14 +16783,14 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
       message: `Dispatched ${createdTasks.length} Prometheus worker${createdTasks.length === 1 ? '' : 's'}.`,
     });
   } catch (err: any) {
-    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
 });
 
 router.post('/api/voice-agent/realtime-tool', async (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const toolName = String(body.toolName || body.name || '').trim();
     const parsedToolArgs = body.toolArgs && typeof body.toolArgs === 'object'
       ? body.toolArgs
@@ -16810,7 +16826,7 @@ router.post('/api/voice-agent/realtime-tool', async (req, res) => {
       processEntries: trace,
     });
   } catch (err: any) {
-    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
 });
 
@@ -16848,7 +16864,7 @@ router.post('/api/voice-agent/xai-vision-summary', async (req, res) => {
 router.post('/api/mobile/voice/interruption', (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'mobile_default').trim() || 'mobile_default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'mobile_default').trim() || 'mobile_default', 'session ID');
     const transcript = String(body.userInterruptionTranscript || '').trim();
     const classification = classifyVoiceInterruption(transcript);
     const activeRuntime = findActiveMainChatRuntimeForSession(sessionId);
@@ -16969,7 +16985,7 @@ router.post('/api/mobile/voice/interruption', (req, res) => {
       activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
     });
   } catch (err: any) {
-    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
 });
 
@@ -17052,7 +17068,7 @@ router.post('/api/connectors/gmail/send-composer', async (req, res) => {
 router.post('/api/chat/steer', (req, res) => {
   try {
     const body = req.body || {};
-    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session id');
     const steerAttachments = normalizeRuntimeVisionAttachmentsInput(body.attachments);
     const steerAttachmentPreviews = normalizeRuntimeAttachmentPreviewsInput(body.attachmentPreviews);
     const message = String(body.message || body.text || '').trim()
@@ -17232,7 +17248,13 @@ function normalizeForcedSkillIdsInput(value: unknown): string[] {
 router.post('/api/chat', async (req, res) => {
   const { message, sessionId = 'default', pinnedMessages, attachments, attachmentPreviews, reasoning, callerContext } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
-  const resolvedSessionId = String(sessionId || 'default');
+  let resolvedSessionId: string;
+  try {
+    resolvedSessionId = assertSafeStorageId(String(sessionId || 'default'), 'session id');
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Invalid session id.' });
+    return;
+  }
   const excludedSkillIds = normalizeExcludedSkillIdsInput(req.body?.excludedSkillIds || req.body?.excludedMatchingSkillIds);
   const forcedSkillIds = normalizeForcedSkillIdsInput(req.body?.selectedSkillIds || req.body?.forcedSkillIds || req.body?.matchedSkillIds);
   const clientRequestId = normalizeClientRequestId(req.body?.clientRequestId || req.headers['x-client-request-id']);
@@ -17609,7 +17631,7 @@ router.get('/api/sessions/search', (req, res) => {
   }
 });
 
-router.post('/api/sessions/:id/mobile-read', (req, res) => {
+router.post('/api/sessions/:id/mobile-read', requireSafeSessionParam, (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
     if (!id) {
@@ -17626,7 +17648,7 @@ router.post('/api/sessions/:id/mobile-read', (req, res) => {
 });
 
 
-router.post('/api/sessions/:id/history', (req, res) => {
+router.post('/api/sessions/:id/history', requireSafeSessionParam, (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
     if (!id) {
@@ -17686,7 +17708,7 @@ function wouldDangerouslyReplaceSessionHistory(sessionId: string, incomingHistor
   }
 }
 
-router.post('/api/sessions/:id/edit-rerun-reset', (req, res) => {
+router.post('/api/sessions/:id/edit-rerun-reset', requireSafeSessionParam, (req, res) => {
   const id = String(req.params.id || '').trim();
   if (!id) {
     res.status(400).json({ error: 'Session id required' });
@@ -17696,7 +17718,7 @@ router.post('/api/sessions/:id/edit-rerun-reset', (req, res) => {
   res.json({ success: true });
 });
 
-router.patch('/api/sessions/:id', (req, res) => {
+router.patch('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   try {
     const title = String(req.body?.title || '').replace(/\s+/g, ' ').trim();
     if (!title) {
@@ -17715,7 +17737,7 @@ router.patch('/api/sessions/:id', (req, res) => {
   }
 });
 
-router.get('/api/sessions/:id', (req, res) => {
+router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.id);
     const session = getSession(sessionId);
@@ -17786,7 +17808,7 @@ router.get('/api/sessions/:id', (req, res) => {
   }
 });
 
-router.get('/api/sessions/:id/context-window', (req, res) => {
+router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, res) => {
   try {
     const id = req.params.id;
     if (!id) {
@@ -17857,7 +17879,7 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
   }
 });
 
-router.post('/api/sessions/:id/main-goal/:action', (req, res) => {
+router.post('/api/sessions/:id/main-goal/:action', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.id || '').trim();
     const action = String(req.params.action || '').trim().toLowerCase();
@@ -17883,7 +17905,7 @@ router.post('/api/sessions/:id/main-goal/:action', (req, res) => {
   }
 });
 
-router.delete('/api/sessions/:id', (req, res) => {
+router.delete('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.id || '').trim();
     if (!sessionId) {
@@ -17901,7 +17923,7 @@ router.delete('/api/sessions/:id', (req, res) => {
     res.json({ success: true, projectId: project?.id });
   } catch (e: any) {
     console.error('[/api/sessions/:id DELETE] Error:', e);
-    res.status(500).json({ error: e.message });
+    res.status(storageAwareStatus(e)).json({ error: e.message });
   }
 });
 

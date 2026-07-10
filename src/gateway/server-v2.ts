@@ -16,6 +16,7 @@ import '../security/vault-key-bootstrap.js';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import type { NextFunction, Request, Response } from 'express';
 import {
   getConfig,
   getAgents,
@@ -30,6 +31,7 @@ import { hookBus } from './hooks';
 import { loadWorkspaceHooks } from './hook-loader';
 import { runBootMd } from './boot';
 import { setupErrorResponseEndpoint } from './errors/error-response-endpoint-integrated';
+import { isStorageBoundaryError } from './storage/storage-paths';
 import { initCredentialHandler, getCredentialHandler } from '../security/credential-handler';
 import { getVerificationFlowManager } from './verification-flow';
 import { getErrorAnalyzer } from './errors/error-analyzer';
@@ -813,6 +815,14 @@ app.use('/', requireGatewayAuth, requireAccountAccess, processesRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, codingRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, chatRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, onboardingRouter);
+
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (!isStorageBoundaryError(err)) {
+    next(err);
+    return;
+  }
+  res.status(400).json({ success: false, error: err.message });
+});
 startupMark('routers mounted');
 
 // ─── Server ────────────────────────────────────────────────────────────────────

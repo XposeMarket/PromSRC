@@ -41,12 +41,17 @@ import {
   removeKnowledgeFile,
   listKnowledgeFiles,
   getKnowledgeFileContent,
-  getProjectKnowledgeDir,
+  getProjectKnowledgeFilePath,
 } from '../projects/project-store.js';
 import { refreshProjectContextFromLatestPriorSession } from '../projects/project-learning.js';
 import { getSession, sessionExists } from '../session.js';
+import { isStorageBoundaryError } from '../storage/storage-paths.js';
 
 const router = Router();
+
+function sendProjectError(res: Response, err: any, fallback: string): void {
+  res.status(isStorageBoundaryError(err) ? 400 : 500).json({ error: err?.message || fallback });
+}
 
 function hydrateProjectSessions(project: any): any {
   const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
@@ -77,7 +82,7 @@ function hydrateProjectSessions(project: any): any {
 
 router.get('/api/projects', (_req: Request, res: Response) => {
   try { res.json(listProjects().map(hydrateProjectSessions)); }
-  catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to list projects' }); }
+  catch (err: any) { sendProjectError(res, err, 'Failed to list projects'); }
 });
 
 router.post('/api/projects', (req: Request, res: Response) => {
@@ -85,7 +90,7 @@ router.post('/api/projects', (req: Request, res: Response) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
     res.status(201).json(createProject(name));
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to create project' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to create project'); }
 });
 
 router.get('/api/projects/:id', (req: Request, res: Response) => {
@@ -93,7 +98,7 @@ router.get('/api/projects/:id', (req: Request, res: Response) => {
     const project = getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     res.json(hydrateProjectSessions(project));
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to get project' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to get project'); }
 });
 
 router.patch('/api/projects/:id', (req: Request, res: Response) => {
@@ -105,14 +110,14 @@ router.patch('/api/projects/:id', (req: Request, res: Response) => {
     const project = updateProject(req.params.id, updates);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     res.json(project);
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to update project' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to update project'); }
 });
 
 router.delete('/api/projects/:id', (req: Request, res: Response) => {
   try {
     if (!deleteProject(req.params.id)) return res.status(404).json({ error: 'Project not found' });
     res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to delete project' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to delete project'); }
 });
 
 router.post('/api/projects/:id/sessions', (req: Request, res: Response) => {
@@ -125,7 +130,7 @@ router.post('/api/projects/:id/sessions', (req: Request, res: Response) => {
       console.warn(`[Projects] Prior-session project context refresh failed for ${req.params.id}:`, err?.message || err);
     });
     res.status(201).json({ sessionId, projectId: req.params.id });
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to create session' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to create session'); }
 });
 
 router.delete('/api/projects/:id/sessions/:sessionId', (req: Request, res: Response) => {
@@ -133,14 +138,14 @@ router.delete('/api/projects/:id/sessions/:sessionId', (req: Request, res: Respo
     if (!removeSessionFromProject(req.params.id, req.params.sessionId))
       return res.status(404).json({ error: 'Project or session not found' });
     res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to delete session' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to delete session'); }
 });
 
 router.get('/api/projects/:id/files', (req: Request, res: Response) => {
   try {
     if (!getProject(req.params.id)) return res.status(404).json({ error: 'Project not found' });
     res.json(listKnowledgeFiles(req.params.id));
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to list files' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to list files'); }
 });
 
 // POST /api/projects/:id/files — JSON body: { filename, content? } or { filename, base64, mimeType? }
@@ -151,11 +156,9 @@ router.post('/api/projects/:id/files', (req: Request, res: Response) => {
     const filename = String(req.body?.filename || '').trim();
     if (!filename) return res.status(400).json({ error: 'filename is required' });
 
-    const knowledgeDir = getProjectKnowledgeDir(req.params.id);
-    if (!fs.existsSync(knowledgeDir)) fs.mkdirSync(knowledgeDir, { recursive: true });
-
     const safeName = path.basename(filename).replace(/[^a-zA-Z0-9._\-]/g, '_');
-    const absPath = path.join(knowledgeDir, safeName);
+    if (!safeName || safeName === '.' || safeName === '..') return res.status(400).json({ error: 'filename is invalid' });
+    const absPath = getProjectKnowledgeFilePath(req.params.id, safeName);
     let sizeBytes = 0;
 
     if (req.body?.base64) {
@@ -173,7 +176,7 @@ router.post('/api/projects/:id/files', (req: Request, res: Response) => {
     const kf = addKnowledgeFile(req.params.id, safeName, absPath, sizeBytes);
     if (!kf) return res.status(500).json({ error: 'Failed to register file' });
     res.status(201).json(kf);
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to upload file' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to upload file'); }
 });
 
 router.get('/api/projects/:id/files/:fileId/content', (req: Request, res: Response) => {
@@ -181,7 +184,7 @@ router.get('/api/projects/:id/files/:fileId/content', (req: Request, res: Respon
     const content = getKnowledgeFileContent(req.params.id, req.params.fileId);
     if (content === null) return res.status(404).json({ error: 'File not found' });
     res.json({ content });
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to read file' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to read file'); }
 });
 
 router.delete('/api/projects/:id/files/:fileId', (req: Request, res: Response) => {
@@ -189,7 +192,7 @@ router.delete('/api/projects/:id/files/:fileId', (req: Request, res: Response) =
     if (!removeKnowledgeFile(req.params.id, req.params.fileId))
       return res.status(404).json({ error: 'File not found' });
     res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to delete file' }); }
+  } catch (err: any) { sendProjectError(res, err, 'Failed to delete file'); }
 });
 
 export { router };

@@ -64,6 +64,16 @@
 - Public release verifier: `scripts/verify-public-release.js`
 - Public installer artifact: `release-public/Prometheus-Setup-<version>.exe`
 
+### Storage identifier and path boundary
+
+- `src/gateway/storage/storage-paths.ts` is the canonical boundary for session, project, and task filesystem identifiers.
+- Persistent IDs use `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`; encoded separators, dots, whitespace, drive/UNC forms, and Windows device names are rejected rather than recursively decoded.
+- `resolveConfinedStoragePath(...)` proves lexical and canonical confinement and refuses existing symbolic-link/Windows-junction components.
+- Session JSON plus transcript/compaction artifacts, project metadata/workspaces/knowledge files, task JSON/evidence buses, task cleanup artifacts, and voice-workgroup records must use this boundary instead of interpolating IDs into `path.join(...)`.
+- Project knowledge metadata is compatibility data, not authority: reads/deletes derive the absolute path from a confined `relPath`, and a legacy absolute `path` is accepted only when it resolves inside that project's knowledge directory.
+- `removeSessionFromProject(...)` must prove the session is a member before deleting its session record.
+- Run `npm run test:storage-boundaries` after changing any of these stores or their route parameters. The test uses an isolated temporary data/workspace root and covers Windows/POSIX traversal, encoded IDs, junctions/symlinks, task deletion, knowledge metadata, and project-session membership.
+
 ## 30) Current Sharp Edges / Truths To Preserve
 
 - `copilot` is real, but it is a browser interaction mode, not a chat execution mode
