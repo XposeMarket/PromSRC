@@ -783,9 +783,9 @@ initSettingsRouter({ requireGatewayAuth });
 initGoalsRouter({ requireGatewayAuth, cronScheduler, telegramChannel, handleChat });
 startupMark('routers initialized');
 
-// Pairing endpoints are mounted BEFORE gateway-auth/account-access so an
-// unpaired mobile device can complete the QR handshake without an existing
-// session. Approval still gates access to every other API surface.
+// Pairing is mounted before gateway auth only so certificate/claim/poll can be
+// reached by an unpaired phone. Desktop administration is independently gated
+// inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
 // Mount routers. Account auth endpoints stay available after gateway auth so
 // users can log in, refresh status, or recover from an expired subscription.

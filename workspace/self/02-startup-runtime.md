@@ -66,11 +66,13 @@ Mobile pairing is implemented as a desktop-approved device enrollment flow, not 
 Canonical source files:
 
 - backend store: `src/gateway/pairing/pairing-store.ts`
+- desktop-admin authorization: `src/gateway/pairing/pairing-admin-auth.ts`
 - backend REST routes: `src/gateway/routes/pairing.router.ts`
 - gateway auth gate: `src/gateway/gateway-auth.ts`
 - router mount order and HTTP/HTTPS listener setup: `src/gateway/server-v2.ts`
 - HTTP/HTTPS server behavior and redirect handling: `src/gateway/core/server.ts`
 - desktop Pairing settings UI: `web-ui/src/pages/SettingsPage.js`
+- Electron authority bridge: `electron/main.js` and `electron/preload.js`
 - mobile PWA pairing UI: `web-ui/src/mobile/mobile-pages.js`
 - generated public UI mirrors: `generated/public-web-ui/static/pages/SettingsPage.js` and `generated/public-web-ui/static/mobile/mobile-pages.js`
 
@@ -98,6 +100,9 @@ Important auth/mounting behavior:
 - `gateway-auth.ts` verifies `X-Pairing-Token` and `?pt=` before checking the configured gateway token. This lets approved mobile devices work over LAN or Tailscale even when `gateway.auth.token` is absent.
 - Non-loopback, unpaired API access is still blocked when no gateway auth token is configured.
 - `POST /api/pairing/claim` also checks the server-side Prometheus account session via `getSessionStatus()` and requires `authenticated`. Pairing is therefore "phone logs into a free Prometheus account, then desktop approves the device."
+- QR creation, pending-list, approval/denial, device management, remote-access settings, and Tailscale operations use `requirePairingAdmin`. A paired-device credential cannot satisfy this middleware.
+- Electron generates `PROMETHEUS_PAIRING_ADMIN_TOKEN` per process, keeps it out of renderer JavaScript, and proxies only allowlisted pairing-admin requests through `window.prometheusPairingAdmin`.
+- A manually started standalone gateway permits pairing administration without a token only when it is loopback-bound and the request is an exact same-origin browser request or a non-browser loopback client. LAN/wildcard binds require an explicit gateway credential.
 
 iOS/Safari/PWA behavior that drove the dual route:
 
@@ -135,11 +140,11 @@ Tailscale / remote access model:
 - The Settings Pairing UI has a Detect Tailscale action, a "Use this URL" helper, and tells the user to run a command like `tailscale funnel <port>` when Funnel is not active.
 - If remote access is on, the Pairing UI shows a "Remote access ON" badge and generates a new QR against the public URL.
 
-Security sharp edge to preserve:
+Security boundary to preserve:
 
 - `pairingRouter` is currently mounted before gateway auth so unpaired phones can claim challenges.
-- That also means remote-access configuration/device-management endpoints in the pairing router are not individually protected by `requireGatewayAuth` at the router mount layer.
-- Do not casually expose a Funnel/public URL without understanding this. A hardening pass should make desktop management endpoints loopback/account-gated while keeping only `qr`, `claim`, `poll`, certificate download, and `me` available as needed for pairing.
+- Only certificate download, claim, poll, and `me` remain mobile/public-facing. QR creation is desktop-admin-only because challenge creation is part of the approval authority surface.
+- Do not replace `requirePairingAdmin` with ordinary `requireGatewayAuth`: gateway auth accepts paired-device tokens by design, which would restore the self-approval/device-administration vulnerability.
 - A leaked QR/human code is not a credential by itself because desktop approval is still required, but it can create pending approval prompts.
 
 Tailscale First-Time Setup Runbook (Windows):
@@ -167,9 +172,10 @@ Self-edit verification checklist for pairing/remote access:
 - After changing `web-ui/src/*`, run `npm run sync:web-ui` and `npm run check:web-ui` or `npm run build`.
 - If the running gateway is serving generated web files on Windows, stop it before `npm run sync:web-ui` if generation fails with `EBUSY`.
 - Restart the gateway after backend changes.
-- Smoke-test QR creation: `POST http://127.0.0.1:18789/api/pairing/qr` should return `pairUrl`, `pairCode`, `lanOrigins`, `remoteAccess`, and `qrSvg`.
+- Run `npm run test:pairing-admin-boundary`; it verifies remote/paired-token rejection, Electron authority, standalone loopback rules, and middleware coverage for every admin route.
+- Smoke-test QR creation through the desktop Pairing UI/IPC bridge. Direct HTTP requires either the per-process desktop header or the configured gateway credential and should otherwise return 403.
 - Smoke-test manual code claim from the phone/LAN origin by posting `{ code: pairCode, deviceName, deviceFingerprint }` to `/api/pairing/claim`; it should return `{ success: true, requestId, expiresAt }`.
-- Clean up smoke-test pending requests with `/api/pairing/deny`.
+- Clean up smoke-test pending requests through the desktop Pairing UI/IPC bridge.
 - Verify protected LAN APIs still return 401 without `X-Pairing-Token`.
 - Verify an approved mobile token reaches protected APIs through `X-Pairing-Token`.
 - Verify old QR pages are not reused after challenge expiration or gateway restart.

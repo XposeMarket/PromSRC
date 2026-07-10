@@ -135,6 +135,7 @@ let updaterProgress     = 0;
 let isGatewayRestarting = false;
 const GATEWAY_RESTART_EXIT_CODE = 42;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
+const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
 const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
 
 function getUpdaterState(extra = {}) {
@@ -503,6 +504,7 @@ function startGateway() {
     PROMETHEUS_WORKSPACE_DIR:     path.join(USER_DATA_DIR, 'workspace'),
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
+    PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
     PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
     PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
     ...(IS_PUBLIC_BUILD ? { PROMETHEUS_PUBLIC_BUILD: '1' } : {}),
@@ -1286,6 +1288,76 @@ function createLoadingWindow() {
 }
 
 // ─── IPC Handlers ──────────────────────────────────────────────────────────
+const PAIRING_ADMIN_ROUTES = [
+  ['POST', /^\/api\/pairing\/qr$/],
+  ['GET', /^\/api\/pairing\/pending$/],
+  ['POST', /^\/api\/pairing\/(?:approve|deny)$/],
+  ['GET', /^\/api\/pairing\/devices$/],
+  ['PATCH', /^\/api\/pairing\/devices\/[^/?#]+$/],
+  ['DELETE', /^\/api\/pairing\/devices\/[^/?#]+$/],
+  ['GET', /^\/api\/pairing\/remote-access$/],
+  ['PUT', /^\/api\/pairing\/remote-access$/],
+  ['GET', /^\/api\/pairing\/tailscale\/status$/],
+  ['GET', /^\/api\/pairing\/tailscale\/funnel\/status$/],
+  ['POST', /^\/api\/pairing\/tailscale\/funnel\/(?:enable|disable)$/],
+];
+
+function requireTrustedMainFrame(event) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error('Pairing administration is available only from the Prometheus desktop window.');
+  }
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
+    throw new Error('Pairing administration is not available to child frames.');
+  }
+  let senderUrl;
+  try {
+    senderUrl = new URL(event.senderFrame.url);
+  } catch {
+    throw new Error('Untrusted pairing administration sender.');
+  }
+  if (senderUrl.origin !== new URL(GATEWAY_URL).origin || senderUrl.username || senderUrl.password) {
+    throw new Error('Untrusted pairing administration sender.');
+  }
+}
+
+ipcMain.handle('pairing-admin:request', async (event, payload = {}) => {
+  requireTrustedMainFrame(event);
+  const method = String(payload?.method || 'GET').trim().toUpperCase();
+  const requestPath = String(payload?.path || '').trim();
+  let parsed;
+  try {
+    parsed = new URL(requestPath, GATEWAY_URL);
+  } catch {
+    throw new Error('Invalid pairing administration path.');
+  }
+  if (parsed.origin !== new URL(GATEWAY_URL).origin || parsed.search || parsed.hash) {
+    throw new Error('Invalid pairing administration path.');
+  }
+  const allowed = PAIRING_ADMIN_ROUTES.some(([allowedMethod, pattern]) => (
+    allowedMethod === method && pattern.test(parsed.pathname)
+  ));
+  if (!allowed) throw new Error('Pairing administration route is not allowed.');
+
+  const body = payload?.body === undefined ? undefined : JSON.stringify(payload.body);
+  if (body && Buffer.byteLength(body, 'utf8') > 64 * 1024) {
+    throw new Error('Pairing administration request is too large.');
+  }
+  const response = await fetch(parsed.href, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Prometheus-Pairing-Admin': PAIRING_ADMIN_TOKEN,
+    },
+    body: method === 'GET' || method === 'HEAD' ? undefined : body,
+  });
+  const responseText = await response.text();
+  let data = {};
+  try { data = responseText ? JSON.parse(responseText) : {}; }
+  catch { throw new Error(`Pairing administration returned an invalid response (${response.status}).`); }
+  if (!response.ok) throw new Error(String(data?.error || `Pairing administration failed (${response.status}).`));
+  return data;
+});
+
 ipcMain.handle('get-app-version', () => CURRENT_VERSION);
 
 ipcMain.handle('select-canvas-paths', async (_event, options = {}) => {

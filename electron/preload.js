@@ -45,6 +45,13 @@ contextBridge.exposeInMainWorld('prometheusApp', {
   getVersion: () => ipcRenderer.invoke('get-app-version'),
 });
 
+// ─── Desktop-only Pairing Administration ──────────────────────────────────
+// The gateway credential never enters renderer JavaScript. Main validates the
+// sender, allowlists the route, and attaches a per-process authority token.
+contextBridge.exposeInMainWorld('prometheusPairingAdmin', {
+  request: (payload = {}) => ipcRenderer.invoke('pairing-admin:request', payload),
+});
+
 // ─── Local File Selection Bridge ────────────────────────────────────────────
 contextBridge.exposeInMainWorld('prometheusFiles', {
   selectCanvasFiles: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'files' }),

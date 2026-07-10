@@ -70,8 +70,9 @@
 - `teach_mode` prompt behavior is caller-context driven, not a top-level execution mode
 - legacy browser `review` values normalize to `agent`; `review` is no longer a backend browser mode
 - most app routes now require both gateway auth and account entitlement
-- mobile pairing is the major exception: `pairingRouter` is intentionally mounted before gateway auth, while claim still requires a logged-in/subscribed/admin account and desktop approval
+- mobile pairing is the major mount-order exception: certificate/claim/poll/`me` remain reachable before gateway auth, while QR creation, approval/denial, devices, remote access, and Tailscale operations require separate desktop authority through `requirePairingAdmin`
 - a QR/manual pair code is only a challenge handle, not a credential; do not remove the desktop approval step
+- never gate pairing administration with ordinary `requireGatewayAuth` alone because paired-device tokens satisfy that middleware; preserve the per-process Electron bridge or an exact configured gateway credential
 - iOS Home Screen PWA storage can be separate from Safari storage, and Camera QR scans open Safari rather than the installed PWA; preserve manual pair-code entry inside the mobile pair page
 - if `Unauthorized: configure gateway.auth.token to enable remote access` appears during phone pairing, first check router mount order and whether pairing was accidentally placed behind `requireGatewayAuth`
 - if remote access is through Tailscale Funnel or another HTTPS-terminating proxy, preserve the `x-forwarded-proto: https` redirect bypass so the gateway does not redirect public HTTPS traffic to an unreachable local HTTPS port

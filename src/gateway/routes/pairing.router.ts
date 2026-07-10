@@ -15,11 +15,9 @@
  *   GET  /api/pairing/me            (mobile)  return identity for the device
  *                                             behind the supplied token
  *
- * Note: only /api/pairing/me requires a token. All other endpoints are
- * intentionally open so that the unpaired phone can complete the handshake
- * and the desktop (running on the same machine) can manage devices.
- * In a future hardening pass, the desktop endpoints should be locked to
- * loopback / authenticated sessions.
+ * Only certificate, claim, poll, and /me are public/mobile-facing. Challenge
+ * creation, approval, device management, and remote-access operations require
+ * a separate trusted desktop authority that paired-device tokens cannot use.
  */
 
 import { Router } from 'express';
@@ -37,6 +35,7 @@ import {
   verifyDeviceToken,
 } from '../pairing/pairing-store';
 import { broadcastWS } from '../comms/broadcaster';
+import { requirePairingAdmin } from '../pairing/pairing-admin-auth';
 
 export const router: Router = Router();
 
@@ -165,7 +164,7 @@ function _publicRequest(r: any) {
 }
 
 // ── desktop: create a fresh challenge + QR ────────────────────────────────
-router.post('/api/pairing/qr', async (req, res) => {
+router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
   try {
     // Allow the desktop to override the host (e.g. when pairing across LAN
     // and the gateway is reached via a different hostname than req.host).
@@ -291,12 +290,12 @@ router.get('/api/pairing/poll/:id', (req, res) => {
 });
 
 // ── desktop: list pending claims ─────────────────────────────────────────
-router.get('/api/pairing/pending', (_req, res) => {
+router.get('/api/pairing/pending', requirePairingAdmin, (_req, res) => {
   res.json({ success: true, requests: listPendingRequests().map(_publicRequest) });
 });
 
 // ── desktop: approve / deny ──────────────────────────────────────────────
-router.post('/api/pairing/approve', (req, res) => {
+router.post('/api/pairing/approve', requirePairingAdmin, (req, res) => {
   const id   = String(req.body?.requestId || '');
   const name = req.body?.deviceName ? String(req.body.deviceName) : undefined;
   const result = approvePendingRequest(id, name);
@@ -305,7 +304,7 @@ router.post('/api/pairing/approve', (req, res) => {
   res.json({ success: true, device: _publicDevice(result.device) });
 });
 
-router.post('/api/pairing/deny', (req, res) => {
+router.post('/api/pairing/deny', requirePairingAdmin, (req, res) => {
   const id = String(req.body?.requestId || '');
   const ok = denyPendingRequest(id);
   if (!ok) return res.status(404).json({ success: false, error: 'Request not found or already resolved.' });
@@ -314,11 +313,11 @@ router.post('/api/pairing/deny', (req, res) => {
 });
 
 // ── desktop: device management ───────────────────────────────────────────
-router.get('/api/pairing/devices', (_req, res) => {
+router.get('/api/pairing/devices', requirePairingAdmin, (_req, res) => {
   res.json({ success: true, devices: listPairedDevices().map(_publicDevice) });
 });
 
-router.patch('/api/pairing/devices/:id', (req, res) => {
+router.patch('/api/pairing/devices/:id', requirePairingAdmin, (req, res) => {
   const id = String(req.params.id || '');
   let changed = false;
   if (typeof req.body?.enabled === 'boolean') changed = setDeviceEnabled(id, req.body.enabled) || changed;
@@ -328,7 +327,7 @@ router.patch('/api/pairing/devices/:id', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/api/pairing/devices/:id', (req, res) => {
+router.delete('/api/pairing/devices/:id', requirePairingAdmin, (req, res) => {
   const id = String(req.params.id || '');
   const ok = removeDevice(id);
   if (!ok) return res.status(404).json({ success: false, error: 'Device not found.' });
@@ -377,11 +376,11 @@ function _publicRemoteAccess() {
   };
 }
 
-router.get('/api/pairing/remote-access', (_req, res) => {
+router.get('/api/pairing/remote-access', requirePairingAdmin, (_req, res) => {
   res.json({ success: true, remoteAccess: _publicRemoteAccess() });
 });
 
-router.put('/api/pairing/remote-access', (req, res) => {
+router.put('/api/pairing/remote-access', requirePairingAdmin, (req, res) => {
   try {
     const body = req.body || {};
     const enabled = !!body.enabled;
@@ -414,7 +413,7 @@ router.put('/api/pairing/remote-access', (req, res) => {
 // reports the machine's Funnel-eligible HTTPS hostname (e.g.
 // "your-machine.tail1234.ts.net") and the current funnel/serve state. Used by
 // the UI to one-click suggest the public URL.
-router.get('/api/pairing/tailscale/status', async (_req, res) => {
+router.get('/api/pairing/tailscale/status', requirePairingAdmin, async (_req, res) => {
   const out: any = {
     success: true,
     installed: false,
@@ -479,7 +478,7 @@ async function _isFunnelActiveOnPort(port: number): Promise<boolean> {
 }
 
 // Enable funnel for the gateway port.
-router.post('/api/pairing/tailscale/funnel/enable', async (_req, res) => {
+router.post('/api/pairing/tailscale/funnel/enable', requirePairingAdmin, async (_req, res) => {
   const port = _gatewayPort();
   const result = await _runTailscaleCli(['funnel', String(port)], 10000);
   if (result.code !== 0 && result.code !== -2) {
@@ -491,14 +490,14 @@ router.post('/api/pairing/tailscale/funnel/enable', async (_req, res) => {
 });
 
 // Disable (reset) the funnel.
-router.post('/api/pairing/tailscale/funnel/disable', async (_req, res) => {
+router.post('/api/pairing/tailscale/funnel/disable', requirePairingAdmin, async (_req, res) => {
   const result = await _runTailscaleCli(['funnel', 'reset'], 8000);
   const ok = result.code === 0;
   res.json({ success: ok, error: ok ? undefined : (result.stderr || 'Failed to reset funnel').trim() });
 });
 
 // Lightweight status check — just returns funnelActive for the gateway port.
-router.get('/api/pairing/tailscale/funnel/status', async (_req, res) => {
+router.get('/api/pairing/tailscale/funnel/status', requirePairingAdmin, async (_req, res) => {
   const port = _gatewayPort();
   const active = await _isFunnelActiveOnPort(port);
   res.json({ success: true, funnelActive: active, port });

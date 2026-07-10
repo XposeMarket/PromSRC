@@ -5187,6 +5187,21 @@ window.setQuickThinkingEffort = setQuickThinkingEffort;
 let _pairingPollTimer = null;
 let _pairingCurrentChallenge = null;
 
+async function pairingAdminApi(path, opts = {}) {
+  const bridge = window.prometheusPairingAdmin;
+  if (!bridge || typeof bridge.request !== 'function') return api(path, opts);
+  let body = opts.body;
+  if (typeof body === 'string' && body.trim()) {
+    try { body = JSON.parse(body); }
+    catch { throw new Error('Invalid pairing administration request body.'); }
+  }
+  return bridge.request({
+    path,
+    method: String(opts.method || 'GET').toUpperCase(),
+    body,
+  });
+}
+
 async function loadPairingPanel() {
   await loadRemoteAccessSettings();
   await refreshPairingQR();
@@ -5266,7 +5281,7 @@ function _applyFunnelLiveStatus(funnelActive) {
 // Poll actual funnel status from the server (fast endpoint, no full detect).
 async function _refreshFunnelLiveStatus() {
   try {
-    const r = await api('/api/pairing/tailscale/funnel/status');
+    const r = await pairingAdminApi('/api/pairing/tailscale/funnel/status');
     if (r?.success != null) _applyFunnelLiveStatus(!!r.funnelActive);
   } catch {}
 }
@@ -5285,7 +5300,7 @@ function _stopFunnelStatusPoll() {
 
 async function loadRemoteAccessSettings() {
   try {
-    const r = await api('/api/pairing/remote-access');
+    const r = await pairingAdminApi('/api/pairing/remote-access');
     const ra = (r && r.remoteAccess) || { enabled: false, mode: 'tailscale-funnel', publicUrl: '' };
     const enabledEl = document.getElementById('pairing-remote-enabled');
     const modeEl    = document.getElementById('pairing-remote-mode');
@@ -5313,7 +5328,7 @@ async function _saveRemoteAccess() {
   };
   if (msg) msg.textContent = 'Saving…';
   try {
-    const r = await api('/api/pairing/remote-access', { method: 'PUT', body: JSON.stringify(body) });
+    const r = await pairingAdminApi('/api/pairing/remote-access', { method: 'PUT', body: JSON.stringify(body) });
     if (!r?.success) throw new Error(r?.error || 'Failed to save');
     if (msg) msg.innerHTML = `<span style="color:#15803d">Saved. Generate a new QR to use the ${r.remoteAccess?.enabled ? 'public' : 'local'} URL.</span>`;
     refreshPairingQR().catch(() => {});
@@ -5330,7 +5345,7 @@ async function _enableFunnel() {
   if (enableBtn) { enableBtn.disabled = true; enableBtn.textContent = 'Enabling…'; }
   if (funnelMsg) funnelMsg.textContent = 'Running tailscale funnel command…';
   try {
-    const r = await api('/api/pairing/tailscale/funnel/enable', { method: 'POST', body: '{}' });
+    const r = await pairingAdminApi('/api/pairing/tailscale/funnel/enable', { method: 'POST', body: '{}' });
     if (!r?.success) throw new Error(r?.error || 'Failed to enable funnel');
     if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#15803d">Funnel enabled on port ${r.port}. ✓</span>`;
     _applyFunnelLiveStatus(true);
@@ -5349,7 +5364,7 @@ async function _disableFunnel() {
   if (disableBtn) { disableBtn.disabled = true; disableBtn.textContent = 'Disabling…'; }
   if (funnelMsg) funnelMsg.textContent = 'Running tailscale funnel reset…';
   try {
-    const r = await api('/api/pairing/tailscale/funnel/disable', { method: 'POST', body: '{}' });
+    const r = await pairingAdminApi('/api/pairing/tailscale/funnel/disable', { method: 'POST', body: '{}' });
     if (!r?.success) throw new Error(r?.error || 'Failed to disable funnel');
     if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b45309">Funnel disabled.</span>`;
     _applyFunnelLiveStatus(false);
@@ -5368,7 +5383,7 @@ async function _detectTailscale() {
   const modeEl = document.getElementById('pairing-remote-mode');
   if (out) out.textContent = 'Checking…';
   try {
-    const r = await api('/api/pairing/tailscale/status');
+    const r = await pairingAdminApi('/api/pairing/tailscale/status');
     if (!r?.installed) {
       if (out) out.innerHTML = `<span style="color:#b45309">${escHtml(r?.error || 'Tailscale CLI not found.')}</span><br><span style="font-size:11px">Install from <span style="font-family:ui-monospace">tailscale.com</span> and try again.</span>`;
       return;
@@ -5428,7 +5443,7 @@ async function refreshPairingQR() {
   const meta = document.getElementById('pairing-qr-meta');
   if (wrap) wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">Generating QR…</div>';
   try {
-    const r = await api('/api/pairing/qr', { method: 'POST', body: JSON.stringify({}) });
+    const r = await pairingAdminApi('/api/pairing/qr', { method: 'POST', body: JSON.stringify({}) });
     if (!r?.success) throw new Error(r?.error || 'Failed to generate QR');
     _pairingCurrentChallenge = r;
     if (wrap) {
@@ -5479,7 +5494,7 @@ async function refreshPairingPending() {
   const tabBadge = document.getElementById('settings-pairing-pending-badge');
   if (!list) return;
   try {
-    const r = await api('/api/pairing/pending');
+    const r = await pairingAdminApi('/api/pairing/pending');
     const reqs = Array.isArray(r?.requests) ? r.requests : [];
     if (count) count.textContent = String(reqs.length);
     if (tabBadge) {
@@ -5513,11 +5528,11 @@ async function refreshPairingPending() {
         btn.disabled = true; btn.style.opacity = '0.6';
         try {
           if (act === 'approve') {
-            const ok = await api('/api/pairing/approve', { method: 'POST', body: JSON.stringify({ requestId: id }) });
+            const ok = await pairingAdminApi('/api/pairing/approve', { method: 'POST', body: JSON.stringify({ requestId: id }) });
             if (!ok?.success) throw new Error(ok?.error || 'Approve failed');
             showToast?.('Device paired', '', 'success');
           } else {
-            const ok = await api('/api/pairing/deny', { method: 'POST', body: JSON.stringify({ requestId: id }) });
+            const ok = await pairingAdminApi('/api/pairing/deny', { method: 'POST', body: JSON.stringify({ requestId: id }) });
             if (!ok?.success) throw new Error(ok?.error || 'Deny failed');
             showToast?.('Pairing denied', '', 'success');
           }
@@ -5539,7 +5554,7 @@ async function refreshPairedDevices() {
   const count = document.getElementById('pairing-device-count');
   if (!list) return;
   try {
-    const r = await api('/api/pairing/devices');
+    const r = await pairingAdminApi('/api/pairing/devices');
     const devices = Array.isArray(r?.devices) ? r.devices : [];
     if (count) count.textContent = String(devices.length);
     if (!devices.length) {
@@ -5574,12 +5589,12 @@ async function refreshPairedDevices() {
         try {
           if (act === 'toggle') {
             const next = btn.getAttribute('data-next') === 'true';
-            const ok = await api(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
+            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
             if (!ok?.success) throw new Error(ok?.error || 'Update failed');
             showToast?.(next ? 'Device enabled' : 'Device disabled', '', 'success');
           } else if (act === 'remove') {
             if (!confirm('Remove this device? The user will need to scan a new QR to pair again.')) { btn.disabled = false; btn.style.opacity = ''; return; }
-            const ok = await api(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
             if (!ok?.success) throw new Error(ok?.error || 'Remove failed');
             showToast?.('Device removed', '', 'success');
           }
@@ -5634,7 +5649,7 @@ if (typeof window !== 'undefined') {
 function _bumpPairingBadge() {
   // Fire-and-forget refresh so the tab badge updates even when the user is
   // looking at a different settings tab.
-  api('/api/pairing/pending').then(r => {
+  pairingAdminApi('/api/pairing/pending').then(r => {
     const count = (r?.requests || []).length;
     const tabBadge = document.getElementById('settings-pairing-pending-badge');
     if (tabBadge) {

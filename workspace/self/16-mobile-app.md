@@ -94,12 +94,14 @@ Pairing source:
 
 - `src/gateway/routes/pairing.router.ts`
 - `src/gateway/pairing/pairing-store.ts`
+- `src/gateway/pairing/pairing-admin-auth.ts`
 - `src/gateway/gateway-auth.ts`
 - `src/gateway/server-v2.ts`
+- `electron/main.js` and `electron/preload.js` for desktop-only administration
 - `web-ui/src/mobile/mobile-api.js`
 - `web-ui/src/mobile/mobile-pages.js`
 
-`src/gateway/server-v2.ts` mounts `pairingRouter` before `requireGatewayAuth` and `requireAccountAccess`, so an unpaired phone can complete QR pairing. All normal API surfaces after that still go through gateway auth and account access.
+`src/gateway/server-v2.ts` mounts `pairingRouter` before `requireGatewayAuth` and `requireAccountAccess`, so an unpaired phone can download the certificate, claim a desktop-created challenge, and poll it. Administrative routes inside that router independently use `requirePairingAdmin`; paired-device tokens cannot create/approve challenges or manage devices/Funnel.
 
 Pairing endpoint flow:
 
@@ -110,6 +112,7 @@ Pairing endpoint flow:
 - Desktop manages devices: `GET /api/pairing/devices`, `PATCH /api/pairing/devices/:id`, `DELETE /api/pairing/devices/:id`
 - Phone validates current token: `GET /api/pairing/me`
 - Local HTTPS certificate download: `GET /api/pairing/certificate`
+- Electron generates a per-process pairing-admin token and exposes an allowlisted IPC request bridge without exposing the token to renderer JavaScript.
 
 Remote/mobile reachability support in `pairing.router.ts`:
 
@@ -472,7 +475,7 @@ Mobile header Permissions shortcut note [2026-06-28]: the top-right chat-header 
 - Service worker cache version must be bumped for meaningful PWA/static changes.
 - API/SSE/WS requests are not service-worker cached; stale API-looking behavior is usually stale JS, token state, session state, or gateway state.
 - Phone microphone capture usually needs HTTPS, not plain LAN HTTP.
-- Pairing endpoints are intentionally mounted before auth. Normal API access still requires a valid paired token/gateway auth and account access.
+- Mobile handshake endpoints are intentionally mounted before gateway auth. Pairing administration remains protected by `requirePairingAdmin`; normal API access still requires a valid paired token/gateway auth and account access.
 - Mobile media elements need `?pt=` URLs for auth; headers do not work for `<img>`, `<video>`, or WebSocket construction.
 - `mobile_default` is both the default new mobile draft/session target and a real mobile channel session in several code paths. Avoid accidentally hijacking a fresh new-chat state with old restart/session notifications.
 - `clientRequestId` is used with the mobile dedupe map in `chat.router.ts`; keep it stable for retried mobile sends, unique for new sends.
@@ -507,6 +510,7 @@ For pairing/remote access:
 - Approve from desktop and verify mobile receives/stores `deviceToken` from `GET /api/pairing/poll/:id`.
 - Revoke the device and verify mobile gets 401, clears token, and returns to pairing.
 - If using LAN, confirm gateway host is reachable from phone. If using Tailscale/Funnel, confirm remote access public URL is HTTPS and Funnel status is active.
+- Run `npm run test:pairing-admin-boundary` and verify direct remote/paired-token calls to QR, pending, approve, devices, remote-access, and Tailscale endpoints return 403.
 
 For mobile voice:
 
