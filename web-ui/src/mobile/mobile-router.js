@@ -2,13 +2,13 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=slash-command-style-align-v1';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-document-scroll-v1';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=slash-command-style-align-v1';
+} from './mobile-pages.js?v=mobile-document-scroll-v1';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
@@ -189,13 +189,13 @@ function render() {
   }
 
   if (!isMobileRoute()) {
-    document.body.classList.remove('pm-mobile-active');
+    document.body.classList.remove('pm-mobile-active', 'pm-mobile-document-scroll');
     const root = document.getElementById('mobile-root');
     if (root) { root.hidden = true; root.innerHTML = ''; }
     return;
   }
 
-  document.body.classList.add('pm-mobile-active');
+  document.body.classList.add('pm-mobile-active', 'pm-mobile-document-scroll');
   // Allow auth-pending body to still show mobile root.
   document.body.classList.remove('auth-pending');
 
@@ -327,7 +327,7 @@ function renderMobileBootError(err) {
     '"': '&quot;',
     "'": '&#39;',
   }[ch]));
-  document.body.classList.add('pm-mobile-active');
+  document.body.classList.add('pm-mobile-active', 'pm-mobile-document-scroll');
   document.body.classList.remove('auth-pending');
   root.hidden = false;
   root.innerHTML = `

@@ -75,6 +75,8 @@ export interface RuntimeSteerEvent {
   spokenAck?: string;
   responseMode?: 'silent' | 'narrate' | 'worker_reply';
   contextSummary?: string;
+  attachments?: Array<{ base64: string; mimeType: string; name: string }>;
+  attachmentPreviews?: any[];
 }
 
 const TERMINAL_CHECKPOINT_EVENTS = new Set(['done', 'final', 'error']);
@@ -429,11 +431,15 @@ export function addPendingRuntimeSteer(
   if (!record) return { ok: false, error: 'Runtime not found.' };
   if (record.kind !== 'main_chat') return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not steerable.' };
   const message = String(input.message || '').trim();
-  if (!message) return { ok: false, runtime: toSnapshot(record), error: 'Steer message is empty.' };
+  const attachments = Array.isArray((input as any).attachments) ? (input as any).attachments : [];
+  const attachmentPreviews = Array.isArray((input as any).attachmentPreviews) ? (input as any).attachmentPreviews : [];
+  if (!message && attachments.length === 0 && attachmentPreviews.length === 0) {
+    return { ok: false, runtime: toSnapshot(record), error: 'Steer message is empty.' };
+  }
   const event: RuntimeSteerEvent = {
     id: String(input.id || crypto.randomUUID()),
     sessionId: String(input.sessionId || record.sessionId || '').trim(),
-    message,
+    message: message || `User sent ${attachments.length + attachmentPreviews.length} attachment(s) as a live steer.`,
     source: input.source ? String(input.source) : undefined,
     createdAt: Number(input.createdAt || Date.now()),
     clientRequestId: input.clientRequestId ? String(input.clientRequestId) : undefined,
@@ -443,6 +449,8 @@ export function addPendingRuntimeSteer(
     spokenAck: input.spokenAck ? String(input.spokenAck).slice(0, 1000) : undefined,
     responseMode: input.responseMode,
     contextSummary: input.contextSummary ? String(input.contextSummary).slice(0, 2000) : undefined,
+    attachments: attachments.length ? attachments : undefined,
+    attachmentPreviews: attachmentPreviews.length ? attachmentPreviews : undefined,
   };
   if (!Array.isArray(record.pendingSteers)) record.pendingSteers = [];
   record.pendingSteers.push(event);
@@ -450,14 +458,15 @@ export function addPendingRuntimeSteer(
   record.checkpoint = {
     ...(record.checkpoint || {}),
     pendingSteerCount: record.pendingSteers.length,
-    lastSteer: {
-      id: event.id,
-      message: event.message.slice(0, 500),
-      source: event.source,
-      kind: event.kind,
-      voiceContextPacketId: event.voiceContextPacketId,
-      at: event.createdAt,
-    },
+      lastSteer: {
+        id: event.id,
+        message: event.message.slice(0, 500),
+        source: event.source,
+        kind: event.kind,
+        voiceContextPacketId: event.voiceContextPacketId,
+        attachmentCount: (event.attachments?.length || 0) + (event.attachmentPreviews?.length || 0),
+        at: event.createdAt,
+      },
     updatedAt: Date.now(),
   };
   persistRuntime(toSnapshot(record), 'steer_queued', { steerId: event.id, source: event.source });

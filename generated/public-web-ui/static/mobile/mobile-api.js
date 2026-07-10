@@ -87,6 +87,24 @@ async function mfetch(path, opts = {}) {
   return json;
 }
 
+async function mfetchWithRetry(path, opts = {}, retry = {}) {
+  const attempts = Math.max(1, Math.floor(Number(retry.attempts || 2) || 2));
+  const delayMs = Math.max(100, Math.floor(Number(retry.delayMs || 500) || 500));
+  let lastErr = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await mfetch(path, opts);
+    } catch (err) {
+      lastErr = err;
+      const status = Number(err?.status || 0);
+      const retryable = err?.retryable === true || status === 408 || status === 429 || status >= 500;
+      if (!retryable || attempt >= attempts - 1) break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function mobileGatewayFetch(path, opts = {}) {
   return mfetch(path, opts);
 }
@@ -259,17 +277,19 @@ export async function submitMobileProcessInput(runId, data) {
 }
 
 export async function uploadMobileTextFile({ filename, content }) {
-  return mfetch('/api/canvas/upload', {
+  return mfetchWithRetry('/api/canvas/upload', {
     method: 'POST',
     body: JSON.stringify({ filename, content }),
-  });
+    timeoutMs: 60000,
+  }, { attempts: 3, delayMs: 700 });
 }
 
 export async function uploadMobileBinaryFile({ filename, base64, mimeType }) {
-  return mfetch('/api/canvas/upload-binary', {
+  return mfetchWithRetry('/api/canvas/upload-binary', {
     method: 'POST',
     body: JSON.stringify({ filename, base64, mimeType }),
-  });
+    timeoutMs: 60000,
+  }, { attempts: 3, delayMs: 700 });
 }
 
 /* ---------------- pairing endpoints ---------------- */
@@ -671,7 +691,13 @@ export function streamTeamChat(teamId, { message, signal }, handlers = {}) {
           cb('onEvent', evt);
           switch (evt.type) {
             case 'token':          if (evt.text) cb('onToken', String(evt.text)); break;
-            case 'thinking_delta': if (evt.thinking || evt.text) cb('onThinking', String(evt.thinking || evt.text)); break;
+            case 'thinking_delta': if (evt.thinking || evt.text) cb('onThinking', String(evt.thinking || evt.text), { source: String(evt.source || '') }); break;
+            case 'thinking':
+            case 'agent_thought': {
+              const thought = String(evt.thinking || evt.text || '').trim();
+              if (thought) cb('onThought', thought, evt);
+              break;
+            }
             case 'info':
             case 'heartbeat':      if (evt.message || evt.state) cb('onInfo', String(evt.message || evt.state)); break;
             case 'progress_state': cb('onProgressState', evt); break;
@@ -902,7 +928,13 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
           cb('onEvent', evt);
           switch (evt.type) {
             case 'token':         if (evt.text) cb('onToken', String(evt.text)); break;
-            case 'thinking_delta':if (evt.thinking || evt.text) cb('onThinking', String(evt.thinking || evt.text)); break;
+            case 'thinking_delta':if (evt.thinking || evt.text) cb('onThinking', String(evt.thinking || evt.text), { source: String(evt.source || '') }); break;
+            case 'thinking':
+            case 'agent_thought': {
+              const thought = String(evt.thinking || evt.text || '').trim();
+              if (thought) cb('onThought', thought, evt);
+              break;
+            }
             case 'info':
             case 'heartbeat':     if (evt.message) cb('onInfo', String(evt.message)); break;
             case 'voice_milestone': if (evt.text) cb('onVoiceMilestone', evt); break;
@@ -1415,8 +1447,11 @@ export async function loadMobileChatSession(sessionId, { force = false } = {}) {
     const cached = _sessionCacheGet(sid);
     if (cached) return cached;
   }
-  const historyLimit = force ? 300 : 80;
-  const r = await mfetch(`/api/sessions/${encodeURIComponent(sid)}?historyLimit=${historyLimit}&processLimit=500&includeToolLog=0${force ? '&_fresh=1' : ''}`);
+  const historyLimit = force ? 160 : 70;
+  const processLimit = force ? 160 : 120;
+  const r = await mfetch(`/api/sessions/${encodeURIComponent(sid)}?mobile=1&historyLimit=${historyLimit}&processLimit=${processLimit}&includeToolLog=0${force ? '&_fresh=1' : ''}`, {
+    timeoutMs: force ? 30000 : 20000,
+  });
   const session = r?.session || null;
   if (session) _sessionCacheSet(sid, session);
   return session;
@@ -1681,7 +1716,8 @@ export async function restartMobileGateway({ rebuild = false, sessionId = '', or
  *
  * Calls handlers as events arrive:
  *   - onToken(text)       — incremental text chunk
- *   - onThinking(text)    — incremental reasoning chunk (optional)
+ *   - onThinking(text, meta?) — incremental reasoning chunk (optional; meta.source may be reasoning_summary)
+ *   - onThought(text)     — complete thought block (thinking / agent_thought)
  *   - onInfo(message)     — progress info line
  *   - onFinal(text)       — final assistant text (single string)
  *   - onError(err)        — fatal error
@@ -1774,7 +1810,13 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
           cb('onEvent', evt);
           switch (evt.type) {
             case 'token':         if (evt.text)     cb('onToken', String(evt.text)); break;
-            case 'thinking_delta':if (evt.thinking || evt.text) cb('onThinking', String(evt.thinking || evt.text)); break;
+            case 'thinking_delta':if (evt.thinking || evt.text) cb('onThinking', String(evt.thinking || evt.text), { source: String(evt.source || '') }); break;
+            case 'thinking':
+            case 'agent_thought': {
+              const thought = String(evt.thinking || evt.text || '').trim();
+              if (thought) cb('onThought', thought, evt);
+              break;
+            }
             case 'info':          if (evt.message)  cb('onInfo', String(evt.message)); break;
             case 'ui_preflight':  if (evt.message)  cb('onInfo', String(evt.message)); break;
             case 'voice_milestone': if (evt.text) cb('onVoiceMilestone', evt); break;

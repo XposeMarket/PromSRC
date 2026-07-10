@@ -43,6 +43,11 @@
       "path": "references/styles/voice-browser-desktop-smoke-test-2026-07-04.md",
       "type": "doc",
       "description": "Add style pattern to voice-browser-desktop-smoke-test"
+    },
+    {
+      "path": "references/workflows/voice-browser-desktop-smoke-test-2026-07-07.md",
+      "type": "doc",
+      "description": "Add workflow recipe to voice-browser-desktop-smoke-test"
     }
   ]
 }

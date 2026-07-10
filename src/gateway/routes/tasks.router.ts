@@ -375,6 +375,7 @@ router.get('/api/bg-tasks', (_req, res) => {
     scheduleId: task.scheduleId,
     taskKind: task.taskKind,
     verificationStatus: task.verificationStatus,
+    voiceDispatch: task.voiceDispatch,
     managerEnabled: task.managerEnabled,
     executorProvider: task.executorProvider,
   }));

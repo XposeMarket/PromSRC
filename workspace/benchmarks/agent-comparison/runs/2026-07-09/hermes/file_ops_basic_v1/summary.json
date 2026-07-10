@@ -1,0 +1,26 @@
+{
+  "run_id": "hermes_2026-07-09_file_ops_basic_v1",
+  "agent": "hermes",
+  "benchmark_id": "file_ops_basic_v1",
+  "measurement_mode": "black_box_cli_with_internal_telemetry",
+  "status": "pass",
+  "blocked_reason": null,
+  "total_wall_ms": 38671,
+  "exit_code": 0,
+  "model_calls": 5,
+  "model_latency_ms": 20575,
+  "tool_calls": 6,
+  "tool_latency_ms": 8842,
+  "tool_errors": 0,
+  "retries": null,
+  "tokens_input": 154690,
+  "tokens_output": 376,
+  "estimated_cost_usd": null,
+  "artifacts": [
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/file_ops_basic_v1/stdout.txt",
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/file_ops_basic_v1/stderr.txt",
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/file_ops_basic_v1/events.jsonl"
+  ],
+  "final_output": "FILE_OPS_BASIC_V1_PASS: found_bravo=true line_count=3\n\nsession_id: 20260709_090448_42b587",
+  "notes": "Hermes run via Python/PowerShell wrapper; internal telemetry enabled by HERMES_TELEMETRY_PATH."
+}

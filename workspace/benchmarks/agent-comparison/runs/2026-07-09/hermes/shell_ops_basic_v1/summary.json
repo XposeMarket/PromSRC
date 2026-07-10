@@ -1,0 +1,26 @@
+{
+  "run_id": "hermes_2026-07-09_shell_ops_basic_v1",
+  "agent": "hermes",
+  "benchmark_id": "shell_ops_basic_v1",
+  "measurement_mode": "black_box_cli_with_internal_telemetry",
+  "status": "fail",
+  "blocked_reason": null,
+  "total_wall_ms": 60122,
+  "exit_code": 0,
+  "model_calls": 11,
+  "model_latency_ms": 40983,
+  "tool_calls": 10,
+  "tool_latency_ms": 5545,
+  "tool_errors": 1,
+  "retries": null,
+  "tokens_input": 345121,
+  "tokens_output": 703,
+  "estimated_cost_usd": null,
+  "artifacts": [
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/shell_ops_basic_v1/stdout.txt",
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/shell_ops_basic_v1/stderr.txt",
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/shell_ops_basic_v1/events.jsonl"
+  ],
+  "final_output": "\u250a review diff\n\u001b[38;2;218;165;32ma/benchmarks\\agent-comparison\\fixtures\\shell_ops_basic_v1\\report.md \u2192 b/benchmarks\\agent-comparison\\fixtures\\shell_ops_basic_v1\\report.md\u001b[0m\n\u001b[38;2;139;134;130m@@ -1,6 +1,5 @@\u001b[0m\n\u001b[38;2;184;134;11m # shell_ops_basic_v1 Report\u001b[0m\n\u001b[38;2;184;134;11m \u001b[0m\n\u001b[38;2;255;255;255;48;2;119;20;20m-- Node.js version: v20.20.2\u001b[0m\n\u001b[38;2;255;255;255;48;2;119;20;20m-- Failing command: `definitely_not_a_real_command_hermes_bench`\u001b[0m\n\u001b[38;2;255;255;255;48;2;119;20;20m-- Failure classification: command-not-found (exit code 127; shell reported `command not found`)\u001b[0m\n\u001b[38;2;255;255;255;48;2;119;20;20m-- Recovery output: `SHELL_RECOVERED`\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Node version: v20.20.2\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Failure classification: command-not-found (exit code 127; shell reported \"command not found\" for `definitely_not_a_real_command_hermes_bench`)\u001b[0m",
+  "notes": "Hermes run via Python/PowerShell wrapper; internal telemetry enabled by HERMES_TELEMETRY_PATH."
+}

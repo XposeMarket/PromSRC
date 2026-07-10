@@ -42,8 +42,8 @@ const BUILTIN_STATIC_MODELS = {
 
 // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
 const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
-const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
-const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const PERPLEXITY_EFFORT_OPTIONS = ['', 'low', 'medium', 'high'];
 const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
 const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
@@ -122,9 +122,37 @@ function _ensureHapticSwitch() {
 }
 
 export function pmHaptic(strength = 12) {
+  try {
+    const haptics = window.Capacitor?.Plugins?.Haptics || window.Haptics;
+    if (haptics?.selectionChanged) {
+      haptics.selectionChanged();
+      return;
+    }
+    if (haptics?.impact) {
+      haptics.impact({ style: strength >= 16 ? 'medium' : 'light' });
+      return;
+    }
+  } catch {}
+  try {
+    const tgHaptics = window.Telegram?.WebApp?.HapticFeedback;
+    if (tgHaptics?.selectionChanged) {
+      tgHaptics.selectionChanged();
+      return;
+    }
+    if (tgHaptics?.impactOccurred) {
+      tgHaptics.impactOccurred(strength >= 16 ? 'medium' : 'light');
+      return;
+    }
+  } catch {}
   try { if (navigator.vibrate) navigator.vibrate(strength); } catch {}
-  // Programmatic toggle of a native iOS switch — best-effort earlier buzz.
-  try { const sw = _ensureHapticSwitch(); sw.checked = !sw.checked; } catch {}
+  // Best effort on iOS web. Physical clicks on native switch inputs can haptic;
+  // synthetic clicks usually cannot, but doing this synchronously during a touch
+  // event is the only web-only fallback available for drag boundary ticks.
+  try {
+    const sw = _ensureHapticSwitch();
+    sw.click?.();
+    sw.checked = !sw.checked;
+  } catch {}
 }
 
 // Give an arbitrary button the same real iOS haptic the model badge has: a native
@@ -301,8 +329,12 @@ function _openSheet(titleHtml, bodyHtml) {
   `;
   document.body.appendChild(scrim);
   document.body.appendChild(sheet);
-  _positionSheetNearBadge(sheet);
-  const reposition = () => _positionSheetNearBadge(sheet);
+  const positionSheet = () => {
+    if (sheet.classList.contains('is-reasoning') || sheet.classList.contains('is-model-switch')) return;
+    _positionSheetNearBadge(sheet);
+  };
+  positionSheet();
+  const reposition = positionSheet;
   requestAnimationFrame(() => { scrim.classList.add('open'); sheet.classList.add('open'); });
   scrim.addEventListener('click', _closeSheet);
   sheet.querySelector('.pm-msheet-close')?.addEventListener('click', _closeSheet);
@@ -344,114 +376,221 @@ function _toast(msg, kind) {
   try { window.pmToast ? window.pmToast(msg, kind) : null; } catch {}
 }
 
-// ── TAP: reasoning / thinking sheet for the active provider ──────────────────
+// ── TAP: fluid reasoning slider + click-through advanced model controls ───────
+let _reasoningSaveTimer = null;
+let _reasoningSaveChain = Promise.resolve();
+
+function _effortOptions(provider, cfg = {}) {
+  if (provider === 'openai') return EFFORT_OPTIONS;
+  if (provider === 'openai_codex') return CODEX_EFFORT_OPTIONS;
+  if (provider === 'perplexity') return PERPLEXITY_EFFORT_OPTIONS;
+  if (provider === 'xai') {
+    const model = String(cfg.model || '').trim();
+    return /^grok-4\.20-multi-agent(?:-|$)/i.test(model) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS;
+  }
+  if (provider === 'anthropic') return ANTHROPIC_EFFORT_OPTIONS;
+  return null;
+}
+
+function _effortLabel(value, provider) {
+  if (!value) return (provider === 'anthropic' || provider === 'xai') ? 'Auto' : 'None';
+  if (value === 'xhigh') return 'X high';
+  if (value === 'max') return 'Max';
+  if (value === 'ultra') return 'Ultra';
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 async function _openReasoningSheet() {
-  _openSheet('Reasoning', '<div class="pm-msheet-loading">Loading…</div>');
-  const llm = await _loadLlm(true);
-  const { provider } = _activeModel(llm);
-  const cfg = (llm.providers || {})[provider] || {};
+  pmHaptic(10);
+  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading…</div>');
+  sheet?.classList.add('is-reasoning');
+  document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
+  sheet?.removeAttribute('style');
+  await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
+  const { provider } = _activeModel(_llmCache);
+  const cfg = (_llmCache.providers || {})[provider] || {};
   _renderReasoningBody(provider, cfg);
 }
 
 function _renderReasoningBody(provider, cfg) {
-  _setSheetTitle(`Reasoning · <span class="pm-msheet-sub">${_esc(_providerLabel(provider))}</span>`);
-
-  let options = null;
-  if (provider === 'openai') options = EFFORT_OPTIONS;
-  else if (provider === 'openai_codex') options = CODEX_EFFORT_OPTIONS;
-  else if (provider === 'perplexity') options = PERPLEXITY_EFFORT_OPTIONS;
-  else if (provider === 'xai') {
-    const model = String(cfg.model || '').trim();
-    options = /^grok-4\.20-multi-agent(?:-|$)/i.test(model) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS;
-  }
-  else if (provider === 'anthropic') options = ANTHROPIC_EFFORT_OPTIONS;
-
-  if (!options) {
-    _setSheetBody(`<div class="pm-msheet-empty">${_esc(_providerLabel(provider))} has no adjustable reasoning levels.</div>`);
-    return;
-  }
-
+  const options = _effortOptions(provider, cfg);
   const current = String(cfg.reasoning_effort || '').trim();
-  const labelFor = (v) => {
-    if (!v) return (provider === 'anthropic' || provider === 'xai') ? 'Provider default' : 'None';
-    if (v === 'xhigh') return 'Extra high';
-    return v.charAt(0).toUpperCase() + v.slice(1);
-  };
-  const rows = options.map((v) => `
-    <button type="button" class="pm-msheet-row" data-effort="${_esc(v)}">
-      <span class="pm-msheet-row-label">${_esc(labelFor(v))}</span>
-      ${v === current ? '<span class="pm-msheet-check">✓</span>' : ''}
-    </button>`).join('');
+  const selectedIndex = Math.max(0, options ? options.indexOf(current) : 0);
+  const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
+  const selectedFillWidth = options && options.length ? ((1 / options.length) + selectedProgress * ((options.length - 1) / options.length)) * 100 : 0;
+  const modelName = prettifyModelName(cfg.model, provider);
+  const effortName = options ? _effortLabel(options[selectedIndex], provider) : 'Default';
+  _setSheetTitle('');
 
-  const anthropicToggle = provider === 'anthropic'
-    ? `<label class="pm-msheet-toggle">
-         <span>Extended thinking</span>
-         <input type="checkbox" id="pm-msheet-extthink" ${cfg.extended_thinking === true ? 'checked' : ''} />
-       </label>
-       <label class="pm-msheet-toggle">
-         <span>Fast mode<br><span class="pm-msheet-toggle-hint">Faster output · Opus 4.6/4.7/4.8</span></span>
-         <input type="checkbox" id="pm-msheet-fastmode" ${cfg.fast_mode === true ? 'checked' : ''} />
-       </label>`
-    : '';
+  const slider = options ? `
+    <div class="pm-reasoning-control" id="pm-reasoning-control" style="--pm-reasoning-index:${selectedIndex};--pm-reasoning-progress:${selectedProgress};--pm-reasoning-fill-width:${selectedFillWidth}%;--pm-reasoning-steps:${Math.max(1, options.length - 1)}" role="slider" tabindex="0" aria-label="Reasoning level" aria-valuemin="0" aria-valuemax="${options.length - 1}" aria-valuenow="${selectedIndex}" aria-valuetext="${_esc(effortName)}">
+      <div class="pm-reasoning-track" aria-hidden="true">
+        <div class="pm-reasoning-fill"></div>
+        ${options.map((value, index) => `<button type="button" class="pm-reasoning-segment ${index === selectedIndex ? 'is-active ' : ''}${index <= selectedIndex ? 'is-filled' : ''}" data-index="${index}" aria-label="${_esc(_effortLabel(value, provider))}"><span>${_esc(_effortLabel(value, provider))}</span></button>`).join('')}
+      </div>
+    </div>` : `<div class="pm-msheet-empty">${_esc(_providerLabel(provider))} has no adjustable reasoning levels.</div>`;
 
-  const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>${anthropicToggle}`);
+  const body = _setSheetBody(`
+    <button type="button" class="pm-reasoning-summary" id="pm-reasoning-model" aria-label="Choose model and provider">
+      <strong>${_esc(modelName)}</strong><span aria-hidden="true">·</span><span id="pm-reasoning-live-label">${_esc(effortName)}</span><span class="pm-reasoning-summary-chev" aria-hidden="true">›</span>
+    </button>
+    ${slider}`);
   if (!body) return;
 
-  body.querySelectorAll('[data-effort]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const effort = btn.getAttribute('data-effort') || '';
-      const extEl = document.getElementById('pm-msheet-extthink');
-      const fastEl = document.getElementById('pm-msheet-fastmode');
-      await _saveReasoning(provider, {
-        reasoning_effort: effort,
-        ...(provider === 'anthropic' ? {
-          extended_thinking: !!(extEl && extEl.checked),
-          fast_mode: !!(fastEl && fastEl.checked),
-        } : {}),
+  document.getElementById('pm-reasoning-model')?.addEventListener('click', () => {
+    pmHaptic(10);
+    _openSwitchSheet();
+  });
+
+  const control = document.getElementById('pm-reasoning-control');
+  if (control && options) {
+    let lastIndex = selectedIndex;
+    const indexMax = Math.max(1, options.length - 1);
+    const setProgress = (progress) => {
+      const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
+      control.style.setProperty('--pm-reasoning-progress', String(safeProgress));
+      const fillWidth = ((1 / options.length) + safeProgress * ((options.length - 1) / options.length)) * 100;
+      control.style.setProperty('--pm-reasoning-fill-width', `${fillWidth}%`);
+    };
+    const commitIndex = (index, immediate = false, { snap = true, save = true } = {}) => {
+      const safeIndex = Math.max(0, Math.min(options.length - 1, Number(index) || 0));
+      const value = options[safeIndex] || '';
+      const label = _effortLabel(value, provider);
+      control.style.setProperty('--pm-reasoning-index', String(safeIndex));
+      if (snap) setProgress(safeIndex / indexMax);
+      control.setAttribute('aria-valuenow', String(safeIndex));
+      control.setAttribute('aria-valuetext', label);
+      document.getElementById('pm-reasoning-live-label').textContent = label;
+      control.querySelectorAll('.pm-reasoning-segment').forEach((segment, segmentIndex) => {
+        segment.classList.toggle('is-active', segmentIndex === safeIndex);
+        segment.classList.toggle('is-filled', segmentIndex <= safeIndex);
+      });
+      if (safeIndex !== lastIndex) { pmHaptic(4); lastIndex = safeIndex; }
+      if (save) _queueReasoningSave(provider, { reasoning_effort: value }, immediate);
+    };
+    const progressFromEvent = (event) => {
+      const rect = control.getBoundingClientRect();
+      const pct = rect.width ? (event.clientX - rect.left) / rect.width : 0;
+      return Math.max(0, Math.min(1, pct));
+    };
+    const indexFromProgress = (progress) => {
+      return Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * (options.length - 1));
+    };
+    const updateFromPointer = (event, immediate = false) => {
+      const progress = progressFromEvent(event);
+      setProgress(progress);
+      commitIndex(indexFromProgress(progress), immediate, { snap: immediate, save: immediate });
+    };
+    control.querySelectorAll('.pm-reasoning-segment').forEach((segment) => {
+      segment.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        commitIndex(segment.getAttribute('data-index'), true);
       });
     });
-  });
-  document.getElementById('pm-msheet-extthink')?.addEventListener('change', async (e) => {
-    await _saveReasoning(provider, { extended_thinking: !!e.target.checked }, { keepOpen: true });
-  });
-  document.getElementById('pm-msheet-fastmode')?.addEventListener('change', async (e) => {
-    await _saveReasoning(provider, { fast_mode: !!e.target.checked }, { keepOpen: true });
-  });
-}
-
-async function _saveReasoning(provider, patch, { keepOpen = false } = {}) {
-  try {
-    const llm = await _loadLlm(true);
-    const existing = (llm.providers || {})[provider] || {};
-    const merged = { ...existing, ...patch };
-    if (merged.reasoning_effort === '') delete merged.reasoning_effort;
-    await mobileGatewayFetch('/api/settings/provider', {
-      method: 'POST',
-      body: JSON.stringify({ llm: { provider, providers: { [provider]: merged } } }),
+    control.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      control.setPointerCapture?.(event.pointerId);
+      control.classList.add('is-dragging');
+      updateFromPointer(event);
     });
-    await _loadLlm(true);
-    _toast('Reasoning updated', 'success');
-    if (!keepOpen) _closeSheet();
-    else {
-      const fresh = (_llmCache.providers || {})[provider] || {};
-      _renderReasoningBody(provider, fresh);
-    }
-  } catch (err) {
-    _toast(err?.message || 'Could not save reasoning', 'error');
+    control.addEventListener('pointermove', (event) => {
+      if (!control.classList.contains('is-dragging')) return;
+      updateFromPointer(event);
+    });
+    const finishDrag = (event) => {
+      if (!control.classList.contains('is-dragging')) return;
+      control.classList.remove('is-dragging');
+      control.releasePointerCapture?.(event.pointerId);
+      updateFromPointer(event, true);
+    };
+    control.addEventListener('pointerup', finishDrag);
+    control.addEventListener('pointercancel', finishDrag);
+    control.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
+      event.preventDefault();
+      const currentIndex = Number(control.getAttribute('aria-valuenow') || selectedIndex);
+      if (event.key === 'Home') commitIndex(0, true);
+      else if (event.key === 'End') commitIndex(options.length - 1, true);
+      else commitIndex(currentIndex + (event.key === 'ArrowRight' ? 1 : -1), true);
+    });
   }
 }
 
-// ── HOLD: provider → model switch sheet ──────────────────────────────────────
+function _queueReasoningSave(provider, patch, immediate = false) {
+  const existing = (_llmCache?.providers || {})[provider] || {};
+  const merged = { ...existing, ...patch };
+  if (merged.reasoning_effort === '') delete merged.reasoning_effort;
+  if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+  clearTimeout(_reasoningSaveTimer);
+  const commit = () => {
+    _reasoningSaveChain = _reasoningSaveChain.then(() => mobileGatewayFetch('/api/settings/provider', {
+      method: 'POST',
+      body: JSON.stringify({ llm: { provider, providers: { [provider]: merged } } }),
+    })).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
+  };
+  if (immediate) commit();
+  else _reasoningSaveTimer = setTimeout(commit, 180);
+}
+
+// ── Advanced: provider / model / intelligence controls ───────────────────────
 async function _openSwitchSheet() {
-  _openSheet('Switch model', '<div class="pm-msheet-loading">Loading providers…</div>');
+  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">›</span>', '<div class="pm-msheet-loading">Loading controls…</div>');
+  sheet?.classList.add('is-model-switch');
+  document.getElementById('pm-msheet-scrim')?.classList.add('is-model-switch');
+  sheet?.removeAttribute('style');
   await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
-  _renderProviderList();
+  _renderAdvancedSheet();
+}
+
+function _currentAdvancedState() {
+  const { provider, model } = _activeModel(_llmCache);
+  const cfg = (_llmCache?.providers || {})[provider] || {};
+  const options = _effortOptions(provider, cfg);
+  const effort = String(cfg.reasoning_effort || '').trim();
+  const effortValue = options && options.includes(effort) ? effort : (options ? options[0] : '');
+  return { provider, model: cfg.model || model, cfg, options, effortValue };
+}
+
+function _advancedRow(label, value, action, { disabled = false } = {}) {
+  return `
+    <button type="button" class="pm-advanced-row" data-action="${_esc(action)}" ${disabled ? 'disabled' : ''}>
+      <span class="pm-advanced-row-label">${_esc(label)}</span>
+      <span class="pm-advanced-row-value">${_esc(value)}</span>
+      <span class="pm-advanced-row-chev" aria-hidden="true">⌄</span>
+    </button>`;
+}
+
+function _renderAdvancedSheet() {
+  _setSheetTitle('Advanced <span class="pm-msheet-chev">›</span>');
+  const { provider, model, cfg, options, effortValue } = _currentAdvancedState();
+  const rows = [
+    _advancedRow('Provider', _providerLabel(provider), 'provider'),
+    _advancedRow('Model', prettifyModelName(model, provider), 'model'),
+    _advancedRow('Intelligence', options ? _effortLabel(effortValue, provider) : 'Default', 'intelligence', { disabled: !options }),
+  ];
+  if (provider === 'anthropic') {
+    rows.push(_advancedRow('Speed', cfg.fast_mode === true ? 'Fast' : 'Standard', 'speed'));
+  }
+  const body = _setSheetBody(`<div class="pm-advanced-panel">${rows.join('')}</div>`);
+  if (!body) return;
+  body.querySelector('[data-action="provider"]')?.addEventListener('click', _renderProviderList);
+  body.querySelector('[data-action="model"]')?.addEventListener('click', () => _renderModelList(provider));
+  body.querySelector('[data-action="intelligence"]')?.addEventListener('click', () => _renderEffortList(provider));
+  body.querySelector('[data-action="speed"]')?.addEventListener('click', () => {
+    const nextFastMode = cfg.fast_mode !== true;
+    _queueReasoningSave(provider, { fast_mode: nextFastMode }, true);
+    const merged = { ...cfg, fast_mode: nextFastMode };
+    if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+    _renderAdvancedSheet();
+  });
 }
 
 function _renderProviderList() {
-  _setSheetTitle('Switch model');
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Provider`);
   const { provider: activeProvider } = _activeModel(_llmCache);
   const ids = (_credentialedIds || []).slice();
+  if (activeProvider && !ids.includes(activeProvider)) ids.unshift(activeProvider);
   // Keep a stable, builtin-first ordering.
   const order = Object.keys(BUILTIN_LABELS);
   ids.sort((a, b) => {
@@ -461,6 +600,7 @@ function _renderProviderList() {
 
   if (!ids.length) {
     _setSheetBody('<div class="pm-msheet-empty">No providers with saved credentials. Add an API key or connect a provider in Settings.</div>');
+    document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
     return;
   }
 
@@ -471,15 +611,22 @@ function _renderProviderList() {
       <span class="pm-msheet-chev">›</span>
     </button>`).join('');
   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
   if (!body) return;
   body.querySelectorAll('[data-provider]').forEach((btn) => {
-    btn.addEventListener('click', () => _renderModelList(btn.getAttribute('data-provider')));
+    btn.addEventListener('click', async () => {
+      const nextProvider = btn.getAttribute('data-provider');
+      const existing = (_llmCache?.providers || {})[nextProvider] || {};
+      const nextModel = existing.model || _modelsForProvider(nextProvider)[0] || '';
+      if (nextModel) await _switchModel(nextProvider, nextModel, { keepOpen: true, returnToAdvanced: true });
+      else _renderModelList(nextProvider);
+    });
   });
 }
 
 function _renderModelList(provider) {
   const { provider: activeProvider, model: activeModel } = _activeModel(_llmCache);
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> ${_esc(_providerLabel(provider))}`);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Model`);
   const models = _modelsForProvider(provider);
 
   let rows = models.map((m) => {
@@ -490,114 +637,87 @@ function _renderModelList(provider) {
     </button>`;
   }).join('');
   if (!models.length) {
-    rows = '<div class="pm-msheet-empty">No known models — fetch them from Settings ▸ Models.</div>';
+    rows = '<div class="pm-msheet-empty">No known models. Fetch them from Settings > Models.</div>';
   }
   const body = _setSheetBody(`<div class="pm-msheet-rows pm-msheet-model-rows">${rows}</div>`);
-  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderProviderList);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
   if (!body) return;
   body.querySelectorAll('[data-model]').forEach((btn) => {
-    btn.addEventListener('click', () => _switchModel(provider, btn.getAttribute('data-model')));
+    btn.addEventListener('click', () => _switchModel(provider, btn.getAttribute('data-model'), { keepOpen: true, returnToAdvanced: true }));
   });
 }
 
-async function _switchModel(provider, model) {
+function _renderEffortList(provider) {
+  const cfg = (_llmCache?.providers || {})[provider] || {};
+  const options = _effortOptions(provider, cfg);
+  if (!options) {
+    _renderAdvancedSheet();
+    return;
+  }
+  const current = String(cfg.reasoning_effort || '').trim();
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Intelligence`);
+  const rows = options.map((value) => {
+    const isActive = value === current || (!value && !current);
+    return `<button type="button" class="pm-msheet-row" data-effort="${_esc(value)}">
+      <span class="pm-msheet-row-label">${_esc(_effortLabel(value, provider))}</span>
+      ${isActive ? '<span class="pm-msheet-check">✓</span>' : ''}
+    </button>`;
+  }).join('');
+  const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+  if (!body) return;
+  body.querySelectorAll('[data-effort]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const value = btn.getAttribute('data-effort') || '';
+      _queueReasoningSave(provider, { reasoning_effort: value }, true);
+      const merged = { ...cfg, reasoning_effort: value };
+      if (!value) delete merged.reasoning_effort;
+      if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+      _renderAdvancedSheet();
+    });
+  });
+}
+
+async function _switchModel(provider, model, { keepOpen = false, returnToAdvanced = false } = {}) {
   if (!provider || !model) return;
   try {
     await mobileGatewayFetch('/api/settings/model', {
       method: 'POST',
       body: JSON.stringify({ provider, model }),
     });
-    _llmCache = null; // force refresh
+    _llmCache = null;
+    const llm = await _loadLlm(true);
+    const nextCfg = (llm?.providers || {})[provider] || { model };
     _toast(`Model → ${prettifyModelName(model, provider)}`, 'success');
-    _closeSheet();
-    await refreshMobileModelBadge(true);
+    await refreshMobileModelBadge(false, { provider, model });
     try { window.dispatchEvent(new CustomEvent('pm-model-changed', { detail: { provider, model } })); } catch {}
+    if (keepOpen && returnToAdvanced) _renderAdvancedSheet();
+    else if (keepOpen) _renderReasoningBody(provider, nextCfg, true);
+    else _closeSheet();
   } catch (err) {
     _toast(err?.message || 'Could not switch model', 'error');
   }
 }
 
-// ── Press / long-press gesture wiring (delegated, attached once) ─────────────
+// ── Tap gesture wiring (delegated, attached once) ────────────────────────────
 let _wired = false;
-const LONG_PRESS_MS = 480;
-const MOVE_CANCEL_PX = 12;
 
 export function initMobileModelBadge() {
   if (_wired) return;
   _wired = true;
 
-  let pressTimer = null;
-  let longFired = false;
-  let startX = 0;
-  let startY = 0;
-  let pressBadge = null;
-  let suppressNextClick = false;
-
   const findBadge = (target) => (target?.closest ? target.closest('.pm-model-badge') : null);
-  const setSuppressNativeSelection = (on) => {
-    document.documentElement.classList.toggle('pm-model-badge-pressing', !!on);
-    document.body?.classList?.toggle('pm-model-badge-pressing', !!on);
-  };
 
-  document.addEventListener('pointerdown', (e) => {
-    const badge = findBadge(e.target);
-    if (!badge) return;
-    e.preventDefault();
-    longFired = false;
-    pressBadge = badge;
-    setSuppressNativeSelection(true);
-    startX = e.clientX; startY = e.clientY;
-    if (pressTimer) clearTimeout(pressTimer);
-    pressTimer = setTimeout(() => {
-      pressTimer = null;
-      longFired = true;
-      pmHaptic(18);
-      _openSwitchSheet();
-    }, LONG_PRESS_MS);
-  });
-
-  document.addEventListener('pointermove', (e) => {
-    if (!pressTimer) return;
-    if (Math.abs(e.clientX - startX) > MOVE_CANCEL_PX || Math.abs(e.clientY - startY) > MOVE_CANCEL_PX) {
-      clearTimeout(pressTimer); pressTimer = null; pressBadge = null; setSuppressNativeSelection(false);
-    }
-  });
-
-  const cancel = () => {
-    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-    pressBadge = null;
-    setSuppressNativeSelection(false);
-  };
-  document.addEventListener('pointerup', (e) => {
-    const badge = pressBadge;
-    const wasLong = longFired;
-    const moved = Math.abs(e.clientX - startX) > MOVE_CANCEL_PX || Math.abs(e.clientY - startY) > MOVE_CANCEL_PX;
-    cancel();
-    if (badge && !wasLong && !moved) {
-      suppressNextClick = true;
-      _openReasoningSheet();
-      setTimeout(() => { suppressNextClick = false; }, 350);
-    }
-  });
-  document.addEventListener('pointercancel', cancel);
-  document.addEventListener('selectstart', (e) => {
-    if (pressBadge || findBadge(e.target)) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  }, true);
-  document.addEventListener('contextmenu', (e) => {
-    if (pressBadge || findBadge(e.target)) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
+  document.addEventListener('contextmenu', (event) => {
+    if (!findBadge(event.target)) return;
+    event.preventDefault();
   }, true);
 
-  document.addEventListener('click', (e) => {
-    const badge = findBadge(e.target);
+  document.addEventListener('click', (event) => {
+    const badge = findBadge(event.target);
     if (!badge) return;
-    if (suppressNextClick) { e.preventDefault(); e.stopPropagation(); return; }
-    if (longFired) { e.preventDefault(); e.stopPropagation(); longFired = false; return; }
+    event.preventDefault();
+    event.stopPropagation();
     _openReasoningSheet();
   });
 

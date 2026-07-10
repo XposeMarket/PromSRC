@@ -18,6 +18,9 @@ Canonical mobile source files:
 
 
 Mobile canvas/file viewer fullscreen mode: `initMobileCanvasSheet()` in `web-ui/src/mobile/mobile-shell.js` owns the canvas sheet chrome and fullscreen state. The toolbar includes `#pm-canvas-fullscreen`; when active, `.pm-canvas-sheet.is-fullscreen` hides the handle, file tabs/header, filename, Interact/Inspect, Preview, and Save chrome, leaving only `#pm-canvas-fullscreen-exit` as a top-right safe-area-aware X overlay. Styles live in `web-ui/src/styles/mobile.css`; keep source changes synced with `npm run sync:web-ui`. [2026-06-30]
+
+Mobile reasoning/model control (2026-07-09): `web-ui/src/mobile/mobile-model-badge.js` renders the header-badge tap surface as a compact model-and-effort summary (`Model · Effort ›`) above a segmented range slider. Opening it uses a voice-mode-style bottom takeover that obscures roughly the lower third of the chat and centers the controls; reasoning-specific positioning bypasses the normal header-badge popover coordinates. Tapping the centered summary opens the existing credentialed provider → model picker; changing the range persists `reasoning_effort` through `/api/settings/provider` with haptic step feedback. The takeover variant is styled by `.pm-msheet-scrim.is-reasoning`, `.pm-msheet.is-reasoning`, and `.pm-reasoning-*` in `web-ui/src/styles/mobile.css`. Keep model/provider selection grouped in the dedicated picker rather than reintroducing inline settings selects or permanent Fast/Deep labels.
+
 Mobile canvas live HTML asset linking: workspace HTML files opened in the mobile canvas must iframe through the path-shaped route `/api/canvas/workspace/<workspace-relative-path>` instead of query-style `/api/canvas/inline?path=...`. This preserves the browser URL directory so relative assets like `assets/zombie.png`, local CSS, JS, audio, and images resolve from the HTML file's own subdirectory on mobile. Keep `/api/canvas/inline` for direct media/file previews and downloads. [2026-07-01]
 Mobile background visual rule: `body.pm-mobile-active` and `.pm-app` must use flat theme background colors only. Do not add page-level radial/conic/linear background-image glow layers or pseudo-element glow overlays for any theme/skin; component-local shadows are okay, but the app backdrop itself should have no glow. [2026-06-29]
 
@@ -149,6 +152,14 @@ Mobile sends normal worker turns through `POST /api/chat` with SSE. `mobile-api.
 - attachments and caller context when present
 
 `chat.router.ts` normalizes turn origin. A session ID beginning `mobile_` or an explicit `origin.channel='mobile'` becomes channel `mobile`, surface `mobile_app`, device `phone`. The injected origin context tells the model that mobile is only the contact channel; local desktop/browser/files/tools can still be available.
+
+Mobile thinking / live tool-stream policy (desktop parity, 2026-07-08):
+
+- Desktop `ChatPage.js` buffers raw `thinking_delta` (`source: thinking`) and only live-appends when `source === 'reasoning_summary'`; full `thinking` / `agent_thought` become clean think rows; burst flushes into process log on non-thinking events.
+- Mobile now matches that policy in `mobile-pages.js`: helpers `_flushMobilePendingThinkingBurst`, `_handleMobileThinkingDelta`, `_handleMobileCleanThought`, `_maybeFlushMobileThinkingBeforeEvent`.
+- Live paths: `applyMobileChatStreamEvent`, `applyMobileSideStreamEvent`, voice `onThinking`/`onThought`, and `_applyMobileAgentStreamEvent`.
+- `mobile-api.js` passes `onThinking(text, { source })` and emits `onThought` for complete thought blocks.
+- Do not dump every raw thinking token into `liveTraceEntries`; keep tools + clean thoughts only.
 
 Mobile chat attachment path:
 

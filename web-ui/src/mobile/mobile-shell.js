@@ -419,6 +419,19 @@ function _applyMobileTheme(themeId) {
   document.documentElement.setAttribute('data-skin', theme.id);
   try { localStorage.setItem(PM_THEME_KEY, theme.id); } catch {}
 
+  // Safari paints its translucent top chrome from the document/theme color,
+  // not from the nested .pm-app background. Keep that native-composited area
+  // synchronized with the active mobile skin.
+  try {
+    const mobileBg = getComputedStyle(document.documentElement).getPropertyValue('--pm-bg').trim();
+    if (mobileBg) {
+      document.documentElement.style.backgroundColor = mobileBg;
+      document.body.style.backgroundColor = mobileBg;
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      themeMeta?.setAttribute('content', mobileBg);
+    }
+  } catch {}
+
   const desktopToggle = document.getElementById('theme-toggle');
   if (desktopToggle) {
     desktopToggle.setAttribute('data-theme-state', resolved);

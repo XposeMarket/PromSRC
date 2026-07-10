@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
 import { execSync, spawn, type ChildProcess } from 'child_process';
 import readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
@@ -92,6 +93,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 
 const GATEWAY_STARTUP_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_STARTUP_TIMEOUT_MS, 180_000);
 const GATEWAY_START_ATTEMPTS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_START_ATTEMPTS, 3);
+const GATEWAY_BUSY_RESTART_GRACE_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_BUSY_GRACE_MS, 45_000);
 
 function gatewaySupervisorEnabled(): boolean {
   return process.env.PROMETHEUS_SUPERVISOR === '1'
@@ -126,15 +128,34 @@ function killGatewayChild(child: ChildProcess): void {
 }
 
 async function checkGatewayHealth(timeoutMs = 8000): Promise<boolean> {
-  try {
-    const res = await fetch('http://127.0.0.1:18789/api/health', {
-      signal: AbortSignal.timeout(timeoutMs),
-      cache: 'no-store',
-    } as any);
-    return res.ok;
-  } catch {
-    return false;
-  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    const req = http.request({
+      host: '127.0.0.1',
+      port: 18789,
+      path: '/api/health',
+      method: 'GET',
+      agent: false,
+      headers: { Connection: 'close' },
+      timeout: timeoutMs,
+    }, (res) => {
+      const ok = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
+      res.resume();
+      res.once('end', () => done(ok));
+      res.once('close', () => done(ok));
+    });
+    req.once('timeout', () => {
+      req.destroy();
+      done(false);
+    });
+    req.once('error', () => done(false));
+    req.end();
+  });
 }
 
 interface GatewayRuntimeStatus {
@@ -142,6 +163,7 @@ interface GatewayRuntimeStatus {
   timestamp?: number;
   reason?: string;
   modelBusy?: boolean;
+  modelBusyAgeMs?: number;
   lastMainSessionId?: string;
 }
 
@@ -159,8 +181,19 @@ function shouldDeferGatewayRestart(status: GatewayRuntimeStatus | null): boolean
   if (!status || !Number.isFinite(Number(status.timestamp))) return false;
   const ageMs = Date.now() - Number(status.timestamp);
   if (ageMs < 20_000) return true;
-  if (status.modelBusy && ageMs < 15 * 60_000) return true;
+  const busyAgeMs = Number.isFinite(Number(status.modelBusyAgeMs))
+    ? Number(status.modelBusyAgeMs)
+    : ageMs;
+  if (status.modelBusy && busyAgeMs < GATEWAY_BUSY_RESTART_GRACE_MS) return true;
   return false;
+}
+
+function hasLiveGatewayHeartbeat(status: GatewayRuntimeStatus | null, maxAgeMs = 20_000): boolean {
+  if (!status || !Number.isFinite(Number(status.timestamp))) return false;
+  if (Date.now() - Number(status.timestamp) > maxAgeMs) return false;
+  const owners = getGatewayPortOwnerPids();
+  const statusPid = Number(status.pid);
+  return owners.length > 0 && (!Number.isFinite(statusPid) || owners.includes(statusPid));
 }
 
 function getGatewayPortOwnerPids(port = 18789): number[] {
@@ -231,6 +264,8 @@ function killPidTree(pid: number): void {
 
 async function clearUnhealthyGatewayPort(exemptPids: number[] = []): Promise<void> {
   if (await checkGatewayHealth(1200)) return;
+  const runtimeStatus = readGatewayRuntimeStatus();
+  if (hasLiveGatewayHeartbeat(runtimeStatus)) return;
   const exempt = new Set([process.pid, ...exemptPids.filter(pid => Number.isFinite(pid))]);
   const owners = getGatewayPortOwnerPids().filter(pid => !exempt.has(pid));
   if (owners.length === 0) return;
@@ -245,6 +280,7 @@ async function clearUnhealthyGatewayPort(exemptPids: number[] = []): Promise<voi
 
 async function ensureGatewayForCli(): Promise<boolean> {
   if (await checkGatewayHealth(1000)) return true;
+  if (hasLiveGatewayHeartbeat(readGatewayRuntimeStatus())) return true;
   const entry = process.argv[1];
   const child = spawn(process.execPath, [...process.execArgv, entry, 'gateway', 'start'], {
     cwd: process.cwd(),
@@ -826,6 +862,12 @@ gateway
           return;
         }
       } catch {}
+      const runtimeStatus = readGatewayRuntimeStatus();
+      if (hasLiveGatewayHeartbeat(runtimeStatus, 30_000)) {
+        const ageMs = runtimeStatus?.timestamp ? Date.now() - Number(runtimeStatus.timestamp) : -1;
+        console.log(`Gateway is already running at http://127.0.0.1:18789 (runtime heartbeat ${Math.max(0, Math.round(ageMs / 1000))}s ago)`);
+        return;
+      }
     }
 
     // ── Collect any cached update notice ─────────────────────────────────────

@@ -29,25 +29,106 @@ function readPersistedLastMainSessionId(): string {
 let _modelBusyCount = 0;
 let _lastMainSessionId = readPersistedLastMainSessionId();
 let _runtimeHeartbeatTimer: NodeJS.Timeout | null = null;
+let _modelBusySince = 0;
+let _lastHeartbeatAt = 0;
+let _maxHeartbeatDriftMs = 0;
+let _lastHeartbeatDriftEventAt = 0;
+let _lastHeartbeatDriftEventMs = 0;
+let _lastRestartableHeartbeatDriftAt = 0;
+let _lastRestartableHeartbeatDriftMs = 0;
+let _eventLoopStallRestartScheduled = false;
+
+function parseNonNegativeIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+const EVENT_LOOP_STALL_RESTART_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RESTART_MS', 45_000);
+const EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RESTART_MIN_UPTIME_MS', 120_000);
+const EVENT_LOOP_STALL_AUTORESTART_ENABLED =
+  process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART === '1'
+  || process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART === 'true';
+
+function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: number): void {
+  if (!EVENT_LOOP_STALL_AUTORESTART_ENABLED) return;
+  if (EVENT_LOOP_STALL_RESTART_MS <= 0) return;
+  if (heartbeatDriftMs < EVENT_LOOP_STALL_RESTART_MS) return;
+  if (process.uptime() * 1000 < EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS) return;
+  if (_eventLoopStallRestartScheduled) return;
+  _eventLoopStallRestartScheduled = true;
+
+  const seconds = Math.round(heartbeatDriftMs / 1000);
+  console.error(`[GatewayRuntime] Event loop stalled for ${seconds}s. Scheduling gateway recovery restart...`);
+  const timer = setTimeout(async () => {
+    try {
+      const { gracefulRestart } = await import('../lifecycle.js');
+      await gracefulRestart({
+        reason: 'repair',
+        timestamp: now,
+        previousSessionId: _lastMainSessionId,
+        originChannel: _lastMainSessionId.startsWith('mobile_') || _lastMainSessionId === 'mobile_default' ? 'mobile' : 'web',
+        title: 'Gateway event-loop stall recovery',
+        summary: `Gateway event loop stopped responding for ${seconds}s, so Prometheus restarted itself to recover mobile/web connectivity.`,
+      });
+    } catch (err: any) {
+      console.error('[GatewayRuntime] Event-loop stall recovery restart failed:', err?.message || err);
+      process.exit(1);
+    }
+  }, 250);
+  if (typeof (timer as any).unref === 'function') (timer as any).unref();
+}
 
 function writeRuntimeStatus(reason = 'heartbeat'): void {
   try {
+    const now = Date.now();
+    const expectedIntervalMs = 5000;
+    const heartbeatDriftMs = _lastHeartbeatAt > 0
+      ? Math.max(0, now - _lastHeartbeatAt - expectedIntervalMs)
+      : 0;
+    _lastHeartbeatAt = now;
+    _maxHeartbeatDriftMs = Math.max(_maxHeartbeatDriftMs, heartbeatDriftMs);
+    if (heartbeatDriftMs >= 1000) {
+      _lastHeartbeatDriftEventAt = now;
+      _lastHeartbeatDriftEventMs = heartbeatDriftMs;
+    }
+    if (EVENT_LOOP_STALL_RESTART_MS > 0 && heartbeatDriftMs >= EVENT_LOOP_STALL_RESTART_MS) {
+      _lastRestartableHeartbeatDriftAt = now;
+      _lastRestartableHeartbeatDriftMs = heartbeatDriftMs;
+    }
     const configDir = getConfig().getConfigDir();
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
       pid: process.pid,
-      timestamp: Date.now(),
+      timestamp: now,
       reason,
       modelBusy: _modelBusyCount > 0,
       modelBusyCount: _modelBusyCount,
+      modelBusySince: _modelBusySince || undefined,
+      modelBusyAgeMs: _modelBusyCount > 0 && _modelBusySince > 0 ? now - _modelBusySince : 0,
       lastMainSessionId: _lastMainSessionId,
+      heartbeatDriftMs,
+      maxHeartbeatDriftMs: _maxHeartbeatDriftMs,
+      lastHeartbeatDriftAt: _lastHeartbeatDriftEventAt || undefined,
+      lastHeartbeatDriftMs: _lastHeartbeatDriftEventMs || 0,
+      lastRestartableHeartbeatDriftAt: _lastRestartableHeartbeatDriftAt || undefined,
+      lastRestartableHeartbeatDriftMs: _lastRestartableHeartbeatDriftMs || 0,
+      eventLoopStallRestartThresholdMs: EVENT_LOOP_STALL_RESTART_MS,
+      eventLoopStallAutoRestartEnabled: EVENT_LOOP_STALL_AUTORESTART_ENABLED,
+      eventLoopStallRestartScheduled: _eventLoopStallRestartScheduled,
     }), 'utf-8');
+    maybeScheduleEventLoopStallRecovery(heartbeatDriftMs, now);
   } catch {}
 }
 
 export function isModelBusy(): boolean { return _modelBusyCount > 0; }
 export function setModelBusy(v: boolean): void {
+  const wasBusy = _modelBusyCount > 0;
   _modelBusyCount = v ? _modelBusyCount + 1 : Math.max(0, _modelBusyCount - 1);
+  const isBusyNow = _modelBusyCount > 0;
+  if (!wasBusy && isBusyNow) _modelBusySince = Date.now();
+  if (!isBusyNow) _modelBusySince = 0;
   writeRuntimeStatus(_modelBusyCount > 0 ? 'model_busy' : 'model_idle');
 }
 export function getLastMainSessionId(): string { return _lastMainSessionId; }

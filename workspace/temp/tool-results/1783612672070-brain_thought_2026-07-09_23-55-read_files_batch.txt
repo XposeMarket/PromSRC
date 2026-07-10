@@ -1,0 +1,645 @@
+benchmarks/agent-comparison/reports/comparison-2026-07-09.md (102 lines) [window 1-102]:
+1: # Prometheus vs Hermes benchmark — 2026-07-09
+2: 
+3: ## Summary
+4: 
+5: Continued v1 benchmark after adding Hermes internal telemetry. Hermes now emits internal JSONL events for model calls and tool calls while the wrapper records outer wall-clock, stdout/stderr, exit code, and pass/fail.
+6: 
+7: ## Current results
+8: 
+9: | Benchmark | Prometheus status | Prometheus wall | Hermes status | Hermes wall | Hermes model calls | Hermes model ms | Hermes tool calls | Hermes tool ms | Hermes tool errors | Hermes tokens in/out | Notes |
+10: |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+11: | `file_ops_basic_v1` | PASS | n/a* | PASS | 38.671s | 5 | 20.575s | 6 | 8.842s | 0 | 154,690 / 376 | Clean pass with internal telemetry. |
+12: | `shell_ops_basic_v1` | PASS | 2.075s | FAIL** | 60.122s | 11 | 40.983s | 10 | 5.545s | 1 | 345,121 / 703 | Hermes performed the shell work and wrote the report, but did not emit the required final pass line. |
+13: | `browser_external_v1` | PASS | 7.109s | PASS | 20.276s | 2 | 7.011s | 1 | 2.424s | 0 | 61,040 / 71 | Hermes browser lane is working. |
+14: | `local_web_debug_v1` | pending native export | pending | FAIL** | 171.949s | 25 | 138.047s | 25 | 19.888s | 1 | 919,454 / 2,196 | Hermes created the buggy page, served/opened it, diagnosed and patched it, wrote the report, but did not emit the required final pass line. |
+15: | `desktop_basic_v1` | pending native export | pending | PASS | 67.691s | 7 | 47.743s | 8 | 6.819s | 0 | 242,118 / 1,541 | Hermes found a desktop path via Windows APIs/PowerShell rather than a first-class desktop tool. |
+16: 
+17: \* Prometheus file lane was executed as native workspace calls inside the chat turn before the wrapper existed; current artifact has pass/fail but not an outer harness stopwatch.
+18: 
+19: \** These are strict benchmark failures because the final answer contract was not satisfied. The artifacts show substantial task completion, so they should be reviewed separately as “work completed / final-format failed.”
+20: 
+21: 
+22: ## Strict rerun results
+23: 
+24: Reran the two strict-failed Hermes lanes with an added final-output suppression guard.
+25: 
+26: | Benchmark | Status | Wall | Model calls | Model ms | Tool calls | Tool ms | Tool errors | Tokens in/out | Result |
+27: |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+28: | `shell_ops_basic_v1_strict_rerun` | PASS | 28.228s | 4 | 13.097s | 3 | 4.520s | 0 | 123,351 / 284 | Strong improvement; original failure was mostly final-contract/diff leakage. |
+29: | `local_web_debug_v1_strict_rerun` | FAIL* | 154.095s | 22 | 125.090s | 21 | 17.168s | 0 | 802,939 / 1,988 | Work appears completed again, but Hermes still leaked review diff output instead of the exact required pass line. |
+30: 
+31: \* `local_web_debug_v1` remains a strict scorer failure even though Hermes diagnosed and patched the page. The stdout shows review diffs for `index.html` and `report.md`; this confirms the remaining issue is Hermes/Codex CLI final-output control rather than tool capability.
+32: 
+33: ## Post-fix rerun results
+34: 
+35: Applied a minimal Hermes CLI fix to suppress inline edit diff printing during benchmark runs:
+36: 
+37: - `oss agents/hermes-agent/cli.py` now respects `HERMES_SUPPRESS_INLINE_DIFFS=1` before rendering file-edit review diffs.
+38: - `benchmarks/agent-comparison/rerun_failed_hermes_strict.py` sets that env var for strict reruns.
+39: - Compile check passed: `python -m py_compile cli.py agent/benchmark_telemetry.py agent/tool_executor.py agent/codex_runtime.py`.
+40: 
+41: | Benchmark | Status | Wall | Model calls | Model ms | Tool calls | Tool ms | Tool errors | Tokens in/out | Result |
+42: |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+43: | `shell_ops_basic_v1_strict_rerun` | PASS | 24.038s | 3 | 12.763s | 2 | 2.786s | 0 | 92,293 / 231 | Fixed. Exact final pass line emitted. |
+44: | `local_web_debug_v1_strict_rerun` | FAIL* | 129.089s | 24 | 98.435s | 29 | 16.334s | 0 | 938,289 / 2,118 | Inline diffs fixed/suppressed, but Hermes now finishes with only `session_id` and no final answer line. |
+45: | `local_web_debug_v1_strict_rerun_noquiet` | FAIL* | 146.326s | 23 | 111.094s | 29 | 19.485s | 0 | 871,913 / 2,503 | Non-quiet retry still emitted only `session_id`, so the remaining bug is final-response emission, not diff leakage. |
+46: 
+47: \* Local-web task artifacts show the page was created and patched correctly under Hermes' working directory (`oss agents/hermes-agent/benchmarks/agent-comparison/fixtures/local_web_debug_v1/`), including final verification text in `report.md`. Strict scorer still fails because the Hermes CLI does not emit the requested final answer.
+48: 
+49: 
+50: ## Hermes internal telemetry patch
+51: 
+52: Hermes telemetry is opt-in via:
+53: 
+54: ```powershell
+55: $env:HERMES_TELEMETRY_PATH = ".../events.jsonl"
+56: $env:HERMES_BENCHMARK_RUN_ID = "..."
+57: $env:HERMES_BENCHMARK_ID = "..."
+58: ```
+59: 
+60: Patched files:
+61: 
+62: - `oss agents/hermes-agent/agent/benchmark_telemetry.py`
+63: - `oss agents/hermes-agent/agent/tool_executor.py`
+64: - `oss agents/hermes-agent/agent/codex_runtime.py`
+65: 
+66: The runner used for the current Hermes pass is:
+67: 
+68: - `benchmarks/agent-comparison/run_hermes_bench.py`
+69: 
+70: The earlier PowerShell wrapper remains as a rough draft:
+71: 
+72: - `benchmarks/agent-comparison/run-hermes-bench.ps1`
+73: 
+74: ## Artifacts
+75: 
+76: Hermes summaries:
+77: 
+78: - `benchmarks/agent-comparison/runs/2026-07-09/hermes/file_ops_basic_v1/summary.json`
+79: - `benchmarks/agent-comparison/runs/2026-07-09/hermes/shell_ops_basic_v1/summary.json`
+80: - `benchmarks/agent-comparison/runs/2026-07-09/hermes/browser_external_v1/summary.json`
+81: - `benchmarks/agent-comparison/runs/2026-07-09/hermes/local_web_debug_v1/summary.json`
+82: - `benchmarks/agent-comparison/runs/2026-07-09/hermes/desktop_basic_v1/summary.json`
+83: 
+84: Prometheus summaries from the earlier manual/native pass:
+85: 
+86: - `benchmarks/agent-comparison/runs/2026-07-09/prometheus/file_ops_basic_v1/summary.json`
+87: - `benchmarks/agent-comparison/runs/2026-07-09/prometheus/shell_ops_basic_v1/summary.json`
+88: - `benchmarks/agent-comparison/runs/2026-07-09/prometheus/browser_external_v1/summary.json`
+89: 
+90: ## Read so far
+91: 
+92: - Hermes internal telemetry is working and useful. We can now separate outer wall time from model latency and tool latency.
+93: - Hermes is spending a lot of tokens per benchmark because each single run carries a large injected context/config load. `local_web_debug_v1` consumed ~919k input tokens across 25 model calls.
+94: - Hermes final-answer compliance is currently a benchmark weakness. It completed much of the actual shell/local-web work but surfaced diffs/review output instead of the required exact final line.
+95: - Prometheus remains much faster on the first comparable browser/shell lanes, but Prometheus needs a proper export harness for local-web and desktop if we want the report to be fully normalized.
+96: 
+97: ## Next steps
+98: 
+99: 1. Investigate Hermes/Codex CLI diff leakage on `local_web_debug_v1`; prompt-level guard improved shell but did not suppress local-web review diffs.
+100: 2. Export Prometheus-native telemetry for `local_web_debug_v1` and `desktop_basic_v1` into the same summary schema.
+101: 3. Add derived metrics: orchestration overhead = wall ms - model ms - tool ms, model-call count per pass, tokens per successful benchmark, and final-format compliance.
+102: 
+
+benchmarks/agent-comparison/run_hermes_bench.py (69 lines) [window 1-69]:
+1: import json, os, subprocess, sys, time
+2: from pathlib import Path
+3: 
+4: run_date = sys.argv[1] if len(sys.argv) > 1 else '2026-07-09'
+5: root = Path(__file__).resolve().parents[2]
+6: bench_root = root / 'benchmarks' / 'agent-comparison'
+7: hermes_dir = root / 'oss agents' / 'hermes-agent'
+8: ids = ['file_ops_basic_v1','shell_ops_basic_v1','browser_external_v1','local_web_debug_v1','desktop_basic_v1']
+9: pass_re = {
+10:     'file_ops_basic_v1': 'FILE_OPS_BASIC_V1_PASS',
+11:     'shell_ops_basic_v1': 'SHELL_OPS_BASIC_V1_PASS',
+12:     'browser_external_v1': 'BROWSER_EXTERNAL_V1_PASS',
+13:     'local_web_debug_v1': 'LOCAL_WEB_DEBUG_V1_PASS',
+14:     'desktop_basic_v1': 'DESKTOP_BASIC_V1_PASS',
+15: }
+16: results = []
+17: for bid in ids:
+18:     prompt = (bench_root / 'prompts' / f'{bid}.md').read_text(encoding='utf-8')
+19:     out_dir = bench_root / 'runs' / run_date / 'hermes' / bid
+20:     out_dir.mkdir(parents=True, exist_ok=True)
+21:     for name in ['events.jsonl','summary.json','stdout.txt','stderr.txt']:
+22:         try: (out_dir / name).unlink()
+23:         except FileNotFoundError: pass
+24:     env = os.environ.copy()
+25:     env['HERMES_TELEMETRY_PATH'] = str(Path('..') / '..' / 'benchmarks' / 'agent-comparison' / 'runs' / run_date / 'hermes' / bid / 'events.jsonl')
+26:     env['HERMES_BENCHMARK_RUN_ID'] = f'hermes_{run_date}_{bid}'
+27:     env['HERMES_BENCHMARK_ID'] = bid
+28:     cmd = [sys.executable, '-m', 'uv', 'run', 'hermes', 'chat', '--provider', 'openai-codex', '-m', 'gpt-5.5', '-Q', '-q', prompt]
+29:     start = time.perf_counter()
+30:     proc = subprocess.run(cmd, cwd=str(hermes_dir), env=env, text=True, encoding='utf-8', errors='replace', capture_output=True)
+31:     wall_ms = int((time.perf_counter() - start) * 1000)
+32:     stdout = proc.stdout or ''
+33:     stderr = proc.stderr or ''
+34:     (out_dir / 'stdout.txt').write_text(stdout, encoding='utf-8')
+35:     (out_dir / 'stderr.txt').write_text(stderr, encoding='utf-8')
+36:     text = (stdout + stderr).strip()
+37:     status = 'pass' if proc.returncode == 0 and pass_re[bid] in text else ('blocked' if 'BLOCKED' in text else 'fail')
+38:     events_path = out_dir / 'events.jsonl'
+39:     model_calls = model_ms = tool_calls = tool_ms = tool_errors = tokens_in = tokens_out = 0
+40:     if events_path.exists():
+41:         for line in events_path.read_text(encoding='utf-8', errors='replace').splitlines():
+42:             if not line.strip(): continue
+43:             try: e = json.loads(line)
+44:             except Exception: continue
+45:             if e.get('type') == 'tool_call_end':
+46:                 tool_calls += 1
+47:                 tool_ms += int(e.get('latency_ms') or 0)
+48:                 if e.get('status') != 'ok': tool_errors += 1
+49:             elif e.get('type') == 'model_call_end':
+50:                 model_calls += 1
+51:                 model_ms += int(e.get('latency_ms') or 0)
+52:                 tokens_in += int(e.get('input_tokens') or 0)
+53:                 tokens_out += int(e.get('output_tokens') or 0)
+54:     summary = {
+55:         'run_id': f'hermes_{run_date}_{bid}', 'agent': 'hermes', 'benchmark_id': bid,
+56:         'measurement_mode': 'black_box_cli_with_internal_telemetry', 'status': status,
+57:         'blocked_reason': None, 'total_wall_ms': wall_ms, 'exit_code': proc.returncode,
+58:         'model_calls': model_calls, 'model_latency_ms': model_ms,
+59:         'tool_calls': tool_calls, 'tool_latency_ms': tool_ms, 'tool_errors': tool_errors,
+60:         'retries': None, 'tokens_input': tokens_in or None, 'tokens_output': tokens_out or None,
+61:         'estimated_cost_usd': None,
+62:         'artifacts': [f'benchmarks/agent-comparison/runs/{run_date}/hermes/{bid}/stdout.txt', f'benchmarks/agent-comparison/runs/{run_date}/hermes/{bid}/stderr.txt', f'benchmarks/agent-comparison/runs/{run_date}/hermes/{bid}/events.jsonl'],
+63:         'final_output': text[-4000:],
+64:         'notes': 'Hermes run via Python/PowerShell wrapper; internal telemetry enabled by HERMES_TELEMETRY_PATH.'
+65:     }
+66:     (out_dir / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+67:     results.append({k: summary[k] for k in ['benchmark_id','status','total_wall_ms','exit_code','model_calls','model_latency_ms','tool_calls','tool_latency_ms','tool_errors','tokens_input','tokens_output']})
+68: print(json.dumps(results, indent=2))
+69: 
+
+oss agents/hermes-agent/cli.py (15227 lines) [window 1-220, truncated]:
+1: #!/usr/bin/env python3
+2: """
+3: Hermes Agent CLI - Interactive Terminal Interface
+4: 
+5: A beautiful command-line interface for the Hermes Agent, inspired by Claude Code.
+6: Features ASCII art branding, interactive REPL, toolset selection, and rich formatting.
+7: 
+8: Usage:
+9:     python cli.py                          # Start interactive mode with all tools
+10:     python cli.py --toolsets web,terminal  # Start with specific toolsets
+11:     python cli.py --skills hermes-agent-dev,github-auth
+12:     python cli.py --list-tools             # List available tools and exit
+13: """
+14: 
+15: # IMPORTANT: hermes_bootstrap must be the very first import — UTF-8 stdio
+16: # on Windows.  No-op on POSIX.  See hermes_bootstrap.py for full rationale.
+17: try:
+18:     import hermes_bootstrap  # noqa: F401
+19: except ModuleNotFoundError:
+20:     # Graceful fallback when hermes_bootstrap isn't registered in the venv
+21:     # yet — happens during partial ``hermes update`` where git-reset landed
+22:     # new code but ``uv pip install -e .`` didn't finish.  Missing bootstrap
+23:     # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
+24:     pass
+25: 
+26: import logging
+27: import os
+28: import shutil
+29: import sys
+30: import json
+31: import re
+32: import concurrent.futures
+33: import base64
+34: import atexit
+35: import errno
+36: import tempfile
+37: import time
+38: import uuid
+39: import textwrap
+40: from collections import deque
+41: from urllib.parse import unquote, urlparse
+42: from contextlib import contextmanager
+43: from pathlib import Path
+44: from datetime import datetime
+45: from typing import List, Dict, Any, Optional
+46: 
+47: logger = logging.getLogger(__name__)
+48: 
+49: # Suppress startup messages for clean CLI experience
+50: os.environ["HERMES_QUIET"] = "1"  # Our own modules
+51: 
+52: import yaml
+53: 
+54: from hermes_cli.fallback_config import get_fallback_chain
+55: from hermes_cli.cli_agent_setup_mixin import CLIAgentSetupMixin
+56: from hermes_cli.cli_commands_mixin import CLICommandsMixin
+57: 
+58: # prompt_toolkit for fixed input area TUI
+59: from prompt_toolkit.history import FileHistory
+60: from prompt_toolkit.styles import Style as PTStyle
+61: from prompt_toolkit.patch_stdout import patch_stdout
+62: from prompt_toolkit.application import Application
+63: from prompt_toolkit.layout import Layout, HSplit, Window, FormattedTextControl, ConditionalContainer
+64: from prompt_toolkit.layout.processors import Processor, Transformation, PasswordProcessor, ConditionalProcessor
+65: from prompt_toolkit.filters import Condition
+66: from prompt_toolkit.layout.dimension import Dimension
+67: from prompt_toolkit.layout.menus import CompletionsMenu
+68: from prompt_toolkit.widgets import TextArea
+69: from prompt_toolkit.key_binding import KeyBindings
+70: from prompt_toolkit import print_formatted_text as _pt_print
+71: from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
+72: try:
+73:     from prompt_toolkit.cursor_shapes import CursorShape
+74:     _STEADY_CURSOR = CursorShape.BLOCK  # Non-blinking block cursor
+75: except (ImportError, AttributeError):
+76:     _STEADY_CURSOR = None
+77: 
+78: try:
+79:     from hermes_cli.pt_input_extras import (
+80:         install_ctrl_enter_alias,
+81:         install_ignored_terminal_sequences,
+82:         install_shift_enter_alias,
+83:     )
+84:     install_shift_enter_alias()
+85:     install_ctrl_enter_alias()
+86:     install_ignored_terminal_sequences()
+87:     del install_shift_enter_alias, install_ctrl_enter_alias, install_ignored_terminal_sequences
+88: except Exception:
+89:     pass
+90: import threading
+91: import queue
+92: 
+93: def CanonicalUsage(*args, **kwargs):
+94:     from agent.usage_pricing import CanonicalUsage as _CanonicalUsage
+95: 
+96:     return _CanonicalUsage(*args, **kwargs)
+97: 
+98: 
+99: def estimate_usage_cost(*args, **kwargs):
+100:     from agent.usage_pricing import estimate_usage_cost as _estimate_usage_cost
+101: 
+102:     return _estimate_usage_cost(*args, **kwargs)
+103: 
+104: 
+105: def format_duration_compact(*args, **kwargs):
+106:     seconds = float(args[0] if args else kwargs.get("seconds", 0.0))
+107:     if seconds < 60:
+108:         return f"{seconds:.0f}s"
+109:     minutes = seconds / 60
+110:     if minutes < 60:
+111:         return f"{minutes:.0f}m"
+112:     hours = minutes / 60
+113:     if hours < 24:
+114:         remaining_min = int(minutes % 60)
+115:         return f"{int(hours)}h {remaining_min}m" if remaining_min else f"{int(hours)}h"
+116:     days = hours / 24
+117:     return f"{days:.1f}d"
+118: 
+119: 
+120: def format_token_count_compact(*args, **kwargs):
+121:     value = int(args[0] if args else kwargs.get("value", 0))
+122:     abs_value = abs(value)
+123:     if abs_value < 1_000:
+124:         return str(value)
+125: 
+126:     sign = "-" if value < 0 else ""
+127:     units = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K"))
+128:     for threshold, suffix in units:
+129:         if abs_value >= threshold:
+130:             scaled = abs_value / threshold
+131:             if scaled < 10:
+132:                 text = f"{scaled:.2f}"
+133:             elif scaled < 100:
+134:                 text = f"{scaled:.1f}"
+135:             else:
+136:                 text = f"{scaled:.0f}"
+137:             if "." in text:
+138:                 text = text.rstrip("0").rstrip(".")
+139:             return f"{sign}{text}{suffix}"
+140: 
+141:     return f"{value:,}"
+142: 
+143: 
+144: def is_table_divider(*args, **kwargs):
+145:     from agent.markdown_tables import is_table_divider as _is_table_divider
+146: 
+147:     return _is_table_divider(*args, **kwargs)
+148: 
+149: 
+150: def looks_like_table_row(*args, **kwargs):
+151:     from agent.markdown_tables import looks_like_table_row as _looks_like_table_row
+152: 
+153:     return _looks_like_table_row(*args, **kwargs)
+154: 
+155: 
+156: def realign_markdown_tables(*args, **kwargs):
+157:     from agent.markdown_tables import realign_markdown_tables as _realign_markdown_tables
+158: 
+159:     return _realign_markdown_tables(*args, **kwargs)
+160: # NOTE: `from agent.account_usage import ...` is deliberately NOT at module
+161: # top — it transitively pulls the OpenAI SDK chain (~230 ms cold) and is only
+162: # needed when the user runs `/limits`. Lazy-imported inside the handler below.
+163: from hermes_cli.banner import _format_context_length, format_banner_version_label
+164: 
+165: _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+166: 
+167: 
+168: # Load .env from ~/.hermes/.env first, then project root as dev fallback.
+169: # User-managed env files should override stale shell exports on restart.
+170: from hermes_constants import get_hermes_home, display_hermes_home
+171: from hermes_cli.browser_connect import (
+172:     DEFAULT_BROWSER_CDP_URL,
+173:     is_browser_debug_ready,
+174:     manual_chrome_debug_command,
+175:     try_launch_chrome_debug,
+176: )
+177: from hermes_cli.env_loader import load_hermes_dotenv
+178: from utils import base_url_host_matches
+179: 
+180: _hermes_home = get_hermes_home()
+181: _project_env = Path(__file__).parent / '.env'
+182: load_hermes_dotenv(hermes_home=_hermes_home, project_env=_project_env)
+183: 
+184: 
+185: _REASONING_TAGS = (
+186:     "REASONING_SCRATCHPAD",
+187:     "think",
+188:     "thinking",
+189:     "reasoning",
+190:     "thought",
+191: )
+192: 
+193: 
+194: def _strip_reasoning_tags(text: str) -> str:
+195:     """Remove reasoning/thinking blocks from displayed text.
+196: 
+197:     Handles every case:
+198:       * Closed pairs ``<tag>…</tag>`` (case-insensitive, multi-line).
+199:       * Unterminated open tags that run to end-of-text (e.g. truncated
+200:         generations on NIM/MiniMax where the close tag is dropped).
+201:       * Stray orphan close tags (``stuff</think>answer``) left behind by
+202:         partial-content dumps.
+203: 
+204:     Covers the variants emitted by reasoning models today: ``<think>``,
+205:     ``<thinking>``, ``<reasoning>``, ``<REASONING_SCRATCHPAD>``, and
+206:     ``<thought>`` (Gemma 4).  Must stay in sync with
+207:     ``run_agent.py::_strip_think_blocks`` and the stream consumer's
+208:     ``_OPEN_THINK_TAGS`` / ``_CLOSE_THINK_TAGS`` tuples.
+209: 
+210:     Also strips tool-call XML blocks some open models leak into visible
+211:     content (``<tool_call>``, ``<function_calls>``, Gemma-style
+212:     ``<function name="…">…</function>``). Ported from
+213:     openclaw/openclaw#67318.
+214:     """
+215:     cleaned = text
+216:     for tag in _REASONING_TAGS:
+217:         # Closed pair — case-insensitive so <THINK>…</THINK> is handled too.
+218:         cleaned = re.sub(
+219:             rf"<{tag}>.*?</{tag}>\s*",
+220:             "",
+[READ_TRUNCATED] Use start_line:221, num_lines:220 for the next chunk, or full:true only when needed.
+
+--- web-ui/src/styles/mobile.css ---
+web-ui/src/styles/mobile.css (11956 lines) [window 521-680, truncated]:
+521: .pm-msheet-scrim {
+522:   position: fixed; inset: 0;
+523:   background: rgba(7, 10, 14, 0.18);
+524:   -webkit-backdrop-filter: blur(8px) saturate(1.05) brightness(0.92);
+525:   backdrop-filter: blur(8px) saturate(1.05) brightness(0.92);
+526:   opacity: 0; transition: opacity .18s ease;
+527:   z-index: 10000;
+528: }
+529: .pm-msheet-scrim.open { opacity: 1; }
+530: .pm-msheet {
+531:   position: fixed;
+532:   left: var(--pm-msheet-left, 10px);
+533:   top: var(--pm-msheet-top, 80px);
+534:   width: var(--pm-msheet-width, min(360px, calc(100vw - 20px)));
+535:   z-index: 10001;
+536:   max-height: var(--pm-msheet-max-height, min(70vh, 560px));
+537:   display: flex; flex-direction: column;
+538:   min-height: 0;
+539:   padding: 14px;
+540:   border-radius: 28px;
+541:   background:
+542:     linear-gradient(180deg, rgba(255, 255, 255, .88), rgba(250, 247, 241, .76)),
+543:     linear-gradient(135deg, rgba(255, 255, 255, .62), rgba(255, 247, 235, .46) 58%, rgba(234, 106, 31, .08));
+544:   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,.42);
+545:   box-shadow:
+546:     inset 0 1px 0 rgba(255,255,255,.62),
+547:     inset 0 -1px 0 rgba(255,255,255,.22),
+548:     0 18px 58px rgba(35, 24, 14, .22),
+549:     0 2px 10px rgba(35, 24, 14, .10);
+550:   backdrop-filter: blur(22px) saturate(1.55) brightness(1.04);
+551:   -webkit-backdrop-filter: blur(22px) saturate(1.55) brightness(1.04);
+552:   opacity: 0;
+553:   transform: translateY(-8px) scale(.97);
+554:   transform-origin: top center;
+555:   transition: transform .18s ease, opacity .18s ease;
+556:   -webkit-user-select: none;
+557:   user-select: none;
+558:   -webkit-touch-callout: none;
+559: }
+560: .pm-msheet.open { opacity: 1; transform: translateY(0) scale(1); }
+561: /* Rename sheet follows the keyboard up — bottom is set dynamically via JS */
+562: .pm-msheet-rename { transition: transform .26s cubic-bezier(.22,.61,.36,1), bottom .18s ease, max-height .18s ease; }
+563: .pm-sess-rename-wrap {
+564:   display: flex; flex-direction: column; gap: 0; width: 100%;
+565:   padding: 4px 0 8px;
+566: }
+567: .pm-sess-rename-input {
+568:   width: 100%; box-sizing: border-box;
+569:   background: var(--pm-input-bg, rgba(120,120,128,.18));
+570:   color: var(--pm-text, #f5f0e8);
+571:   border: 1.5px solid var(--pm-border, rgba(255,255,255,.12));
+572:   border-radius: 12px;
+573:   font-size: 16px; font-family: inherit;
+574:   padding: 12px 16px;
+575:   outline: none;
+576:   -webkit-appearance: none;
+577:   caret-color: var(--pm-accent, #e8a020);
+578: }
+579: .pm-sess-rename-input:focus {
+580:   border-color: var(--pm-accent, #e8a020);
+581:   background: var(--pm-input-bg-focus, rgba(120,120,128,.26));
+582: }
+583: .pm-sess-rename-hint {
+584:   font-size: 12px; color: var(--pm-muted, #b8ad9c);
+585:   margin: 6px 0 0; text-align: center;
+586: }
+587: :root[data-theme="dark"] .pm-msheet {
+588:   border-color: rgba(255,255,255,.16);
+589:   background:
+590:     linear-gradient(180deg, rgba(39, 39, 42, .88), rgba(22, 22, 24, .78)),
+591:     linear-gradient(135deg, rgba(255,255,255,.13), rgba(255,255,255,.055) 58%, rgba(234,106,31,.08));
+592:   box-shadow:
+593:     inset 0 1px 0 rgba(255,255,255,.16),
+594:     inset 0 -1px 0 rgba(255,255,255,.06),
+595:     0 20px 64px rgba(0,0,0,.46),
+596:     0 2px 10px rgba(0,0,0,.22);
+597: }
+598: 
+599: .pm-msheet-handle {
+600:   display: none;
+601: }
+602: .pm-msheet-head {
+603:   display: flex; align-items: center; justify-content: space-between;
+604:   gap: 10px; margin-bottom: 10px;
+605:   flex: 0 0 auto;
+606:   -webkit-user-select: none;
+607:   user-select: none;
+608:   -webkit-touch-callout: none;
+609: }
+610: .pm-msheet-title {
+611:   font-size: 17px; font-weight: 800; color: var(--pm-text);
+612:   display: flex; align-items: center; gap: 8px;
+613: }
+614: .pm-msheet-title .pm-msheet-sub { font-size: 13px; font-weight: 600; color: var(--pm-muted); }
+615: .pm-msheet-back {
+616:   border: 0; background: transparent; color: var(--pm-text);
+617:   font-size: 22px; line-height: 1; padding: 0 6px 0 0; cursor: pointer;
+618: }
+619: .pm-msheet-close {
+620:   border: 0; background: transparent; color: var(--pm-muted);
+621:   font-size: 26px; line-height: 1; cursor: pointer; padding: 0 4px;
+622: }
+623: .pm-msheet-body {
+624:   overflow-y: auto;
+625:   -webkit-overflow-scrolling: touch;
+626:   min-height: 0;
+627:   flex: 1 1 auto;
+628:   padding-right: 2px;
+629:   -webkit-user-select: none;
+630:   user-select: none;
+631:   -webkit-touch-callout: none;
+632: }
+633: .pm-msheet-rows { display: flex; flex-direction: column; gap: 6px; }
+634: .pm-msheet-model-rows {
+635:   max-height: calc((54px * 6) + (6px * 5));
+636:   overflow-y: auto;
+637:   -webkit-overflow-scrolling: touch;
+638:   padding-right: 2px;
+639:   flex: 0 0 auto;
+640: }
+641: .pm-msheet-row {
+642:   appearance: none;
+643:   display: flex; align-items: center; gap: 10px;
+644:   width: 100%; text-align: left;
+645:   min-height: 54px;
+646:   padding: 12px 13px;
+647:   border-radius: 18px;
+648:   border: 0;
+649:   background: rgba(255,255,255,.08);
+650:   color: var(--pm-text);
+651:   font-size: 15px; font-weight: 600; cursor: pointer;
+652:   -webkit-user-select: none;
+653:   user-select: none;
+654:   -webkit-touch-callout: none;
+655:   -webkit-tap-highlight-color: transparent;
+656: }
+657: .pm-msheet-row:active { background: rgba(255,255,255,.14); }
+658: :root[data-theme="dark"] .pm-msheet-row { background: rgba(255,255,255,.055); }
+659: .pm-msheet-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+660: .pm-msheet-row-raw {
+661:   font-size: 11px; font-weight: 500; color: var(--pm-muted);
+662:   font-family: 'IBM Plex Mono', ui-monospace, monospace;
+663:   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%;
+664: }
+665: .pm-msheet-check { color: var(--pm-green); font-weight: 800; }
+666: .pm-msheet-chev { color: var(--pm-muted); font-size: 19px; }
+667: .pm-msheet-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pm-green); }
+668: .pm-msheet-toggle {
+669:   display: flex; align-items: center; justify-content: space-between;
+670:   gap: 10px; margin-top: 10px; padding: 12px 14px;
+671:   border-radius: 18px; border: 0;
+672:   background: rgba(255,255,255,.08);
+673:   font-size: 14px; font-weight: 600; color: var(--pm-text);
+674: }
+675: .pm-msheet-row-label,
+676: .pm-msheet-row-raw,
+677: .pm-msheet-title,
+678: .pm-msheet-title *,
+679: .pm-msheet-toggle,
+680: .pm-msheet-toggle span {
+[READ_TRUNCATED] Returned 160 of 11956 lines. Use start_line:681, num_lines:220 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/service-worker.js ---
+web-ui/service-worker.js (267 lines) [window 1-80, truncated]:
+1: /* Prometheus Mobile service worker.
+2:  *
+3:  * Strategy:
+4:  *   - install: pre-cache the mobile shell so first-launch offline works.
+5:  *   - fetch:
+6:  *       /api/*        → network only (no caching of API calls).
+7:  *       /assets/*     → stale-while-revalidate (icons / brand art).
+8:  *       same-origin static (HTML/JS/CSS) → network-first with cache fallback.
+9:  *       cross-origin → passthrough.
+10:  *   - activate: drop old cache versions.
+11:  *
+12:  * Do not cache /api/chat or any SSE/WS traffic. The fetch handler bails out
+13:  * for anything under /api so streaming + auth state never get stale.
+14:  */
+15: 
+16: // IMPORTANT: bump this on every meaningful frontend change. The version is the
+17: // only signal browsers use to decide whether to re-install the SW and purge
+18: // the old cache. If you forget to bump it, devices keep serving stale assets
+19: // even after `npm run build` + gateway restart.
+20: const VERSION = 'pm-v120-2026-07-09-mobile-popover-frost';
+21: const STATIC_CACHE  = `prometheus-static-${VERSION}`;
+22: const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
+23: 
+24: // Files needed for the mobile shell to render offline.
+25: const PRECACHE = [
+26:   '/',
+27:   '/index.html',
+28:   '/mobile/chat',
+29:   '/mobile/voice',
+30:   '/mobile/tasks',
+31:   '/?source=pwa#mobile/chat',
+32:   '/src/styles/mobile.css',
+33:   '/src/styles/base.css',
+34:   '/src/mobile/mobile-router.js',
+35:   '/src/mobile/mobile-shell.js',
+36:   '/src/mobile/mobile-pages.js',
+37:   '/src/mobile/mobile-data.js',
+38:   '/src/mobile/mobile-api.js',
+39:   '/static/styles/mobile.css',
+40:   '/static/styles/base.css',
+41:   '/static/mobile/mobile-router.js',
+42:   '/static/mobile/mobile-shell.js',
+43:   '/static/mobile/mobile-pages.js',
+44:   '/static/mobile/mobile-data.js',
+45:   '/static/mobile/mobile-api.js',
+46:   '/src/api.js',
+47:   '/src/state.js',
+48:   '/src/utils.js',
+49:   '/assets/Prometheus.png',
+50: ];
+51: 
+52: self.addEventListener('install', (event) => {
+53:   self.skipWaiting();
+54:   event.waitUntil(
+55:     caches.open(STATIC_CACHE).then((cache) =>
+56:       Promise.allSettled(PRECACHE.map((url) => cache.add(url).catch(() => null)))
+57:     )
+58:   );
+59: });
+60: 
+61: self.addEventListener('activate', (event) => {
+62:   event.waitUntil((async () => {
+63:     const keys = await caches.keys();
+64:     await Promise.all(
+65:       keys
+66:         .filter((k) => k.startsWith('prometheus-') && !k.endsWith(VERSION))
+67:         .map((k) => caches.delete(k))
+68:     );
+69:     await self.clients.claim();
+70:   })());
+71: });
+72: 
+73: function isBypass(url) {
+74:   if (url.pathname.startsWith('/api/'))   return true;   // never cache API
+75:   if (url.pathname.startsWith('/ws'))     return true;   // websocket upgrade
+76:   if (url.pathname.startsWith('/events')) return true;   // SSE
+77:   return false;
+78: }
+79: 
+80: async function networkFirst(request, cacheName) {
+[READ_TRUNCATED] Returned 80 of 267 lines. Use start_line:81, num_lines:220 for the next chunk, or pass full:true only when the whole file is truly needed.

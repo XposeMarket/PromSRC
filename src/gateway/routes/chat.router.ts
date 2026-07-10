@@ -17,10 +17,12 @@ import crypto from 'crypto';
 import { execFileSync } from 'child_process';
 
 // ── TEMP latency bisection probe ──────────────────────────────────────────
+const TURN_TIMING_ENABLED = process.env.PROMETHEUS_TURN_TIMING === '1';
 let __htimeT0 = 0;
 function __htimeReset(): void { __htimeT0 = Date.now(); }
 function htime(label: string): void {
   try {
+    if (!TURN_TIMING_ENABLED) return;
     if (!__htimeT0) return;
     const line = `${new Date().toISOString()} +${String(Date.now() - __htimeT0).padStart(6)}ms ${label}\n`;
     fs.appendFileSync(path.join(getConfig().getConfigDir(), 'logs', 'turn-timing.log'), line, 'utf-8');
@@ -49,7 +51,7 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, type TurnOrigin } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, type TurnOrigin } from '../session';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { collectRichArtifacts, productCarouselToArtifact } from '../rich-artifacts';
 import { getConnector, isConnectorConnected } from '../../integrations/connector-registry.js';
@@ -64,8 +66,10 @@ import { createToolObservationsFromResults, formatToolStateSummaryForContext, pe
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
+import { getAgentTeamScheduleTools } from '../tools/defs/agent-team-schedule';
+import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
-import { findProjectBySessionId, removeSessionFromProject } from '../projects/project-store.js';
+import { buildProjectContextBlock, findProjectBySessionId, removeSessionFromProject } from '../projects/project-store.js';
 import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundAbort, listActiveBackgroundIdsForSession } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
@@ -80,7 +84,9 @@ import { getContextInjectionManager } from '../context-injection';
 import { SkillsManager } from '../skills-runtime/skills-manager';
 import { rankSkillsForQuery } from '../agents-runtime/capabilities/skills-executor';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
+import { loadSoul } from '../../config/soul-loader.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
+import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import {
   browserOpen,
   browserSnapshot,
@@ -179,6 +185,40 @@ import {
   listMainChatTimers,
   updateMainChatTimer,
 } from '../timers/timer-store';
+
+const AGENT_TEAM_SCHEDULE_TOOL_DEF_CACHE = new Map<string, any>();
+
+function getAgentTeamScheduleToolDefByName(name: string): any | null {
+  const clean = String(name || '').trim();
+  if (!clean) return null;
+  if (AGENT_TEAM_SCHEDULE_TOOL_DEF_CACHE.has(clean)) {
+    return AGENT_TEAM_SCHEDULE_TOOL_DEF_CACHE.get(clean);
+  }
+  const found = getAgentTeamScheduleTools()
+    .find((tool: any) => String(tool?.function?.name || '').trim() === clean) || null;
+  AGENT_TEAM_SCHEDULE_TOOL_DEF_CACHE.set(clean, found);
+  return found;
+}
+
+function normalizeRuntimeVisionAttachmentsInput(value: unknown): RuntimeVisionAttachment[] {
+  return (Array.isArray(value) ? value : [])
+    .map((item: any) => {
+      const base64 = String(item?.base64 || '').trim().replace(/^data:[^;]+;base64,/, '');
+      const mimeType = String(item?.mimeType || item?.mime_type || 'image/png').trim() || 'image/png';
+      const name = String(item?.name || item?.filename || item?.fileName || mimeType || 'attachment').trim() || 'attachment';
+      if (!base64 || !mimeType.startsWith('image/')) return null;
+      return { base64, mimeType, name };
+    })
+    .filter(Boolean)
+    .slice(0, 4) as RuntimeVisionAttachment[];
+}
+
+function normalizeRuntimeAttachmentPreviewsInput(value: unknown): any[] {
+  return (Array.isArray(value) ? value : [])
+    .filter((item) => item && typeof item === 'object')
+    .slice(0, 8);
+}
+
 // orchestration/multi-agent removed — stubs to prevent reference errors
 const OrchestrationTriggerState: any = class { recordToolResult() {} recordRoundNoProgress() {} shouldTrigger() { return { fire: false, reason: '' }; } markFired() {} };
 const callSecondaryPreflight: any = async () => null;
@@ -944,6 +984,14 @@ import {
   formatScheduleMemoryForPrompt,
 } from '../scheduling/schedule-memory';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
+import {
+  addVoiceWorkgroupWorker,
+  createVoiceWorkgroup,
+  listVoiceWorkgroupsForSession,
+  loadVoiceWorkgroup,
+  type VoiceWorkgroupDelivery,
+  type VoiceWorkgroupMode,
+} from '../voice/voice-workgroup-store';
 import { analyzeRunForImprovement, applyPromptMutation } from '../scheduling/prompt-mutation';
 import { processTaskFailure, buildSelfRepairTriggerPrompt } from '../errors/error-watchdog';
 import {
@@ -1106,6 +1154,7 @@ import {
   getLatestPauseContext, summarizeTaskRecord, buildBlockedTaskStatusMessage,
   parseTaskStatusFilter, getTaskScopeBuckets, parseTaskIdFromText,
   launchBackgroundTaskRunner, handleTaskControlAction,
+  handleTaskRecoveryMessage,
   renderTaskCandidatesForHuman, tryHandleBlockedTaskFollowup,
 } from '../tasks/task-router';
 
@@ -1195,10 +1244,6 @@ import {
   buildVisionScreenshotMessage,
   // Chat intent classifiers
   isExecutionLikeRequest,
-  isBrowserAutomationRequest,
-  isDesktopAutomationRequest,
-  extractLikelyUrl,
-  looksLikeSafetyRefusal,
   isContinuationCue,
   hasPendingExecutionIntent,
   isHardBlockerReply,
@@ -1935,6 +1980,23 @@ async function handleChat(
   runtimeOptions?: { directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
 ): Promise<HandleChatResult> {
   try {
+  const latencyStartAt = Date.now();
+  let firstProviderEventAt = 0;
+  let firstVisibleTokenAt = 0;
+  let firstReasoningAt = 0;
+  const markLatency = (stage: string, extra: Record<string, any> = {}) => {
+    const now = Date.now();
+    const elapsedMs = now - latencyStartAt;
+    try {
+      sendSSE('latency_mark', {
+        stage,
+        elapsedMs,
+        message: `Latency: ${stage} at ${elapsedMs}ms`,
+        ...extra,
+      });
+    } catch {}
+    return now;
+  };
   const ollama = getOllamaClient();
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const excludedSkillIds = Array.isArray(runtimeOptions?.excludedSkillIds)
@@ -2199,6 +2261,28 @@ async function handleChat(
     if (toolDefs.some((tool: any) => String(tool?.function?.name || '') === 'tool_loop_continue')) return toolDefs;
     return [LOOP_CONTINUE_TOOL_DEF, ...toolDefs];
   };
+  let planStepToolsActive = isProposalExecutionMode || sessionId.startsWith('task_');
+  const backgroundPlanToolsActive = executionMode === 'background_agent' || sessionId.startsWith('background_');
+  const addToolDefIfMissing = (toolDefs: any[], name: string): any[] => {
+    if (toolDefs.some((tool: any) => String(tool?.function?.name || '') === name)) return toolDefs;
+    const def = getAgentTeamScheduleToolDefByName(name);
+    return def ? [def, ...toolDefs] : toolDefs;
+  };
+  const maybeAddPlanScopedTools = (toolDefs: any[]): any[] => {
+    let next = toolDefs;
+    if (backgroundPlanToolsActive) {
+      next = addToolDefIfMissing(next, 'bg_plan_advance');
+      next = addToolDefIfMissing(next, 'bg_plan_declare');
+      return next;
+    }
+    if (planStepToolsActive) {
+      next = addToolDefIfMissing(next, 'complete_plan_step');
+      if (isProposalExecutionMode || sessionId.startsWith('task_')) {
+        next = addToolDefIfMissing(next, 'step_complete');
+      }
+    }
+    return next;
+  };
   const PROPOSAL_CORE_MIN = new Set([
     'run_command',
     'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
@@ -2229,7 +2313,7 @@ async function handleChat(
         return true; // Category tools are still governed by per-session activation.
       })
       : baseTools;
-    return maybeAddLoopGateTool(filterToolsForModelCapabilities(currentTools));
+    return maybeAddLoopGateTool(maybeAddPlanScopedTools(filterToolsForModelCapabilities(currentTools)));
   };
   const buildSwitchModelToolCategories = (): Set<string> => {
     const switchCategories = new Set<string>();
@@ -2599,6 +2683,9 @@ async function handleChat(
     progressState.items = items;
     progressState.activeIndex = -1;
     progressState.manualStepAdvance = opts?.manualStepAdvance === true;
+    if (progressState.manualStepAdvance) {
+      planStepToolsActive = true;
+    }
     emitProgressState('plan_created');
     return true;
   };
@@ -2692,10 +2779,13 @@ async function handleChat(
     progressState.manualStepAdvance = true;
     stepCursor = firstOpenIndex;
     consecutiveStepFailures = 0;
+    planStepToolsActive = true;
     emitProgressState('goal_plan_resumed');
     return true;
   };
-  seedProgressFromStoredGoalPlan();
+  if (seedProgressFromStoredGoalPlan()) {
+    tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
+  }
 
   // Tools that gather information — do NOT advance the step cursor.
   const READ_ONLY_PROGRESS_TOOLS = new Set([
@@ -3479,6 +3569,7 @@ async function handleChat(
         : (excludedSkillIds.length || forcedSkillIds.length ? { excludedSkillIds, forcedSkillIds } : undefined));
   htime('reached Building model context');
   sendSSE('ui_preflight', { message: 'Building model context...' });
+  const contextBuildStartedAt = markLatency('context_build_start');
   const personalityCtx = await buildPersonalityContext(
     sessionId,
     workspacePath,
@@ -3492,6 +3583,10 @@ async function handleChat(
     personalityProfile,
   );
   htime('after buildPersonalityContext');
+  markLatency('context_build_done', {
+    stageDurationMs: Date.now() - contextBuildStartedAt,
+    contextChars: String(personalityCtx || '').length,
+  });
   let switchModelPersonalityCtx: string | null = null;
 
   // Inject active browser session state so LLM knows to reuse it instead of re-opening
@@ -5204,7 +5299,74 @@ RULES:
   sendSSE('info', { message: 'Thinking...' });
   console.log('[v2] -- CHAT --');
 
-  const injectPendingChatSteers = (): number => {
+  const appendSteerEventToMessages = async (steer: RuntimeSteerEvent): Promise<void> => {
+    const previewContext = Array.isArray(steer.attachmentPreviews) && steer.attachmentPreviews.length
+      ? await buildAttachmentRuntimeContext(steer.attachmentPreviews)
+      : { block: '', visionAttachments: [], attachmentCount: 0 };
+    const steerBlock = buildChatSteerContextBlock(steer);
+    const steerText = appendAttachmentContextToMessage(steerBlock, previewContext.block);
+    const steerVisionAttachments = [
+      ...(Array.isArray(steer.attachments) ? steer.attachments : []),
+      ...(Array.isArray(previewContext.visionAttachments) ? previewContext.visionAttachments : []),
+    ]
+      .map((attachment: any) => ({
+        base64: String(attachment?.base64 || '').trim(),
+        mimeType: String(attachment?.mimeType || 'image/png').trim() || 'image/png',
+        name: String(attachment?.name || attachment?.mimeType || 'attachment').trim() || 'attachment',
+      }))
+      .filter((attachment) => attachment.base64 && attachment.mimeType.startsWith('image/'))
+      .slice(0, 4);
+
+    const shouldUseSteerXaiVisionSidecar =
+      steerVisionAttachments.length > 0
+      && !currentModelCapabilities.hasVision
+      && String(currentModelCapabilities.provider || '').toLowerCase() === 'xai'
+      && /^grok-composer/i.test(String(currentModelCapabilities.model || ''));
+
+    if (steerVisionAttachments.length > 0 && currentModelCapabilities.hasVision) {
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: steerText },
+          ...steerVisionAttachments.map((attachment) => buildVisionImagePart(attachment.base64, attachment.mimeType)),
+        ],
+      });
+      sendSSE('vision_injected', {
+        source: 'chat_steer_attachment',
+        eventId: steer.id,
+        attachments: steerVisionAttachments.length,
+      });
+      return;
+    }
+
+    if (shouldUseSteerXaiVisionSidecar) {
+      const summaries: string[] = [];
+      for (const attachment of steerVisionAttachments) {
+        const dataUrl = `data:${attachment.mimeType};base64,${attachment.base64}`;
+        const result = await executeXaiImageVisionSummary({ dataUrl, name: attachment.name });
+        summaries.push(result.success && result.summary
+          ? `- ${attachment.name}: ${result.summary}`
+          : `- ${attachment.name}: vision sidecar failed (${String(result.error || 'unknown error').slice(0, 220)})`);
+      }
+      messages.push({
+        role: 'user',
+        content: `${steerText}\n\n[STEER_ATTACHMENT_VISION_SUMMARY]\nThe active xAI Composer model cannot receive raw image payloads. A vision sidecar inspected the steer image attachment(s):\n${summaries.join('\n')}`,
+      });
+      sendSSE('vision_injected', {
+        source: 'chat_steer_xai_vision_sidecar',
+        eventId: steer.id,
+        attachments: steerVisionAttachments.length,
+      });
+      return;
+    }
+
+    const nonVisionNotice = steerVisionAttachments.length > 0
+      ? `\n\n[STEER_ATTACHMENT_NOTICE]\n${steerVisionAttachments.length} image attachment(s) were included with this steer, but the active model is not vision-capable, so raw image payloads were not injected. If direct image interpretation is essential, switch to a vision-capable model or use attachment paths/tool outputs when available.`
+      : '';
+    messages.push({ role: 'user', content: `${steerText}${nonVisionNotice}` });
+  };
+
+  const injectPendingChatSteers = async (): Promise<number> => {
     const steers = consumePendingRuntimeSteersForSession(sessionId, 4);
     if (!steers.length) return 0;
     const cfg = getConfig().getConfig() as any;
@@ -5212,7 +5374,7 @@ RULES:
     const _steerProviderId = String(providerOverride || _steerActiveProvider || '').trim().toLowerCase();
     const _steerIsAnthropic = _steerProviderId === 'anthropic';
     for (const steer of steers) {
-      messages.push({ role: 'user', content: buildChatSteerContextBlock(steer) });
+      await appendSteerEventToMessages(steer);
       // Anthropic does not support assistant prefill — skip trailing assistant ack for that provider
       if (!_steerIsAnthropic) {
         messages.push({ role: 'assistant', content: 'Understood. I will steer the current run with this correction.' });
@@ -5221,6 +5383,7 @@ RULES:
         eventId: steer.id,
         message: steer.message.slice(0, 500),
         source: steer.source || 'web',
+        attachments: (steer.attachments?.length || 0) + (steer.attachmentPreviews?.length || 0),
       });
       sendSSE('info', { message: `Steer applied: ${steer.message.slice(0, 120)}` });
     }
@@ -5253,7 +5416,7 @@ RULES:
     // ── Synthetic tool calls from browser advisor ─────────────────────────────
     // When the advisor queued deterministic tool calls (e.g. PageDown scroll),
     // skip LLM generation entirely for this round and execute them directly.
-    injectPendingChatSteers();
+    await injectPendingChatSteers();
 
     if (pendingSyntheticToolCalls.length > 0) {
       const syntheticCalls = pendingSyntheticToolCalls.map((call: any, idx: number) => ({
@@ -5484,10 +5647,25 @@ RULES:
         grokGreetingLikeTurn = isGrokGeneration && isGrokGreetingLikeMessage(message);
         let streamedVisibleText = '';
         let suppressRunawayStream = false;
+        let providerRequestStartedAt = 0;
 	      const emitStreamToken = (chunk: string) => {
 	        if (abortSignal?.aborted) return;
 	        const text = String(chunk || '');
 	        if (!text || suppressRunawayStream) return;
+          if (!firstProviderEventAt) {
+            firstProviderEventAt = markLatency('first_provider_event', {
+              provider: generationOverride.providerId,
+              model: generationOverride.model,
+              eventKind: 'assistant_delta',
+            });
+          }
+          if (!firstVisibleTokenAt) {
+            firstVisibleTokenAt = markLatency('first_visible_token', {
+              provider: generationOverride.providerId,
+              model: generationOverride.model,
+              providerWaitMs: firstProviderEventAt ? firstProviderEventAt - providerRequestStartedAt : undefined,
+            });
+          }
           if (isGrokGeneration) {
             streamedVisibleText += text;
             if (streamedVisibleText.length > 800) {
@@ -5547,6 +5725,20 @@ RULES:
 	        if (abortSignal?.aborted) return;
 	        const text = String(chunk || '');
 	        if (!text) return;
+          if (!firstProviderEventAt) {
+            firstProviderEventAt = markLatency('first_provider_event', {
+              provider: generationOverride.providerId,
+              model: generationOverride.model,
+              eventKind: source,
+            });
+          }
+          if (!firstReasoningAt) {
+            firstReasoningAt = markLatency('first_reasoning_delta', {
+              provider: generationOverride.providerId,
+              model: generationOverride.model,
+              source,
+            });
+          }
 	        allThinking += text;
 	        sendSSE('thinking_delta', { thinking: text, source });
 	      };
@@ -5554,6 +5746,13 @@ RULES:
 	        if (abortSignal?.aborted || !event || typeof event !== 'object') return;
 	        const type = String(event.type || '').trim();
 	        if (!type) return;
+          if (!firstProviderEventAt) {
+            firstProviderEventAt = markLatency('first_provider_event', {
+              provider: generationOverride.providerId,
+              model: generationOverride.model,
+              eventKind: type,
+            });
+          }
 	        sendSSE('model_stream_event', { event });
 	      };
       currentModelCapabilities = resolveCapabilitiesForGenerationOverride(generationOverride);
@@ -5583,6 +5782,12 @@ RULES:
       } else {
         if (messages[0]?.role === 'system') messages[0].content = buildSystemPrompt('full');
       }
+      providerRequestStartedAt = markLatency('provider_request_start', {
+        provider: generationOverride.providerId,
+        model: generationOverride.model,
+        toolCount: Array.isArray(tools) ? tools.length : 0,
+        messageCount: Array.isArray(messages) ? messages.length : 0,
+      });
       const generationPromise = ollama.chatWithThinking(messages, 'executor', {
         tools,
         temperature: 0.3,
@@ -5735,6 +5940,13 @@ RULES:
 
         // Generation finished before watchdog
 	        const result = watchdogOutcome.result;
+          markLatency('provider_done', {
+            provider: generationOverride.providerId,
+            model: generationOverride.model,
+            stageDurationMs: Date.now() - providerRequestStartedAt,
+            firstProviderEventMs: firstProviderEventAt ? firstProviderEventAt - providerRequestStartedAt : undefined,
+            firstVisibleTokenMs: firstVisibleTokenAt ? firstVisibleTokenAt - providerRequestStartedAt : undefined,
+          });
 	        response = result.message;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
@@ -5746,6 +5958,13 @@ RULES:
 	      } else {
         // Watchdog not active — normal await
         const result = await generationPromise;
+        markLatency('provider_done', {
+          provider: generationOverride.providerId,
+          model: generationOverride.model,
+          stageDurationMs: Date.now() - providerRequestStartedAt,
+          firstProviderEventMs: firstProviderEventAt ? firstProviderEventAt - providerRequestStartedAt : undefined,
+          firstVisibleTokenMs: firstVisibleTokenAt ? firstVisibleTokenAt - providerRequestStartedAt : undefined,
+        });
 	        response = result.message;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
@@ -5786,66 +6005,6 @@ RULES:
           response.tool_calls = toolCalls;
           response.content = '';
         } catch { /* JSON parse failed, treat as normal text */ }
-      }
-    }
-
-    // Auto-recover: if model dumped pure reasoning without calling any tools on a
-    // question that clearly needs tools (search, file, browser), re-prompt once
-    if ((!toolCalls || toolCalls.length === 0) && response.content && round === 0 && allToolResults.length === 0) {
-      const content = response.content;
-      const looksLikeReasoning = content.length > 300
-        && (/\b(let me|I need to|I should|the user|first,|wait,|hmm|the rules say)\b/i.test(content));
-      const queryNeedsTools = /\b(search|find|look up|latest|news|info|open|browse|navigate|visit|click|type|fill|what happened|desktop|screen|window|vscode|vs code|codex|clipboard)\b/i.test(message);
-      const browserAutomationRequest = isBrowserAutomationRequest(message);
-      const desktopAutomationRequest = isDesktopAutomationRequest(message);
-      const looksLikeRefusal = looksLikeSafetyRefusal(content);
-      // Only the browser/desktop automation paths and an actual refusal should force a
-      // retry. Pure reasoning (e.g. "there is nothing to search here") and resumed
-      // write_note finalization after a restart must fall through to normal handling so
-      // the model's answer is delivered and not hijacked into a forced web_search.
-      const shouldForceToolRetry = queryNeedsTools
-        && (browserAutomationRequest || desktopAutomationRequest || looksLikeRefusal);
-      if (shouldForceToolRetry) {
-        console.log(`[v2] AUTO-RECOVER: Model dumped ${content.length} chars without tools on a tool-shaped request. Re-prompting...`);
-        allThinking += (allThinking ? '\n\n' : '') + content;
-        sendSSE('thinking', { thinking: content.slice(0, 500) + '...' });
-        // Inject a forceful nudge and retry this round
-        if (browserAutomationRequest) {
-          const liveBrowser = getBrowserSessionInfo(sessionId);
-          const explicitUrl = extractLikelyUrl(message);
-          messages.push({ role: 'assistant', content: 'Understood. Executing browser automation now.' });
-          if (liveBrowser.active) {
-            messages.push({
-              role: 'user',
-              content: 'Use browser_snapshot now. Then continue with browser_click/browser_fill/browser_press_key to complete the user request. Do NOT refuse.',
-            });
-          } else if (explicitUrl) {
-            messages.push({
-              role: 'user',
-              content: `Use browser_open now with url="${explicitUrl}". This is explicitly user-authorized local automation. Then continue with browser_snapshot/browser_fill/browser_press_key as needed. Do NOT refuse.`,
-            });
-          } else {
-            messages.push({
-              role: 'user',
-              content: 'Call browser_open now using the target site from the user request. Then continue with browser_snapshot/browser_click/browser_fill to complete the task. Do NOT refuse.',
-            });
-          }
-          sendSSE('info', { message: 'Re-prompting model to execute browser automation...' });
-        } else if (desktopAutomationRequest) {
-          messages.push({ role: 'assistant', content: 'Understood. Checking desktop state now.' });
-          messages.push({
-            role: 'user',
-            content: 'Use desktop_screenshot now. If VS Code or another app must be targeted, use desktop_focus_window first, then continue with desktop_click/desktop_type/desktop_press_key as needed. Do NOT refuse.',
-          });
-          sendSSE('info', { message: 'Re-prompting model to execute desktop automation...' });
-        } else {
-          // looksLikeRefusal === true here (guaranteed by shouldForceToolRetry).
-          // The model refused a tool-shaped request; nudge it once to use its tools.
-          messages.push({ role: 'assistant', content: 'Let me reconsider and use my tools.' });
-          messages.push({ role: 'user', content: 'You have full tool access for this authorized local request. Use the appropriate tool now rather than refusing.' });
-          sendSSE('info', { message: 'Re-prompting after refusal...' });
-        }
-        continue; // retry this round (browser/desktop/refusal paths only)
       }
     }
 
@@ -7015,6 +7174,19 @@ RULES:
           seedProgressFromLines(plannedSteps, 'declared', { manualStepAdvance: true });
           stepCursor = 0; // reset cursor whenever a fresh plan is declared
           consecutiveStepFailures = 0;
+          planStepToolsActive = true;
+          const previousNames = new Set(
+            tools
+              .map((t: any) => String(t?.function?.name || '').trim())
+              .filter(Boolean),
+          );
+          tools = buildCurrentTurnTools();
+          const newlyAvailable = tools
+            .map((t: any) => String(t?.function?.name || '').trim())
+            .filter((name: string) => name && !previousNames.has(name));
+          if (newlyAvailable.includes('complete_plan_step')) {
+            sendSSE('info', { message: 'Plan step tools unlocked for this turn.' });
+          }
           console.log(`[v2] declare_plan: seeded ${plannedSteps.length} steps: ${plannedSteps.join(' -> ')}`);
         } else {
           stepCursor = 0;
@@ -7027,7 +7199,7 @@ RULES:
         allToolResults.push(makeInstrumentedToolResult(toolName, planArgs, planSummary, false));
         sendSSE('tool_result', { action: toolName, result: planSummary, error: false, stepNum: allToolResults.length });
         const planActiveBehavior = plannedSteps.length >= 2
-          ? 'Now: work the steps in order. Keep each step in_progress until it is truly done, then call complete_plan_step with concrete evidence of what you did. Do not re-declare the plan mid-turn. Finish only after every step is complete.'
+          ? 'Now: work the steps in order. complete_plan_step is now available for this turn. Keep each step in_progress until it is truly done, then call complete_plan_step with concrete evidence of what you did. Do not re-declare the plan mid-turn. Finish only after every step is complete.'
           : '';
         messages.push({
           role: 'tool',
@@ -9033,6 +9205,9 @@ function buildChatSteerContextBlock(event: RuntimeSteerEvent): string {
     event.contextSummary ? `Current worker context:\n${voiceNarrationClean(event.contextSummary, 1600)}` : '',
     event.spokenAck ? `Spoken acknowledgement already given to user: ${voiceNarrationClean(event.spokenAck, 500)}` : '',
     `User steer: ${String(event.message || '').trim()}`,
+    (event.attachments?.length || event.attachmentPreviews?.length)
+      ? `Steer attachments: ${(event.attachments?.length || 0) + (event.attachmentPreviews?.length || 0)} file(s) attached to this live steer. Inspect the injected visual payloads or attachment context below before acting.`
+      : '',
     event.requiresWorkerResponse
       ? 'Runtime instruction: The user sent this while the current Prometheus run was active and expects the worker to address it. Incorporate it before the next action or final response. If it conflicts with earlier instructions, prefer this steer unless it is unsafe.'
       : 'Runtime instruction: The user sent this while the current Prometheus run was active. Treat it as an immediate same-turn course correction, not as a separate future chat turn. Incorporate it before the next action or final response. If it conflicts with earlier instructions, prefer this steer unless it is unsafe.',
@@ -9666,20 +9841,70 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
   }
   const displayPhase = currentPhase && currentPhase !== 'running' ? currentPhase : '';
   const displayTool = activeToolName && activeToolName !== 'skill_list' ? friendlyVoiceToolName(activeToolName) : '';
+  const voiceWorkgroups = subagentId ? [] : listVoiceWorkgroupsForSession(sid).slice(0, 4).map((workgroup) => {
+    const workers = workgroup.workers.map((worker) => {
+      const task = loadTask(worker.taskId);
+      const status = String(task?.status || worker.status || 'queued');
+      return {
+        taskId: worker.taskId,
+        title: task?.title || worker.title,
+        status,
+        finalSummary: compactVoiceText(task?.finalSummary || '', 260),
+        currentStep: task?.plan?.[Math.max(0, Number(task.currentStepIndex || 0))]?.description || '',
+      };
+    });
+    const activeWorkers = workers.filter((worker) => !['complete', 'failed'].includes(worker.status));
+    const completedWorkers = workers.filter((worker) => worker.status === 'complete');
+    const failedWorkers = workers.filter((worker) => worker.status === 'failed');
+    const status = activeWorkers.length > 0
+      ? 'running'
+      : failedWorkers.length > 0 && completedWorkers.length > 0
+        ? 'partially_complete'
+        : failedWorkers.length > 0
+          ? 'failed'
+          : completedWorkers.length === workers.length && workers.length > 0
+            ? 'complete'
+            : workgroup.status;
+    return {
+      id: workgroup.id,
+      status,
+      workerCount: workers.length,
+      activeCount: activeWorkers.length,
+      completedCount: completedWorkers.length,
+      failedCount: failedWorkers.length,
+      delivery: workgroup.delivery,
+      mode: workgroup.mode,
+      workers,
+    };
+  });
+  const activeVoiceWorkgroups = voiceWorkgroups.filter((workgroup) => !['complete', 'failed'].includes(workgroup.status));
+  const voiceWorkgroupLines = voiceWorkgroups.slice(0, 2).map((workgroup) => {
+    const workerBits = workgroup.workers.slice(0, 5)
+      .map((worker) => `${worker.title} (${worker.status}${worker.currentStep ? `: ${compactVoiceText(worker.currentStep, 120)}` : ''})`)
+      .join('; ');
+    return `Voice workgroup ${workgroup.id}: ${workgroup.status}; ${workgroup.completedCount}/${workgroup.workerCount} complete${workerBits ? `; ${workerBits}` : ''}`;
+  }).filter(Boolean);
+  const effectiveCurrentGoal = currentGoal || (activeVoiceWorkgroups[0]?.workers || [])
+    .map((worker) => worker.title)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join('; ');
   const recentSummaryLines = [
     subagentId ? `Voice target: ${subagentLabel} subagent` : '',
-    currentGoal ? `Goal: ${currentGoal}` : '',
+    effectiveCurrentGoal ? `Goal: ${effectiveCurrentGoal}` : '',
     displayPhase ? `Current phase: ${displayPhase}` : '',
     displayTool ? `Active step: ${displayTool}` : '',
     activeToolLabel ? `Latest update: ${activeToolLabel}` : '',
     completed.length ? `Recent completed work: ${completed.join(' | ')}` : '',
+    voiceWorkgroupLines.length ? `Voice-dispatched workers: ${voiceWorkgroupLines.join(' | ')}` : '',
   ].filter(Boolean);
+  const active = !!activeRuntime || activeVoiceWorkgroups.length > 0;
   return {
     id: `voice_ctx_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
     createdAt: Date.now(),
     sessionId: sid,
     target: subagentId ? { kind: 'subagent', agentId: subagentId, label: subagentLabel } : { kind: 'main', label: 'Prometheus' },
-    active: !!activeRuntime,
+    active,
     activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
     trigger: activeRuntime ? {
       source: compactVoiceText(activeRuntime.source || '', 120),
@@ -9689,11 +9914,16 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
       agentId: activeRuntime.agentId ? String(activeRuntime.agentId) : '',
       scheduleId: activeRuntime.scheduleId ? String(activeRuntime.scheduleId) : '',
       startedAt: Number(activeRuntime.startedAt || 0) || null,
+    } : activeVoiceWorkgroups[0] ? {
+      source: 'voice_workgroup',
+      detail: effectiveCurrentGoal,
+      workgroupId: activeVoiceWorkgroups[0].id,
+      startedAt: null,
     } : null,
-    currentGoal,
-    currentPhase: displayPhase,
+    currentGoal: effectiveCurrentGoal,
+    currentPhase: displayPhase || (activeVoiceWorkgroups.length ? 'running_voice_workgroup' : ''),
     activeToolName: displayTool,
-    activeToolLabel,
+    activeToolLabel: activeToolLabel || (activeVoiceWorkgroups.length ? `${activeVoiceWorkgroups.length} voice workgroup${activeVoiceWorkgroups.length === 1 ? '' : 's'} active` : ''),
     pendingSteerCount: Number(checkpoint.pendingSteerCount || 0) || 0,
     lastSteer: checkpoint.lastSteer || null,
     lastVoiceInterruption: checkpoint.voiceInterruptionEvent || null,
@@ -9712,8 +9942,9 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     processEntries,
     recentEvents,
     observations: summarizeVoiceObservation(sid),
-    doneAlready: completed,
-    currentlyDoing: activeToolLabel || displayTool || displayPhase || '',
+    voiceWorkgroups,
+    doneAlready: [...completed, ...voiceWorkgroupLines],
+    currentlyDoing: activeToolLabel || displayTool || displayPhase || voiceWorkgroupLines[0] || '',
     summary: recentSummaryLines.join('\n'),
   };
 }
@@ -10611,6 +10842,7 @@ const VOICE_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'voice_desktop_window_scroll',
   'voice_automation_dashboard',
   'voice_worker_status',
+  'voice_task_control',
   'voice_send_screenshot',
   'voice_generate_image',
   'voice_generate_video',
@@ -10673,6 +10905,7 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
       timer: 'voice_timer',
       automation_dashboard: 'voice_automation_dashboard',
       worker_status: 'voice_worker_status',
+      task_control: 'voice_task_control',
       send_screenshot: 'voice_send_screenshot',
       generate_image: 'voice_generate_image',
       generate_video: 'voice_generate_video',
@@ -10683,6 +10916,10 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
     }
     if (target === 'voice_timer' && innerArgs.action == null) {
       const innerAction = args?.timer_action ?? args?.timerAction ?? args?.tool_action ?? args?.toolAction ?? args?.command;
+      if (innerAction != null) innerArgs.action = innerAction;
+    }
+    if (target === 'voice_task_control' && innerArgs.action == null) {
+      const innerAction = args?.task_action ?? args?.taskAction ?? args?.tool_action ?? args?.toolAction ?? args?.command;
       if (innerAction != null) innerArgs.action = innerAction;
     }
     return target ? { name: target, args: innerArgs } : { name, args };
@@ -10703,7 +10940,7 @@ function buildVoiceToolDefinitions(): any[] {
           properties: {
             action: {
               type: 'string',
-              enum: ['web_search', 'web_fetch', 'write_note', 'agent_memory', 'set_wake_phrase', 'enter_quiet_mode', 'set_quiet_until', 'memory_search', 'timer', 'automation_dashboard', 'worker_status', 'send_screenshot', 'generate_image', 'generate_video'],
+              enum: ['web_search', 'web_fetch', 'write_note', 'agent_memory', 'set_wake_phrase', 'enter_quiet_mode', 'set_quiet_until', 'memory_search', 'timer', 'automation_dashboard', 'worker_status', 'task_control', 'send_screenshot', 'generate_image', 'generate_video'],
             },
             query: { type: 'string' },
             url: { type: 'string' },
@@ -10714,6 +10951,12 @@ function buildVoiceToolDefinitions(): any[] {
             tool_action: { type: 'string', description: 'Inner operation for wrapped tools that also need an action, such as agent_memory or timer.' },
             memory_action: { type: 'string', enum: ['read', 'append', 'replace'], description: 'Inner action when action is agent_memory.' },
             timer_action: { type: 'string', enum: ['create', 'list', 'update', 'reschedule', 'cancel'], description: 'Inner action when action is timer.' },
+            task_action: { type: 'string', enum: ['status', 'resume', 'pause', 'rerun', 'cancel', 'message'], description: 'Inner action when action is task_control.' },
+            task_id: { type: 'string', description: 'Optional exact task id for task_control. If omitted, defaults to latest unfinished voice workgroup tasks.' },
+            task_ids: { type: 'array', items: { type: 'string' }, description: 'Optional exact task ids for task_control.' },
+            workgroup_id: { type: 'string', description: 'Optional voice workgroup id for task_control.' },
+            message: { type: 'string', description: 'Guidance/note for task_control, especially "tell the worker..." or resume with new direction.' },
+            resume_after_message: { type: 'boolean', description: 'For task_control action=message, resume after injecting the message. Default false.' },
             timer_id: { type: 'string' },
             instruction: { type: 'string' },
             label: { type: 'string' },
@@ -11674,6 +11917,158 @@ function buildVoiceToolDefinitions(): any[] {
   return tools.filter((tool: any) => !VOICE_HIDDEN_COMPAT_TOOL_NAMES.has(String(tool?.function?.name || tool?.name || '')));
 }
 
+const VOICE_TASK_CONTROL_STATUSES = new Set(['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'failed', 'waiting_subagent']);
+
+function parseVoiceTaskIds(args: Record<string, any>): string[] {
+  const ids = [
+    String(args?.task_id || args?.taskId || args?.id || '').trim(),
+    ...(Array.isArray(args?.task_ids) ? args.task_ids.map((id: any) => String(id || '').trim()) : []),
+    ...(Array.isArray(args?.taskIds) ? args.taskIds.map((id: any) => String(id || '').trim()) : []),
+  ].filter(Boolean);
+  return Array.from(new Set(ids));
+}
+
+function selectVoiceTaskControlTargets(sessionId: string, args: Record<string, any>): TaskRecord[] {
+  const action = String(args?.action || args?.task_action || args?.taskAction || 'status').trim().toLowerCase();
+  const explicitTaskIds = parseVoiceTaskIds(args);
+  if (explicitTaskIds.length) {
+    return explicitTaskIds
+      .map((id) => loadTask(id))
+      .filter((task): task is TaskRecord => !!task);
+  }
+
+  const workgroupId = String(args?.workgroup_id || args?.workgroupId || '').trim();
+  const workgroups = workgroupId
+    ? [loadVoiceWorkgroup(workgroupId)].filter(Boolean)
+    : listVoiceWorkgroupsForSession(sessionId)
+        .filter((workgroup) => workgroup.workers.some((worker) => {
+          const task = loadTask(worker.taskId);
+          return task && VOICE_TASK_CONTROL_STATUSES.has(String(task.status || ''));
+        }))
+        .slice(0, String(args?.scope || '').trim() === 'all_voice_workgroups' ? 4 : 1);
+
+  const fromWorkgroups = workgroups
+    .flatMap((workgroup: any) => Array.isArray(workgroup?.workers) ? workgroup.workers : [])
+    .map((worker: any) => loadTask(String(worker?.taskId || '')))
+    .filter((task): task is TaskRecord => !!task);
+
+  if (fromWorkgroups.length) {
+    const unfinished = fromWorkgroups.filter((task) => VOICE_TASK_CONTROL_STATUSES.has(String(task.status || '')));
+    return (action === 'status' ? fromWorkgroups : unfinished).slice(0, 8);
+  }
+
+  const fallback = listTasks()
+    .filter((task) => (
+      task.originatingSessionId === sessionId
+      || task.sessionId === sessionId
+      || String(task.sessionId || '').includes(sessionId)
+    ))
+    .filter((task) => action === 'status' || VOICE_TASK_CONTROL_STATUSES.has(String(task.status || '')))
+    .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0));
+  return fallback.slice(0, 3);
+}
+
+function summarizeVoiceTaskTargets(tasks: TaskRecord[]): any[] {
+  return tasks.map((task) => ({
+    task_id: task.id,
+    title: task.title,
+    status: task.status,
+    pauseReason: task.pauseReason || '',
+    currentStepIndex: task.currentStepIndex,
+    totalSteps: Array.isArray(task.plan) ? task.plan.length : 0,
+    currentStep: Array.isArray(task.plan) ? task.plan[Math.max(0, Number(task.currentStepIndex || 0))]?.description || '' : '',
+    finalSummary: compactVoiceText(task.finalSummary || '', 500),
+    workgroupId: task.voiceDispatch?.workgroupId || '',
+  }));
+}
+
+async function executeVoiceTaskControl(sessionId: string, args: Record<string, any>): Promise<string> {
+  const action = String(args?.action || args?.task_action || args?.taskAction || 'status').trim().toLowerCase();
+  const normalizedAction = action === 'continue' || action === 'unpause' ? 'resume' : action;
+  const message = String(args?.message || args?.note || args?.instruction || args?.guidance || '').trim();
+  const targets = selectVoiceTaskControlTargets(sessionId, args);
+  if (!targets.length) {
+    return voiceToolResult(false, 'No matching task was found for voice task control.', {
+      action: normalizedAction,
+      requestedTaskIds: parseVoiceTaskIds(args),
+      workgroupId: String(args?.workgroup_id || args?.workgroupId || '').trim(),
+    });
+  }
+
+  if (normalizedAction === 'status') {
+    return voiceToolResult(true, `Loaded ${targets.length} task${targets.length === 1 ? '' : 's'}.`, {
+      action: normalizedAction,
+      tasks: summarizeVoiceTaskTargets(targets),
+    });
+  }
+
+  if (normalizedAction === 'message') {
+    if (!message) return voiceToolResult(false, 'A message is required to steer or chat with paused tasks.');
+    const resumeAfter = args?.resume_after_message === true || args?.resumeAfterMessage === true;
+    const results: any[] = [];
+    for (const task of targets) {
+      const recovery = await handleTaskRecoveryMessage(task.id, message, {
+        sourceSessionId: sessionId,
+        source: 'chat',
+        visibleMessage: message,
+      });
+      let control: any = null;
+      if (!recovery.handled) {
+        const existing = Array.isArray(task.resumeContext?.messages) ? task.resumeContext.messages : [];
+        updateResumeContext(task.id, {
+          messages: [
+            ...existing,
+            { role: 'user', content: `[VOICE TASK GUIDANCE]\n${message}`, timestamp: Date.now() },
+          ].slice(-80),
+        });
+        appendJournal(task.id, { type: 'status_push', content: `Voice guidance added: ${message.slice(0, 220)}` });
+      }
+      if (resumeAfter) {
+        control = await handleTaskControlAction(sessionId, { action: 'resume', task_id: task.id, note: message });
+      }
+      results.push({
+        task_id: task.id,
+        title: task.title,
+        recoveryHandled: recovery.handled,
+        resumed: recovery.resumed || control?.success === true,
+        reply: compactVoiceText(recovery.reply || control?.message || 'Guidance recorded.', 900),
+        control,
+      });
+    }
+    return voiceToolResult(true, `${resumeAfter ? 'Sent guidance and resumed' : 'Sent guidance to'} ${results.length} task${results.length === 1 ? '' : 's'}.`, {
+      action: normalizedAction,
+      resumeAfter,
+      results,
+    });
+  }
+
+  if (!['resume', 'pause', 'rerun', 'cancel'].includes(normalizedAction)) {
+    return voiceToolResult(false, `Unsupported voice task action: ${normalizedAction}`);
+  }
+
+  const results: any[] = [];
+  for (const task of targets) {
+    const control = await handleTaskControlAction(sessionId, {
+      action: normalizedAction,
+      task_id: task.id,
+      note: message,
+      ...(normalizedAction === 'cancel' ? { confirm: true } : {}),
+    });
+    results.push({
+      task_id: task.id,
+      title: task.title,
+      ok: control.success === true,
+      message: control.message || '',
+      task: control.task || null,
+    });
+  }
+  const okCount = results.filter((result) => result.ok).length;
+  return voiceToolResult(okCount > 0, `${normalizedAction} applied to ${okCount}/${results.length} task${results.length === 1 ? '' : 's'}.`, {
+    action: normalizedAction,
+    results,
+  });
+}
+
 async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
   const workspacePath = getConfig().getWorkspacePath();
   try {
@@ -12476,6 +12871,9 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         error: raw.error || '',
       });
     }
+    if (name === 'voice_task_control') {
+      return await executeVoiceTaskControl(sessionId, args || {});
+    }
     if (name === 'voice_worker_status') {
       const providedPacket = args?.contextPacket && typeof args.contextPacket === 'object' ? args.contextPacket : null;
       const providedSessionId = String(providedPacket?.sessionId || '').trim();
@@ -13085,9 +13483,75 @@ function boundedPositiveInt(input: unknown, fallback: number, min: number, max: 
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
+function sanitizeUiProcessValue(value: unknown, maxChars: number): unknown {
+  if (value == null) return value;
+  if (typeof value === 'string') return truncateRuntimeProcessText(value, maxChars);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  try {
+    const json = JSON.stringify(value);
+    if (!json || json.length <= maxChars) return value;
+    return {
+      truncated: true,
+      preview: truncateRuntimeProcessText(json, maxChars),
+    };
+  } catch {
+    return truncateRuntimeProcessText(String(value), maxChars);
+  }
+}
+
+function sanitizeProcessEntryForUi(entry: any, options: { textLimit: number; extraLimit: number }): any {
+  if (!entry || typeof entry !== 'object') return entry;
+  const next: any = { ...entry };
+  for (const key of ['content', 'message', 'text', 'result', 'thinking', 'thinkingTail']) {
+    if (typeof next[key] === 'string') next[key] = truncateRuntimeProcessText(next[key], options.textLimit);
+  }
+  if (next.extra && typeof next.extra === 'object') {
+    const extra: any = { ...next.extra };
+    for (const key of Object.keys(extra)) {
+      extra[key] = sanitizeUiProcessValue(extra[key], options.extraLimit);
+    }
+    next.extra = extra;
+  }
+  return next;
+}
+
+function sanitizeAttachmentPreviewForUi(preview: any, options: { dataUrlLimit: number; textLimit: number }): any {
+  if (!preview || typeof preview !== 'object') return preview;
+  const next: any = { ...preview };
+  delete next.file;
+  for (const key of ['base64', 'bytes', 'raw', 'buffer']) {
+    if (key in next) {
+      delete next[key];
+      next.previewTruncated = true;
+    }
+  }
+  for (const key of ['dataUrl', 'preview', 'previewUrl', 'thumbnailUrl', 'url']) {
+    if (typeof next[key] !== 'string') continue;
+    const value = next[key];
+    const isInlineData = value.startsWith('data:');
+    if (value.length > options.dataUrlLimit || (isInlineData && value.length > options.dataUrlLimit)) {
+      delete next[key];
+      next.hasPreview = true;
+      next.previewTruncated = true;
+    }
+  }
+  for (const key of ['content', 'text']) {
+    if (typeof next[key] === 'string') next[key] = truncateRuntimeProcessText(next[key], options.textLimit);
+  }
+  return next;
+}
+
 function sanitizeHistoryForUiResponse(
   history: any[],
-  options: { historyLimit: number; includeToolLog: boolean; perMessageProcessLimit: number },
+  options: {
+    historyLimit: number;
+    includeToolLog: boolean;
+    perMessageProcessLimit: number;
+    processEntryTextLimit?: number;
+    processEntryExtraLimit?: number;
+    attachmentPreviewDataUrlLimit?: number;
+    attachmentPreviewTextLimit?: number;
+  },
 ): any[] {
   const source = Array.isArray(history) ? history : [];
   const limited = options.historyLimit > 0 ? source.slice(-options.historyLimit) : source;
@@ -13095,8 +13559,19 @@ function sanitizeHistoryForUiResponse(
     if (!raw || typeof raw !== 'object') return raw;
     const msg: any = { ...raw };
     if (!options.includeToolLog) delete msg.toolLog;
-    if (Array.isArray(msg.processEntries) && msg.processEntries.length > options.perMessageProcessLimit) {
-      msg.processEntries = msg.processEntries.slice(-options.perMessageProcessLimit);
+    if (Array.isArray(msg.processEntries)) {
+      msg.processEntries = msg.processEntries
+        .slice(-options.perMessageProcessLimit)
+        .map((entry: any) => sanitizeProcessEntryForUi(entry, {
+          textLimit: options.processEntryTextLimit || 1600,
+          extraLimit: options.processEntryExtraLimit || 1200,
+        }));
+    }
+    if (Array.isArray(msg.attachmentPreviews)) {
+      msg.attachmentPreviews = msg.attachmentPreviews.map((preview: any) => sanitizeAttachmentPreviewForUi(preview, {
+        dataUrlLimit: options.attachmentPreviewDataUrlLimit || 60_000,
+        textLimit: options.attachmentPreviewTextLimit || 4000,
+      }));
     }
     return msg;
   });
@@ -13451,21 +13926,8 @@ function estimateCurrentSystemToolSchemaTokens(sessionId: string, profile: { tok
 
 function estimateCurrentSystemPromptTokens(sessionId: string, profile: { tokenizer: any }): number {
   try {
-    const workspacePath = getConfig().getWorkspacePath();
-    const today = new Date().toISOString().split('T')[0];
-    const intraday = loadWorkspaceFile(workspacePath, path.join('memory', `${today}-intraday-notes.md`), 1800);
-    const promptBits = [
-      'You are Prometheus. Follow the current execution mode, response style, safety, routing, memory, and tool-use rules.',
-      `[MODEL_CAPABILITIES]\nprovider=${resolveActiveModelContextProfile().providerId}\nmodel=${resolveActiveModelContextProfile().model}`,
-      loadWorkspaceFile(workspacePath, 'USER.md', 5000) ? `[USER]\n${loadWorkspaceFile(workspacePath, 'USER.md', 5000)}` : '',
-      loadWorkspaceFile(workspacePath, 'SOUL.md', 6000) ? `[SOUL]\n${loadWorkspaceFile(workspacePath, 'SOUL.md', 6000)}` : '',
-      loadWorkspaceFile(workspacePath, 'MEMORY.md', 8000) ? `[MEMORY]\n${loadWorkspaceFile(workspacePath, 'MEMORY.md', 8000)}` : '',
-      loadWorkspaceFile(workspacePath, 'BUSINESS.md', 4000) ? `[BUSINESS]\n${loadWorkspaceFile(workspacePath, 'BUSINESS.md', 4000)}` : '',
-      intraday ? `[TODAY_NOTES]\n${intraday}` : '',
-      buildToolsContext(getActivatedToolCategories(sessionId)),
-      _skillsManager?.buildTurnContext?.('') || '',
-    ].filter(Boolean).join('\n\n');
-    return estimateTextTokensForModel(promptBits, profile.tokenizer);
+    return buildSystemPromptChildren(0, sessionId, profile)
+      .reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
   } catch {
     return 0;
   }
@@ -13499,25 +13961,129 @@ function buildSystemToolSchemaChildren(sessionId: string, profile: { tokenizer: 
   );
 }
 
-function buildSystemPromptChildren(totalTokens: number): ContextWindowRow[] {
-  return allocateContextChildren('system_prompt', totalTokens, [
-    { id: 'base_identity', label: 'Base identity / execution mode', weight: 9 },
-    { id: 'model_capabilities', label: 'Model capabilities', weight: 4 },
-    { id: 'caller_context', label: 'Caller context', weight: 5 },
-    { id: 'browser_state', label: 'Browser state', weight: 3 },
-    { id: 'prometheus_soul', label: '[PROMETHEUS_SOUL]', weight: 8 },
-    { id: 'user', label: '[USER]', weight: 9 },
-    { id: 'soul', label: '[SOUL]', weight: 10 },
-    { id: 'memory', label: '[MEMORY]', weight: 15 },
-    { id: 'business', label: '[BUSINESS]', weight: 5 },
-    { id: 'project_context', label: '[PROJECT_CONTEXT]', weight: 8 },
-    { id: 'today_notes', label: '[TODAY_NOTES]', weight: 8 },
-    { id: 'tools_menu', label: '[TOOLS] menu', weight: 5 },
-    { id: 'activated_tool_blocks', label: 'Activated TOOL_BLOCKS.*', weight: 6 },
-    { id: 'skills_hint', label: 'Skills hint / matching skills', weight: 3 },
-    { id: 'retrieved_memory', label: 'Retrieved memory', weight: 1 },
-    { id: 'reference_hints', label: 'Reference hints', weight: 1 },
-  ]);
+function buildContextWindowSubagentsRosterEstimate(): string {
+  try {
+    const subs = getAgents().filter((agent: any) => agent && agent.default !== true && agent.id !== 'main');
+    if (subs.length === 0) {
+      return '[SUBAGENTS] You currently have 0 subagents configured (only the default agent exists). If asked "how many subagents / who are they," answer: none yet.';
+    }
+    const lines = subs.map((agent: any) => {
+      const displayName = agent?.identity?.displayName || agent?.name || agent?.id;
+      const desc = String(agent?.description || '').trim();
+      const shortDesc = desc.length > 140 ? `${desc.slice(0, 137)}...` : desc;
+      return `- ${displayName} (id: ${agent.id})${shortDesc ? ` - ${shortDesc}` : ''}`;
+    });
+    return [
+      `[SUBAGENTS] You currently have ${subs.length} subagent${subs.length === 1 ? '' : 's'} configured. ALWAYS refer to each by their display name (not the technical id). When asked how many subagents exist or who they are, answer with this count and these names:`,
+      ...lines,
+    ].join('\n');
+  } catch {
+    return '';
+  }
+}
+
+function getLastUserContextText(sessionId: string): string {
+  try {
+    const history = Array.isArray(getSession(sessionId)?.history) ? getSession(sessionId).history : [];
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const msg = history[i] as any;
+      if (msg?.role !== 'user') continue;
+      const content = String(msg?.content || '').trim();
+      if (!content) continue;
+      if (/^Before continuing: summarize the conversation so far into a compact context note\./i.test(content)) continue;
+      if (/^Before continuing: preserve any durable user preferences/i.test(content)) continue;
+      return content;
+    }
+  } catch {}
+  return '';
+}
+
+function buildSystemPromptChildren(totalTokens: number, sessionId: string, profile: { tokenizer: any }): ContextWindowRow[] {
+  const rows: ContextWindowRow[] = [];
+  const addText = (id: string, label: string, text: string, estimated = false) => {
+    const tokens = estimateTextTokensForModel(text, profile.tokenizer);
+    if (tokens <= 0) return;
+    rows.push({
+      id: `system_prompt.${id}`,
+      label,
+      tokens,
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated,
+    });
+  };
+
+  try {
+    const workspacePath = getConfig().getWorkspacePath();
+    const activeCategories = getActivatedToolCategories(sessionId);
+    const today = new Date().toISOString().split('T')[0];
+    const intraday = loadWorkspaceFile(workspacePath, path.join('memory', `${today}-intraday-notes.md`), 1800);
+    const business = isBusinessContextEnabled(sessionId) ? loadWorkspaceFile(workspacePath, 'BUSINESS.md', 4000) : '';
+    const cisContext = buildCisContextBlock(workspacePath, getLastUserContextText(sessionId), { force: isBusinessContextEnabled(sessionId) });
+    const projectContext = findProjectBySessionId(sessionId) ? (buildProjectContextBlock(sessionId) || '') : '';
+    const toolsBlock = buildToolsContext(activeCategories);
+    const baseToolsBlock = buildToolsContext(new Set<string>());
+    const toolsMenu = toolsBlock.startsWith(baseToolsBlock)
+      ? baseToolsBlock
+      : toolsBlock;
+    const activeToolBlocks = toolsBlock.startsWith(baseToolsBlock)
+      ? toolsBlock.slice(baseToolsBlock.length).trim()
+      : Array.from(activeCategories)
+        .map((category) => TOOL_BLOCKS[String(category || '')])
+        .filter(Boolean)
+        .join('\n\n');
+    const skillsHint = _skillsManager?.buildTurnContext?.('') || '';
+    const referenceHint = isPublicDistributionBuild()
+      ? ''
+      : '[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use workspace_read(action:"read", path:"self/index.md"). Follow its links to focused self/* subsystem files as needed.';
+    const profileInfo = resolveActiveModelContextProfile();
+
+    addText('base_identity', 'Base identity / execution mode', 'You are Prometheus. Follow the current execution mode, response style, safety, routing, memory, and tool-use rules.', true);
+    addText('model_capabilities', 'Model capabilities', `[MODEL_CAPABILITIES]\nprovider=${profileInfo.providerId}\nmodel=${profileInfo.model}`, false);
+    addText('prometheus_soul', '[PROMETHEUS_SOUL]', loadSoul());
+    addText('user', '[USER]', loadWorkspaceFile(workspacePath, 'USER.md', 5000));
+    addText('soul', '[SOUL]', loadWorkspaceFile(workspacePath, 'SOUL.md', 6000));
+    addText('memory', '[MEMORY]', loadWorkspaceFile(workspacePath, 'MEMORY.md', 8000));
+    addText('business', '[BUSINESS]', business);
+    addText('cis_context', '[CIS_CONTEXT]', cisContext, true);
+    addText('subagents', '[SUBAGENTS]', buildContextWindowSubagentsRosterEstimate(), true);
+    addText('project_context', '[PROJECT_CONTEXT]', projectContext);
+    addText('today_notes', '[TODAY_NOTES]', intraday);
+    addText('tools_menu', '[TOOLS] menu', toolsMenu, true);
+    addText('activated_tool_blocks', 'Activated TOOL_BLOCKS.*', activeToolBlocks, true);
+    addText('skills_hint', 'Skills hint / matching skills', skillsHint, true);
+    addText('reference_hints', 'Reference hints', referenceHint, true);
+  } catch {
+    // Fall through to the total reconciliation below.
+  }
+
+  const total = Math.max(0, Math.round(Number(totalTokens || 0)));
+  const rowTotal = rows.reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
+  if (total > 0 && rowTotal > total) {
+    return allocateContextChildren(
+      'system_prompt',
+      total,
+      rows.map((row) => ({
+        id: row.id.replace(/^system_prompt\./, ''),
+        label: row.label,
+        tokens: row.tokens,
+        estimated: row.estimated,
+      })),
+    );
+  }
+  if (total > rowTotal) {
+    rows.push({
+      id: 'system_prompt.runtime_context',
+      label: 'Caller/browser/runtime context',
+      tokens: total - rowTotal,
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: true,
+    });
+  }
+  return rows;
 }
 
 function buildProviderUsageGroup(id: string, label: string, usage: any, percentLabel = 'total'): ContextWindowRow | null {
@@ -13620,6 +14186,7 @@ function buildContextWindowCurrentState(input: {
   currentInputTokens: number;
   messageTokens: number;
   recentToolTokens: number;
+  inputBudgetTokens: number;
   compactionTriggerTokens: number;
   storedThread: any;
   modelUsage: any;
@@ -13644,15 +14211,14 @@ function buildContextWindowCurrentState(input: {
   const storedObservationTokens = Math.max(0, Number(input.storedThread?.toolObservationStoredTokens || 0));
   const rawToolStorageTokens = Math.max(0, Number(input.storedThread?.rawToolResultTokens || 0));
   const systemToolChildren = buildSystemToolSchemaChildren(input.sessionId, input.profile, latestToolSchemaTokens);
-  const systemPromptChildren = buildSystemPromptChildren(systemPromptTokens);
+  const systemPromptChildren = buildSystemPromptChildren(systemPromptTokens, input.sessionId, input.profile);
   const providerUsageChildren = buildProviderUsageChildren(input.modelUsage);
   const lastTurnUsageRow = buildLastTurnUsageRow(input.turnTelemetry);
   const skillChildren = activeSkillEstimate.children;
   const contextWindowTokens = Math.max(0, Number(input.profile.contextWindowTokens || 0));
+  const inputBudgetTokens = Math.max(0, Number(input.inputBudgetTokens || 0));
   const compactionTriggerTokens = Math.max(0, Number(input.compactionTriggerTokens || 0));
-  const contextLimitTokens = compactionTriggerTokens > 0 && contextWindowTokens > 0
-    ? Math.min(compactionTriggerTokens, contextWindowTokens)
-    : (compactionTriggerTokens || contextWindowTokens);
+  const contextLimitTokens = contextWindowTokens || inputBudgetTokens || compactionTriggerTokens;
   const inContextRows: ContextWindowRow[] = [
     { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
     { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0, children: systemToolChildren },
@@ -13683,9 +14249,10 @@ function buildContextWindowCurrentState(input: {
     rows: [
       ...inContextRows,
       ...runtimeOverheadRow,
-      { id: 'free_space', label: 'Free before compaction', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
+      { id: 'free_space', label: 'Free context window', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
       { id: 'next_call_estimate', label: 'Next call estimate', tokens: input.currentInputTokens, active: input.currentInputTokens > 0, includedInContext: false, percentLabel: 'next' },
-      { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, percentBasis: 'window', percentLabel: 'limit' },
+      { id: 'input_budget', label: 'Input budget after reserves', tokens: inputBudgetTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'budget' },
+      { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'trigger' },
       { id: 'model_context_window', label: 'Model context window', tokens: contextWindowTokens, active: false, includedInContext: false, outOfBand: true, percentLabel: 'full' },
       { id: 'full_stored_thread', label: 'Full stored thread', tokens: Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0)), active: false, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
       { id: 'stored_process_logs', label: 'Stored process logs', tokens: processTokens, active: processTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
@@ -15335,9 +15902,23 @@ function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): an
       : 'Hand off heavy or durable work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that voice_browser and voice_desktop can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Speaking "on it" or "I started that" WITHOUT emitting this function call does nothing and the work never runs. Never claim the worker is running unless you actually called this function or voice_ops action worker_status reports it active.',
     parameters: {
       type: 'object',
-      required: ['task'],
+      required: [],
       properties: {
-        task: { type: 'string', description: 'Natural-language description of what the worker should do. Include any constraints or details the user mentioned.' },
+        task: { type: 'string', description: 'Natural-language description of the single worker task. Include any constraints or details the user mentioned.' },
+        tasks: {
+          type: 'array',
+          description: 'Use this for multi-part requests that should fan out to multiple Prometheus workers in parallel.',
+          items: {
+            type: 'object',
+            required: ['prompt'],
+            properties: {
+              title: { type: 'string', description: 'Short display name for this worker task.' },
+              prompt: { type: 'string', description: 'Self-contained worker instruction for this task.' },
+            },
+            additionalProperties: false,
+          },
+        },
+        delivery: { type: 'string', enum: ['report_each', 'grouped_summary', 'task_panel_only'], description: 'How results should return to the chat. Default report_each.' },
         spoken_ack: { type: 'string', description: 'Optional. The exact ack you already spoke or are about to speak — included for logs.' },
       },
       additionalProperties: false,
@@ -15445,7 +16026,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     args.voiceAgentMemory ? args.voiceAgentMemory : '',
     args.voiceAgentMemory ? '' : '',
     '## When to call which tool',
-    '- voice_ops: unified quick voice operations. Use action web_search for quick factual/current lookup; web_fetch for one clean text URL; write_note for explicit remember/jot/note; agent_memory for workspace/VOICEAGENT.md routing/spoken-behavior notes with memory_action read/append/replace; set_wake_phrase, enter_quiet_mode, or set_quiet_until for runtime voice settings; memory_search for read-only recall; timer for one-shot timers with timer_action create/list/update/reschedule/cancel; automation_dashboard for operator snapshots; worker_status for Worker progress; send_screenshot for screenshot delivery; generate_image/generate_video for simple media generation.',
+    '- voice_ops: unified quick voice operations. Use action web_search for quick factual/current lookup; web_fetch for one clean text URL; write_note for explicit remember/jot/note; agent_memory for workspace/VOICEAGENT.md routing/spoken-behavior notes with memory_action read/append/replace; set_wake_phrase, enter_quiet_mode, or set_quiet_until for runtime voice settings; memory_search for read-only recall; timer for one-shot timers with timer_action create/list/update/reschedule/cancel; automation_dashboard for operator snapshots; worker_status for Worker progress; task_control for paused/restarted/background task resume, pause, rerun, cancel, or sending guidance to a paused/blocked worker; send_screenshot for screenshot delivery; generate_image/generate_video for simple media generation.',
     '- Visual cards (render a card in the app while you speak the gist — keep speech short, the card carries the detail): show_weather (forecast), show_market (crypto/memecoins), show_stocks (equities/ETFs), show_prediction_market (Polymarket odds), show_map (places/locations), show_sources (news/citations you gathered), show_comparison (side-by-side table), show_chart (line/bar/area from numbers), show_product_carousel (products), show_agent_work (operator snapshot — gather via voice_automation_dashboard first), show_run_result (finished-task summary). All keyless and read-only; call them directly instead of dispatching the Worker for these.',
     '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
@@ -15454,8 +16035,8 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
     identity.isSubagent
       ? `- dispatch_prometheus_worker: TECHNICAL HANDOFF for heavy/durable work. The browser routes it into ${identity.label}'s selected subagent chat. Call it IMMEDIATELY and do not speak an acknowledgement before or after it. Do not describe this as getting a worker or asking Prometheus.`
-      : '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
-    '- steer_active_worker / interrupt_active_worker: ONLY when a worker run is currently active (check the worker context below) AND the user is correcting, changing, pausing, or cancelling the active work. Normal conversation and status questions are not steers.',
+      : '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. If the user gives multiple independent work items, pass them as tasks[] so multiple Prometheus workers can run in parallel. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
+    '- steer_active_worker / interrupt_active_worker: ONLY when a live foreground worker runtime is currently active (check the worker context below) AND the user is correcting, changing, pausing, or cancelling that active runtime. If the worker status says tasks are paused, stalled, awaiting input, failed, or paused after gateway restart, use voice_ops action task_control instead.',
     '',
     '## Routing decisions you make implicitly',
     '- If the user asks something answerable from your context (memory, identity, recall, small talk) — answer directly, no tool.',
@@ -15465,8 +16046,10 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
       ? `- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app routes it into ${identity.label}'s subagent chat and ${identity.label} will report progress.`
-      : '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app shows the handoff and the worker will report progress.',
-    '- If the user interrupts an active worker with an actual correction, new constraint, pause, or direction change — call steer_active_worker.',
+      : '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. For several independent work items, call it once with tasks[] instead of serial single-task calls. The app shows the handoff and the worker will report progress.',
+    '- If the user asks to resume, pause, rerun, cancel, or unpause paused/restarted tasks — call voice_ops with action task_control and task_action resume/pause/rerun/cancel. If task ids are not known, omit task_id so it targets the latest voice workgroup.',
+    '- If the user says to tell a paused/blocked worker something, call voice_ops with action task_control, task_action message, message set to their guidance, and resume_after_message true only when they also ask to continue/resume.',
+    '- If the user interrupts an active live runtime with an actual correction, new constraint, pause, or direction change — call steer_active_worker. Do not use steer_active_worker for paused background tasks.',
     '- If the user explicitly cancels/stops/aborts — call interrupt_active_worker.',
     '',
     '## Tool calls are REAL actions — never fake them',
@@ -16016,6 +16599,178 @@ router.post('/api/voice-agent/realtime-skill-context', async (req, res) => {
   }
 });
 
+type NormalizedVoiceDispatchTask = { title: string; prompt: string };
+
+function compactVoiceDispatchTitle(value: string, fallback: string): string {
+  const clean = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return fallback;
+  return clean.slice(0, 90);
+}
+
+function normalizeVoiceDispatchMode(value: unknown): VoiceWorkgroupMode {
+  return String(value || '').trim() === 'sequential' ? 'sequential' : 'parallel';
+}
+
+function normalizeVoiceDispatchDelivery(value: unknown): VoiceWorkgroupDelivery {
+  const clean = String(value || '').trim();
+  if (clean === 'grouped_summary' || clean === 'task_panel_only') return clean;
+  return 'report_each';
+}
+
+function normalizeVoiceDispatchTasks(body: any): NormalizedVoiceDispatchTask[] {
+  const rawTasks = Array.isArray(body?.tasks) ? body.tasks : [];
+  const tasks = rawTasks.map((raw: any, index: number) => {
+    const prompt = typeof raw === 'string'
+      ? raw
+      : String(raw?.prompt || raw?.task || raw?.objective || raw?.message || raw?.instruction || '').trim();
+    const title = typeof raw === 'object' && raw
+      ? String(raw.title || raw.name || raw.label || '').trim()
+      : '';
+    const cleanPrompt = String(prompt || '').trim();
+    if (!cleanPrompt) return null;
+    return {
+      title: compactVoiceDispatchTitle(title || cleanPrompt, `Voice worker ${index + 1}`),
+      prompt: cleanPrompt.slice(0, 12000),
+    };
+  }).filter(Boolean) as NormalizedVoiceDispatchTask[];
+
+  if (!tasks.length) {
+    const prompt = String(body?.task || body?.prompt || body?.objective || body?.message || '').trim();
+    if (prompt) {
+      const title = String(body?.title || body?.name || '').trim();
+      tasks.push({
+        title: compactVoiceDispatchTitle(title || prompt, 'Voice worker task'),
+        prompt: prompt.slice(0, 12000),
+      });
+    }
+  }
+
+  return tasks.slice(0, 8);
+}
+
+router.get('/api/voice-agent/workgroups/:id', (req, res) => {
+  try {
+    const workgroup = loadVoiceWorkgroup(String(req.params.id || ''));
+    if (!workgroup) {
+      res.status(404).json({ ok: false, success: false, error: 'Voice workgroup not found.' });
+      return;
+    }
+    res.json({ ok: true, success: true, workgroup });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const tasks = normalizeVoiceDispatchTasks(body);
+    if (!tasks.length) {
+      res.status(400).json({ ok: false, success: false, error: 'dispatch_prometheus_worker requires task or tasks[].' });
+      return;
+    }
+
+    const mode = normalizeVoiceDispatchMode(body.mode);
+    const delivery = normalizeVoiceDispatchDelivery(body.delivery);
+    const sourceTranscript = String(body.sourceTranscript || body.transcript || body.originalUserPrompt || body.task || '').trim();
+    const workgroup = createVoiceWorkgroup({
+      parentSessionId: sessionId,
+      sourceTranscript,
+      source: String(body.source || 'realtime_voice_dispatch').trim() || 'realtime_voice_dispatch',
+      mode,
+      delivery,
+    });
+    const taskChannel = inferTaskChannelFromSession(sessionId);
+    const suppressOriginDelivery = delivery === 'grouped_summary' || delivery === 'task_panel_only';
+    const createdTasks: Array<{ taskId: string; title: string; prompt: string; status: string; index: number }> = [];
+
+    tasks.forEach((item, index) => {
+      const task = createTask({
+        title: item.title,
+        prompt: item.prompt,
+        sessionId: `run_once_${sessionId}_${Date.now()}_${index + 1}`,
+        channel: taskChannel,
+        plan: [{ index: 0, description: item.prompt.slice(0, 180) || item.title, status: 'pending' as const }],
+        taskKind: 'run_once',
+        originatingSessionId: sessionId,
+        suppressOriginDelivery,
+        voiceDispatch: {
+          workgroupId: workgroup.id,
+          workerIndex: index,
+          workerTotal: tasks.length,
+          sourceTranscript: sourceTranscript.slice(0, 500) || undefined,
+          delivery,
+          mode,
+        },
+      });
+      appendJournal(task.id, {
+        type: 'status_push',
+        content: `Voice worker ${index + 1}/${tasks.length} queued from realtime dispatch group ${workgroup.id}.`,
+      });
+      addVoiceWorkgroupWorker(workgroup.id, {
+        taskId: task.id,
+        title: task.title,
+        prompt: task.prompt,
+        index,
+        status: task.status,
+      });
+      createdTasks.push({ taskId: task.id, title: task.title, prompt: task.prompt, status: task.status, index });
+
+      setImmediate(() => {
+        try {
+          const runner = new BackgroundTaskRunner(task.id, handleChat, makeBroadcastForTask(task.id), _telegramChannel);
+          runner.start().catch((err: Error) => {
+            console.error(`[VoiceDispatch] BackgroundTaskRunner error for ${task.id}:`, err?.message || err);
+          });
+        } catch (err: any) {
+          console.error(`[VoiceDispatch] Failed to spawn runner for ${task.id}:`, err?.message || err);
+        }
+      });
+      try {
+        broadcastWS({
+          type: 'task_running',
+          taskId: task.id,
+          title: task.title,
+          source: 'voice_dispatch',
+          sessionId,
+          workgroupId: workgroup.id,
+          workerIndex: index,
+          workerTotal: tasks.length,
+        });
+        broadcastWS({ type: 'task_panel_update', taskId: task.id, workgroupId: workgroup.id });
+      } catch {}
+    });
+
+    const refreshedWorkgroup = loadVoiceWorkgroup(workgroup.id) || workgroup;
+    broadcastWS({
+      type: 'voice_workgroup_dispatched',
+      sessionId,
+      workgroupId: workgroup.id,
+      workgroup: refreshedWorkgroup,
+      tasks: createdTasks,
+      taskIds: createdTasks.map((task) => task.taskId),
+      delivery,
+      mode,
+    });
+
+    res.json({
+      ok: true,
+      success: true,
+      dispatched: true,
+      workgroupId: workgroup.id,
+      workgroup: refreshedWorkgroup,
+      taskIds: createdTasks.map((task) => task.taskId),
+      tasks: createdTasks,
+      delivery,
+      mode,
+      message: `Dispatched ${createdTasks.length} Prometheus worker${createdTasks.length === 1 ? '' : 's'}.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
 router.post('/api/voice-agent/realtime-tool', async (req, res) => {
   try {
     const body = req.body || {};
@@ -16298,9 +17053,12 @@ router.post('/api/chat/steer', (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
-    const message = String(body.message || '').trim();
-    if (!message) {
-      res.status(400).json({ ok: false, success: false, error: 'Message required' });
+    const steerAttachments = normalizeRuntimeVisionAttachmentsInput(body.attachments);
+    const steerAttachmentPreviews = normalizeRuntimeAttachmentPreviewsInput(body.attachmentPreviews);
+    const message = String(body.message || body.text || '').trim()
+      || (steerAttachments.length || steerAttachmentPreviews.length ? `User sent ${steerAttachments.length + steerAttachmentPreviews.length} attachment(s) as a live steer.` : '');
+    if (!message && steerAttachments.length === 0 && steerAttachmentPreviews.length === 0) {
+      res.status(400).json({ ok: false, success: false, error: 'Message or attachment required' });
       return;
     }
     const expectedRuntimeId = String(body.expectedRuntimeId || body.runtimeId || '').trim();
@@ -16320,6 +17078,8 @@ router.post('/api/chat/steer', (req, res) => {
       message,
       source: String(body.source || 'web_queue_steer').trim() || 'web_queue_steer',
       clientRequestId: String(body.clientRequestId || '').trim() || undefined,
+      attachments: steerAttachments,
+      attachmentPreviews: steerAttachmentPreviews,
     });
     if (!steer.ok || !steer.event) {
       res.status(409).json({ ok: false, success: false, error: steer.error || 'Could not queue steer event.' });
@@ -16331,6 +17091,7 @@ router.post('/api/chat/steer', (req, res) => {
         id: steer.event.id,
         transcript: message.slice(0, 500),
         injectedContextText,
+        attachmentCount: steerAttachments.length + steerAttachmentPreviews.length,
         at: Date.now(),
       },
     });
@@ -16360,6 +17121,8 @@ router.post('/api/chat/steer', (req, res) => {
       eventId: steer.event.id,
       runtimeId: activeRuntime.id,
       message: message.slice(0, 500),
+      attachments: steerAttachments.map((attachment) => ({ name: attachment.name, mimeType: attachment.mimeType })),
+      attachmentPreviews: steerAttachmentPreviews.map((preview: any) => ({ name: preview?.name, mimeType: preview?.mimeType, workspacePath: preview?.workspacePath || preview?.path || preview?.filePath })),
     });
     res.json({
       ok: true,
@@ -16538,6 +17301,7 @@ router.post('/api/chat', async (req, res) => {
   const __turnT0 = Date.now();
   const __turnTimingLog = (label: string) => {
     try {
+      if (!TURN_TIMING_ENABLED) return;
       const line = `${new Date().toISOString()} +${String(Date.now() - __turnT0).padStart(6)}ms session=${resolvedSessionId} ${label}\n`;
       fs.appendFileSync(path.join(getConfig().getConfigDir(), 'logs', 'turn-timing.log'), line, 'utf-8');
     } catch {}
@@ -16961,23 +17725,37 @@ router.get('/api/sessions/:id', (req, res) => {
     }
 
     const full = req.query.full === '1' || req.query.full === 'true';
+    const mobileOptimized = req.query.mobile === '1'
+      || req.query.client === 'mobile'
+      || !!req.headers['x-pairing-token']
+      || sessionId.startsWith('mobile_')
+      || sessionId === 'mobile_default';
     const historyLimit = full
       ? 0
-      : boundedPositiveInt(req.query.historyLimit, 200, 20, 500);
+      : boundedPositiveInt(req.query.historyLimit, mobileOptimized ? 70 : 200, 20, mobileOptimized ? 180 : 500);
     const processLimit = full
       ? 500
-      : boundedPositiveInt(req.query.processLimit, 250, 40, 500);
+      : boundedPositiveInt(req.query.processLimit, mobileOptimized ? 120 : 250, 20, mobileOptimized ? 160 : 500);
     const includeToolLog = full || req.query.includeToolLog === '1' || req.query.includeToolLog === 'true';
     const responseHistory = sanitizeHistoryForUiResponse(session.history, {
       historyLimit,
       includeToolLog,
-      perMessageProcessLimit: full ? 500 : 50,
+      perMessageProcessLimit: full ? 500 : mobileOptimized ? 12 : 50,
+      processEntryTextLimit: full ? 10_000_000 : mobileOptimized ? 900 : 1600,
+      processEntryExtraLimit: full ? 10_000_000 : mobileOptimized ? 700 : 1200,
+      attachmentPreviewDataUrlLimit: full ? 10_000_000 : mobileOptimized ? 30_000 : 60_000,
+      attachmentPreviewTextLimit: full ? 10_000_000 : mobileOptimized ? 2000 : 4000,
     });
     const durableProcessLog = Array.isArray((session as any).processLog) ? (session as any).processLog : [];
     const responseProcessLog = [
       ...durableProcessLog,
       ...sessionProcessLogFromHistory({ history: responseHistory }),
-    ].slice(-processLimit);
+    ]
+      .slice(-processLimit)
+      .map((entry: any) => sanitizeProcessEntryForUi(entry, {
+        textLimit: full ? 10_000_000 : mobileOptimized ? 900 : 1600,
+        extraLimit: full ? 10_000_000 : mobileOptimized ? 700 : 1200,
+      }));
     
     res.json({
       session: {
@@ -17039,6 +17817,7 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
       currentInputTokens,
       messageTokens,
       recentToolTokens: toolTokens,
+      inputBudgetTokens: budget.inputBudgetTokens,
       compactionTriggerTokens: budget.compactionTriggerTokens,
       storedThread,
       modelUsage,
@@ -17062,7 +17841,7 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
       calibration,
       contextWindowTokens: profile.contextWindowTokens,
       contextLimitTokens: currentState.contextLimitTokens,
-      currentContextLimitTokens: currentState.contextLimitTokens,
+      currentContextLimitTokens: profile.contextWindowTokens,
       inputBudgetTokens: budget.inputBudgetTokens,
       compactionTriggerTokens: budget.compactionTriggerTokens,
       percentOfWindow: profile.contextWindowTokens > 0 ? currentState.currentStateTokens / profile.contextWindowTokens : 0,

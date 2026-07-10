@@ -2041,6 +2041,38 @@ export function getFileWebMemoryTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'media_generate',
+        description: 'Unified AI media generation wrapper. Use action="image" for one-shot raster images and action="video" for one-shot MP4 generation. Existing generate_image/generate_video remain executable compatibility aliases.',
+        parameters: {
+          type: 'object',
+          required: ['action', 'prompt'],
+          properties: {
+            action: { type: 'string', enum: ['image', 'video'], description: 'Media kind to generate.' },
+            prompt: { type: 'string', description: 'Text prompt describing the image or video to generate.' },
+            reference_images: { type: 'array', items: { type: 'string' }, maxItems: 16, description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs.' },
+            image: { type: 'string', description: 'Optional source image path, URL, or data URL for image-to-video.' },
+            video: { type: 'string', description: 'Optional source video path, URL, or data URL for video edit/extend modes.' },
+            mode: { type: 'string', enum: ['generate', 'edit', 'extend'], description: 'Video request mode. Defaults to generate, or edit when video is provided.' },
+            aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired media aspect ratio.' },
+            count: { type: 'integer', minimum: 1, maximum: 4, description: 'Image only: how many separate image outputs to generate.' },
+            duration: { type: 'integer', minimum: 1, maximum: 15, description: 'Video only: duration in seconds.' },
+            resolution: { type: 'string', enum: ['480p', '720p'], description: 'Video only: output resolution.' },
+            provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Optional provider override. Image supports OpenAI/OpenAI Codex/xAI; video currently supports xAI.' },
+            model: { type: 'string', description: 'Optional image or video model override.' },
+            background: { type: 'string', enum: ['transparent', 'opaque', 'auto'], description: 'Image only: background mode. Use transparent for real alpha.' },
+            output_format: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'Image only: output format.' },
+            quality: { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'Image only: generation quality.' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory.' },
+            save_to_workspace: { type: 'boolean', description: 'If false, keep generated media only in Prometheus cache.' },
+            poll_interval_ms: { type: 'integer', minimum: 1000, maximum: 30000, description: 'Video only: polling interval in milliseconds.' },
+            timeout_ms: { type: 'integer', minimum: 30000, maximum: 1800000, description: 'Video only: generation timeout in milliseconds.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'generate_image',
         description: 'Generate one or more raster images from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. Use background="transparent" and output_format="png" for true alpha transparency; do not rely only on prompt wording. For separate options/variations, set count > 1 and ask for separate standalone images, not a collage. Use count=1 only when the user wants one image or explicitly wants a single collage/grid/contact sheet. Saves to generated/images by default.',
         parameters: {

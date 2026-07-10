@@ -1,0 +1,223 @@
+self/09-providers-and-models.md (139 lines) [window 1-139]:
+1: ## 20) Providers and Provider Registry
+2: 
+3: Provider selection is now extension-descriptor driven through `src/providers/provider-registry.ts`, not just a small hardcoded factory list.
+4: 
+5: Registry helpers now expose:
+6: 
+7: - provider descriptors
+8: - known provider IDs
+9: - secret field lists
+10: - provider static model lists
+11: 
+12: Bundled provider extension directories currently include:
+13: 
+14: - `anthropic`
+15: - `arcee`
+16: - `deepseek`
+17: - `gemini`
+18: - `huggingface`
+19: - `kilocode`
+20: - `llama_cpp`
+21: - `lm_studio`
+22: - `minimax`
+23: - `moonshot`
+24: - `nvidia`
+25: - `ollama`
+26: - `openai`
+27: - `openai_codex`
+28: - `opencode`
+29: - `opencode-go`
+30: - `openrouter`
+31: - `perplexity`
+32: - `qwen`
+33: - `vercel-ai-gateway`
+34: - `xai`
+35: - `xiaomi`
+36: - `zai`
+37: 
+38: The config schema explicitly validates provider-specific structures for:
+39: 
+40: - `ollama`
+41: - `llama_cpp`
+42: - `lm_studio`
+43: - `openai`
+44: - `openai_codex`
+45: - `anthropic`
+46: - `perplexity`
+47: - `gemini`
+48: 
+49: ## 21) Model Configuration and Presets
+50: 
+51: Current default LLM config in source:
+52: 
+53: - active provider default: `ollama`
+54: - default Ollama model: `qwen3:4b`
+55: - default OpenAI Codex model: `gpt-5.5`
+56: - default OpenAI API model: `gpt-5.5`
+57: - OpenAI Codex and OpenAI API static model lists expose the official GPT-5.6 preview model IDs published by OpenAI: `gpt-5.6-sol` (flagship), `gpt-5.6-terra` (balanced), and `gpt-5.6-luna` (fast/low-cost). Do not expose invented aliases such as `gpt-5.6`, `gpt-5.6-codex`, `gpt-5.6-codex-mini`, or plain `sol`; OpenAI's preview help article lists only the three fully-qualified IDs for API and Codex. GPT-5.6 preview access is separately provisioned for approved API organizations and Codex workspaces, so `gpt-5.5` remains the safe default/fallback until the active account is enabled.
+58: - Official GPT-5.6 preview pricing per 1M tokens: Sol $5 input / $30 output, Terra $2.50 input / $15 output, Luna $1 input / $6 output. GPT-5.6 cache writes are billed at 1.25x uncached input and cache reads keep the 90% cached-input discount.
+59: 
+60: - native Anthropic exposed models start with `claude-opus-4-8`, then preserve the current Opus/Sonnet/Haiku models
+61: - legacy `models.primary`: `qwen3:4b`
+62: - legacy role defaults (`manager`, `executor`, `verifier`): all `qwen3:4b`
+63: 
+64: Provider/model settings surfaces:
+65: 
+66: - `GET/POST /api/settings/provider`
+67: - `GET/POST /api/settings/model`
+68: - `GET/POST /api/settings/agent-model-defaults`
+69: - `POST /api/models/test`
+70: 
+71: Agent/model default keys currently supported:
+72: 
+73: - `main_chat`
+74: - `proposal_executor_high_risk`
+75: - `proposal_executor_low_risk`
+76: - `manager`
+77: - `team_manager`
+78: - `subagent`
+79: - `team_subagent`
+80: - `background_task`
+81: - `subagent_planner`
+82: - `subagent_orchestrator`
+83: - `subagent_researcher`
+84: - `subagent_analyst`
+85: - `subagent_builder`
+86: - `subagent_operator`
+87: - `subagent_verifier`
+88: - `switch_model_low`
+89: - `switch_model_medium`
+90: - `coordinator`
+91: - `background_agent`
+92: 
+93: Other current model facts:
+94: 
+95: - `switch_model` is turn-scoped, not a global config save
+96: - its exposed tiers are `low` and `medium`
+97: - OpenAI, OpenAI Codex, and Perplexity provider config support `reasoning_effort`
+98: - validated reasoning efforts include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; GPT-5.6 introduces `max` reasoning effort, while older providers/models may normalize or ignore unsupported values.
+99: - Anthropic provider config supports `extended_thinking` and `thinking_budget`
+100: 
+101: Provider-aware context budgeting lives in `src/gateway/context/model-context.ts`.
+102: 
+103: Current context-profile behavior:
+104: 
+105: - `resolveActiveModelContextProfile(...)` reads the active provider/model from config and returns `providerId`, `model`, `contextWindowTokens`, `maxOutputTokens`, tokenizer family, reasoning-token support, reasoning budget, and source
+106: - profile sources are `config_override`, `provider_metadata`, `known_table`, `ollama_num_ctx`, or `fallback`
+107: - provider config overrides can set `context_window` / `contextWindowTokens`, `max_output_tokens` / `maxOutputTokens`, `reasoning_budget_tokens` / `thinking_budget`, and `tokenizer`
+108: - provider metadata can supply `contextWindowTokens`, `maxOutputTokens`, and tokenizer when available
+109: - Ollama context can come from configured `num_ctx`, `LOCALCLAW_SESSION_NUM_CTX`, or `LOCALCLAW_CHAT_NUM_CTX`
+110: - tokenizer families are `openai`, `anthropic`, `gemini`, `llama`, `qwen`, and `heuristic`
+111: 
+112: Known context table facts:
+113: 
+114: - OpenAI/OpenAI Codex `gpt-5*` and Codex-named models are currently treated as 400k context with 128k max output
+115: - OpenAI/OpenAI Codex `gpt-4.1*` is treated as about 1,047,576 context with 32,768 max output
+116: - OpenAI/OpenAI Codex `gpt-4o` and `o*` models are treated as 128k context
+117: - Anthropic `claude-opus-4-8` is treated as 1m context with 128k max output
+118: - Anthropic `claude-*` models are treated as 200k context
+119: - Gemini `gemini-*` models are treated as 1m context
+120: - xAI static models include `grok-build-0.1`, the OAuth/subscription-gated `grok-composer-2.5-fast` Composer 2.5 id, and current Grok 4.x ids. Composer 2.5 is available in Grok Build to SuperGrok/X Premium+ and may be absent from public `/v1/models`, so keep it as a curated static model while live model discovery remains enabled.
+121: - Perplexity sonar models and xAI Grok/Composer models currently fall back to 128k known-table entries unless overridden or provider metadata says otherwise
+122: - unknown local/llama providers fall back lower, currently 8192; unknown cloud-ish providers fall back to 32768
+123: 
+124: Budget math:
+125: 
+126: - `buildContextBudget(...)` reserves output tokens, reasoning tokens when supported, and 10% safety headroom
+127: - usable input budget is context minus reserved output, reasoning, and headroom
+128: - compaction triggers at 75% of the usable input budget
+129: - recent tool context budget is about 16% of usable input budget, with a 600-token floor
+130: - summary budget is about 8% of usable input budget, with a 700-token floor
+131: 
+132: Token counts are estimates, not provider-billed truth. `estimateTextTokensForModel(...)` uses character-density heuristics by tokenizer family and gives denser code/log text a smaller divisor. Provider usage metadata should be used for calibration where available, but UI/context decisions should still tolerate approximation.
+133: 
+134: Anthropic extended-thinking request shape:
+135: 
+136: - Opus 4.7 and newer Opus aliases use adaptive thinking (`thinking: { type: "adaptive" }`) with high effort output config instead of legacy `budget_tokens`.
+137: - Older supported Claude thinking models continue to use the configured `thinking_budget`.
+138: - The native Anthropic extension does not carry a descriptor-level static model list; `AnthropicAdapter.listModels()` returns the known native model set. Aggregator descriptors keep static fallback lists in their provider-specific ID formats.
+139: 
+
+temp/tool-results/1783538086294-mobile_mrcghgkh_mmlgpg-read_files_batch.txt (140 lines) [window 1-80, truncated]:
+1: self/09-providers-and-models.md (139 lines) [window 1-139]:
+2: 1: ## 20) Providers and Provider Registry
+3: 2: 
+4: 3: Provider selection is now extension-descriptor driven through `src/providers/provider-registry.ts`, not just a small hardcoded factory list.
+5: 4: 
+6: 5: Registry helpers now expose:
+7: 6: 
+8: 7: - provider descriptors
+9: 8: - known provider IDs
+10: 9: - secret field lists
+11: 10: - provider static model lists
+12: 11: 
+13: 12: Bundled provider extension directories currently include:
+14: 13: 
+15: 14: - `anthropic`
+16: 15: - `arcee`
+17: 16: - `deepseek`
+18: 17: - `gemini`
+19: 18: - `huggingface`
+20: 19: - `kilocode`
+21: 20: - `llama_cpp`
+22: 21: - `lm_studio`
+23: 22: - `minimax`
+24: 23: - `moonshot`
+25: 24: - `nvidia`
+26: 25: - `ollama`
+27: 26: - `openai`
+28: 27: - `openai_codex`
+29: 28: - `opencode`
+30: 29: - `opencode-go`
+31: 30: - `openrouter`
+32: 31: - `perplexity`
+33: 32: - `qwen`
+34: 33: - `vercel-ai-gateway`
+35: 34: - `xai`
+36: 35: - `xiaomi`
+37: 36: - `zai`
+38: 37: 
+39: 38: The config schema explicitly validates provider-specific structures for:
+40: 39: 
+41: 40: - `ollama`
+42: 41: - `llama_cpp`
+43: 42: - `lm_studio`
+44: 43: - `openai`
+45: 44: - `openai_codex`
+46: 45: - `anthropic`
+47: 46: - `perplexity`
+48: 47: - `gemini`
+49: 48: 
+50: 49: ## 21) Model Configuration and Presets
+51: 50: 
+52: 51: Current default LLM config in source:
+53: 52: 
+54: 53: - active provider default: `ollama`
+55: 54: - default Ollama model: `qwen3:4b`
+56: 55: - default OpenAI Codex model: `gpt-5.5`
+57: 56: - default OpenAI API model: `gpt-5.5`
+58: 57: - OpenAI Codex and OpenAI API static model lists expose the official GPT-5.6 preview model IDs published by OpenAI: `gpt-5.6-sol` (flagship), `gpt-5.6-terra` (balanced), and `gpt-5.6-luna` (fast/low-cost). Do not expose invented aliases such as `gpt-5.6`, `gpt-5.6-codex`, `gpt-5.6-codex-mini`, or plain `sol`; OpenAI's preview help article lists only the three fully-qualified IDs for API and Codex. GPT-5.6 preview access is separately provisioned for approved API organizations and Codex workspaces, so `gpt-5.5` remains the safe default/fallback until the active account is enabled.
+59: 58: - Official GPT-5.6 preview pricing per 1M tokens: Sol $5 input / $30 output, Terra $2.50 input / $15 output, Luna $1 input / $6 output. GPT-5.6 cache writes are billed at 1.25x uncached input and cache reads keep the 90% cached-input discount.
+60: 59: 
+61: 60: - native Anthropic exposed models start with `claude-opus-4-8`, then preserve the current Opus/Sonnet/Haiku models
+62: 61: - legacy `models.primary`: `qwen3:4b`
+63: 62: - legacy role defaults (`manager`, `executor`, `verifier`): all `qwen3:4b`
+64: 63: 
+65: 64: Provider/model settings surfaces:
+66: 65: 
+67: 66: - `GET/POST /api/settings/provider`
+68: 67: - `GET/POST /api/settings/model`
+69: 68: - `GET/POST /api/settings/agent-model-defaults`
+70: 69: - `POST /api/models/test`
+71: 70: 
+72: 71: Agent/model default keys currently supported:
+73: 72: 
+74: 73: - `main_chat`
+75: 74: - `proposal_executor_high_risk`
+76: 75: - `proposal_executor_low_risk`
+77: 76: - `manager`
+78: 77: - `team_manager`
+79: 78: - `subagent`
+80: 79: - `team_subagent`
+[READ_TRUNCATED] Use start_line:81, num_lines:80 for the next chunk, or full:true only when needed.

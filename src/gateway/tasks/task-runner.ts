@@ -725,7 +725,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   }
   const id = `bg_${crypto.randomUUID()}`;
   const joinPolicy: BackgroundJoinPolicy =
-    input?.joinPolicy === 'wait_all' || input?.joinPolicy === 'best_effort_merge'
+    input?.joinPolicy === 'wait_all' || input?.joinPolicy === 'wait_until_timeout' || input?.joinPolicy === 'best_effort_merge'
       ? input.joinPolicy
       : 'wait_all';
   const timeoutMs = clampBackgroundTimeoutMs(input?.timeoutMs);
@@ -923,7 +923,7 @@ export async function backgroundJoin(input: {
   if (!rec) return null;
 
   const policy: BackgroundJoinPolicy =
-    input?.joinPolicy === 'wait_all' || input?.joinPolicy === 'best_effort_merge'
+    input?.joinPolicy === 'wait_all' || input?.joinPolicy === 'wait_until_timeout' || input?.joinPolicy === 'best_effort_merge'
       ? input.joinPolicy
       : (rec.joinPolicy || 'wait_until_timeout');
   const timeoutMs = clampBackgroundTimeoutMs(input?.timeoutMs ?? rec.timeoutMs);

@@ -29,6 +29,10 @@ import { log } from '../security/log-scrubber';
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
 const VAULT_KEY = 'anthropic.oauth_tokens';
+const accountVaultKey = (accountId?: string): string => {
+  const id = String(accountId || '').trim();
+  return id ? `${VAULT_KEY}.${id}` : VAULT_KEY;
+};
 
 // Anthropic API endpoint
 export const ANTHROPIC_API_BASE = 'https://api.anthropic.com';
@@ -87,9 +91,9 @@ export interface AnthropicTokens {
 /**
  * Load Anthropic tokens from the encrypted vault.
  */
-export function loadTokens(configDir: string): AnthropicTokens | null {
+export function loadTokens(configDir: string, accountId?: string): AnthropicTokens | null {
   const vault  = getVault(configDir);
-  const secret = vault.get(VAULT_KEY, 'anthropic:load');
+  const secret = vault.get(accountVaultKey(accountId), 'anthropic:load');
   if (!secret) return null;
   try {
     return JSON.parse(secret.expose()) as AnthropicTokens;
@@ -101,25 +105,25 @@ export function loadTokens(configDir: string): AnthropicTokens | null {
 /**
  * Save Anthropic tokens to the encrypted vault.
  */
-export function saveTokens(configDir: string, tokens: AnthropicTokens): void {
+export function saveTokens(configDir: string, tokens: AnthropicTokens, accountId?: string): void {
   const vault = getVault(configDir);
-  vault.set(VAULT_KEY, JSON.stringify(tokens), 'anthropic:save');
+  vault.set(accountVaultKey(accountId), JSON.stringify(tokens), 'anthropic:save');
   log.security('[anthropic-auth] Tokens saved to vault (type:', tokens.auth_type, ')');
 }
 
 /**
  * Clear Anthropic tokens from the vault.
  */
-export function clearTokens(configDir: string): void {
-  getVault(configDir).delete(VAULT_KEY, 'anthropic:clear');
+export function clearTokens(configDir: string, accountId?: string): void {
+  getVault(configDir).delete(accountVaultKey(accountId), 'anthropic:clear');
   log.security('[anthropic-auth] Tokens cleared from vault');
 }
 
 /**
  * Check if Anthropic is connected (has valid tokens).
  */
-export function isConnected(configDir: string): boolean {
-  return loadTokens(configDir) !== null;
+export function isConnected(configDir: string, accountId?: string): boolean {
+  return loadTokens(configDir, accountId) !== null;
 }
 
 /**
@@ -128,8 +132,8 @@ export function isConnected(configDir: string): boolean {
  * If the token is invalid/expired, the API will return 401 and the user
  * needs to re-run `claude setup-token` and paste a new one.
  */
-export function getValidToken(configDir: string): string {
-  const tokens = loadTokens(configDir);
+export function getValidToken(configDir: string, accountId?: string): string {
+  const tokens = loadTokens(configDir, accountId);
   if (!tokens) {
     throw new Error(
       'Not connected to Anthropic. Go to Settings → Models → Anthropic and paste your setup-token.\n' +
@@ -143,7 +147,7 @@ export function getValidToken(configDir: string): string {
  * Store a setup-token from the user.
  * Validates format and saves to vault.
  */
-export function storeSetupToken(configDir: string, token: string): { success: boolean; error?: string } {
+export function storeSetupToken(configDir: string, token: string, accountId?: string): { success: boolean; error?: string } {
   const trimmed = token.trim();
 
   if (!trimmed) {
@@ -167,7 +171,7 @@ export function storeSetupToken(configDir: string, token: string): { success: bo
     auth_type:    isOAuthToken ? 'setup_token' : 'api_key',
   };
 
-  saveTokens(configDir, tokens);
+  saveTokens(configDir, tokens, accountId);
   return { success: true };
 }
 
@@ -175,8 +179,8 @@ export function storeSetupToken(configDir: string, token: string): { success: bo
  * Build the required headers for Anthropic API requests.
  * Handles the difference between OAuth tokens and API keys.
  */
-export function buildAuthHeaders(configDir: string): Record<string, string> {
-  const tokens = loadTokens(configDir);
+export function buildAuthHeaders(configDir: string, accountId?: string): Record<string, string> {
+  const tokens = loadTokens(configDir, accountId);
   if (!tokens) throw new Error('No Anthropic credentials configured.');
 
   const headers: Record<string, string> = {

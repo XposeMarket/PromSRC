@@ -1,0 +1,242 @@
+src/providers/provider-usage-limits.ts (661 lines) [window 286-525, truncated]:
+286:     ? `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+287:     : `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`;
+288: }
+289: 
+290: function normaliseGrokBillingWindow(body: any): UsageWindow | null {
+291:   const root = body?.config && typeof body.config === 'object' ? body.config : body;
+292:   const pool = body?.weeklyPool || body?.sharedPool || body?.usagePool || body?.credits || root;
+293:   const used = firstPathNumber(pool, [
+294:     'used.val', 'used.value', 'usedCredits.val', 'usedCredits', 'usage.used.val', 'usage.used',
+295:     'totalUsed.val', 'totalUsed', 'amountUsed.val', 'amountUsed',
+296:   ]);
+297:   const limit = firstPathNumber(pool, [
+298:     'weeklyLimit.val', 'weeklyLimit', 'monthlyLimit.val', 'monthlyLimit', 'limit.val', 'limit',
+299:     'total.val', 'total', 'pool.val', 'pool', 'creditLimit.val', 'creditLimit',
+300:   ]);
+301:   const explicitRemaining = firstPathNumber(pool, [
+302:     'remaining.val', 'remaining', 'remainingCredits.val', 'remainingCredits', 'available.val', 'available',
+303:     'balance.val', 'balance',
+304:   ]);
+305:   const remaining = explicitRemaining != null ? explicitRemaining
+306:     : (used != null && limit != null ? Math.max(0, limit - used) : null);
+307:   const usedPercent = firstPathNumber(pool, ['used_percent', 'usedPercent', 'percentUsed', 'utilization', 'percentage'])
+308:     ?? (used != null && limit != null && limit > 0 ? (used / limit) * 100 : null);
+309:   const resetAt = resetIsoFrom({
+310:     reset_at: firstPathString(pool, [
+311:       'reset_at', 'resetAt', 'resets_at', 'resetsAt', 'billingPeriodEnd', 'billing_period_end',
+312:       'periodEnd', 'period_end', 'nextResetAt', 'next_reset_at',
+313:     ]),
+314:     reset_after_seconds: firstPathNumber(pool, [
+315:       'reset_after_seconds', 'resetAfterSeconds', 'resets_in_seconds', 'secondsUntilReset',
+316:       'seconds_until_reset', 'resetCountdownSeconds',
+317:     ]),
+318:   });
+319:   const period = firstPathString(pool, ['period', 'window', 'cadence', 'limitType'])
+320:     || (firstPathString(pool, ['billingPeriodStart', 'billing_period_start']) ? 'Monthly' : 'Weekly');
+321:   const unit = firstPathString(pool, ['unit', 'currency']) || 'credits';
+322:   const parts = [
+323:     remaining != null && limit != null ? `Remaining ${money(remaining, unit)} / ${money(limit, unit)}` : '',
+324:     used != null ? `Used ${money(used, unit)}` : '',
+325:   ].filter(Boolean);
+326:   return {
+327:     label: /month/i.test(period) ? 'Monthly pool' : /day/i.test(period) ? `${period} pool` : 'Weekly pool',
+328:     used_percent: clampPct(usedPercent ?? 0),
+329:     reset_at: resetAt,
+330:     used,
+331:     limit,
+332:     remaining,
+333:     unit,
+334:     detail: parts.join(' · ') || null,
+335:   };
+336: }
+337: 
+338: function localGrokAuthPath(): string {
+339:   const os = require('os');
+340:   const path = require('path');
+341:   return path.join(os.homedir(), '.grok', 'auth.json');
+342: }
+343: 
+344: function extractGrokAuth(raw: any, authPath: string): GrokAuth | null {
+345:   const access = firstPathString(raw, [
+346:     'access_token', 'accessToken', 'tokens.access_token', 'tokens.accessToken',
+347:     'oauth.access_token', 'oauth.accessToken',
+348:   ]);
+349:   if (!access) return null;
+350:   const refresh = firstPathString(raw, [
+351:     'refresh_token', 'refreshToken', 'tokens.refresh_token', 'tokens.refreshToken',
+352:     'oauth.refresh_token', 'oauth.refreshToken',
+353:   ]) || undefined;
+354:   const tokenEndpoint = firstPathString(raw, [
+355:     'token_endpoint', 'tokenEndpoint', 'tokens.token_endpoint', 'oauth.token_endpoint',
+356:   ]) || undefined;
+357:   return { source: 'grok_cli_auth', access_token: access, refresh_token: refresh, token_endpoint: tokenEndpoint, auth_path: authPath, raw };
+358: }
+359: 
+360: function loadLocalGrokAuth(): GrokAuth | null {
+361:   try {
+362:     const fs = require('fs');
+363:     const authPath = localGrokAuthPath();
+364:     if (!fs.existsSync(authPath)) return null;
+365:     return extractGrokAuth(JSON.parse(String(fs.readFileSync(authPath, 'utf8'))), authPath);
+366:   } catch {
+367:     return null;
+368:   }
+369: }
+370: 
+371: function saveLocalGrokAuth(auth: GrokAuth, update: any): void {
+372:   if (!auth.auth_path || !auth.raw || !update?.access_token) return;
+373:   const fs = require('fs');
+374:   const raw = { ...auth.raw };
+375:   const setKnown = (snake: string, camel: string, value: unknown) => {
+376:     if (raw[snake] != null) raw[snake] = value;
+377:     else if (raw[camel] != null) raw[camel] = value;
+378:   };
+379:   setKnown('access_token', 'accessToken', String(update.access_token));
+380:   if (update.refresh_token) setKnown('refresh_token', 'refreshToken', String(update.refresh_token));
+381:   if (raw.tokens && typeof raw.tokens === 'object') {
+382:     raw.tokens.access_token = String(update.access_token);
+383:     if (update.refresh_token) raw.tokens.refresh_token = String(update.refresh_token);
+384:   }
+385:   if (raw.oauth && typeof raw.oauth === 'object') {
+386:     raw.oauth.access_token = String(update.access_token);
+387:     if (update.refresh_token) raw.oauth.refresh_token = String(update.refresh_token);
+388:   }
+389:   fs.writeFileSync(auth.auth_path, JSON.stringify(raw, null, 2));
+390: }
+391: 
+392: async function refreshLocalGrokAuth(auth: GrokAuth): Promise<GrokAuth | null> {
+393:   if (!auth.refresh_token) return null;
+394:   const endpoint = auth.token_endpoint || 'https://auth.x.ai/oauth/token';
+395:   const url = new URL(endpoint);
+396:   if (url.protocol !== 'https:' || (url.hostname !== 'auth.x.ai' && !url.hostname.endsWith('.x.ai'))) {
+397:     throw new Error('Grok auth refresh endpoint is not an x.ai HTTPS endpoint');
+398:   }
+399:   const res = await withTimeout(fetch(endpoint, {
+400:     method: 'POST',
+401:     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+402:     body: new URLSearchParams({
+403:       grant_type: 'refresh_token',
+404:       client_id: 'b1a00492-073a-47ea-816f-4c329264a828',
+405:       refresh_token: auth.refresh_token,
+406:     }).toString(),
+407:   }), 15000);
+408:   if (!res.ok) return null;
+409:   const data: any = await res.json().catch(() => ({}));
+410:   if (!data?.access_token) return null;
+411:   try { saveLocalGrokAuth(auth, data); } catch { /* best-effort local CLI cache update */ }
+412:   return { ...auth, access_token: String(data.access_token), refresh_token: String(data.refresh_token || auth.refresh_token) };
+413: }
+414: 
+415: async function loadGrokBillingAuth(configDir: string): Promise<GrokAuth | null> {
+416:   try {
+417:     const oauth = require('../auth/xai-oauth');
+418:     const tokens = oauth.loadXAITokens(configDir);
+419:     if (tokens?.access_token) {
+420:       let accessToken = String(tokens.access_token);
+421:       try { accessToken = await oauth.getValidXAIToken(configDir); } catch { /* use stored token */ }
+422:       return {
+423:         source: 'prometheus_oauth',
+424:         access_token: accessToken,
+425:         refresh_token: tokens.refresh_token,
+426:         token_endpoint: tokens.token_endpoint,
+427:       };
+428:     }
+429:   } catch { /* fall back to Grok CLI auth */ }
+430:   return loadLocalGrokAuth();
+431: }
+432: 
+433: async function grokProxyGet(pathname: string, auth: GrokAuth): Promise<Response> {
+434:   return withTimeout(fetch(`https://cli-chat-proxy.grok.com${pathname}`, {
+435:     headers: {
+436:       Authorization: `Bearer ${auth.access_token}`,
+437:       Accept: 'application/json',
+438:       'User-Agent': 'Prometheus/grok-usage',
+439:     },
+440:   }), 15000);
+441: }
+442: 
+443: async function fetchGrokLive(configDir: string): Promise<LiveResult | null> {
+444:   let auth = await loadGrokBillingAuth(configDir);
+445:   if (!auth?.access_token) return null;
+446: 
+447:   let res = await grokProxyGet('/v1/billing?format=credits', auth);
+448:   if ((res.status === 401 || res.status === 403) && auth.source === 'prometheus_oauth') {
+449:     try {
+450:       const oauth = require('../auth/xai-oauth');
+451:       const refreshed = await oauth.refreshXAITokens(configDir);
+452:       auth = { ...auth, access_token: String(refreshed.access_token || auth.access_token), refresh_token: refreshed.refresh_token || auth.refresh_token };
+453:       res = await grokProxyGet('/v1/billing?format=credits', auth);
+454:     } catch { /* keep original response */ }
+455:   } else if ((res.status === 401 || res.status === 403) && auth.source === 'grok_cli_auth') {
+456:     const refreshed = await refreshLocalGrokAuth(auth).catch(() => null);
+457:     if (refreshed) {
+458:       auth = refreshed;
+459:       res = await grokProxyGet('/v1/billing?format=credits', auth);
+460:     }
+461:   }
+462:   if (!res.ok) return { windows: [], plan_label: null, error: `Grok billing ${res.status}` };
+463: 
+464:   const billing: any = await res.json().catch(() => ({}));
+465:   const windows = [normaliseGrokBillingWindow(billing)].filter(Boolean) as UsageWindow[];
+466: 
+467:   let planLabel = firstPathString(billing, [
+468:     'plan.label', 'plan.name', 'subscription.plan', 'subscription.name', 'account.plan', 'planLabel',
+469:   ]);
+470:   try {
+471:     const settings = await grokProxyGet('/v1/settings', auth);
+472:     if (settings.ok) {
+473:       const body: any = await settings.json().catch(() => ({}));
+474:       planLabel = firstPathString(body, [
+475:         'plan.label', 'plan.name', 'subscription.plan', 'subscription.name', 'account.plan',
+476:         'user.plan', 'organization.plan', 'tier', 'planLabel',
+477:       ]) || planLabel;
+478:     }
+479:   } catch { /* billing is enough */ }
+480: 
+481:   return { windows, plan_label: planLabel, error: windows.length ? null : 'Grok billing response had no recognised credit pool' };
+482: }
+483: 
+484: // ─── Live cache ──────────────────────────────────────────────────────────────
+485: 
+486: const LIVE_TTL_MS = 2 * 60 * 1000;
+487: const liveCache = new Map<string, { ts: number; value: LiveResult }>();
+488: 
+489: async function getLive(providerId: string, configDir: string): Promise<LiveResult | null> {
+490:   const cached = liveCache.get(providerId);
+491:   if (cached && Date.now() - cached.ts < LIVE_TTL_MS) return cached.value;
+492: 
+493:   let result: LiveResult | null = null;
+494:   try {
+495:     if (providerId === 'anthropic') result = await fetchAnthropicLive(configDir);
+496:     else if (providerId === 'openai_codex') result = await fetchCodexLive(configDir);
+497:     else if (providerId === 'xai') result = await fetchGrokLive(configDir);
+498:   } catch (err: any) {
+499:     result = { windows: [], plan_label: null, error: err?.message || String(err) };
+500:   }
+501: 
+502:   if (result) liveCache.set(providerId, { ts: Date.now(), value: result });
+503:   return result;
+504: }
+505: 
+506: // ─── Internal token accounting ───────────────────────────────────────────────
+507: 
+508: function internalTokens(providerId: string, events: ReturnType<typeof readModelUsageEvents>): ProviderTokenTotals {
+509:   const monthStart = new Date();
+510:   monthStart.setDate(1);
+511:   monthStart.setHours(0, 0, 0, 0);
+512:   const monthMs = monthStart.getTime();
+513: 
+514:   let total = 0, input = 0, output = 0, calls = 0, monthTotal = 0;
+515:   for (const e of events) {
+516:     if (String(e.provider) !== providerId) continue;
+517:     const tt = Number(e.totalTokens || 0);
+518:     total += tt;
+519:     input += Number(e.inputTokens || 0);
+520:     output += Number(e.outputTokens || 0);
+521:     calls += 1;
+522:     const t = Date.parse(e.timestamp || '');
+523:     if (Number.isFinite(t) && t >= monthMs) monthTotal += tt;
+524:   }
+525:   return { total, input, output, calls, monthTotal };
+[READ_TRUNCATED] Returned 240 of 661 lines. Use start_line:526, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

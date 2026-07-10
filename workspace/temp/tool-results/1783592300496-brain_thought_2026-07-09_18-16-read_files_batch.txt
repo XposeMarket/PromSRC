@@ -1,0 +1,574 @@
+audit/cron/jobs/jobs.json (119 lines) [window 88-119]:
+88:       "lastOutputSessionId": "auto_job_1781533738853_j59oa",
+89:       "createdAt": "2026-06-15T14:28:58.853Z"
+90:     },
+91:     {
+92:       "id": "job_1783232120356_kfzu6",
+93:       "name": "Morning motivational wake-up",
+94:       "prompt": "Daily morning wake-up for Raul at 8:00 AM America/New_York.\n\n1. Compose ONE short motivational message: good morning opener, ONE fresh motivational quote (attribute author), 1–2 sentences warm direct encouragement for someone building Prometheus/Xpose, coding, and trading — no fluff, no em dashes.\n2. Vary quote and angle each run; avoid repeating yesterday's quote if possible.\n3. Deliver via delivery_send target=\"Telegram\" first; fallback mobile if needed.\n4. Under ~120 words total.\n5. write_note(tag=\"task\") one line: date, quote author, delivery channel.",
+95:       "skillIds": [],
+96:       "context_refs": [],
+97:       "type": "recurring",
+98:       "schedule": "0 8 * * *",
+99:       "tz": "America/New_York",
+100:       "sessionTarget": "main",
+101:       "payloadKind": "agentTurn",
+102:       "assignmentTarget": "main",
+103:       "deliverToMainChannel": true,
+104:       "enabled": true,
+105:       "priority": 3,
+106:       "delivery": "web",
+107:       "lastRun": "2026-07-06T16:16:35.698Z",
+108:       "lastResult": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"prolite\",\"resets_at\":1783390768,\"eligible_promo\":null,\"resets_in_seconds\":36178}}",
+109:       "lastDuration": 3198,
+110:       "consecutiveErrors": 9,
+111:       "deleteAfterRun": false,
+112:       "nextRun": "2026-07-09T12:00:00.000Z",
+113:       "status": "scheduled",
+114:       "lastOutputSessionId": "auto_job_1783232120356_kfzu6",
+115:       "createdAt": "2026-07-05T06:15:20.357Z"
+116:     }
+117:   ],
+118:   "legacyAutomatedSessionsConsolidated": true
+119: }
+
+audit/proposals/state/pending/prop_1783572488631_a6b07a.json (131 lines) [window 1-131]:
+1: {
+2:   "type": "task_trigger",
+3:   "executionMode": "action",
+4:   "priority": "high",
+5:   "title": "Repair the daily 8am motivational wake-up schedule that is stuck behind Codex quota",
+6:   "summary": "The 8am Eastern mobile wake-up job is still enabled but has 9 consecutive failures from `openai_codex` usage-limit 429s. Approval will patch the existing scheduled job to run on a reliable low/medium fallback route, add expected-output checks, and run it once to verify Raul gets the wake-up again.",
+7:   "details": "## What you asked for\nRaul created/kept an active daily 8am Eastern motivational wake-up workflow for mobile (`mobile_mr7ect84_9n28jv`), and the Active Work Ledger carries it as non-resolved: `Brain/active-work.jsonl:3`.\n\n## Current state\nTonight I re-verified the live scheduler artifact, not just the thought summary. `audit/cron/jobs/jobs.json:104-114` shows job `job_1783232120356_kfzu6` is still enabled/scheduled, but `lastResult` is `Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\"...}}`, `consecutiveErrors` is `9`, `nextRun` is `2026-07-09T12:00:00.000Z`, and `lastOutputSessionId` is `auto_job_1783232120356_kfzu6`. No evidence showed this ...[line truncated]
+8:   "sourceAgentId": "brain_dream_2026-07-07",
+9:   "sourceSessionId": "brain_dream_2026-07-07",
+10:   "affectedFiles": [
+11:     {
+12:       "path": "audit/cron/jobs/jobs.json",
+13:       "action": "edit",
+14:       "description": "Patch existing job `job_1783232120356_kfzu6` routing/prompt metadata only if the scheduler API is unavailable."
+15:     },
+16:     {
+17:       "path": "Brain/active-work.jsonl",
+18:       "action": "edit",
+19:       "description": "Refresh the `morning-motivational-wake-up` ledger row with post-repair verification."
+20:     }
+21:   ],
+22:   "executionSteps": [
+23:     {
+24:       "title": "Re-check the live job state",
+25:       "kind": "inspect",
+26:       "description": "Open scheduler detail/history or `audit/cron/jobs/jobs.json` for `job_1783232120356_kfzu6` and confirm the latest failure is still Codex 429 usage_limit_reached.",
+27:       "successCriteria": "Current failure and schedule state are documented before any patch."
+28:     },
+29:     {
+30:       "title": "Patch the job route/prompt safely",
+31:       "kind": "edit",
+32:       "description": "Use the scheduler patch API if available; otherwise edit only this job block in `audit/cron/jobs/jobs.json` to use a reliable low/medium fallback route or explicit quota fallback behavior for the wake-up.",
+33:       "successCriteria": "Only the target wake-up job is changed."
+34:     },
+35:     {
+36:       "title": "Add expected-output or delivery verification",
+37:       "kind": "verify",
+38:       "description": "Configure/check expected outputs for the job so future runs can be distinguished from false success.",
+39:       "successCriteria": "Expected-output/delivery check exists or a concrete scheduler limitation is documented."
+40:     },
+41:     {
+42:       "title": "Run the wake-up job once",
+43:       "kind": "trigger",
+44:       "description": "Trigger the patched scheduled job immediately.",
+45:       "successCriteria": "A fresh run record/output is created."
+46:     },
+47:     {
+48:       "title": "Verify and update ledger",
+49:       "kind": "complete",
+50:       "description": "Inspect the fresh run result/output and update `Brain/active-work.jsonl` with the new state, timestamp, and remaining blocker if any.",
+51:       "successCriteria": "Ledger reflects the verified post-patch state."
+52:     }
+53:   ],
+54:   "diffPreview": "",
+55:   "estimatedImpact": "Restores a visible daily routine Raul asked for and prevents a user-facing automation from silently failing every morning behind a quota wall.",
+56:   "requiresBuild": false,
+57:   "executorAgentId": "",
+58:   "executorPrompt": "Approved action: repair the daily 8am Eastern motivational wake-up scheduled job `job_1783232120356_kfzu6`. First re-check live scheduler state/history and confirm the latest failure is still `openai_codex` 429 `usage_limit_reached`. Then patch only this job to use a reliable low/medium fallback route or explicit quota fallback behavior for the short wake-up. Add or verify expected-output/delivery checks, run the job once, inspect the result, and update `Brain/active-work.jsonl` row `morning-motivational-wake-up` with the post-repair verification. Do not change unrelated scheduled jobs. If every provider is blocked, stop and record the exact blocker rather than retry-loo...[line truncated]
+59:   "riskTier": "low",
+60:   "id": "prop_1783572488631_a6b07a",
+61:   "status": "pending",
+62:   "version": 1,
+63:   "revisionHistory": [
+64:     {
+65:       "version": 1,
+66:       "editedAt": 1783572488631,
+67:       "editedBy": "brain_dream_2026-07-07",
+68:       "note": "Initial proposal content",
+69:       "snapshot": {
+70:         "executionMode": "action",
+71:         "type": "task_trigger",
+72:         "priority": "high",
+73:         "title": "Repair the daily 8am motivational wake-up schedule that is stuck behind Codex quota",
+74:         "summary": "The 8am Eastern mobile wake-up job is still enabled but has 9 consecutive failures from `openai_codex` usage-limit 429s. Approval will patch the existing scheduled job to run on a reliable low/medium fallback route, add expected-output checks, and run it once to verify Raul gets the wake-up again.",
+75:         "details": "## What you asked for\nRaul created/kept an active daily 8am Eastern motivational wake-up workflow for mobile (`mobile_mr7ect84_9n28jv`), and the Active Work Ledger carries it as non-resolved: `Brain/active-work.jsonl:3`.\n\n## Current state\nTonight I re-verified the live scheduler artifact, not just the thought summary. `audit/cron/jobs/jobs.json:104-114` shows job `job_1783232120356_kfzu6` is still enabled/scheduled, but `lastResult` is `Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\"...}}`, `consecutiveErrors` is `9`, `nextRun` is `2026-07-09T12:00:00.000Z`, and `lastOutputSessionId` is `auto_job_1783232120356_kfzu6`. No evidence showed...[line truncated]
+76:         "affectedFiles": [
+77:           {
+78:             "path": "audit/cron/jobs/jobs.json",
+79:             "action": "edit",
+80:             "description": "Patch existing job `job_1783232120356_kfzu6` routing/prompt metadata only if the scheduler API is unavailable."
+81:           },
+82:           {
+83:             "path": "Brain/active-work.jsonl",
+84:             "action": "edit",
+85:             "description": "Refresh the `morning-motivational-wake-up` ledger row with post-repair verification."
+86:           }
+87:         ],
+88:         "executionSteps": [
+89:           {
+90:             "title": "Re-check the live job state",
+91:             "kind": "inspect",
+92:             "description": "Open scheduler detail/history or `audit/cron/jobs/jobs.json` for `job_1783232120356_kfzu6` and confirm the latest failure is still Codex 429 usage_limit_reached.",
+93:             "successCriteria": "Current failure and schedule state are documented before any patch."
+94:           },
+95:           {
+96:             "title": "Patch the job route/prompt safely",
+97:             "kind": "edit",
+98:             "description": "Use the scheduler patch API if available; otherwise edit only this job block in `audit/cron/jobs/jobs.json` to use a reliable low/medium fallback route or explicit quota fallback behavior for the wake-up.",
+99:             "successCriteria": "Only the target wake-up job is changed."
+100:           },
+101:           {
+102:             "title": "Add expected-output or delivery verification",
+103:             "kind": "verify",
+104:             "description": "Configure/check expected outputs for the job so future runs can be distinguished from false success.",
+105:             "successCriteria": "Expected-output/delivery check exists or a concrete scheduler limitation is documented."
+106:           },
+107:           {
+108:             "title": "Run the wake-up job once",
+109:             "kind": "trigger",
+110:             "description": "Trigger the patched scheduled job immediately.",
+111:             "successCriteria": "A fresh run record/output is created."
+112:           },
+113:           {
+114:             "title": "Verify and update ledger",
+115:             "kind": "complete",
+116:             "description": "Inspect the fresh run result/output and update `Brain/active-work.jsonl` with the new state, timestamp, and remaining blocker if any.",
+117:             "successCriteria": "Ledger reflects the verified post-patch state."
+118:           }
+119:         ],
+120:         "diffPreview": "",
+121:         "estimatedImpact": "Restores a visible daily routine Raul asked for and prevents a user-facing automation from silently failing every morning behind a quota wall.",
+122:         "requiresBuild": false,
+123:         "executorAgentId": "",
+124:         "executorPrompt": "Approved action: repair the daily 8am Eastern motivational wake-up scheduled job `job_1783232120356_kfzu6`. First re-check live scheduler state/history and confirm the latest failure is still `openai_codex` 429 `usage_limit_reached`. Then patch only this job to use a reliable low/medium fallback route or explicit quota fallback behavior for the short wake-up. Add or verify expected-output/delivery checks, run the job once, inspect the result, and update `Brain/active-work.jsonl` row `morning-motivational-wake-up` with the post-repair verification. Do not change unrelated scheduled jobs. If every provider is blocked, stop and record the exact blocker rather than ret...[line truncated]
+125:         "riskTier": "low"
+126:       }
+127:     }
+128:   ],
+129:   "createdAt": 1783572488631,
+130:   "updatedAt": 1783572488631
+131: }
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (29016 lines) [window 300-479, truncated]:
+300:   if (minutes > 0) return `${minutes}m ${seconds}s`;
+301:   return `${seconds}s`;
+302: }
+303: 
+304: function _mobileGoalStatusLabel(status) {
+305:   const value = String(status || 'active').toLowerCase();
+306:   if (value === 'done' || value === 'completed') return 'Completed goal';
+307:   if (value === 'paused') return 'Paused goal';
+308:   if (value === 'blocked') return 'Blocked goal';
+309:   if (value === 'failed') return 'Failed goal';
+310:   return 'Pursuing goal';
+311: }
+312: 
+313: function _mobileGoalStepStatus(status) {
+314:   const value = String(status || '').toLowerCase();
+315:   if (value === 'done' || value === 'failed' || value === 'in_progress' || value === 'skipped') return value;
+316:   return 'pending';
+317: }
+318: 
+319: function _renderMobileGoalStepList(steps = []) {
+320:   const safeSteps = Array.isArray(steps) ? steps : [];
+321:   return safeSteps.map((step, idx) => {
+322:     const status = _mobileGoalStepStatus(step?.status);
+323:     const label = status === 'done' || status === 'skipped' ? '&#10003;' : (status === 'failed' ? '&times;' : String(idx + 1));
+324:     return `<div class="pm-mobile-goal-step ${escapeHtml(status)}">
+325:       <span>${label}</span>
+326:       <p>${escapeHtml(String(step?.text || `Step ${idx + 1}`).slice(0, 180))}</p>
+327:     </div>`;
+328:   }).join('');
+329: }
+330: 
+331: function _renderMobileGoalDiagnostics(goal) {
+332:   const rows = [
+333:     ['Quality', goal?.lastQualityGrade || ''],
+334:     ['Open issues', Array.isArray(goal?.lastUnresolvedIssues) ? goal.lastUnresolvedIssues.join(' | ') : ''],
+335:     ['Missing', Array.isArray(goal?.lastMissingAcceptanceCriteria) ? goal.lastMissingAcceptanceCriteria.join(' | ') : ''],
+336:     ['Verification', Array.isArray(goal?.lastVerificationGaps) ? goal.lastVerificationGaps.join(' | ') : ''],
+337:   ].filter(([, value]) => String(value || '').trim());
+338:   if (!rows.length) return '';
+339:   return `<div class="pm-mobile-goal-diagnostics">
+340:     ${rows.map(([label, value]) => `<div><strong>${escapeHtml(label)}</strong><span>${escapeHtml(String(value).slice(0, 520))}</span></div>`).join('')}
+341:   </div>`;
+342: }
+343: 
+344: function _renderMobileGoalPlans(goal) {
+345:   const plans = Array.isArray(goal?.turnPlans) ? goal.turnPlans : [];
+346:   if (!plans.length) return '<div class="pm-mobile-goal-empty">No turn plan has been declared yet.</div>';
+347:   const total = plans.length;
+348:   return `<div class="pm-mobile-goal-plans">
+349:     ${plans.map((plan, index) => {
+350:       const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+351:       const done = steps.filter((step) => ['done', 'skipped'].includes(_mobileGoalStepStatus(step?.status))).length;
+352:       const judge = String(plan?.judgeReason || '').trim();
+353:       return `<section class="pm-mobile-goal-plan">
+354:         <div class="pm-mobile-goal-plan-head">
+355:           <strong>Turn ${escapeHtml(String(index + 1))}/${escapeHtml(String(total))}</strong>
+356:           <span>${escapeHtml(String(plan?.status || 'planned'))} - ${escapeHtml(String(done))}/${escapeHtml(String(steps.length))}</span>
+357:         </div>
+358:         ${steps.length ? _renderMobileGoalStepList(steps) : '<div class="pm-mobile-goal-empty">This turn has no tracked steps.</div>'}
+359:         ${judge ? `<div class="pm-mobile-goal-judge">${escapeHtml(judge.slice(0, 520))}</div>` : ''}
+360:       </section>`;
+361:     }).join('')}
+362:   </div>`;
+363: }
+364: 
+365: function _setMobileSessionGoal(sessionId, goal) {
+366:   const sid = String(sessionId || '').trim();
+367:   if (!sid) return;
+368:   if (goal && goal.status !== 'cleared') __pmChat.mainChatGoals[sid] = goal;
+369:   else delete __pmChat.mainChatGoals[sid];
+370:   _rememberMobileLastGoalSession(sid, goal);
+371:   _writeMobileGoalCache();
+372: }
+373: 
+374: function _rememberMobileSessionGoal(session = {}, fallbackSessionId = '') {
+375:   const sid = String(session?.id || session?.sessionId || fallbackSessionId || '').trim();
+376:   if (!sid) return;
+377:   _setMobileSessionGoal(sid, session?.mainChatGoal || null);
+378: }
+379: 
+380: function _getMobileGoalForSession(sessionId = '', options = {}) {
+381:   const sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+382:   const direct = sid ? (__pmChat.mainChatGoals?.[sid] || null) : null;
+383:   if (direct || options.fallbackToLast !== true) return direct;
+384:   const lastSid = _readMobileLastGoalSession();
+385:   return lastSid ? (__pmChat.mainChatGoals?.[lastSid] || null) : null;
+386: }
+387: 
+388: function _updateMobileGoalElapsedLabels() {
+389:   document.querySelectorAll('[data-pm-goal-elapsed][data-session-id]').forEach((label) => {
+390:     const goal = _getMobileGoalForSession(label.getAttribute('data-session-id'));
+391:     if (!goal || goal.status === 'cleared') return;
+392:     label.textContent = _formatMobileGoalElapsed(_mobileGoalElapsedMs(goal));
+393:   });
+394: }
+395: 
+396: function _syncMobileGoalTimer() {
+397:   const hasVisibleGoal = !!document.querySelector('[data-pm-goal-elapsed][data-session-id]');
+398:   if (!hasVisibleGoal) {
+399:     if (__pmChat.goalTimer) clearInterval(__pmChat.goalTimer);
+400:     __pmChat.goalTimer = null;
+401:     return;
+402:   }
+403:   _updateMobileGoalElapsedLabels();
+404:   const anyActiveGoal = !!document.querySelector('.pm-mobile-goal-strip[data-status="active"] [data-pm-goal-elapsed][data-session-id]');
+405:   if (anyActiveGoal && !__pmChat.goalTimer) {
+406:     __pmChat.goalTimer = setInterval(_updateMobileGoalElapsedLabels, 1000);
+407:   } else if (!anyActiveGoal && __pmChat.goalTimer) {
+408:     clearInterval(__pmChat.goalTimer);
+409:     __pmChat.goalTimer = null;
+410:   }
+411: }
+412: 
+413: async function _mobileGoalAction(sessionId, action) {
+414:   const sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+415:   const name = String(action || '').trim().toLowerCase();
+416:   if (!sid || !name) return;
+417:   try { pmHaptic?.(12); } catch {}
+418:   const body = {};
+419:   if (name === 'pause') {
+420:     const reason = window.prompt?.('Pause reason (optional)', '') || '';
+421:     if (reason.trim()) body.text = reason.trim();
+422:   } else if (name === 'done') {
+423:     const note = window.prompt?.('Completion note (optional)', '') || '';
+424:     if (note.trim()) body.text = note.trim();
+425:   } else if (name === 'clear') {
+426:     const ok = window.confirm?.('Clear and archive this goal?') ?? true;
+427:     if (!ok) return;
+428:     const note = window.prompt?.('Archive note (optional)', '') || '';
+429:     if (note.trim()) body.text = note.trim();
+430:   } else if (name === 'revise') {
+431:     const current = _getMobileGoalForSession(sid);
+432:     const goal = window.prompt?.('Revise goal', current?.goal || '') || '';
+433:     if (!goal.trim()) return;
+434:     body.goal = goal.trim();
+435:   }
+436:   try {
+437:     const result = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sid)}/main-goal/${encodeURIComponent(name)}`, {
+438:       method: 'POST',
+439:       body: JSON.stringify(body),
+440:     });
+441:     _setMobileSessionGoal(sid, result?.goal || null);
+442:     _refreshVisibleMobileGoalPills(sid);
+443:     try { window.__pmMobileGoalChanged?.(); } catch {}
+444:     pmToast(name === 'status' ? (result?.message || 'Goal status refreshed') : (result?.message || 'Goal updated'), name === 'status' ? 'info' : 'success');
+445:   } catch (err) {
+446:     pmToast(`Goal action failed: ${err?.message || err}`, 'error');
+447:   }
+448: }
+449: 
+450: function _renderMobileGoalPill(target, sessionId = '', options = {}) {
+451:   if (!target) return;
+452:   let sid = String(sessionId || __pmChat.activeSessionId || '').trim();
+453:   let goal = _getMobileGoalForSession(sid);
+454:   const fallbackToLast = options.fallbackToLast === true || target.dataset.goalFallback === 'last';
+455:   target.dataset.goalFallback = fallbackToLast ? 'last' : '';
+456:   if (!goal && fallbackToLast) {
+457:     const lastSid = _readMobileLastGoalSession();
+458:     const fallbackGoal = lastSid ? _getMobileGoalForSession(lastSid) : null;
+459:     if (fallbackGoal) {
+460:       sid = lastSid;
+461:       goal = fallbackGoal;
+462:     }
+463:   }
+464:   if (!sid || !goal || goal.status === 'cleared') {
+465:     target.hidden = true;
+466:     target.innerHTML = '';
+467:     delete target.dataset.sessionId;
+468:     delete target.dataset.expanded;
+469:     target.removeAttribute('data-status');
+470:     _syncMobileGoalTimer();
+471:     return;
+472:   }
+473:   target.dataset.sessionId = sid;
+474:   const expanded = __pmChat.goalDetailsOpen?.[sid] === true;
+475:   const judgeReprompt = String(goal.nextStepDirective || goal.lastJudgeDirective || goal.lastReason || '').trim();
+476:   const status = String(goal.status || 'active');
+477:   const isActive = status === 'active';
+478:   const canResume = ['paused', 'blocked', 'failed'].includes(status);
+479:   target.hidden = false;
+[READ_TRUNCATED] Returned 180 of 29016 lines. Use start_line:480, num_lines:220 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- web-ui/src/mobile/mobile-pages.js ---
+web-ui/src/mobile/mobile-pages.js (29016 lines) [window 1000-1219, truncated]:
+1000:     if (!candidate || candidate !== target) continue;
+1001:     const msgTs = Number(msg.timestamp || 0);
+1002:     if (ts > 0 && msgTs > 0 && Math.abs(msgTs - ts) > 120000) continue;
+1003:     return msg;
+1004:   }
+1005:   return null;
+1006: }
+1007: 
+1008: function _promoteMobileVoiceWorkerHandoffMessage(target, source) {
+1009:   if (!target || !source) return target;
+1010:   const text = _mobileMessageCopyText(target);
+1011:   target.voiceAgentWorkerHandoff = true;
+1012:   target.source = String(source.source || 'realtime_agent_dispatch');
+1013:   target.channelLabel = String(source.channelLabel || 'Voice Agent handoff');
+1014:   if (!target.body || typeof target.body !== 'object') target.body = { text };
+1015:   target.body.text = String(target.body.text || text);
+1016:   target.body.source = String(source.body?.source || target.source);
+1017:   return target;
+1018: }
+1019: 
+1020: function _isMobileHiddenVoiceDraftMessage(msg, index = -1) {
+1021:   const text = _mobileMessageCopyText(msg);
+1022:   const isDraftText = /^Mobile voice chat$/i.test(text)
+1023:     || (Number(index) <= 1 && /^New Chat$/i.test(text));
+1024:   return isDraftText
+1025:     && !Array.isArray(msg?.body?.attachments)
+1026:     && !Array.isArray(msg?.attachmentPreviews);
+1027: }
+1028: 
+1029: function _isMobileMessagePersistable(msg) {
+1030:   if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) return false;
+1031:   if (msg.role !== 'ai') return true;
+1032:   if (msg.streaming !== true) return true;
+1033:   const hasAnswer = _mobileAssistantHasVisibleAnswer(msg);
+1034:   const hasEnded = Number(msg.workEndedAt || 0) > 0 || Number.isFinite(Number(msg.workDurationMs));
+1035:   return hasAnswer && hasEnded;
+1036: }
+1037: 
+1038: function _mobileHistoryForServer(thread = _activeMobileThread()) {
+1039:   return (Array.isArray(thread) ? thread : [])
+1040:     .filter((msg, index) => msg && (msg.role === 'user' || msg.role === 'ai') && !_isMobileHiddenVoiceDraftMessage(msg, index))
+1041:     .filter(_isMobileMessagePersistable)
+1042:     .filter((msg) => msg._voiceWorkerLocalTurn !== true && msg._voiceWorkerLocalFinal !== true)
+1043:     .filter((msg) => !_isMobileRestartContextPacketText(_mobileMessageCopyText(msg)))
+1044:     .filter((msg) => !msg._isRestartNotification)
+1045:     .map((msg) => ({
+1046:       ..._cloneMobileMessageForBranch(msg),
+1047:       role: _mobileRoleToServerRole(msg.role),
+1048:       content: _mobileMessageCopyText(msg),
+1049:       timestamp: Number(msg.timestamp) || Date.now(),
+1050:       attachmentPreviews: Array.isArray(msg.attachmentPreviews)
+1051:         ? msg.attachmentPreviews.map(_sanitizeMobileAttachmentPreviewForServer)
+1052:         : (Array.isArray(msg.body?.attachments) ? msg.body.attachments.map(_sanitizeMobileAttachmentPreviewForServer) : undefined),
+1053:       liveTraceEntries: Array.isArray(msg.liveTraceEntries) && msg.liveTraceEntries.length ? msg.liveTraceEntries : undefined,
+1054:     }))
+1055:     .filter((msg) => msg.content.trim())
+1056:     .map((msg, index) => ({ ...msg, sourceIndex: index }));
+1057: }
+1058: 
+1059: function _sanitizeMobileAttachmentPreviewForServer(attachment) {
+1060:   if (!attachment || typeof attachment !== 'object') return attachment;
+1061:   const next = { ...attachment };
+1062:   const hasDurablePath = !!String(next.workspacePath || next.path || next.filePath || '').trim();
+1063:   if (hasDurablePath) {
+1064:     delete next.dataUrl;
+1065:     delete next.base64;
+1066:     delete next.file;
+1067:   }
+1068:   return next;
+1069: }
+1070: 
+1071: function _reindexMobileThread(thread = _activeMobileThread()) {
+1072:   (Array.isArray(thread) ? thread : []).forEach((msg, index) => {
+1073:     if (msg && typeof msg === 'object') msg.sourceIndex = index;
+1074:   });
+1075: }
+1076: 
+1077: function _isMobileAssistantMessage(msg) {
+1078:   return msg?.role === 'ai';
+1079: }
+1080: 
+1081: function _findMobileAssistantResponseIndex(thread, userIndex) {
+1082:   const list = Array.isArray(thread) ? thread : [];
+1083:   for (let i = userIndex + 1; i < list.length; i += 1) {
+1084:     const msg = list[i];
+1085:     if (!msg) continue;
+1086:     if (msg.role === 'user') return -1;
+1087:     if (_isMobileAssistantMessage(msg)) return i;
+1088:   }
+1089:   return -1;
+1090: }
+1091: 
+1092: function _makeMobilePromptVariantFromTimeline(userIndex, thread = _activeMobileThread()) {
+1093:   const user = _cloneMobileMessageForBranch(thread[userIndex]);
+1094:   if (!user) return null;
+1095:   const assistantIndex = _findMobileAssistantResponseIndex(thread, userIndex);
+1096:   const assistant = assistantIndex >= 0 ? _cloneMobileMessageForBranch(thread[assistantIndex]) : null;
+1097:   const tailStart = assistantIndex >= 0 ? assistantIndex + 1 : userIndex + 1;
+1098:   const tail = thread.slice(tailStart).map(_cloneMobileMessageForBranch).filter(Boolean);
+1099:   return { user, assistant, tail };
+1100: }
+1101: 
+1102: function _getMobilePromptVariants(userIndex) {
+1103:   const msg = _activeMobileThread()[userIndex];
+1104:   return Array.isArray(msg?._promptVariants) ? msg._promptVariants : [];
+1105: }
+1106: 
+1107: function _getMobilePromptVariantActiveIndex(userIndex) {
+1108:   const variants = _getMobilePromptVariants(userIndex);
+1109:   const raw = Number(_activeMobileThread()[userIndex]?._promptVariantActive);
+1110:   if (!variants.length) return -1;
+1111:   return Number.isFinite(raw) ? Math.max(0, Math.min(Math.floor(raw), variants.length - 1)) : 0;
+1112: }
+1113: 
+1114: function _saveActiveMobilePromptVariant(userIndex) {
+1115:   const thread = _activeMobileThread();
+1116:   const msg = thread[userIndex];
+1117:   const variants = Array.isArray(msg?._promptVariants) ? msg._promptVariants : null;
+1118:   if (!variants || !variants.length) return variants || [];
+1119:   const activeIndex = _getMobilePromptVariantActiveIndex(userIndex);
+1120:   const current = _makeMobilePromptVariantFromTimeline(userIndex, thread);
+1121:   if (current) variants[activeIndex] = current;
+1122:   msg._promptVariants = variants;
+1123:   msg._promptVariantActive = activeIndex;
+1124:   return variants;
+1125: }
+1126: 
+1127: function _ensureMobilePromptVariantsForEdit(userIndex) {
+1128:   const thread = _activeMobileThread();
+1129:   const msg = thread[userIndex];
+1130:   if (!msg || msg.role !== 'user') return null;
+1131:   if (Array.isArray(msg._promptVariants) && msg._promptVariants.length) {
+1132:     _saveActiveMobilePromptVariant(userIndex);
+1133:     return msg._promptVariants;
+1134:   }
+1135:   const original = _makeMobilePromptVariantFromTimeline(userIndex, thread);
+1136:   msg._promptVariants = original ? [original] : [];
+1137:   msg._promptVariantActive = 0;
+1138:   return msg._promptVariants;
+1139: }
+1140: 
+1141: function _attachMobilePromptVariantsToUserMessage(user, variants, activeIndex) {
+1142:   const next = _cloneMobileMessageForBranch(user) || { role: 'user', body: { text: '' }, time: _nowTime(), timestamp: Date.now() };
+1143:   next._promptVariants = variants;
+1144:   next._promptVariantActive = activeIndex;
+1145:   return next;
+1146: }
+1147: 
+1148: function _makeMobileUserMessage(text, attachments = [], options = {}) {
+1149:   const content = _stripMobileInternalUploadContext(text);
+1150:   const attachmentPreviews = Array.isArray(attachments) ? attachments.map(_sanitizeMobileAttachmentPreviewForServer) : [];
+1151:   const selectedSkillRefs = _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills);
+1152:   return {
+1153:     role: 'user',
+1154:     time: _nowTime(),
+1155:     timestamp: Date.now(),
+1156:     body: { text: content, attachments, selectedSkillRefs },
+1157:     content,
+1158:     selectedSkillRefs,
+1159:     attachmentPreviews,
+1160:   };
+1161: }
+1162: 
+1163: function _generateMobileSideChatId() {
+1164:   const rand = Math.random().toString(36).slice(2, 8);
+1165:   return `side_mobile_${Date.now().toString(36)}_${rand}`;
+1166: }
+1167: 
+1168: function _normalizeMobileSideChatLink(link) {
+1169:   const id = String(link?.id || '').trim();
+1170:   const parentSessionId = String(link?.parentSessionId || '').trim();
+1171:   if (!id || !parentSessionId) return null;
+1172:   return {
+1173:     id,
+1174:     parentSessionId,
+1175:     title: String(link?.title || 'Side chat').trim() || 'Side chat',
+1176:     anchorPreview: String(link?.anchorPreview || '').trim(),
+1177:     createdAt: Number(link?.createdAt || Date.now()),
+1178:     updatedAt: Number(link?.updatedAt || Date.now()),
+1179:     closed: link?.closed === true,
+1180:   };
+1181: }
+1182: 
+1183: function _loadMobileSideChatLinks() {
+1184:   try {
+1185:     const parsed = JSON.parse(localStorage.getItem(PM_MOBILE_SIDE_CHAT_LINKS_KEY) || '[]');
+1186:     return Array.isArray(parsed) ? parsed.map(_normalizeMobileSideChatLink).filter(Boolean) : [];
+1187:   } catch {
+1188:     return [];
+1189:   }
+1190: }
+1191: 
+1192: function _saveMobileSideChatLinks(links) {
+1193:   try {
+1194:     localStorage.setItem(PM_MOBILE_SIDE_CHAT_LINKS_KEY, JSON.stringify((Array.isArray(links) ? links : []).map(_normalizeMobileSideChatLink).filter(Boolean)));
+1195:   } catch {}
+1196: }
+1197: 
+1198: function _getMobileSideChatLinksForParent(parentSessionId) {
+1199:   const parent = String(parentSessionId || '').trim();
+1200:   if (!parent) return [];
+1201:   return _loadMobileSideChatLinks()
+1202:     .filter((link) => link.parentSessionId === parent && link.closed !== true)
+1203:     .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+1204: }
+1205: 
+1206: function _makeMobileSideChatTitle(seed = '') {
+1207:   const text = String(seed || '').replace(/\s+/g, ' ').trim();
+1208:   return text ? `Side chat - ${text.slice(0, 52)}` : 'Side chat';
+1209: }
+1210: 
+1211: function _mobileSideReferenceSnapshot(parentThread = []) {
+1212:   const visible = (Array.isArray(parentThread) ? parentThread : [])
+1213:     .filter((msg, index) => msg && !_isMobileHiddenVoiceDraftMessage(msg, index))
+1214:     .filter((msg) => msg.role === 'user' || msg.role === 'ai')
+1215:     .slice(-8);
+1216:   return visible.map((msg) => {
+1217:     const label = msg.role === 'user' ? 'User' : 'Prometheus';
+1218:     return `${label}: ${_mobileMessageCopyText(msg).replace(/\s+/g, ' ').trim().slice(0, 420)}`;
+1219:   }).filter(Boolean);
+[READ_TRUNCATED] Returned 220 of 29016 lines. Use start_line:1220, num_lines:220 for the next chunk, or pass full:true only when the whole file is truly needed.

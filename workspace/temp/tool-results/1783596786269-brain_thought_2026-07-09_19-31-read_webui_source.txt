@@ -1,0 +1,242 @@
+web-ui/src/mobile/mobile-pages.js (29016 lines) [window 20000-20239, truncated]:
+20000:   }
+20001: 
+20002:   async function _activateVoiceOrbTargetPicker() {
+20003:     if (inlineMode) return;
+20004:     const micReady = await _ensureMicPermissionBeforeOrbPicker();
+20005:     if (!micReady) return;
+20006:     await _toggleVoiceTargetPicker();
+20007:   }
+20008: 
+20009:   if (inlineMode) {
+20010:     __pmVoice.targetSessionId = inlineSessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID;
+20011:     __pmVoice.targetSessionLabel = inlineSessionLabel || (__pmVoice.targetSessionId === MOBILE_CHAT_SESSION_ID ? 'Mobile - New Chat' : 'Mobile - Chat');
+20012:     __pmVoice.targetSessionChannel = 'mobile';
+20013:     __pmVoice.targetSessionForced = true;
+20014:     if (targetBtn) targetBtn.hidden = true;
+20015:     _paintVoiceTarget();
+20016:   }
+20017: 
+20018:   async function _resolveVoiceSessionTarget({ forceRefresh = false } = {}) {
+20019:     if (__pmVoice?.target?.kind === 'subagent') {
+20020:       __pmVoice.targetSessionId = `subagent_chat_${__pmVoice.target.agentId}`;
+20021:       __pmVoice.targetSessionLabel = _voiceTargetLabel(__pmVoice.target);
+20022:       __pmVoice.targetSessionChannel = 'subagent';
+20023:       __pmVoice.targetSessionForced = true;
+20024:       _paintVoiceTarget();
+20025:       return String(__pmVoice.targetSessionId).trim();
+20026:     }
+20027:     const forced = __pmVoice.targetSessionForced && String(__pmVoice.targetSessionId || '').trim();
+20028:     if (forced) {
+20029:       _paintVoiceTarget();
+20030:       return String(__pmVoice.targetSessionId).trim();
+20031:     }
+20032:     if (!forceRefresh && String(__pmVoice.targetSessionId || '').trim()) {
+20033:       _paintVoiceTarget();
+20034:       return String(__pmVoice.targetSessionId).trim();
+20035:     }
+20036:     const latest = await loadLatestUsableSession().catch(() => null);
+20037:     if (latest?.id) {
+20038:       __pmVoice.targetSessionId = latest.id;
+20039:       __pmVoice.targetSessionLabel = _voiceShortSessionLabel(latest);
+20040:       __pmVoice.targetSessionChannel = latest.channel || '';
+20041:       __pmVoice.targetSessionForced = false;
+20042:     } else {
+20043:       __pmVoice.targetSessionId = MOBILE_CHAT_SESSION_ID;
+20044:       __pmVoice.targetSessionLabel = 'Mobile - New Chat';
+20045:       __pmVoice.targetSessionChannel = 'mobile';
+20046:       __pmVoice.targetSessionForced = false;
+20047:     }
+20048:     _paintVoiceTarget();
+20049:     return String(__pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID).trim();
+20050:   }
+20051: 
+20052:   const _onDrawerClosed = () => { window.__pmVoiceTargetPicker = null; };
+20053:   document.addEventListener('pm-drawer-closed', _onDrawerClosed);
+20054: 
+20055:   const activateTargetPickerButton = () => {
+20056:     if (inlineMode) return;
+20057:     _toggleVoiceTargetPicker().catch((err) => {
+20058:       console.warn('[mobile voice] target picker failed:', err);
+20059:       pmToast('Could not open voice targets.', 'error');
+20060:     });
+20061:   };
+20062:   targetBtn.addEventListener('click', (event) => {
+20063:     if (inlineMode) return;
+20064:     event.preventDefault();
+20065:     event.stopPropagation();
+20066:     try { pmHaptic?.(12); } catch {}
+20067:     activateTargetPickerButton();
+20068:   });
+20069:   const activateOrb = () => {
+20070:     _activateVoiceOrbTargetPicker().catch((err) => {
+20071:       console.warn('[mobile voice] orb target picker failed:', err);
+20072:       pmToast('Could not open voice targets.', 'error');
+20073:     });
+20074:   };
+20075:   orbEl?.addEventListener('click', (event) => {
+20076:     if (inlineMode) return;
+20077:     event.preventDefault();
+20078:     event.stopPropagation();
+20079:     try { pmHaptic?.(12); } catch {}
+20080:     activateOrb();
+20081:   });
+20082: 
+20083:   if (!inlineMode) {
+20084:     _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced }).catch(() => {
+20085:       __pmVoice.targetSessionId = __pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID;
+20086:       __pmVoice.targetSessionLabel = __pmVoice.targetSessionLabel || 'Mobile - New Chat';
+20087:       _paintVoiceTarget();
+20088:     });
+20089:   }
+20090: 
+20091:   // ── Provider detection ─────────────────────────────────────────────
+20092:   function _providerOptionHtml(id, label, selected) {
+20093:     return `<option value="${escapeHtml(id)}" ${id === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+20094:   }
+20095: 
+20096:   function _routingProviderReady(provider, kind) {
+20097:     const id = String(provider || 'browser');
+20098:     if (id === 'browser') return true;
+20099:     if (id === 'openai_realtime') return _isRealtimeConnected(__pmVoice.lastVoiceStatus);
+20100:     const list = kind === 'input' ? __pmVoice.voiceStatus?.sttProviders : __pmVoice.voiceStatus?.ttsProviders;
+20101:     return Array.isArray(list) && list.some(p => p?.configured && p?.id === id);
+20102:   }
+20103: 
+20104:   function _syncVoicePresetFromRouting() {
+20105:     const sttProvider = String(__pmVoice.settings?.sttProvider || 'browser');
+20106:     const ttsProvider = String(__pmVoice.settings?.ttsProvider || 'browser');
+20107:     const preset = _voicePresetForProviders(sttProvider, ttsProvider);
+20108:     _saveVoiceSettings({ voiceMode: preset });
+20109:     return preset;
+20110:   }
+20111: 
+20112:   function _paintVoiceSettings() {
+20113:     const settings = __pmVoice.settings || {};
+20114:     const sttProviders = Array.isArray(__pmVoice.voiceStatus?.sttProviders) ? __pmVoice.voiceStatus.sttProviders : [];
+20115:     const ttsProviders = Array.isArray(__pmVoice.voiceStatus?.ttsProviders) ? __pmVoice.voiceStatus.ttsProviders : [];
+20116:     const realtimeReady = _isRealtimeConnected(__pmVoice.lastVoiceStatus);
+20117:     const xaiReady = sttProviders.some(p => p?.configured && p?.id === 'xai') && ttsProviders.some(p => p?.configured && p?.id === 'xai');
+20118:     const selectedMode = ['default', 'openai_realtime', 'xai', 'custom'].includes(settings.voiceMode) ? settings.voiceMode : _syncVoicePresetFromRouting();
+20119:     const outputProvider = String(settings.ttsProvider || _outputProviderForMode(selectedMode));
+20120:     const customRoutingSelected = selectedMode === 'custom';
+20121:     if (listenModeSelect) listenModeSelect.value = _voiceListenMode();
+20122:     // Realtime-agent toggle: only visible when voice mode is openai_realtime
+20123:     const realtimeAgentLabel = page.querySelector('#pm-voice-realtime-agent-label');
+20124:     const realtimeAgentCheckbox = page.querySelector('#pm-voice-realtime-agent');
+20125:     if (realtimeAgentLabel) realtimeAgentLabel.style.display = selectedMode === 'openai_realtime' ? '' : 'none';
+20126:     if (realtimeAgentCheckbox) realtimeAgentCheckbox.checked = settings.voiceAgentRealtimeAgent === true;
+20127:     // xAI realtime toggle: only visible when voice mode is xai
+20128:     const xaiRealtimeLabel = page.querySelector('#pm-voice-xai-realtime-label');
+20129:     const xaiRealtimeCheckbox = page.querySelector('#pm-voice-xai-realtime');
+20130:     if (xaiRealtimeLabel) xaiRealtimeLabel.style.display = selectedMode === 'xai' ? '' : 'none';
+20131:     if (xaiRealtimeCheckbox) xaiRealtimeCheckbox.checked = settings.voiceAgentXaiRealtime === true;
+20132:     voiceModeSelect.innerHTML = [
+20133:       _providerOptionHtml('default', 'Default', selectedMode),
+20134:       _providerOptionHtml('openai_realtime', `OpenAI Realtime${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
+20135:       _providerOptionHtml('xai', `xAI / Grok${xaiReady ? '' : ' (not connected)'}`, selectedMode),
+20136:       _providerOptionHtml('custom', 'Custom routing', selectedMode),
+20137:     ].join('');
+20138:     if (inputProviderSelect) inputProviderSelect.value = String(settings.sttProvider || _inputProviderForMode(selectedMode));
+20139:     if (outputProviderSelect) outputProviderSelect.value = outputProvider;
+20140:     if (advancedToggle) advancedToggle.style.display = customRoutingSelected ? '' : 'none';
+20141:     if (advancedPanel) advancedPanel.style.display = customRoutingSelected ? 'block' : 'none';
+20142:     const selectedServerTts = outputProvider === 'xai' && _routingProviderReady('xai', 'output') ? 'xai' : '';
+20143:     realtimeVoiceSelect.innerHTML = REALTIME_VOICE_OPTIONS
+20144:       .map(id => _providerOptionHtml(id, id[0].toUpperCase() + id.slice(1), settings.realtimeVoice || 'marin'))
+20145:       .join('');
+20146:     if (realtimeVoiceLabel) realtimeVoiceLabel.style.display = outputProvider === 'openai_realtime' ? '' : 'none';
+20147:     if (selectedServerTts && serverVoiceLabel && serverVoiceSelect) {
+20148:       serverVoiceLabel.style.display = '';
+20149:       serverVoiceSelect.innerHTML = `<option value="">Loading voices...</option>`;
+20150:       _loadServerVoiceCatalog(selectedServerTts).then((voices) => {
+20151:         const fallback = selectedServerTts === 'xai' ? 'eve' : (selectedServerTts === 'openai' ? 'alloy' : '');
+20152:         const stored = settings.serverVoice || fallback;
+20153:         const selected = voices.some((voice) => voice.id === stored) ? stored : (voices[0]?.id || '');
+20154:         serverVoiceSelect.innerHTML = voices
+20155:           .map((voice) => _providerOptionHtml(voice.id, voice.label || voice.name || voice.id, selected))
+20156:           .join('');
+20157:         serverVoiceSelect.value = selected;
+20158:         if (selected && selected !== settings.serverVoice) _saveVoiceSettings({ serverVoice: selected });
+20159:         if (__pmVoice.provider) __pmVoice.provider.ttsVoice = selected;
+20160:         _paintProviderBanner();
+20161:       }).catch(() => {
+20162:         const voices = _serverVoiceFallback(selectedServerTts);
+20163:         serverVoiceSelect.innerHTML = voices
+20164:           .map((voice) => _providerOptionHtml(voice.id, voice.label || voice.id, settings.serverVoice || voice.id))
+20165:           .join('');
+20166:       });
+20167:     } else if (serverVoiceLabel && serverVoiceSelect) {
+20168:       serverVoiceLabel.style.display = 'none';
+20169:       serverVoiceSelect.innerHTML = '';
+20170:     }
+20171:     const speedValue = outputProvider === 'xai' ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05);
+20172:     if (speedControl) speedControl.style.display = ['openai_realtime', 'xai'].includes(outputProvider) ? '' : 'none';
+20173:     speedInput.min = outputProvider === 'xai' ? '0.7' : '0.75';
+20174:     speedInput.max = outputProvider === 'xai' ? '1.5' : '1.3';
+20175:     speedInput.step = '0.05';
+20176:     speedInput.value = String(speedValue);
+20177:     speedLabel.textContent = `${Number(speedInput.value).toFixed(2)}x`;
+20178:   }
+20179: 
+20180:   function _recomputeVoiceProvider() {
+20181:     if (__pmVoice.lastVoiceStatus) __pmVoice.provider = _detectProvider(__pmVoice.lastVoiceStatus);
+20182:     _paintVoiceSettings();
+20183:   }
+20184: 
+20185:   function _paintProviderBanner() {
+20186:     const p = __pmVoice.provider || _detectProvider(__pmVoice.lastVoiceStatus || {});
+20187:     const stt = String(p.sttProvider || __pmVoice.settings?.sttProvider || 'browser');
+20188:     const tts = String(p.ttsProvider || __pmVoice.settings?.ttsProvider || 'browser');
+20189:     const providerLabel = (id, kind) => {
+20190:       if (id === 'openai_realtime') return 'OpenAI Realtime';
+20191:       if (id === 'xai') return 'xAI / Grok';
+20192:       if (kind === 'input') return 'Browser';
+20193:       return 'Device voice';
+20194:     };
+20195:     let detail = `Input: <strong>${escapeHtml(providerLabel(stt, 'input'))}</strong> - Output: <strong>${escapeHtml(providerLabel(tts, 'output'))}</strong>`;
+20196:     if (tts === 'openai_realtime') detail += ` - ${escapeHtml(p.voice || __pmVoice.settings?.realtimeVoice || 'marin')}`;
+20197:     if (tts === 'xai') detail += ` - ${escapeHtml(p.ttsVoice || __pmVoice.settings?.serverVoice || 'eve')}`;
+20198:     detail += ` - ${_isAlwaysListeningMode() ? 'Always listening' : 'Push to Speak'}`;
+20199:     banner.innerHTML = detail;
+20200:   }
+20201: 
+20202:   settingsToggle.addEventListener('click', (event) => {
+20203:     event?.stopPropagation?.();
+20204:     const willOpen = settingsPanel.style.display === 'none';
+20205:     settingsPanel.style.display = willOpen ? 'block' : 'none';
+20206:     document.removeEventListener('pointerdown', _voiceSettingsOutsideHandler, true);
+20207:     if (willOpen) setTimeout(() => document.addEventListener('pointerdown', _voiceSettingsOutsideHandler, true), 0);
+20208:   });
+20209:   voiceModeSelect.addEventListener('change', () => {
+20210:     const mode = voiceModeSelect.value || 'default';
+20211:     const wasListening = __pmVoice.listening;
+20212:     if (mode === 'custom') {
+20213:       _saveVoiceSettings({ voiceMode: 'custom', sttProviderLocked: true });
+20214:       if (advancedPanel) advancedPanel.style.display = 'block';
+20215:       _recomputeVoiceProvider();
+20216:       _paintProviderBanner();
+20217:       return;
+20218:     }
+20219:     _saveVoiceSettings({
+20220:       voiceMode: mode,
+20221:       sttProvider: _inputProviderForMode(mode),
+20222:       ttsProvider: _outputProviderForMode(mode),
+20223:       serverVoice: mode === 'xai' ? (__pmVoice.settings?.serverVoice || 'eve') : '',
+20224:       sttProviderLocked: true,
+20225:       autoProviderDefault: '',
+20226:     });
+20227:     if (mode !== 'openai_realtime') _closeRealtimeSpeechConnection();
+20228:     _recomputeVoiceProvider();
+20229:     _paintProviderBanner();
+20230:     if (wasListening && !__pmRealtimeAgent.conn) {
+20231:       _stopListening(true);
+20232:       if (_isAlwaysListeningMode()) setTimeout(() => _startAlwaysListening(), 250);
+20233:     }
+20234:   });
+20235:   listenModeSelect?.addEventListener('change', () => {
+20236:     const listenMode = listenModeSelect.value === 'always_listening' ? 'always_listening' : 'push_to_speak';
+20237:     _saveVoiceSettings(listenMode === 'push_to_speak'
+20238:       ? { listenMode, wakePhrase: '', wakeGateActive: false, autoProviderDefault: '' }
+20239:       : { listenMode, wakeGateActive: false, autoProviderDefault: '' });
+[READ_TRUNCATED] Returned 240 of 29016 lines. Use start_line:20240, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

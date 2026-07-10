@@ -180,6 +180,102 @@ const PROVIDER_OAUTH_VAULT_KEYS: Record<string, string[]> = {
   anthropic: ['anthropic.oauth_tokens'],
   xai: ['xai.oauth_tokens'],
 };
+const ACCOUNT_AWARE_PROVIDERS = new Set(['xai', 'openai_codex', 'anthropic']);
+
+function providerAccountVaultKey(providerId: string, accountId: string, field = 'api_key'): string {
+  return `llm.${providerId}.accounts.${accountId}.${field}`;
+}
+
+function providerOAuthVaultKey(providerId: string, accountId?: string): string {
+  const id = String(accountId || '').trim();
+  if (providerId === 'openai_codex') return id ? `openai.oauth_tokens.${id}` : 'openai.oauth_tokens';
+  if (providerId === 'anthropic') return id ? `anthropic.oauth_tokens.${id}` : 'anthropic.oauth_tokens';
+  if (providerId === 'xai') return id ? `xai.oauth_tokens.${id}` : 'xai.oauth_tokens';
+  return '';
+}
+
+function slugAccountId(providerId: string, label = ''): string {
+  const base = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30);
+  return `${providerId}_${base || 'account'}_${Date.now().toString(36).slice(-5)}`;
+}
+
+function getProviderAccounts(providerId: string, providerCfg: any): Record<string, any> {
+  const accounts = providerCfg?.accounts && typeof providerCfg.accounts === 'object' && !Array.isArray(providerCfg.accounts)
+    ? { ...providerCfg.accounts }
+    : {};
+  if (Object.keys(accounts).length) return accounts;
+
+  const legacyAuthType = providerId === 'xai'
+    ? String(providerCfg?.auth_mode || '').trim() || 'api_key'
+    : providerId === 'anthropic'
+      ? 'setup_token'
+      : 'oauth';
+  return {
+    default: {
+      id: 'default',
+      label: providerId === 'xai' ? 'xAI account' : providerId === 'anthropic' ? 'Claude account' : 'Codex account',
+      authType: legacyAuthType === 'oauth' ? 'oauth' : legacyAuthType,
+      status: 'connected',
+      ...(typeof providerCfg?.api_key === 'string' && providerCfg.api_key ? { api_key: providerCfg.api_key } : {}),
+    },
+  };
+}
+
+function normalizeProviderAccountBlock(providerId: string, providerCfg: any): any {
+  if (!ACCOUNT_AWARE_PROVIDERS.has(providerId) || !providerCfg || typeof providerCfg !== 'object' || Array.isArray(providerCfg)) {
+    return providerCfg;
+  }
+  const out = { ...providerCfg };
+  const rawAccounts = getProviderAccounts(providerId, providerCfg);
+  const accounts: Record<string, any> = {};
+  for (const [rawId, rawAccount] of Object.entries(rawAccounts)) {
+    const id = String((rawAccount as any)?.id || rawId || '').trim() || slugAccountId(providerId);
+    const account = rawAccount && typeof rawAccount === 'object' && !Array.isArray(rawAccount) ? { ...(rawAccount as any) } : {};
+    account.id = id;
+    account.label = String(account.label || '').trim() || (id === 'default' ? 'Default account' : id);
+    account.authType = String(account.authType || account.auth_mode || out.auth_mode || (providerId === 'anthropic' ? 'setup_token' : providerId === 'openai_codex' ? 'oauth' : 'api_key')).trim();
+    account.status = String(account.status || 'connected').trim();
+    accounts[id] = account;
+  }
+  const requestedDefault = String(out.defaultAccountId || '').trim();
+  out.accounts = accounts;
+  out.defaultAccountId = requestedDefault && accounts[requestedDefault] ? requestedDefault : Object.keys(accounts)[0];
+  return out;
+}
+
+function normalizeLLMAccounts(llm: any): any {
+  if (!llm || typeof llm !== 'object') return llm;
+  const out = JSON.parse(JSON.stringify(llm));
+  const providers = out.providers && typeof out.providers === 'object' ? out.providers : {};
+  for (const providerId of ACCOUNT_AWARE_PROVIDERS) {
+    if (providers[providerId]) providers[providerId] = normalizeProviderAccountBlock(providerId, providers[providerId]);
+  }
+  const activeProvider = String(out.provider || '').trim();
+  if (activeProvider && providers[activeProvider]?.defaultAccountId && !out.accountId) {
+    out.accountId = providers[activeProvider].defaultAccountId;
+  }
+  return out;
+}
+
+function migrateAccountSecretsToVault(llm: any): any {
+  if (!llm || typeof llm !== 'object') return llm;
+  const out = JSON.parse(JSON.stringify(llm));
+  const providers = out.providers && typeof out.providers === 'object' ? out.providers : {};
+  const vault = getVault();
+  for (const providerId of Object.keys(providers)) {
+    const accounts = providers[providerId]?.accounts;
+    if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) continue;
+    for (const [accountId, account] of Object.entries(accounts)) {
+      if (!account || typeof account !== 'object' || Array.isArray(account)) continue;
+      const value = String((account as any).api_key || '').trim();
+      if (!value || value.startsWith('vault:') || value.startsWith('env:') || isMaskedSecretValue(value)) continue;
+      const vaultKey = providerAccountVaultKey(providerId, accountId);
+      vault.set(vaultKey, value, 'settings:provider-account-secret');
+      (account as any).api_key = `vault:${vaultKey}`;
+    }
+  }
+  return out;
+}
 
 function hasSavedProviderSecretConfig(providerConfig: any, field: string): boolean {
   const value = providerConfig?.[field];
@@ -200,6 +296,17 @@ function listCredentialedModelProviderIds(): string[] {
   for (const [providerId, field] of listProviderSecretFieldPaths()) {
     if (keys.has(`llm.${providerId}.${field}`)) ids.add(providerId);
     if (hasSavedProviderSecretConfig(configuredProviders?.[providerId], field)) ids.add(providerId);
+  }
+
+  for (const [providerId, providerCfg] of Object.entries(configuredProviders)) {
+    const accounts = (providerCfg as any)?.accounts;
+    if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) continue;
+    for (const [accountId, account] of Object.entries(accounts)) {
+      if (hasSavedProviderSecretConfig(account, 'api_key')) ids.add(providerId);
+      if (keys.has(providerAccountVaultKey(providerId, accountId))) ids.add(providerId);
+      const oauthKey = providerOAuthVaultKey(providerId, accountId);
+      if (oauthKey && keys.has(oauthKey)) ids.add(providerId);
+    }
   }
 
   for (const [providerId, vaultKeys] of Object.entries(PROVIDER_OAUTH_VAULT_KEYS)) {
@@ -1479,6 +1586,24 @@ function preserveMaskedProviderSecrets(nextLlm: any, currentLlm: any): any {
     }
   }
 
+  const nextProvidersObj = out.providers || {};
+  for (const [providerId, providerCfg] of Object.entries(nextProvidersObj)) {
+    const nextAccounts = (providerCfg as any)?.accounts;
+    const currentAccounts = currentProviders?.[providerId]?.accounts;
+    if (!nextAccounts || typeof nextAccounts !== 'object' || Array.isArray(nextAccounts)) continue;
+    for (const [accountId, account] of Object.entries(nextAccounts)) {
+      if (!account || typeof account !== 'object' || Array.isArray(account)) continue;
+      const nextVal = (account as any).api_key;
+      if (!isMaskedSecretValue(nextVal)) continue;
+      const currentVal = currentAccounts?.[accountId]?.api_key;
+      if (typeof currentVal === 'string') {
+        (account as any).api_key = currentVal;
+      } else {
+        delete (account as any).api_key;
+      }
+    }
+  }
+
   return out;
 }
 
@@ -1527,14 +1652,14 @@ router.get('/api/settings/provider', (_req, res) => {
     provider: 'ollama',
     providers: { ollama: { endpoint: raw.ollama?.endpoint || 'http://localhost:11434', model: raw.models?.primary || 'qwen3:4b' } },
   };
-  const llm = redactConfigForUI(sanitizeLLMConfig(llmRaw));
+  const llm = redactConfigForUI(normalizeLLMAccounts(sanitizeLLMConfig(llmRaw)));
   res.json({ success: true, llm });
 });
 
 // POST /api/settings/provider  — update provider config
 router.post('/api/settings/provider', (req, res) => {
   try {
-    const llmIncoming = sanitizeLLMConfig(req.body?.llm);
+    const llmIncoming = migrateAccountSecretsToVault(normalizeLLMAccounts(sanitizeLLMConfig(req.body?.llm)));
     if (!llmIncoming?.provider) { res.status(400).json({ success: false, error: 'Missing llm.provider' }); return; }
     const configManager = getConfig();
     const current = (configManager.getConfig() as any).llm || {};
@@ -1642,7 +1767,7 @@ router.post('/api/settings/bulk', (req, res) => {
 
     let providerChanged = false;
     if (body.llm) {
-      const llmIncoming = sanitizeLLMConfig(body.llm);
+      const llmIncoming = migrateAccountSecretsToVault(normalizeLLMAccounts(sanitizeLLMConfig(body.llm)));
       if (!llmIncoming?.provider) { res.status(400).json({ success: false, error: 'Missing llm.provider' }); return; }
       const currentLlm = current.llm || {};
       const llm = preserveMaskedProviderSecrets(llmIncoming, currentLlm);
@@ -1724,17 +1849,19 @@ router.post('/api/models/test', async (req, res) => {
 // GET /api/auth/openai/status  — is the user connected via OAuth?
 router.get('/api/auth/openai/status', (_req, res) => {
   const configDir = CONFIG_DIR_PATH;
-  const connected = isConnected(configDir);
-  const tokens    = connected ? loadTokens(configDir) : null;
+  const accountId = String((_req.query as any)?.accountId || '').trim();
+  const connected = isConnected(configDir, accountId || undefined);
+  const tokens    = connected ? loadTokens(configDir, accountId || undefined) : null;
   res.json({ connected, account_id: tokens?.account_id || null, expires_at: tokens?.expires_at || null });
 });
 
 // POST /api/auth/openai/start  — start OAuth flow, return authUrl immediately (non-blocking)
 // UI opens authUrl via window.open, then polls /api/auth/openai/poll for completion
-router.post('/api/auth/openai/start', (_req, res) => {
+router.post('/api/auth/openai/start', (req, res) => {
   const configDir = CONFIG_DIR_PATH;
   try {
-    const result = startOAuthFlowBackground(configDir);
+    const accountId = String(req.body?.accountId || '').trim();
+    const result = startOAuthFlowBackground(configDir, accountId || undefined);
     res.json(result); // { authUrl } or { error }
   } catch (err: any) {
     res.json({ error: err.message });
@@ -1754,12 +1881,13 @@ router.get('/api/auth/openai/poll', (_req, res) => {
 router.post('/api/auth/openai/manual', async (req, res) => {
   const configDir = CONFIG_DIR_PATH;
   const redirectedUrl = String(req.body?.url || '').trim();
+  const accountId = String(req.body?.accountId || '').trim();
   if (!redirectedUrl) {
     res.status(400).json({ success: false, error: 'Missing redirect URL' });
     return;
   }
   try {
-    const result = await exchangeManualCodeFromPending(configDir, redirectedUrl);
+    const result = await exchangeManualCodeFromPending(configDir, redirectedUrl, accountId || undefined);
     res.json(result);
   } catch (err: any) {
     res.json({ success: false, error: err.message });
@@ -1767,9 +1895,10 @@ router.post('/api/auth/openai/manual', async (req, res) => {
 });
 
 // POST /api/auth/openai/disconnect  — revoke stored tokens
-router.post('/api/auth/openai/disconnect', (_req, res) => {
+router.post('/api/auth/openai/disconnect', (req, res) => {
   const configDir = CONFIG_DIR_PATH;
-  clearTokens(configDir);
+  const accountId = String(req.body?.accountId || '').trim();
+  clearTokens(configDir, accountId || undefined);
   res.json({ success: true });
 });
 
@@ -1777,10 +1906,12 @@ router.post('/api/auth/openai/disconnect', (_req, res) => {
 // and quota server-side; Prometheus only stores and forwards the bearer token.
 router.get('/api/auth/xai/status', (_req, res) => {
   const configDir = CONFIG_DIR_PATH;
-  const connected = isXAIConnected(configDir);
-  const tokens = connected ? loadXAITokens(configDir) : null;
+  const accountId = String((_req.query as any)?.accountId || '').trim();
+  const connected = isXAIConnected(configDir, accountId || undefined);
+  const tokens = connected ? loadXAITokens(configDir, accountId || undefined) : null;
   const providerCfg = ((getConfig().getConfig() as any)?.llm?.providers?.xai || {}) as Record<string, any>;
-  const hasApiKey = !!(getConfig().resolveSecret(providerCfg.api_key) || process.env.XAI_API_KEY);
+  const accountCfg = accountId && providerCfg.accounts?.[accountId] ? providerCfg.accounts[accountId] : {};
+  const hasApiKey = !!(getConfig().resolveSecret(accountCfg.api_key || providerCfg.api_key) || process.env.XAI_API_KEY);
   res.json({
     connected: connected || hasApiKey,
     oauthConnected: connected,
@@ -1793,9 +1924,10 @@ router.get('/api/auth/xai/status', (_req, res) => {
   });
 });
 
-router.post('/api/auth/xai/start', async (_req, res) => {
+router.post('/api/auth/xai/start', async (req, res) => {
   try {
-    const result = await startXAIOAuthFlowBackground(CONFIG_DIR_PATH);
+    const accountId = String(req.body?.accountId || '').trim();
+    const result = await startXAIOAuthFlowBackground(CONFIG_DIR_PATH, accountId || undefined);
     res.json(result);
   } catch (err: any) {
     res.json({ error: err.message });
@@ -1817,7 +1949,8 @@ router.get('/api/auth/xai/poll', (_req, res) => {
 router.post('/api/auth/xai/manual', async (req, res) => {
   try {
     const code = String(req.body?.code || '').trim();
-    const result = await completeXAIOAuthWithCode(CONFIG_DIR_PATH, code);
+    const accountId = String(req.body?.accountId || '').trim();
+    const result = await completeXAIOAuthWithCode(CONFIG_DIR_PATH, code, accountId || undefined);
     if (result?.success) {
       setXAIAuthModeOAuth();
     }
@@ -1827,8 +1960,9 @@ router.post('/api/auth/xai/manual', async (req, res) => {
   }
 });
 
-router.post('/api/auth/xai/disconnect', (_req, res) => {
-  clearXAITokens(CONFIG_DIR_PATH);
+router.post('/api/auth/xai/disconnect', (req, res) => {
+  const accountId = String(req.body?.accountId || '').trim();
+  clearXAITokens(CONFIG_DIR_PATH, accountId || undefined);
   res.json({ success: true });
 });
 
@@ -1904,8 +2038,9 @@ router.post('/api/auth/x-api/disconnect', (req, res) => {
 // GET /api/auth/anthropic/status  — is the user connected?
 router.get('/api/auth/anthropic/status', (_req, res) => {
   const configDir = CONFIG_DIR_PATH;
-  const connected = anthropicIsConnected(configDir);
-  const tokens    = connected ? anthropicLoadTokens(configDir) : null;
+  const accountId = String((_req.query as any)?.accountId || '').trim();
+  const connected = anthropicIsConnected(configDir, accountId || undefined);
+  const tokens    = connected ? anthropicLoadTokens(configDir, accountId || undefined) : null;
   res.json({
     connected,
     auth_type:  tokens?.auth_type || null,
@@ -1918,27 +2053,30 @@ router.get('/api/auth/anthropic/status', (_req, res) => {
 router.post('/api/auth/anthropic/setup-token', (req, res) => {
   const configDir = CONFIG_DIR_PATH;
   const token = String(req.body?.token || '').trim();
+  const accountId = String(req.body?.accountId || '').trim();
   if (!token) {
     res.status(400).json({ success: false, error: 'Missing token. Run `claude setup-token` and paste the result.' });
     return;
   }
-  const result = anthropicStoreSetupToken(configDir, token);
+  const result = anthropicStoreSetupToken(configDir, token, accountId || undefined);
   res.json(result);
 });
 
 // POST /api/auth/anthropic/disconnect  — clear stored tokens
-router.post('/api/auth/anthropic/disconnect', (_req, res) => {
+router.post('/api/auth/anthropic/disconnect', (req, res) => {
   const configDir = CONFIG_DIR_PATH;
-  anthropicClearTokens(configDir);
+  const accountId = String(req.body?.accountId || '').trim();
+  anthropicClearTokens(configDir, accountId || undefined);
   res.json({ success: true });
 });
 
 // POST /api/auth/anthropic/test  — verify the stored token works
-router.post('/api/auth/anthropic/test', async (_req, res) => {
+router.post('/api/auth/anthropic/test', async (req, res) => {
   const configDir = CONFIG_DIR_PATH;
+  const accountId = String(req.body?.accountId || '').trim();
   try {
     const { AnthropicAdapter } = require('../../providers/anthropic-adapter');
-    const adapter = new AnthropicAdapter(configDir);
+    const adapter = new AnthropicAdapter({ configDir, accountId: accountId || undefined });
     const ok = await adapter.testConnection();
     res.json({ success: ok, error: ok ? undefined : 'Token rejected by Anthropic API. Re-run `claude setup-token` and paste a fresh token.' });
   } catch (err: any) {

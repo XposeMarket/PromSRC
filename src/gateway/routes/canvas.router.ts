@@ -4679,8 +4679,8 @@ router.post('/api/canvas/upload', (req: any, res: any, next: any) => _requireGat
   const absPath = path.join(uploadsDir, targetRelPath);
   const relPath = path.relative(workspacePath, absPath);
   try {
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    fs.writeFileSync(absPath, content, 'utf-8');
+    await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.promises.writeFile(absPath, content, 'utf-8');
     res.json({ success: true, filename: finalName, relPath, absPath });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -4711,8 +4711,8 @@ router.post('/api/canvas/upload-binary', (req: any, res: any, next: any) => _req
   try {
     // Strip data URL prefix if present (e.g. "data:image/png;base64,...")
     const pureBase64 = base64.replace(/^data:.*?;base64,/, '');
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    fs.writeFileSync(absPath, Buffer.from(pureBase64, 'base64'));
+    await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.promises.writeFile(absPath, Buffer.from(pureBase64, 'base64'));
     res.json({ success: true, filename: finalName, relPath, absPath });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });

@@ -1,0 +1,11 @@
+  ┊ review diff
+[38;2;218;165;32ma/benchmarks\agent-comparison\fixtures\shell_ops_basic_v1\report.md → b/benchmarks\agent-comparison\fixtures\shell_ops_basic_v1\report.md[0m
+[38;2;139;134;130m@@ -1,6 +1,5 @@[0m
+[38;2;184;134;11m # shell_ops_basic_v1 Report[0m
+[38;2;184;134;11m [0m
+[38;2;255;255;255;48;2;119;20;20m-- Node.js version: v20.20.2[0m
+[38;2;255;255;255;48;2;119;20;20m-- Failing command: `definitely_not_a_real_command_hermes_bench`[0m
+[38;2;255;255;255;48;2;119;20;20m-- Failure classification: command-not-found (exit code 127; shell reported `command not found`)[0m
+[38;2;255;255;255;48;2;119;20;20m-- Recovery output: `SHELL_RECOVERED`[0m
+[38;2;255;255;255;48;2;19;87;20m+- Node version: v20.20.2[0m
+[38;2;255;255;255;48;2;19;87;20m+- Failure classification: command-not-found (exit code 127; shell reported "command not found" for `definitely_not_a_real_command_hermes_bench`)[0m

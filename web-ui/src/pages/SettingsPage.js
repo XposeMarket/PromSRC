@@ -853,6 +853,7 @@ function toggleCredVis(inputId, btn) {
 // --- Provider-aware Model Settings ------------------------------------------
 
 const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini'];
+const ACCOUNT_AWARE_PROVIDER_IDS = new Set(['xai', 'openai_codex', 'anthropic']);
 const BUILTIN_STATIC_MODEL_FALLBACKS = {
   openai: ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
@@ -893,6 +894,14 @@ function getProviderStatusElementId(providerId) {
 
 function getProviderSettingsFieldId(providerId, fieldKey) {
   return `settings-provider-${sanitizeProviderDomId(providerId)}-${sanitizeProviderDomId(fieldKey)}`;
+}
+
+function getProviderAccountSelectId(providerId) {
+  return `settings-provider-${sanitizeProviderDomId(providerId)}-account`;
+}
+
+function getProviderAccountLabelId(providerId) {
+  return `settings-provider-${sanitizeProviderDomId(providerId)}-account-label`;
 }
 
 function getProviderCatalogItems() {
@@ -986,6 +995,118 @@ function getProviderSelectPlaceholder(selectId) {
   return 'inherit / same as main agent';
 }
 
+function getProviderConfigFromCache(providerId) {
+  const providers = window._llmSettingsCache?.providers && typeof window._llmSettingsCache.providers === 'object'
+    ? window._llmSettingsCache.providers
+    : {};
+  return providers[providerId] && typeof providers[providerId] === 'object' ? providers[providerId] : {};
+}
+
+function normalizeProviderAccountsForUI(providerId, providerConfig) {
+  const cfg = providerConfig && typeof providerConfig === 'object' ? providerConfig : {};
+  const rawAccounts = cfg.accounts && typeof cfg.accounts === 'object' && !Array.isArray(cfg.accounts) ? cfg.accounts : null;
+  const accounts = rawAccounts && Object.keys(rawAccounts).length ? rawAccounts : {
+    default: {
+      id: 'default',
+      label: providerId === 'xai' ? 'xAI account' : providerId === 'anthropic' ? 'Claude account' : 'Codex account',
+      authType: providerId === 'xai' ? (cfg.auth_mode || 'api_key') : providerId === 'anthropic' ? 'setup_token' : 'oauth',
+      status: 'connected',
+      ...(cfg.api_key ? { api_key: cfg.api_key } : {}),
+    },
+  };
+  return Object.entries(accounts).map(([id, value]) => {
+    const account = value && typeof value === 'object' ? value : {};
+    return {
+      ...account,
+      id: String(account.id || id),
+      label: String(account.label || id),
+      authType: String(account.authType || account.auth_mode || cfg.auth_mode || (providerId === 'anthropic' ? 'setup_token' : providerId === 'openai_codex' ? 'oauth' : 'api_key')),
+      status: String(account.status || 'connected'),
+    };
+  });
+}
+
+function getSelectedProviderAccountId(providerId) {
+  const select = document.getElementById(getProviderAccountSelectId(providerId));
+  return String(select?.value || getProviderConfigFromCache(providerId)?.defaultAccountId || 'default').trim() || 'default';
+}
+
+function getSelectedProviderAccount(providerId) {
+  const selected = getSelectedProviderAccountId(providerId);
+  return normalizeProviderAccountsForUI(providerId, getProviderConfigFromCache(providerId)).find(account => account.id === selected) || null;
+}
+
+function syncProviderAccountLabel(providerId) {
+  const account = getSelectedProviderAccount(providerId);
+  const label = document.getElementById(getProviderAccountLabelId(providerId));
+  if (label && account) label.value = account.label || account.id;
+}
+
+function syncXaiAuthModeVisibility() {
+  const mode = String(document.getElementById(getProviderSettingsFieldId('xai', 'auth_mode'))?.value || 'api_key').trim() || 'api_key';
+  const apiWrap = document.getElementById('xai-api-key-auth-panel');
+  const oauthWrap = document.getElementById('xai-oauth-auth-panel');
+  if (apiWrap) apiWrap.style.display = mode === 'api_key' ? 'block' : 'none';
+  if (oauthWrap) oauthWrap.style.display = mode === 'oauth' ? 'block' : 'none';
+}
+
+function onProviderAccountChange(providerId) {
+  syncProviderAccountLabel(providerId);
+  const account = getSelectedProviderAccount(providerId);
+  if (providerId === 'xai' && account) {
+    writeProviderFieldElementValue('xai', 'auth_mode', account.authType === 'oauth' ? 'oauth' : 'api_key');
+    writeProviderFieldElementValue('xai', 'api_key', account.api_key || '');
+    syncXaiAuthModeVisibility();
+    refreshXaiStatus().catch(() => {});
+  } else if (providerId === 'openai_codex') {
+    refreshCodexStatus().catch(() => {});
+  } else if (providerId === 'anthropic') {
+    refreshAnthropicStatus().catch(() => {});
+  }
+}
+
+function addProviderAccount(providerId) {
+  const cache = window._llmSettingsCache || { provider: providerId, providers: {} };
+  cache.providers = cache.providers || {};
+  const cfg = cache.providers[providerId] && typeof cache.providers[providerId] === 'object' ? cache.providers[providerId] : {};
+  const accounts = {};
+  for (const account of normalizeProviderAccountsForUI(providerId, cfg)) accounts[account.id] = account;
+  const id = `${providerId}_${Date.now().toString(36)}`;
+  accounts[id] = {
+    id,
+    label: providerId === 'xai' ? 'New xAI account' : providerId === 'anthropic' ? 'New Claude account' : 'New Codex account',
+    authType: providerId === 'xai' ? 'api_key' : providerId === 'anthropic' ? 'setup_token' : 'oauth',
+    status: 'disconnected',
+  };
+  cache.providers[providerId] = { ...cfg, accounts, defaultAccountId: id };
+  if (cache.provider === providerId) cache.accountId = id;
+  window._llmSettingsCache = cache;
+  renderDynamicProviderPanels();
+  hydrateBuiltInProviderAccountControls();
+  applyDynamicProviderConfig(providerId, cache.providers[providerId]);
+  setVisibleProviderPanel(providerId);
+  const select = document.getElementById(getProviderAccountSelectId(providerId));
+  if (select) select.value = id;
+  onProviderAccountChange(providerId);
+}
+
+function renderProviderAccountControls(provider) {
+  if (!ACCOUNT_AWARE_PROVIDER_IDS.has(provider.id)) return '';
+  const cfg = getProviderConfigFromCache(provider.id);
+  const accounts = normalizeProviderAccountsForUI(provider.id, cfg);
+  const selected = String(cfg.defaultAccountId || accounts[0]?.id || 'default');
+  const options = accounts.map(account => `<option value="${escHtml(account.id)}"${account.id === selected ? ' selected' : ''}>${escHtml(account.label || account.id)}</option>`).join('');
+  return `<div class="settings-provider-account-panel" style="margin:10px 0 12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:end">
+      <label style="display:block;font-size:12px;color:var(--muted)">Account<select id="${getProviderAccountSelectId(provider.id)}" class="settings-input" onchange="onProviderAccountChange('${provider.id}')" style="margin-top:6px;font-size:13px">${options}</select></label>
+      <label style="display:block;font-size:12px;color:var(--muted)">Name<input id="${getProviderAccountLabelId(provider.id)}" class="settings-input" value="${escHtml(accounts.find(a => a.id === selected)?.label || selected)}" placeholder="Account name" style="margin-top:6px;font-size:13px" /></label>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn btn-sm" onclick="addProviderAccount('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Add Account</button>
+    </div>
+  </div>`;
+}
+
 function setProviderStatusMessage(providerId, type, text) {
   setSettingsStatus(document.getElementById(getProviderStatusElementId(providerId)), type, text);
 }
@@ -1008,12 +1129,27 @@ function applyDynamicProviderConfig(providerId, providerConfig) {
     ...getProviderDefaultConfig(providerId),
     ...((providerConfig && typeof providerConfig === 'object') ? providerConfig : {}),
   };
+  if (ACCOUNT_AWARE_PROVIDER_IDS.has(providerId)) {
+    const accounts = normalizeProviderAccountsForUI(providerId, providerConfig || {});
+    const selected = String(providerConfig?.defaultAccountId || accounts[0]?.id || '').trim();
+    const select = document.getElementById(getProviderAccountSelectId(providerId));
+    if (select && selected) select.value = selected;
+    const account = accounts.find(item => item.id === selected) || accounts[0];
+    if (account) {
+      if (providerId === 'xai') {
+        merged.auth_mode = account.authType === 'oauth' ? 'oauth' : 'api_key';
+        if (account.api_key) merged.api_key = account.api_key;
+      }
+      syncProviderAccountLabel(providerId);
+    }
+  }
   for (const field of fields) {
     const control = document.getElementById(getProviderSettingsFieldId(providerId, field.key));
     if (!control) continue;
     if (field.key === 'model' && control.tagName === 'SELECT') ensureSelectOption(control, merged[field.key]);
     writeProviderFieldElementValue(providerId, field.key, merged[field.key]);
   }
+  if (providerId === 'xai') syncXaiAuthModeVisibility();
 }
 
 function collectDynamicProviderConfig(providerId, activeProviderId) {
@@ -1153,10 +1289,28 @@ function renderDynamicProviderPanel(provider) {
   const refreshButton = provider.runtime?.options?.supportsLiveModelDiscovery
     ? `<button class="btn btn-sm" onclick="refreshProviderModels('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>`
     : '';
+  const xaiAuthModeField = provider.id === 'xai'
+    ? renderProviderField(provider, fields.find(field => field.key === 'auth_mode') || {
+        key: 'auth_mode',
+        label: 'Auth Mode',
+        input: 'select',
+        options: ['api_key', 'oauth'],
+        help: 'Choose API key billing or Grok account OAuth for the selected account.',
+      }).replace('<select ', '<select onchange="syncXaiAuthModeVisibility()" ')
+    : '';
+  const xaiApiKeyPanel = provider.id === 'xai'
+    ? `<div id="xai-api-key-auth-panel">${renderProviderField(provider, fields.find(field => field.key === 'api_key') || {
+        key: 'api_key',
+        label: 'API Key',
+        input: 'password',
+        placeholder: 'xai-...',
+        help: 'Stored only for the selected xAI account.',
+      })}</div>`
+    : '';
   const xaiOAuthPanel = provider.id === 'xai'
-    ? `<div style="margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+    ? `<div id="xai-oauth-auth-panel" style="margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
         <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px">Grok account OAuth</div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">Connect your Grok/X account and set Auth Mode to oauth. xAI still decides whether X Premium, Premium+, or SuperGrok can use each endpoint.</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">Connect your Grok/X account for the selected account. xAI still decides whether X Premium, Premium+, or SuperGrok can use each endpoint.</div>
         <div id="xai-oauth-disconnected-state" style="display:block">
           <button class="btn btn-sm" onclick="startXaiOAuth()" style="background:#111827;color:#fff;border:1px solid #111827">Connect xAI OAuth</button>
         </div>
@@ -1194,7 +1348,10 @@ function renderDynamicProviderPanel(provider) {
         <div id="x-api-oauth-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
       </div>`
     : '';
-  return `<div id="${panelId}" style="display:none"><div class="right-section-title" style="margin-bottom:8px">${escHtml(provider.name)}</div>${description}${xaiOAuthPanel}${xApiOAuthPanel}${fields.map(field => renderProviderField(provider, field)).join('')}<div style="display:flex;gap:8px;margin-top:10px">${refreshButton}<button class="btn btn-sm" onclick="testProviderConnection('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button></div><div id="${statusId}" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>`;
+  const visibleFields = provider.id === 'xai'
+    ? fields.filter(field => field.key !== 'auth_mode' && field.key !== 'api_key')
+    : fields;
+  return `<div id="${panelId}" style="display:none"><div class="right-section-title" style="margin-bottom:8px">${escHtml(provider.name)}</div>${description}${renderProviderAccountControls(provider)}${xaiAuthModeField}${xaiApiKeyPanel}${xaiOAuthPanel}${xApiOAuthPanel}${visibleFields.map(field => renderProviderField(provider, field)).join('')}<div style="display:flex;gap:8px;margin-top:10px">${refreshButton}<button class="btn btn-sm" onclick="testProviderConnection('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button></div><div id="${statusId}" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>`;
 }
 
 function renderProviderSelectors() {
@@ -1234,6 +1391,32 @@ function renderDynamicProviderPanels() {
   host.innerHTML = dynamicProviders.map(provider => renderDynamicProviderPanel(provider)).join('');
 }
 
+function setVisibleProviderPanel(providerId) {
+  const provider = String(providerId || '').trim();
+  const select = document.getElementById('settings-llm-provider');
+  if (select && provider) select.value = provider;
+  getKnownProviderIds().forEach(id => {
+    const el = document.getElementById(getProviderPanelId(id));
+    if (el) el.style.display = id === provider ? 'block' : 'none';
+  });
+}
+
+function hydrateBuiltInProviderAccountControls() {
+  for (const providerId of ['openai_codex', 'anthropic']) {
+    const panel = document.getElementById(getProviderPanelId(providerId));
+    if (!panel) continue;
+    panel.querySelector('.settings-provider-account-panel')?.remove();
+    const provider = getProviderCatalogItem(providerId) || { id: providerId, name: providerId };
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = renderProviderAccountControls(provider);
+    const control = wrapper.firstElementChild;
+    if (!control) continue;
+    const anchor = panel.querySelector('.right-section-title');
+    if (anchor?.nextSibling) panel.insertBefore(control, anchor.nextSibling);
+    else panel.insertBefore(control, panel.firstChild);
+  }
+}
+
 async function ensureProviderCatalogUIReady() {
   if (providerCatalogCache) return providerCatalogCache;
   if (!providerCatalogPromise) {
@@ -1251,6 +1434,7 @@ async function ensureProviderCatalogUIReady() {
         providerCatalogCache = items;
         renderProviderSelectors();
         renderDynamicProviderPanels();
+        hydrateBuiltInProviderAccountControls();
         return items;
       })
       .catch((err) => {
@@ -1258,6 +1442,7 @@ async function ensureProviderCatalogUIReady() {
         providerCatalogCache = BUILTIN_PROVIDER_IDS.map(id => ({ id, name: id, setup: {}, runtime: {}, config: {} }));
         renderProviderSelectors();
         renderDynamicProviderPanels();
+        hydrateBuiltInProviderAccountControls();
         return providerCatalogCache;
       });
   }
@@ -1266,10 +1451,7 @@ async function ensureProviderCatalogUIReady() {
 
 function onProviderChange() {
   const provider = document.getElementById('settings-llm-provider').value;
-  getKnownProviderIds().forEach(id => {
-    const el = document.getElementById(getProviderPanelId(id));
-    if (el) el.style.display = id === provider ? 'block' : 'none';
-  });
+  setVisibleProviderPanel(provider);
   if (provider === 'openai') {
     refreshOpenAIModels(true).catch(() => {});
   } else if (provider === 'anthropic') {
@@ -1315,6 +1497,8 @@ async function loadModelSettings() {
       const prov = llm.provider || 'ollama';
       window._llmSettingsCache = llm;
       renderProviderSelectors();
+      renderDynamicProviderPanels();
+      hydrateBuiltInProviderAccountControls();
       const provSel = document.getElementById('settings-llm-provider');
       if (provSel) provSel.value = prov;
 
@@ -1785,14 +1969,46 @@ function buildProviderPayload(providerOverride) {
     const config = collectDynamicProviderConfig(item.id, provider);
     if (config) providers[item.id] = config;
   }
-  return { provider, providers };
+  const applyAccountState = (providerId) => {
+    const existing = getProviderConfigFromCache(providerId);
+    const selected = getSelectedProviderAccountId(providerId);
+    const accounts = {};
+    for (const account of normalizeProviderAccountsForUI(providerId, existing)) {
+      accounts[account.id] = { ...account };
+    }
+    if (!accounts[selected]) {
+      accounts[selected] = { id: selected, label: selected, authType: providerId === 'anthropic' ? 'setup_token' : providerId === 'openai_codex' ? 'oauth' : 'api_key', status: 'disconnected' };
+    }
+    const label = document.getElementById(getProviderAccountLabelId(providerId))?.value?.trim();
+    if (label) accounts[selected].label = label;
+    if (providerId === 'xai') {
+      const mode = String(document.getElementById(getProviderSettingsFieldId('xai', 'auth_mode'))?.value || 'api_key').trim() || 'api_key';
+      accounts[selected].authType = mode === 'oauth' ? 'oauth' : 'api_key';
+      const key = String(document.getElementById(getProviderSettingsFieldId('xai', 'api_key'))?.value || '').trim();
+      if (key || accounts[selected].api_key) accounts[selected].api_key = key || accounts[selected].api_key;
+      providers.xai = {
+        ...(providers.xai || {}),
+        auth_mode: mode,
+        defaultAccountId: selected,
+        accounts,
+      };
+    } else if (providerId === 'openai_codex') {
+      providers.openai_codex = { ...(providers.openai_codex || {}), defaultAccountId: selected, accounts };
+    } else if (providerId === 'anthropic') {
+      providers.anthropic = { ...(providers.anthropic || {}), defaultAccountId: selected, accounts };
+    }
+  };
+  ['xai', 'openai_codex', 'anthropic'].forEach(applyAccountState);
+  const activeAccount = providers[provider]?.defaultAccountId || '';
+  return { provider, accountId: activeAccount, providers };
 }
 
 // --- Codex OAuth UI ------------------------------------------------
 
 async function refreshCodexStatus() {
   try {
-    const data = await api('/api/auth/openai/status');
+    const accountId = getSelectedProviderAccountId('openai_codex');
+    const data = await api(`/api/auth/openai/status?accountId=${encodeURIComponent(accountId)}`);
     const disc = document.getElementById('codex-disconnected-state');
     const conn = document.getElementById('codex-connected-state');
     const acct = document.getElementById('codex-account-id');
@@ -1814,7 +2030,7 @@ async function startCodexOAuth() {
   setSettingsStatus(statusEl, 'info', 'Starting…');
   if (_codexPollTimer) { clearTimeout(_codexPollTimer); _codexPollTimer = null; }
   try {
-    const data = await api('/api/auth/openai/start', { method: 'POST', body: '{}' });
+        const data = await api('/api/auth/openai/start', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('openai_codex') }) });
     if (data?.error) {
       setSettingsStatus(statusEl, 'error', data.error);
       return;
@@ -1860,7 +2076,7 @@ async function submitManualCodexUrl() {
   const statusEl = document.getElementById('codex-oauth-status');
   setSettingsStatus(statusEl, 'info', 'Exchanging token…');
   try {
-    const data = await api('/api/auth/openai/manual', { method: 'POST', body: JSON.stringify({ url }) });
+    const data = await api('/api/auth/openai/manual', { method: 'POST', body: JSON.stringify({ url, accountId: getSelectedProviderAccountId('openai_codex') }) });
     if (data?.success) {
       setSettingsStatus(statusEl, 'info', '');
       await refreshCodexStatus();
@@ -1873,7 +2089,7 @@ async function submitManualCodexUrl() {
 }
 
 async function disconnectCodex() {
-  await api('/api/auth/openai/disconnect', { method: 'POST', body: '{}' });
+  await api('/api/auth/openai/disconnect', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('openai_codex') }) });
   await refreshCodexStatus();
 }
 
@@ -1881,7 +2097,8 @@ async function disconnectCodex() {
 
 async function refreshXaiStatus() {
   try {
-    const data = await api('/api/auth/xai/status');
+    const accountId = getSelectedProviderAccountId('xai');
+    const data = await api(`/api/auth/xai/status?accountId=${encodeURIComponent(accountId)}`);
     const disc = document.getElementById('xai-oauth-disconnected-state');
     const conn = document.getElementById('xai-oauth-connected-state');
     const acct = document.getElementById('xai-oauth-account-id');
@@ -1910,7 +2127,7 @@ async function startXaiOAuth() {
   setSettingsStatus(statusEl, 'info', 'Starting xAI login...');
   if (_xaiPollTimer) { clearTimeout(_xaiPollTimer); _xaiPollTimer = null; }
   try {
-    const data = await api('/api/auth/xai/start', { method: 'POST', body: '{}' });
+    const data = await api('/api/auth/xai/start', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('xai') }) });
     if (data?.error) {
       setSettingsStatus(statusEl, 'error', data.error);
       return;
@@ -1957,7 +2174,7 @@ async function submitXaiOAuthCode() {
   }
   setSettingsStatus(statusEl, 'info', 'Completing xAI OAuth...');
   try {
-    const data = await api('/api/auth/xai/manual', { method: 'POST', body: JSON.stringify({ code }) });
+    const data = await api('/api/auth/xai/manual', { method: 'POST', body: JSON.stringify({ code, accountId: getSelectedProviderAccountId('xai') }) });
     if (data?.success) {
       if (input) input.value = '';
       setSettingsStatus(statusEl, 'success', 'Connected. Auth Mode was switched to oauth.');
@@ -1971,7 +2188,7 @@ async function submitXaiOAuthCode() {
 }
 
 async function disconnectXaiOAuth() {
-  await api('/api/auth/xai/disconnect', { method: 'POST', body: '{}' });
+  await api('/api/auth/xai/disconnect', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('xai') }) });
   await refreshXaiStatus();
   setSettingsStatus(document.getElementById('xai-oauth-status'), 'info', 'xAI OAuth disconnected. You can reconnect whenever you need OAuth.');
 }
@@ -2105,7 +2322,8 @@ async function disconnectXApiOAuth() {
 
 async function refreshAnthropicStatus() {
   try {
-    const data = await api('/api/auth/anthropic/status');
+    const accountId = getSelectedProviderAccountId('anthropic');
+    const data = await api(`/api/auth/anthropic/status?accountId=${encodeURIComponent(accountId)}`);
     const disc = document.getElementById('anthropic-disconnected-state');
     const conn = document.getElementById('anthropic-connected-state');
     const authType = document.getElementById('anthropic-auth-type');
@@ -2205,7 +2423,7 @@ async function connectAnthropic() {
   try {
     const data = await api('/api/auth/anthropic/setup-token', {
       method: 'POST',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, accountId: getSelectedProviderAccountId('anthropic') }),
     });
     if (data?.success) {
       setSettingsStatus(statusEl, 'info', '');
@@ -2224,7 +2442,7 @@ async function testAnthropicConnection() {
   const statusEl = document.getElementById('anthropic-oauth-status');
   setSettingsStatus(statusEl, 'info', 'Testing…');
   try {
-    const data = await api('/api/auth/anthropic/test', { method: 'POST', body: '{}' });
+    const data = await api('/api/auth/anthropic/test', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('anthropic') }) });
     if (data?.success) {
       if (statusEl) statusEl.style.color = '#166534';
       setSettingsStatus(statusEl, 'success', 'Connected — API responded successfully');
@@ -2245,7 +2463,7 @@ async function testAnthropicConnection() {
 }
 
 async function disconnectAnthropic() {
-  await api('/api/auth/anthropic/disconnect', { method: 'POST', body: '{}' });
+  await api('/api/auth/anthropic/disconnect', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('anthropic') }) });
   await refreshAnthropicStatus();
   addProcessEntry('info', 'Anthropic disconnected.');
 }
@@ -5439,6 +5657,9 @@ window.showMCPAddForm = showMCPAddForm;
 window.startCodexOAuth = startCodexOAuth;
 window.startXaiOAuth = startXaiOAuth;
 window.submitXaiOAuthCode = submitXaiOAuthCode;
+window.addProviderAccount = addProviderAccount;
+window.onProviderAccountChange = onProviderAccountChange;
+window.syncXaiAuthModeVisibility = syncXaiAuthModeVisibility;
 window.saveXApiCredentials = saveXApiCredentials;
 window.startXApiOAuth = startXApiOAuth;
 window.submitXApiOAuthCode = submitXApiOAuthCode;

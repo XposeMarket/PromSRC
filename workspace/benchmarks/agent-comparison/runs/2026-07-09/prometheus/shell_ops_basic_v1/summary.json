@@ -1,0 +1,19 @@
+{
+  "run_id": "prometheus_shell_ops_basic_v1_2026-07-09",
+  "agent": "prometheus",
+  "benchmark_id": "shell_ops_basic_v1",
+  "status": "pass",
+  "blocked_reason": null,
+  "total_wall_ms": 2075,
+  "tool_calls": 4,
+  "tool_errors": 1,
+  "retries": 0,
+  "tokens_input": null,
+  "tokens_output": null,
+  "estimated_cost_usd": null,
+  "artifacts": [
+    "benchmarks/agent-comparison/fixtures/prometheus_shell_ops_basic_v1/report.md"
+  ],
+  "final_line": "SHELL_OPS_BASIC_V1_PASS: recovered=true",
+  "notes": "Native Prometheus shell/workspace wrappers. Timed shell subprocesses: node --version 309ms; intentional command-not-found 1286ms; recovery command 480ms. Report write via workspace_edit not included in total_wall_ms."
+}

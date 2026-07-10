@@ -1,0 +1,17 @@
+{
+  "run_id": "prometheus_browser_external_v1_2026-07-09",
+  "agent": "prometheus",
+  "benchmark_id": "browser_external_v1",
+  "status": "pass",
+  "blocked_reason": null,
+  "total_wall_ms": 7109,
+  "tool_calls": 2,
+  "tool_errors": 0,
+  "retries": 0,
+  "tokens_input": null,
+  "tokens_output": null,
+  "estimated_cost_usd": null,
+  "artifacts": [],
+  "final_line": "BROWSER_EXTERNAL_V1_PASS: Example Domain",
+  "notes": "Prometheus browser_session.open to https://example.com returned snapshot with h1 Example Domain in 6975ms; browser_session.close took 134ms."
+}

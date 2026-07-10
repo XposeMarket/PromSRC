@@ -33,7 +33,7 @@ function sanitizeCacheMarkers(messages: ChatMessage[]): ChatMessage[] {
 const EFFORT_MAP: Record<string, string> = {
   none: 'none', minimal: 'minimal', fast: 'minimal',
   low: 'low', medium: 'medium', high: 'high',
-  xhigh: 'high', extra_high: 'high', max: 'high',
+  xhigh: 'xhigh', extra_high: 'xhigh', max: 'max',
 };
 
 // Providers that meaningfully accept a `reasoning_effort` parameter via the
@@ -67,7 +67,12 @@ function normalizeReasoningEffortForProvider(providerId: string, rawEffort: stri
     if (effort === 'minimal') effort = 'low';
     if ((normalized === 'xhigh' || normalized === 'extra_high' || normalized === 'max') && xaiModelSupportsXHighReasoningEffort(modelName || '')) {
       effort = 'xhigh';
+    } else if (effort === 'xhigh' || effort === 'max') {
+      effort = 'high';
     }
+  }
+  if (id === 'perplexity' && (effort === 'minimal' || effort === 'xhigh' || effort === 'max')) {
+    effort = effort === 'minimal' ? 'low' : 'high';
   }
   return effort;
 }
@@ -83,7 +88,8 @@ function shouldSendReasoningEffort(providerId: string, effort: string, modelName
     }
     return effort === 'none' || effort === 'low' || effort === 'medium' || effort === 'high';
   }
-  return effort !== 'none';
+  if (id === 'openai') return effort !== 'none';
+  return effort !== 'none' && effort !== 'xhigh' && effort !== 'max';
 }
 
 function providerToolLimit(providerId: string): number | null {

@@ -1,0 +1,626 @@
+--- src/providers/provider-registry.ts via read_source ---
+src/providers/provider-registry.ts (72 lines) [window 1-72]:
+1: import { listExtensionDescriptors } from '../extensions/registry.js';
+2: import type {
+3:   ExtensionRuntimeOptions,
+4:   LoadedExtensionDescriptor,
+5: } from '../extensions/types.js';
+6: 
+7: export type ProviderDescriptor = LoadedExtensionDescriptor & { kind: 'provider' };
+8: 
+9: function listDescriptors(): ProviderDescriptor[] {
+10:   return listExtensionDescriptors('provider') as ProviderDescriptor[];
+11: }
+12: 
+13: function descriptorOwnsProviderId(descriptor: ProviderDescriptor, providerId: string): boolean {
+14:   if (descriptor.id === providerId) return true;
+15:   return Boolean(descriptor.ownership?.providerIds?.includes(providerId));
+16: }
+17: 
+18: export function listProviderDescriptors(): ProviderDescriptor[] {
+19:   return listDescriptors();
+20: }
+21: 
+22: export function listKnownProviderIds(): string[] {
+23:   const ids = new Set<string>();
+24:   for (const descriptor of listDescriptors()) {
+25:     ids.add(descriptor.id);
+26:     for (const providerId of descriptor.ownership?.providerIds || []) {
+27:       ids.add(providerId);
+28:     }
+29:   }
+30:   return [...ids];
+31: }
+32: 
+33: export function isKnownProviderId(providerId: string): boolean {
+34:   const normalized = String(providerId || '').trim();
+35:   if (!normalized) return false;
+36:   return listDescriptors().some((descriptor) => descriptorOwnsProviderId(descriptor, normalized));
+37: }
+38: 
+39: export function getProviderDescriptor(providerId: string): ProviderDescriptor | undefined {
+40:   const normalized = String(providerId || '').trim();
+41:   if (!normalized) return undefined;
+42:   return listDescriptors().find((descriptor) => descriptorOwnsProviderId(descriptor, normalized));
+43: }
+44: 
+45: export function getProviderDefaultConfig(providerId: string): Record<string, unknown> {
+46:   return { ...(getProviderDescriptor(providerId)?.config?.defaults || {}) };
+47: }
+48: 
+49: export function getProviderRuntimeOptions(providerId: string): ExtensionRuntimeOptions {
+50:   return { ...(getProviderDescriptor(providerId)?.runtime?.options || {}) };
+51: }
+52: 
+53: export function getProviderSecretFields(providerId: string): string[] {
+54:   return (getProviderDescriptor(providerId)?.setup?.fields || [])
+55:     .filter((field) => field.secret)
+56:     .map((field) => field.key);
+57: }
+58: 
+59: export function listProviderSecretFieldPaths(): Array<[string, string]> {
+60:   const paths: Array<[string, string]> = [];
+61:   for (const providerId of listKnownProviderIds()) {
+62:     for (const field of getProviderSecretFields(providerId)) {
+63:       paths.push([providerId, field]);
+64:     }
+65:   }
+66:   return paths;
+67: }
+68: 
+69: export function getProviderStaticModels(providerId: string): string[] {
+70:   return [...(getProviderRuntimeOptions(providerId).staticModels || [])];
+71: }
+72: 
+
+--- src/providers/factory.ts via read_source ---
+src/providers/factory.ts (234 lines) [window 1-234]:
+1: /**
+2:  * factory.ts
+3:  * Returns the active LLMProvider based on config.
+4:  * All code that needs to talk to an LLM goes through here.
+5:  */
+6: 
+7: import { getConfig } from '../config/config';
+8: import { log } from '../security/log-scrubber';
+9: import type { LLMProvider, ProviderID } from './LLMProvider';
+10: import { OllamaAdapter } from './ollama-adapter';
+11: import { OpenAICompatAdapter } from './openai-compat-adapter';
+12: import { OpenAICodexAdapter } from './openai-codex-adapter';
+13: import { AnthropicAdapter } from './anthropic-adapter';
+14: import { PerplexityAdapter } from './perplexity-adapter';
+15: import { GeminiAdapter } from './gemini-adapter';
+16: import { getValidXAIToken, isXAIConnected } from '../auth/xai-oauth';
+17: import {
+18:   getProviderDefaultConfig,
+19:   getProviderDescriptor,
+20:   getProviderRuntimeOptions,
+21: } from './provider-registry.js';
+22: 
+23: const LEGACY_BLOCKED_MODELS = new Set(['codex-davinci-002']);
+24: const DEFAULT_OPENAI_MODEL = 'gpt-4o';
+25: const DEFAULT_OPENAI_CODEX_MODEL = 'gpt-5.4';
+26: const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+27: const DEFAULT_PERPLEXITY_MODEL = 'sonar-pro';
+28: const DEFAULT_GEMINI_MODEL = 'gemini-2.5-pro';
+29: 
+30: function getProviderConfig(): { active: ProviderID; providers: any } {
+31:   const raw = getConfig().getConfig() as any;
+32: 
+33:   if (raw.llm?.provider) {
+34:     return { active: raw.llm.provider, providers: raw.llm.providers || {} };
+35:   }
+36: 
+37:   return {
+38:     active: 'ollama',
+39:     providers: {
+40:       ollama: {
+41:         endpoint: raw.ollama?.endpoint || 'http://localhost:11434',
+42:         model: raw.models?.primary || 'qwen3:4b',
+43:       },
+44:     },
+45:   };
+46: }
+47: 
+48: function getConfigDir(): string {
+49:   return getConfig().getConfigDir();
+50: }
+51: 
+52: function getProviderSettings(id: string, providers: any): Record<string, unknown> {
+53:   const configured = providers?.[id];
+54:   return {
+55:     ...getProviderDefaultConfig(id),
+56:     ...(configured && typeof configured === 'object' && !Array.isArray(configured) ? configured : {}),
+57:   };
+58: }
+59: 
+60: function getProviderDisplayName(id: string): string {
+61:   return getProviderDescriptor(id)?.name || id;
+62: }
+63: 
+64: function readStringSetting(obj: Record<string, unknown>, key: string): string {
+65:   const value = obj[key];
+66:   return typeof value === 'string' ? value : '';
+67: }
+68: 
+69: function requireApiKey(id: string, cfg: Record<string, unknown>): string {
+70:   const apiKey = resolveSecretKey(readStringSetting(cfg, 'api_key'));
+71:   if (!apiKey) {
+72:     throw new Error(`${getProviderDisplayName(id)} API key not configured. Add it in Settings -> Models.`);
+73:   }
+74:   return apiKey;
+75: }
+76: 
+77: let cachedProvider: LLMProvider | null = null;
+78: let cachedProviderId: ProviderID | null = null;
+79: 
+80: export function getProvider(): LLMProvider {
+81:   const { active, providers } = getProviderConfig();
+82: 
+83:   if (cachedProvider && cachedProviderId === active) {
+84:     if (active === 'ollama' && cachedProvider instanceof OllamaAdapter) {
+85:       const cfg = getProviderSettings('ollama', providers);
+86:       cachedProvider.updateEndpoint(readStringSetting(cfg, 'endpoint') || 'http://localhost:11434');
+87:     }
+88:     return cachedProvider;
+89:   }
+90: 
+91:   cachedProviderId = active;
+92:   cachedProvider = buildProvider(active, providers);
+93:   return cachedProvider;
+94: }
+95: 
+96: export function resetProvider(): void {
+97:   cachedProvider = null;
+98:   cachedProviderId = null;
+99: }
+100: 
+101: export function buildProviderById(providerId: string): LLMProvider {
+102:   const raw = getConfig().getConfig() as any;
+103:   const providers = raw.llm?.providers || {};
+104:   return buildProvider(providerId, providers);
+105: }
+106: 
+107: export function buildProviderForLLM(llm: any): LLMProvider {
+108:   const active = String(llm?.provider || 'ollama');
+109:   const providers = llm?.providers || {};
+110:   return buildProvider(active, providers);
+111: }
+112: 
+113: function buildProvider(id: ProviderID, providers: any): LLMProvider {
+114:   const descriptor = getProviderDescriptor(id);
+115:   if (!descriptor) {
+116:     log.warn(`[Provider] Unknown provider "${id}", falling back to Ollama`);
+117:     return new OllamaAdapter('http://localhost:11434');
+118:   }
+119: 
+120:   const cfg = getProviderSettings(id, providers);
+121:   const runtime = getProviderRuntimeOptions(id);
+122: 
+123:   switch (descriptor.runtime.binding) {
+124:     case 'providers/ollama-adapter': {
+125:       return new OllamaAdapter(readStringSetting(cfg, 'endpoint') || 'http://localhost:11434');
+126:     }
+127: 
+128:     case 'providers/openai-compat-adapter': {
+129:       const authType = descriptor.setup?.authType || 'none';
+130:       const rawProviderCfg = providers?.[id] && typeof providers[id] === 'object' && !Array.isArray(providers[id])
+131:         ? providers[id]
+132:         : {};
+133:       const explicitAuthMode = readStringSetting(rawProviderCfg, 'auth_mode');
+134:       const authMode = explicitAuthMode || readStringSetting(cfg, 'auth_mode') || 'api_key';
+135:       const useXaiOAuth = id === 'xai' && (authMode === 'oauth' || (!explicitAuthMode && isXAIConnected(getConfigDir())));
+136:       const apiKey = useXaiOAuth
+137:         ? undefined
+138:         : authType === 'api_key'
+139:           ? requireApiKey(id, cfg)
+140:           : resolveSecretKey(readStringSetting(cfg, 'api_key'));
+141:       const endpoint = readStringSetting(cfg, 'endpoint') || runtime.endpoint || 'http://localhost:11434';
+142:       return new OpenAICompatAdapter({
+143:         endpoint,
+144:         apiKey,
+145:         getToken: useXaiOAuth ? () => getValidXAIToken(getConfigDir()) : undefined,
+146:         providerId: id,
+147:         chatCompletionsPath: runtime.chatCompletionsPath,
+148:         modelsPath: runtime.modelsPath,
+149:         defaultHeaders: runtime.defaultHeaders,
+150:         authLabel: useXaiOAuth ? 'xAI OAuth' : (authType === 'api_key' ? 'API key' : undefined),
+151:         staticModels: runtime.staticModels,
+152:         supportsReasoningEffort: runtime.supportsReasoningEffort,
+153:       });
+154:     }
+155: 
+156:     case 'providers/openai-codex-adapter': {
+157:       return new OpenAICodexAdapter(getConfigDir());
+158:     }
+159: 
+160:     case 'providers/anthropic-adapter': {
+161:       if (id === 'anthropic') {
+162:         return new AnthropicAdapter(getConfigDir());
+163:       }
+164:       return new AnthropicAdapter({
+165:         providerId: id,
+166:         apiKey: requireApiKey(id, cfg),
+167:         baseUrl: readStringSetting(cfg, 'endpoint') || runtime.endpoint || '',
+168:         authHeader: runtime.authHeader,
+169:         staticModels: runtime.staticModels,
+170:         defaultHeaders: runtime.defaultHeaders,
+171:       });
+172:     }
+173: 
+174:     case 'providers/perplexity-adapter': {
+175:       return new PerplexityAdapter(requireApiKey(id, cfg));
+176:     }
+177: 
+178:     case 'providers/gemini-adapter': {
+179:       return new GeminiAdapter(requireApiKey(id, cfg));
+180:     }
+181: 
+182:     default: {
+183:       log.warn(`[Provider] Unsupported binding "${descriptor.runtime.binding}" for "${id}", falling back to Ollama`);
+184:       return new OllamaAdapter('http://localhost:11434');
+185:     }
+186:   }
+187: }
+188: 
+189: function resolveEnvKey(value: string | undefined): string | undefined {
+190:   if (!value) return undefined;
+191:   if (value.startsWith('env:')) {
+192:     const envName = value.slice(4);
+193:     return process.env[envName];
+194:   }
+195:   return value;
+196: }
+197: 
+198: function resolveSecretKey(value: string | undefined): string | undefined {
+199:   if (!value) return undefined;
+200:   const envResolved = resolveEnvKey(value);
+201:   if (envResolved !== value) return envResolved;
+202:   return getConfig().resolveSecret(value);
+203: }
+204: 
+205: export function getModelForRole(role: 'manager' | 'executor' | 'verifier'): string {
+206:   const raw = getConfig().getConfig() as any;
+207:   const { active, providers } = getProviderConfig();
+208:   const providerCfg = getProviderSettings(active, providers);
+209: 
+210:   if (providerCfg.model) {
+211:     const model = String(providerCfg.model).trim();
+212:     if (active === 'openai_codex' && LEGACY_BLOCKED_MODELS.has(model)) return DEFAULT_OPENAI_CODEX_MODEL;
+213:     return model;
+214:   }
+215: 
+216:   const defaultModel = String(getProviderDefaultConfig(active).model || '').trim();
+217:   if (defaultModel) {
+218:     if (active === 'openai_codex' && LEGACY_BLOCKED_MODELS.has(defaultModel)) return DEFAULT_OPENAI_CODEX_MODEL;
+219:     return defaultModel;
+220:   }
+221: 
+222:   if (active === 'openai_codex') return DEFAULT_OPENAI_CODEX_MODEL;
+223:   if (active === 'openai') return DEFAULT_OPENAI_MODEL;
+224:   if (active === 'anthropic') return DEFAULT_ANTHROPIC_MODEL;
+225:   if (active === 'perplexity') return DEFAULT_PERPLEXITY_MODEL;
+226:   if (active === 'gemini') return DEFAULT_GEMINI_MODEL;
+227: 
+228:   return raw.models?.roles?.[role] || raw.models?.primary || 'qwen3:4b';
+229: }
+230: 
+231: export function getPrimaryModel(): string {
+232:   return getModelForRole('executor');
+233: }
+234: 
+
+--- src/providers/LLMProvider.ts via read_source ---
+src/providers/LLMProvider.ts (144 lines) [window 1-144]:
+1: /**
+2:  * LLMProvider.ts
+3:  * Provider-agnostic interface that every backend adapter must implement.
+4:  * ollama-client.ts delegates to whichever provider is active at runtime.
+5:  */
+6: 
+7: /**
+8:  * A single part inside a multimodal content array.
+9:  * Used only when sending image data to capable secondary models (OpenAI, Codex).
+10:  * Small primary models (Ollama 4B) always receive plain string content.
+11:  */
+12: export type ContentPart =
+13:   | { type: 'text'; text: string }
+14:   | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } };
+15: 
+16: /**
+17:  * Internal sentinel inserted by prompt-context.ts between the STABLE (cacheable)
+18:  * prefix of the system prompt and the VOLATILE (per-turn) tail. Adapters use it
+19:  * to place provider cache breakpoints (Anthropic) or simply to keep the stable
+20:  * prefix byte-identical across turns (OpenAI / xAI / Codex auto-caching).
+21:  *
+22:  * It MUST never reach a model: the Anthropic adapter consumes it via
+23:  * splitOnCacheMarker(); all other adapters strip it via stripCacheMarker().
+24:  * The token is deliberately unusual so it can't collide with real prompt text.
+25:  */
+26: export const PROMPT_CACHE_MARKER = '\n␞<<<PROMETHEUS_PROMPT_CACHE_BREAKPOINT>>>␞\n';
+27: 
+28: export interface ChatMessage {
+29:   role: 'system' | 'user' | 'assistant' | 'tool';
+30:   /**
+31:    * Plain string for all primary (small) model calls.
+32:    * ContentPart[] only for multimodal secondary advisor calls where the
+33:    * provider is 'openai' or 'openai_codex' and the model supports vision.
+34:    */
+35:   content: string | ContentPart[] | null;
+36:   tool_calls?: ToolCall[];
+37:   tool_call_id?: string;
+38:   name?: string;
+39: }
+40: 
+41: export interface ToolCall {
+42:   id: string;
+43:   type: 'function';
+44:   function: {
+45:     name: string;
+46:     arguments: string;
+47:   };
+48: }
+49: 
+50: export type ModelStreamEvent =
+51:   | { type: 'assistant_delta'; text: string; nativeType?: string; provider?: string; model?: string }
+52:   | { type: 'reasoning_delta'; text: string; summary?: boolean; nativeType?: string; provider?: string; model?: string }
+53:   | { type: 'reasoning_done'; text?: string; summary?: boolean; nativeType?: string; provider?: string; model?: string }
+54:   | { type: 'tool_call_start'; id: string; name: string; nativeType?: string; provider?: string; model?: string }
+55:   | { type: 'tool_call_delta'; id: string; name?: string; argumentsDelta: string; nativeType?: string; provider?: string; model?: string }
+56:   | { type: 'tool_call_done'; id: string; name: string; arguments: string; nativeType?: string; provider?: string; model?: string }
+57:   | { type: 'provider_event'; nativeType: string; data?: unknown; provider?: string; model?: string };
+58: 
+59: export interface ChatOptions {
+60:   temperature?: number;
+61:   max_tokens?: number;
+62:   num_ctx?: number;
+63:   tools?: any[];
+64:   think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+65:   /** Called with each text token as it streams from the model. */
+66:   onToken?: (chunk: string) => void;
+67:   /** Called with provider-visible reasoning/thinking deltas as they stream. */
+68:   onThinking?: (chunk: string) => void;
+69:   /** Called with provider-visible reasoning summary deltas as they stream. */
+70:   onReasoningSummary?: (chunk: string) => void;
+71:   /** Provider-normalized stream events for future UI/runtime lanes. */
+72:   onModelEvent?: (event: ModelStreamEvent) => void;
+73:   /** Cancels the provider request when the owning chat turn is stopped. */
+74:   abortSignal?: AbortSignal;
+75:   /** When true, strip [TODAY_NOTES] intraday context from system prompt (used after switch_model to reduce context). */
+76:   omitIntradayNotes?: boolean;
+77: }
+78: 
+79: export interface GenerateOptions {
+80:   temperature?: number;
+81:   max_tokens?: number;
+82:   num_ctx?: number;
+83:   format?: 'json';
+84:   system?: string;
+85:   think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+86: }
+87: 
+88: export interface ModelUsage {
+89:   inputTokens?: number;
+90:   outputTokens?: number;
+91:   reasoningTokens?: number;
+92:   cacheReadTokens?: number;
+93:   cacheWriteTokens?: number;
+94:   totalTokens?: number;
+95:   source?: 'provider' | 'estimated';
+96:   requestedModel?: string;
+97:   actualModel?: string;
+98:   fallbackFrom?: string;
+99:   fallbackReason?: string;
+100: }
+101: 
+102: export interface ChatResult {
+103:   message: ChatMessage;
+104:   thinking?: string;
+105:   usage?: ModelUsage;
+106: }
+107: 
+108: export interface GenerateResult {
+109:   response: string;
+110:   thinking?: string;
+111:   usage?: ModelUsage;
+112: }
+113: 
+114: export interface ModelInfo {
+115:   name: string;
+116:   size?: number;
+117:   parameter_size?: string;
+118:   family?: string;
+119:   modified_at?: string;
+120:   contextWindowTokens?: number;
+121:   maxOutputTokens?: number;
+122:   tokenizer?: string;
+123:   supportsReasoningTokens?: boolean;
+124: }
+125: 
+126: export interface LLMProvider {
+127:   /** Send a multi-turn chat request. */
+128:   chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult>;
+129: 
+130:   /** Single-prompt generation (used by reactor/agents). */
+131:   generate(prompt: string, model: string, options?: GenerateOptions): Promise<GenerateResult>;
+132: 
+133:   /** List available models. Returns [] if provider doesn't support listing. */
+134:   listModels(): Promise<ModelInfo[]>;
+135: 
+136:   /** Quick connectivity check. Returns true if reachable. */
+137:   testConnection(): Promise<boolean>;
+138: 
+139:   /** Provider identifier. */
+140:   readonly id: ProviderID;
+141: }
+142: 
+143: export type ProviderID = string;
+144: 
+
+--- src/config/config-schema.ts via read_source ---
+src/config/config-schema.ts (491 lines) [window 1-80, truncated]:
+1: /**
+2:  * src/config/config-schema.ts
+3:  *
+4:  * Zod schema for PrometheusConfig — typed validation replacing the legacy
+5:  * manual type-checking and redactConfigForUI() gymnastics.
+6:  *
+7:  * Usage:
+8:  *   import { PrometheusConfigSchema, parseConfig } from './config-schema';
+9:  *   const result = PrometheusConfigSchema.safeParse(rawJson);
+10:  *
+11:  * Step 30.1 of Phase 6 refactor.
+12:  */
+13: 
+14: import { z } from 'zod';
+15: 
+16: // ─── Primitives ──────────────────────────────────────────────────────────────
+17: 
+18: const ProviderIDSchema = z.string().min(1);
+19: 
+20: // ─── LLM Providers ──────────────────────────────────────────────────────────
+21: 
+22: const OllamaProviderSchema = z.object({
+23:   endpoint: z.string().url().or(z.string().startsWith('http')),
+24:   model: z.string(),
+25: });
+26: 
+27: const LlamaCppProviderSchema = z.object({
+28:   endpoint: z.string(),
+29:   model: z.string(),
+30:   api_key: z.string().optional(),
+31: });
+32: 
+33: const LMStudioProviderSchema = z.object({
+34:   endpoint: z.string(),
+35:   model: z.string(),
+36:   api_key: z.string().optional(),
+37: });
+38: 
+39: // Accepted reasoning effort levels for providers that expose one.
+40: // Anthropic additionally accepts "max"; providers that do not support it must
+41: // clamp or reject it at their adapter/UI boundary.
+42: const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional();
+43: 
+44: const OpenAIProviderSchema = z.object({
+45:   api_key: z.string(),   // may be "vault:<key>" or "env:VAR"
+46:   model: z.string(),
+47:   reasoning_effort: ReasoningEffortSchema,
+48:   tool_choice: z.enum(['auto', 'required']).optional(),
+49: });
+50: 
+51: const OpenAICodexProviderSchema = z.object({
+52:   model: z.string(),
+53:   reasoning_effort: ReasoningEffortSchema,
+54:   tool_choice: z.enum(['auto', 'required']).optional(),
+55: });
+56: 
+57: const AnthropicProviderSchema_LLM = z.object({
+58:   model: z.string(),
+59:   reasoning_effort: ReasoningEffortSchema,
+60:   extended_thinking: z.boolean().optional(),
+61:   thinking_budget: z.number().int().min(1024).optional(),
+62:   // Claude Fast Mode — faster output on the same Opus model (no quality
+63:   // downgrade). Supported on Opus 4.6/4.7/4.8 via the Messages API `speed` field.
+64:   fast_mode: z.boolean().optional(),
+65: });
+66: 
+67: const PerplexityProviderSchema = z.object({
+68:   api_key: z.string(),
+69:   model: z.string(),
+70:   reasoning_effort: ReasoningEffortSchema,
+71: });
+72: 
+73: const GeminiProviderSchema = z.object({
+74:   api_key: z.string(),
+75:   model: z.string(),
+76: });
+77: 
+78: const ProviderConfigValueSchema = z.record(z.unknown());
+79: 
+80: const LLMConfigSchema = z.object({
+[READ_TRUNCATED] Returned 80 of 491 lines. Use start_line:81, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- src/config/config.ts via read_source ---
+src/config/config.ts (1033 lines) [window 1-80, truncated]:
+1: import fs from 'fs';
+2: import path from 'path';
+3: import os from 'os';
+4: import { AgentDefinition, PrometheusConfig } from '../types.js';
+5: import { getVault, scrubSecrets } from '../security/vault.js';
+6: import { getConfigErrors } from './config-schema.js';
+7: import { ensurePublicWorkspaceScaffold } from './public-workspace.js';
+8: import { isPublicDistributionBuild } from '../runtime/distribution.js';
+9: import { listProviderSecretFieldPaths } from '../providers/provider-registry.js';
+10: 
+11: function migrateLegacyDir(legacyDir: string, targetDir: string): void {
+12:   try {
+13:     if (!fs.existsSync(legacyDir)) return;
+14:     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+15: 
+16:     const marker = path.join(targetDir, '.migrated-from-localclaw');
+17:     if (fs.existsSync(marker)) return;
+18: 
+19:     // One-time migration: preserve existing users by carrying over all legacy data,
+20:     // including config, credentials, skills, logs, and state files.
+21:     fs.cpSync(legacyDir, targetDir, { recursive: true, force: true });
+22:     fs.writeFileSync(marker, new Date().toISOString(), 'utf-8');
+23:     console.log(`[Config] Migrated legacy data: ${legacyDir} -> ${targetDir}`);
+24:   } catch (err: any) {
+25:     console.warn(`[Config] Legacy migration failed (${legacyDir} -> ${targetDir}): ${String(err?.message || err)}`);
+26:   }
+27: }
+28: 
+29: function migrateLegacyData(): void {
+30:   const projectLegacy = path.join(__dirname, '..', '..', '.localclaw');
+31:   const projectTarget = path.join(__dirname, '..', '..', '.prometheus');
+32:   const homeLegacy = path.join(os.homedir(), '.localclaw');
+33:   const homeTarget = path.join(os.homedir(), '.prometheus');
+34: 
+35:   if (process.env.PROMETHEUS_DATA_DIR) {
+36:     const dataRoot = process.env.PROMETHEUS_DATA_DIR;
+37:     migrateLegacyDir(path.join(dataRoot, '.localclaw'), path.join(dataRoot, '.prometheus'));
+38:     return;
+39:   }
+40: 
+41:   // Prefer project-local migration when this repo has (or previously had)
+42:   // project-scoped state; otherwise migrate home-scoped state.
+43:   const hasProjectScopedState = fs.existsSync(projectLegacy) || fs.existsSync(projectTarget) ||
+44:     false;
+45:   if (hasProjectScopedState) {
+46:     migrateLegacyDir(projectLegacy, projectTarget);
+47:     return;
+48:   }
+49: 
+50:   migrateLegacyDir(homeLegacy, homeTarget);
+51: }
+52: 
+53: migrateLegacyData();
+54: 
+55: // ── Config & workspace directory resolution ──────────────────────────────────
+56: // Priority:
+57: //   1. PROMETHEUS_DATA_DIR env var  (set by Docker / CI)
+58: //   2. .prometheus/ next to the project root
+59: //   3. ~/.prometheus in the user's home directory
+60: const PROJECT_CONFIG_NEW = path.join(__dirname, '..', '..', '.prometheus');
+61: const PROJECT_CONFIG = PROJECT_CONFIG_NEW;
+62: const HOME_CONFIG    = path.join(os.homedir(), '.prometheus');
+63: const CONFIG_DIR =
+64:   process.env.PROMETHEUS_DATA_DIR
+65:     ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
+66:     : fs.existsSync(PROJECT_CONFIG_NEW)
+67:       ? PROJECT_CONFIG_NEW
+68:       : HOME_CONFIG;
+69: 
+70: // Exposed as a plain const so early importers (e.g. the extension loader, which
+71: // runs while config.ts is still mid-initialization) can resolve the data dir
+72: // without depending on the ConfigManager singleton being constructed yet.
+73: export function getResolvedConfigDir(): string {
+74:   return CONFIG_DIR;
+75: }
+76: 
+77: const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+78: 
+79: // Workspace: env var → config-dir-relative default (cross-platform safe)
+80: const WORKSPACE_DIR =
+[READ_TRUNCATED] Returned 80 of 1033 lines. Use start_line:81, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

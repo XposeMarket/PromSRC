@@ -57,12 +57,13 @@ function _estimateTokensFromText(text) {
 
 function _displayLimit(data, currentState = {}) {
   return Math.max(0, Number(
-    data?.currentContextLimitTokens
+    data?.contextWindowTokens
+    || currentState?.contextWindowTokens
+    || data?.currentContextLimitTokens
     || data?.contextLimitTokens
     || currentState?.contextLimitTokens
-    || data?.compactionTriggerTokens
     || data?.inputBudgetTokens
-    || data?.contextWindowTokens
+    || data?.compactionTriggerTokens
     || 0
   ));
 }
@@ -291,14 +292,12 @@ function _renderContext(data) {
   const currentState = data.currentState || {};
   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
   const windowTokens = _displayLimit(data, currentState);
-  const modelWindowTokens = Math.max(0, Number(data.contextWindowTokens || currentState.contextWindowTokens || 0));
-  const isCompactionLimit = modelWindowTokens > 0 && windowTokens > 0 && modelWindowTokens !== windowTokens;
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   if (ring) ring.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
-  if (chip) chip.title = `Context before compaction: ${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} tokens${modelWindowTokens && modelWindowTokens !== windowTokens ? ` (model window ${_fmtTokens(modelWindowTokens)})` : ''}`;
+  if (chip) chip.title = `Context window: ${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} tokens`;
   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
-  if (headLabel) headLabel.innerHTML = `${isCompactionLimit ? 'Before compaction' : 'Context window'}<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
-  if (total) total.textContent = `${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} (${Math.round(percent)}%)${isCompactionLimit ? ` · window ${_fmtTokens(modelWindowTokens)}` : ''}`;
+  if (headLabel) headLabel.innerHTML = `Context window<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
+  if (total) total.textContent = `${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} (${Math.round(percent)}%)`;
 
   const rows = Array.isArray(currentState.rows) ? currentState.rows : [];
   if (metrics) {
@@ -325,6 +324,7 @@ function _renderPlan() {
         <div class="pm-ctx-gauge">
           <div class="pm-ctx-gauge-head"><span>${escapeHtml(w.label || '')}</span><span class="pm-ctx-gauge-pct">${left}% left</span></div>
           <div class="pm-ctx-gauge-track"><div class="pm-ctx-gauge-fill ${_gaugeClass(pct)}" style="width:${pct}%"></div></div>
+          ${w.detail ? `<div class="pm-ctx-gauge-reset">${escapeHtml(w.detail)}</div>` : ''}
           ${reset ? `<div class="pm-ctx-gauge-reset">${escapeHtml(reset)}</div>` : ''}
         </div>`;
     }).join('');

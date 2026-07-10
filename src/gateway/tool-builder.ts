@@ -151,7 +151,8 @@ const TEAM_OPS_TOOL_NAMES = new Set([
 // manage jobs without needing category activation. Natural-language/friendly
 // schedule parsing is handled inside schedule_job; parse_schedule_pattern is
 // intentionally not exposed as a model-facing helper.
-// background_spawn/status/progress/join are also CORE — always injected.
+// background_ops is core. Legacy background_* leaves remain executable but are
+// hidden from the normal model-facing schema surface.
 
 const SOURCE_WRITE_TOOL_NAMES = new Set([
     'dev_source_edit',
@@ -164,6 +165,12 @@ const SOURCE_WRITE_TOOL_NAMES = new Set([
 	  'delete_lines_prom', 'write_prom_file', 'delete_prom_file',
 	  'prom_apply_dev_changes',
 	]);
+
+const DEV_SOURCE_APPROVAL_TOOL_NAMES = new Set([
+  'request_dev_source_edit',
+  'update_dev_source_edit',
+  'await_dev_source_edit_approval',
+]);
 
 const DEV_ONLY_SOURCE_READ_TOOL_NAMES = new Set([
   'dev_source_read',
@@ -333,18 +340,23 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'internal_watch',
 ]);
 
-// Skill authoring/packaging/maintenance — read-only skill tools (skill_list,
-// skill_read, skill_resource_list, skill_resource_read) stay core.
+// Skill authoring/packaging/maintenance — only skill_list and skill_read stay core.
 const SKILL_AUTHORING_TOOL_NAMES = new Set([
+  'skill_ops',
   'skill_create',
   'skill_create_bundle',
   'skill_import_bundle',
   'skill_export_bundle',
   'skill_update_from_source',
   'skill_manifest_write',
+  'skill_resource_list',
+  'skill_resource_read',
   'skill_resource_write',
   'skill_resource_delete',
   'skill_inspect',
+  'skill_audit_all',
+  'skill_repair_metadata',
+  'skill_update_metadata',
 ]);
 
 // Agent fleet / model template administration — switch_model and
@@ -454,6 +466,35 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'web_search_single',
   'web_search_multi',
   'web_fetch_batch',
+  'generate_image',
+  'generate_video',
+  'prom_repo_push',
+  'prom_repo_pull',
+  'prom_repo_sync',
+  'background_spawn',
+  'background_status',
+  'background_progress',
+  'background_wait',
+  'background_join',
+  'complete_plan_step',
+  'step_complete',
+  'bg_plan_declare',
+  'bg_plan_advance',
+  'skill_inspect',
+  'skill_resource_list',
+  'skill_resource_read',
+  'skill_resource_write',
+  'skill_resource_delete',
+  'skill_update_metadata',
+  'skill_manifest_write',
+  'skill_import_bundle',
+  'skill_export_bundle',
+  'skill_update_from_source',
+  'skill_create',
+  'skill_create_bundle',
+  'skill_audit_all',
+  'skill_repair_metadata',
+  'delivery_send_screenshot',
   'send_telegram',
   'browser_send_to_telegram',
   'browser_doctor',
@@ -932,6 +973,7 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (name.startsWith('mcp__')) return 'mcp_server_tools';
   if (name.startsWith('vercel_')) return 'integration_admin';
   if (TEAM_OPS_TOOL_NAMES.has(name)) return 'agents_and_teams';
+  if (DEV_SOURCE_APPROVAL_TOOL_NAMES.has(name)) return 'prometheus_source_read';
   if (DEV_ONLY_SOURCE_READ_TOOL_NAMES.has(name)) return 'prometheus_source_read';
   if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'prometheus_source_write';
   if (COMMAND_RUNNER_TOOL_NAMES.has(name)) return 'workspace_write';
@@ -1021,16 +1063,25 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       function: {
         name: 'delivery_send',
         description:
-          'Send a message, file, or image to the user through a universal delivery channel. Prefer target="origin" unless the user explicitly names a destination. Origin means where the user contacted Prometheus from, not where Prometheus is running; Prometheus still runs on the local computer and desktop/browser tasks remain available. For screenshots, prefer delivery_send_screenshot.',
+          'Unified delivery/presentation wrapper. action="send" sends a message, file, or image through an origin-aware delivery channel; action="screenshot" captures/reuses a screenshot and delivers it; action="present_file" presents a local file as an inline assistant artifact and optionally delivers it. Prefer target="origin" unless the user explicitly names a destination.',
         parameters: {
           type: 'object', required: [],
           properties: {
+            action: { type: 'string', enum: ['send', 'screenshot', 'present_file'], description: 'Default send. Use present_file to show a local file with the assistant message.' },
             text: { type: 'string', description: 'Text message to deliver.' },
+            message: { type: 'string', description: 'Alias for text.' },
             target: { type: 'string', enum: ['origin', 'telegram', 'mobile', 'web', 'discord', 'whatsapp', 'terminal', 'all'], description: 'Destination. Default origin.' },
             attachmentPath: { type: 'string', description: 'Optional workspace-relative or absolute file path to deliver.' },
+            attachmentPaths: { type: 'array', items: { type: 'string' }, description: 'Optional batch of workspace-relative or absolute file paths to deliver/present together.' },
+            path: { type: 'string', description: 'File path for action="present_file", or screenshot source=file.' },
+            paths: { type: 'array', items: { type: 'string' }, description: 'Batch of file paths for action="present_file".' },
+            files: { type: 'array', items: { type: 'string' }, description: 'Alias for paths/attachmentPaths when sending or presenting multiple files.' },
+            filename: { type: 'string', description: 'Alias for path/attachmentPath.' },
             imageBase64: { type: 'string', description: 'Optional base64 image payload to deliver.' },
             mimeType: { type: 'string', description: 'Mime type for imageBase64 or attachment, e.g. image/png.' },
             caption: { type: 'string', description: 'Caption for images/files. Defaults to text.' },
+            source: { type: 'string', enum: ['desktop_new', 'desktop_last', 'browser_new', 'browser_last', 'file'], description: 'Screenshot source for action="screenshot". Default desktop_new.' },
+            title: { type: 'string', description: 'Optional display title for presented files.' },
           },
         },
       },
@@ -1221,7 +1272,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             description:
               'Spawn a child agent in an isolated session to handle a parallel subtask. ' +
               'Use only when the current task must wait for the child result before it can continue. ' +
-              'For ASAP, urgent, time-sensitive, or independent parallel work, use background_spawn instead so the current task can continue without waiting. ' +
+              'For ASAP, urgent, time-sensitive, or independent parallel work, use background_ops(action:"spawn") instead so the current task can continue without waiting. ' +
               'Do NOT call this recursively from inside a child task.',
             parameters: {
               type: 'object',

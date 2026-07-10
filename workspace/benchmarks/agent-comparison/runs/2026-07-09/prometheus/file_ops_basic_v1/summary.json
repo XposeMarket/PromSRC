@@ -1,0 +1,20 @@
+{
+  "run_id": "prometheus_file_ops_basic_v1_2026-07-09",
+  "agent": "prometheus",
+  "benchmark_id": "file_ops_basic_v1",
+  "status": "pass",
+  "blocked_reason": null,
+  "total_wall_ms": null,
+  "tool_calls": 4,
+  "tool_errors": 0,
+  "retries": 0,
+  "tokens_input": null,
+  "tokens_output": null,
+  "estimated_cost_usd": null,
+  "artifacts": [
+    "benchmarks/agent-comparison/fixtures/prometheus_file_ops_basic_v1/input.txt",
+    "benchmarks/agent-comparison/fixtures/prometheus_file_ops_basic_v1/report.md"
+  ],
+  "final_line": "FILE_OPS_BASIC_V1_PASS: found_bravo=true line_count=3",
+  "notes": "Native Prometheus workspace wrappers: write input, read input, grep bravo, write report. Wall time intentionally left null until harness captures exact per-tool timestamps automatically."
+}

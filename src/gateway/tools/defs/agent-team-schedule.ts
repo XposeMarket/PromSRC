@@ -1130,6 +1130,60 @@ export function getAgentTeamScheduleTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'background_ops',
+        description:
+          'Unified background agent wrapper. action="spawn" starts an ephemeral parallel agent whose result is auto-merged at turn end; action="wait" briefly pauses this foreground turn; action="status"/"progress" checks state; action="join" is system-use only and normally unnecessary.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['spawn', 'status', 'progress', 'wait', 'join'],
+              description: 'Background operation to run.',
+            },
+            prompt: {
+              type: 'string',
+              description: 'For spawn: fully self-contained task instructions. Include all context, paths, URLs, and exact parameters.',
+            },
+            task_prompt: {
+              type: 'string',
+              description: 'Alias for prompt.',
+            },
+            background_id: {
+              type: 'string',
+              description: 'Background agent ID for status/progress/wait/join.',
+            },
+            background_ids: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional IDs for wait.',
+            },
+            wait_ms: {
+              type: 'number',
+              description: 'For wait: foreground pause duration in milliseconds.',
+            },
+            timeout_ms: {
+              type: 'number',
+              description: 'Timeout for wait/join, or turn-end wait cap for spawn policies.',
+            },
+            join_policy: {
+              type: 'string',
+              enum: ['wait_all', 'wait_until_timeout', 'best_effort_merge'],
+              description: 'Spawn/join merge policy. Default spawn policy is wait_all.',
+            },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional spawn tracking tags.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'background_spawn',
         description:
           'Spawn a one-time ephemeral background agent (full tool-capable LLM call) to run a task in parallel while you continue your primary work. ' +

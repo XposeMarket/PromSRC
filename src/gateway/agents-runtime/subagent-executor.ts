@@ -2889,8 +2889,149 @@ function normalizeCreativeWrapperTool(name: string, rawArgs: any): { name: strin
   return { name: target, args: normalizeCreativeWrapperArgs(target, args) };
 }
 
+function normalizeMediaGenerateWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (name !== 'media_generate') return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || args.kind || args.type || '').trim().toLowerCase();
+  if (!action) return { name, args, error: 'media_generate requires action "image" or "video".' };
+  delete args.action;
+  delete args.kind;
+  delete args.type;
+  if (action === 'image' || action === 'images') return { name: 'generate_image', args };
+  if (action === 'video' || action === 'videos') return { name: 'generate_video', args };
+  return { name, args: rawArgs, error: `Unsupported media_generate action "${action}".` };
+}
+
+function normalizePromRepoOpsWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (name !== 'prom_repo_ops') return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || args.operation || args.mode || '').trim().toLowerCase();
+  if (!action) return { name, args, error: 'prom_repo_ops requires action "push", "pull", or "sync".' };
+  delete args.action;
+  delete args.operation;
+  delete args.mode;
+  if (action === 'push') return { name: 'prom_repo_push', args };
+  if (action === 'pull') return { name: 'prom_repo_pull', args };
+  if (action === 'sync') return { name: 'prom_repo_sync', args };
+  return { name, args: rawArgs, error: `Unsupported prom_repo_ops action "${action}".` };
+}
+
+function normalizeBackgroundOpsWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (name !== 'background_ops') return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || args.operation || args.mode || '').trim().toLowerCase();
+  if (!action) return { name, args, error: 'background_ops requires action "spawn", "status", "progress", "wait", or "join".' };
+  delete args.action;
+  delete args.operation;
+  delete args.mode;
+  if (action === 'spawn' || action === 'start') return { name: 'background_spawn', args };
+  if (action === 'status') return { name: 'background_status', args };
+  if (action === 'progress') return { name: 'background_progress', args };
+  if (action === 'wait') return { name: 'background_wait', args };
+  if (action === 'join') return { name: 'background_join', args };
+  return { name, args: rawArgs, error: `Unsupported background_ops action "${action}".` };
+}
+
+function normalizeSkillOpsWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+  if (name !== 'skill_ops') return null;
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || args.operation || args.mode_action || '').trim().toLowerCase();
+  if (!action) return { name, args, error: 'skill_ops requires an action.' };
+  delete args.action;
+  delete args.operation;
+  delete args.mode_action;
+  const map: Record<string, string> = {
+    inspect: 'skill_inspect',
+    resource_list: 'skill_resource_list',
+    list_resources: 'skill_resource_list',
+    resource_read: 'skill_resource_read',
+    read_resource: 'skill_resource_read',
+    resource_write: 'skill_resource_write',
+    write_resource: 'skill_resource_write',
+    resource_delete: 'skill_resource_delete',
+    delete_resource: 'skill_resource_delete',
+    update_metadata: 'skill_update_metadata',
+    metadata_update: 'skill_update_metadata',
+    manifest_write: 'skill_manifest_write',
+    write_manifest: 'skill_manifest_write',
+    import_bundle: 'skill_import_bundle',
+    import: 'skill_import_bundle',
+    export_bundle: 'skill_export_bundle',
+    export: 'skill_export_bundle',
+    update_from_source: 'skill_update_from_source',
+    refresh_from_source: 'skill_update_from_source',
+    create: 'skill_create',
+    create_bundle: 'skill_create_bundle',
+    audit_all: 'skill_audit_all',
+    audit: 'skill_audit_all',
+    repair_metadata: 'skill_repair_metadata',
+    repair: 'skill_repair_metadata',
+  };
+  const target = map[action];
+  if (!target) return { name, args: rawArgs, error: `Unsupported skill_ops action "${action}".` };
+  return { name: target, args };
+}
+
+function collectDeliveryFilePaths(args: Record<string, any>): string[] {
+  const rows: string[] = [];
+  const add = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) add(item);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      add((value as any).path ?? (value as any).filename ?? (value as any).file ?? (value as any).attachmentPath);
+      return;
+    }
+    const text = String(value ?? '').trim();
+    if (text) rows.push(text);
+  };
+  add(args.paths);
+  add(args.files);
+  add(args.attachmentPaths);
+  add(args.path);
+  add(args.filename);
+  add(args.attachmentPath);
+  return Array.from(new Set(rows));
+}
+
+function buildPresentedFileArtifact(absPath: string, relPath: string, title?: string): Record<string, any> {
+  const ext = path.extname(absPath).replace(/^\./, '').toLowerCase();
+  return {
+    type: 'file',
+    title: String(title || path.basename(absPath) || relPath || 'Presented file'),
+    path: relPath,
+    status: 'ready',
+    summary: ext ? `${ext.toUpperCase()} file ready to view or download.` : 'File ready to view or download.',
+  };
+}
+
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
   let approvalDisplayToolName = name;
+  const mediaGenerateWrapper = normalizeMediaGenerateWrapperTool(name, args);
+  if (mediaGenerateWrapper) {
+    if (mediaGenerateWrapper.error) return { name, args, result: mediaGenerateWrapper.error, error: true };
+    name = mediaGenerateWrapper.name;
+    args = mediaGenerateWrapper.args;
+  }
+  const promRepoOpsWrapper = normalizePromRepoOpsWrapperTool(name, args);
+  if (promRepoOpsWrapper) {
+    if (promRepoOpsWrapper.error) return { name, args, result: promRepoOpsWrapper.error, error: true };
+    name = promRepoOpsWrapper.name;
+    args = promRepoOpsWrapper.args;
+  }
+  const backgroundOpsWrapper = normalizeBackgroundOpsWrapperTool(name, args);
+  if (backgroundOpsWrapper) {
+    if (backgroundOpsWrapper.error) return { name, args, result: backgroundOpsWrapper.error, error: true };
+    name = backgroundOpsWrapper.name;
+    args = backgroundOpsWrapper.args;
+  }
+  const skillOpsWrapper = normalizeSkillOpsWrapperTool(name, args);
+  if (skillOpsWrapper) {
+    if (skillOpsWrapper.error) return { name, args, result: skillOpsWrapper.error, error: true };
+    name = skillOpsWrapper.name;
+    args = skillOpsWrapper.args;
+  }
   const devSourceWrapper = normalizeDevSourceWrapperTool(name, args);
   if (devSourceWrapper) {
     if (devSourceWrapper.error) return { name, args, result: devSourceWrapper.error, error: true };
@@ -8967,11 +9108,60 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	      }
 
       case 'delivery_send': {
+        const deliveryAction = String(args.action || 'send').trim().toLowerCase();
+        if (deliveryAction === 'screenshot') {
+          const delivered = await executeDeliverySendScreenshot(args, workspacePath, deps, sessionId);
+          return { name, args, result: delivered.result, error: delivered.error };
+        }
         const msgText = String(args.text || args.message || '').trim();
         if (msgText && containsObsoleteProductBrand(msgText)) {
           return { name, args, result: `ERROR: ${buildObsoleteBrandBlockMessage('delivery payload')}`, error: true };
         }
         try {
+          if (deliveryAction === 'present_file') {
+            const requestedPaths = collectDeliveryFilePaths(args);
+            if (!requestedPaths.length) return { name, args, result: 'ERROR: path, paths, files, attachmentPath, or attachmentPaths is required.', error: true };
+            const resolvedFiles = requestedPaths.map((filePath) => {
+              const absPath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(workspacePath, filePath);
+              if (!fs.existsSync(absPath)) throw new Error(`File not found: ${filePath}`);
+              const relPath = path.isAbsolute(filePath) ? path.relative(workspacePath, absPath).replace(/\\/g, '/') : filePath.replace(/\\/g, '/');
+              return { absPath, relPath, fileName: path.basename(absPath) };
+            });
+            const artifacts = resolvedFiles.map((file) => buildPresentedFileArtifact(
+              file.absPath,
+              file.relPath,
+              resolvedFiles.length === 1 ? String(args.title || args.caption || '').trim() : undefined,
+            ));
+            const delivered: string[] = [];
+            const errors: string[] = [];
+            for (const file of resolvedFiles) {
+              const delivery = await deliverToTargets({
+                sessionId,
+                target: args.target || 'origin',
+                text: msgText || `File ready: ${file.fileName}`,
+                caption: String(args.caption || msgText || file.fileName || '').trim(),
+                attachmentPath: file.absPath,
+                fileName: file.fileName,
+                source: 'delivery_send:present_file',
+              }, { telegramChannel: deps.telegramChannel, broadcastWS: deps.broadcastWS });
+              delivered.push(...delivery.delivered);
+              errors.push(...delivery.errors);
+            }
+            const fileList = resolvedFiles.map((file) => file.relPath).join(', ');
+            const suffix = errors.length ? ` Errors: ${errors.join('; ')}` : '';
+            return {
+              name,
+              args,
+              result: `Presented ${resolvedFiles.length} file${resolvedFiles.length === 1 ? '' : 's'}: ${fileList}.${delivered.length ? ` Delivered via ${Array.from(new Set(delivered)).join(', ')}.` : ''}${suffix}`,
+              error: false,
+              data: { files: resolvedFiles.map((file) => ({ path: file.relPath, absPath: file.absPath, fileName: file.fileName })) },
+              artifacts,
+              extra: { presented_files: artifacts },
+            };
+          }
+          if (deliveryAction !== 'send') {
+            return { name, args, result: `ERROR: Unsupported delivery_send action "${deliveryAction}".`, error: true };
+          }
           let imageBuffer: Buffer | undefined;
           let attachmentPath: string | undefined;
           let mimeType = args.mimeType ? String(args.mimeType) : undefined;
@@ -8980,8 +9170,41 @@ export async function executeTool(name: string, args: any, workspacePath: string
             imageBuffer = Buffer.from(String(args.imageBase64), 'base64');
             mimeType = mimeType || 'image/png';
           }
-          if (args.attachmentPath) {
-            const file = readAttachmentBuffer(String(args.attachmentPath), workspacePath);
+          const attachmentPaths = collectDeliveryFilePaths(args);
+          if (attachmentPaths.length > 1) {
+            const delivered: string[] = [];
+            const errors: string[] = [];
+            const artifacts: any[] = [];
+            for (const rawPath of attachmentPaths) {
+              const file = readAttachmentBuffer(rawPath, workspacePath);
+              const relPath = path.relative(workspacePath, file.absPath).replace(/\\/g, '/');
+              artifacts.push(buildPresentedFileArtifact(file.absPath, relPath));
+              const delivery = await deliverToTargets({
+                sessionId,
+                target: args.target || 'origin',
+                text: msgText || `File ready: ${file.fileName}`,
+                caption: String(args.caption || msgText || file.fileName || '').trim(),
+                attachmentPath: file.absPath,
+                imageBuffer: file.mimeType.startsWith('image/') ? file.buffer : undefined,
+                mimeType: file.mimeType,
+                fileName: file.fileName,
+                source: 'delivery_send',
+              }, { telegramChannel: deps.telegramChannel, broadcastWS: deps.broadcastWS });
+              delivered.push(...delivery.delivered);
+              errors.push(...delivery.errors);
+            }
+            const suffix = errors.length ? ` Errors: ${errors.join('; ')}` : '';
+            return {
+              name,
+              args,
+              result: delivered.length ? `Delivered ${attachmentPaths.length} files via ${Array.from(new Set(delivered)).join(', ')}.${suffix}` : `ERROR: Delivery failed.${suffix}`,
+              error: delivered.length === 0,
+              artifacts,
+              extra: { presented_files: artifacts },
+            };
+          }
+          if (attachmentPaths.length === 1) {
+            const file = readAttachmentBuffer(attachmentPaths[0], workspacePath);
             attachmentPath = file.absPath;
             fileName = file.fileName;
             mimeType = mimeType || file.mimeType;
@@ -9077,8 +9300,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!filePath) return { name, args, result: 'ERROR: path is required', error: true };
         const absPath = path.isAbsolute(filePath) ? filePath : path.join(workspacePath, filePath);
         if (!fs.existsSync(absPath)) return { name, args, result: `File not found: ${filePath}`, error: true };
-        const relPath = path.isAbsolute(filePath) ? path.relative(workspacePath, absPath) : filePath;
-        return { name, args, result: `File presented in canvas: ${relPath}`, error: false };
+        const relPath = (path.isAbsolute(filePath) ? path.relative(workspacePath, absPath) : filePath).replace(/\\/g, '/');
+        const artifact = buildPresentedFileArtifact(absPath, relPath, String(args?.title || '').trim());
+        return {
+          name,
+          args,
+          result: `File presented: ${relPath}`,
+          error: false,
+          data: { path: relPath, absPath },
+          artifacts: [artifact],
+          extra: { presented_file: artifact, presented_files: [artifact] },
+        };
       }
 
       case 'enter_creative_mode': {
@@ -12711,6 +12943,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		          count: args.count != null ? Number(args.count) : undefined,
 		          provider: args.provider != null ? String(args.provider) : undefined,
 		          model: args.model != null ? String(args.model) : undefined,
+		          background: args.background != null ? String(args.background) : undefined,
+		          output_format: args.output_format != null ? String(args.output_format) : undefined,
+		          quality: args.quality != null ? String(args.quality) : undefined,
 		          output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
 	          save_to_workspace: args.save_to_workspace != null ? args.save_to_workspace === true : undefined,
 	        });

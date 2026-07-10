@@ -1,0 +1,24 @@
+{
+  "run_id": "hermes_2026-07-09_local_web_debug_v1_strict_rerun_noquiet",
+  "agent": "hermes",
+  "benchmark_id": "local_web_debug_v1_strict_rerun_noquiet",
+  "base_benchmark_id": "local_web_debug_v1",
+  "measurement_mode": "black_box_cli_with_internal_telemetry_noquiet_diff_suppressed",
+  "status": "fail",
+  "total_wall_ms": 146326,
+  "exit_code": 0,
+  "model_calls": 23,
+  "model_latency_ms": 111094,
+  "tool_calls": 29,
+  "tool_latency_ms": 19485,
+  "tool_errors": 0,
+  "tokens_input": 871913,
+  "tokens_output": 2503,
+  "artifacts": [
+    "C:\\Users\\rafel\\PromSRC\\workspace\\benchmarks\\agent-comparison\\runs\\2026-07-09\\hermes\\local_web_debug_v1_strict_rerun_noquiet\\stdout.txt",
+    "C:\\Users\\rafel\\PromSRC\\workspace\\benchmarks\\agent-comparison\\runs\\2026-07-09\\hermes\\local_web_debug_v1_strict_rerun_noquiet\\stderr.txt",
+    "C:\\Users\\rafel\\PromSRC\\workspace\\benchmarks\\agent-comparison\\runs\\2026-07-09\\hermes\\local_web_debug_v1_strict_rerun_noquiet\\events.jsonl"
+  ],
+  "notes": "No-quiet strict rerun with inline diff suppression env var.",
+  "final_output": "session_id: 20260709_095520_076b64"
+}

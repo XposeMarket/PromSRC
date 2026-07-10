@@ -79,6 +79,7 @@ const ProviderConfigValueSchema = z.record(z.unknown());
 
 const LLMConfigSchema = z.object({
   provider: ProviderIDSchema,
+  accountId: z.string().optional(),
   providers: z.record(ProviderConfigValueSchema),
 });
 

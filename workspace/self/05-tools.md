@@ -24,8 +24,11 @@ Runtime categories:
 - `creative_video`
 - `creative_hyperframes`
 - `creative_quality`
+- `skills`
+- `model_management`
+- `business`
 
-Legacy aliases still map onto the current category IDs, including `browser`, `desktop`, `team_ops`, `teams`, `agents`, `source_read`, `source_write`, `file_ops`, `files`, `shell`, `commands`, `run_commands`, `memory`, `media`, `schedule`, `scheduling`, `integrations`, `connectors`, `mcp`, and `composites`.
+Legacy aliases still map onto the current category IDs, including `browser`, `desktop`, `team_ops`, `teams`, `agents`, `source_read`, `source_write`, `file_ops`, `files`, `shell`, `commands`, `run_commands`, `memory`, `media`, `schedule`, `scheduling`, `integrations`, `connectors`, `mcp`, `composites`, `creative`, `creative_mode`, `image_mode`, `video_mode`, `hyperframes`, `creative_qa`, `media_quality`, `skill_authoring`, `models`, `agent_models`, and `entities`.
 
 Key rules:
 
@@ -42,6 +45,7 @@ Key rules:
 - `desktop_automation` is wrapper-first: the model-facing surface is `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background`
 - `external_apps` is wrapper-first for the large bundled connectors: X/xAI uses `x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, and `x_admin`; Vercel uses `vercel_ops`
 - `agents_and_teams` is wrapper-first for non-core agent/team operations: `agent_ops`, `agent_chat_ops`, `team_ops_wrapper`, and `team_collab_ops`
+- `team_ops_wrapper` is the current model-facing managed-team wrapper name; a future cleanup may expose `team_ops` as the friendlier primary name while keeping `team_ops_wrapper` as an alias
 - `workspace_write` is wrapper-first: the model-facing surface is `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`
 - `workspace_run` is the canonical model-facing command/process/check wrapper under `workspace_write`; hidden compatibility tools `terminal`, `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit` remain executable internals
 - `prometheus_source_read` is wrapper-first: `dev_source_read` covers src/, web-ui/, and allowlisted prom-root list/stats/read/batch/grep actions; old granular read helpers remain executable internals
@@ -53,15 +57,20 @@ Key rules:
 - `search_files`, `read_files_batch`, and `file_tree` remain visible helper tools because they are shared by `workspace_write` and `prometheus_source_read`; `clone_repo` also remains visible because repo intake has special first-use guidance
 - legacy `creative_mode` normalizes to `creative_basic`; `image_mode`, `video_mode`, `hyperframes`, `creative_qa`, and `media_quality` normalize to the narrower creative buckets
 - `creative_basic` exposes `creative_project` and `creative_scene`; `creative_image` exposes `creative_image_ops`; `creative_video` exposes `creative_video_ops`; `creative_hyperframes` exposes `creative_hyperframes_ops`; `creative_quality` exposes `creative_quality_ops`
-- `generate_image` and `generate_video` remain core; `analyze_video` lives under `media_assets`
-- only `skill_list` and `skill_read` are core skill tools; `skill_resource_list`, `skill_resource_read`, metadata repair/update, authoring, import/export, and resource mutation live under `skills`
+- `media_generate` is the core model-facing wrapper for one-shot image/video generation; hidden compatibility aliases `generate_image` and `generate_video` still execute and still emit generated media metadata for chat/mobile renderers
+- only `skill_list` and `skill_read` are core skill tools; `skill_ops` is the model-facing `skills` category wrapper for inspect, resource list/read/write/delete, metadata repair/update, manifest overlays, authoring, import/export, and source refreshes; old skill maintenance leaves remain executable compatibility aliases but are hidden from the exposed schema surface
+- `model_management` covers agent model defaults/routes/templates; current-model switching remains core through `switch_model` / `set_current_model`
+- `business` covers structured entity lifecycle tools; `business_context_mode` remains core so BUSINESS.md can be injected without activating the entity mutation surface
 - the model-facing web surface is unified: use `web_search` for preferred-provider, forced-provider, or multi-provider search; use `web_fetch` with either `url` or `urls` for single or batch fetch
 - the model-facing card surface is unified as `show_ui_card`; older `show_*` card tool names remain executable as compatibility aliases but are hidden from the exposed schema surface
-- the model-facing delivery surface is unified around `delivery_send` and `delivery_send_screenshot`; legacy `send_telegram` and `browser_send_to_telegram` remain executable compatibility aliases but are hidden from the exposed schema surface
+- the model-facing delivery surface is unified around `delivery_send`: `action:"send"` sends text/files/images, `action:"screenshot"` replaces `delivery_send_screenshot`, and `action:"present_file"` replaces direct `present_file`; batch file presentation/delivery accepts `paths`, `files`, or `attachmentPaths`; legacy `send_telegram`, `browser_send_to_telegram`, `delivery_send_screenshot`, and `present_file` remain executable compatibility aliases but are hidden from the exposed schema surface
+- the model-facing Prometheus repo sync surface is unified around core `prom_repo_ops`: `action:"push"` replaces `prom_repo_push`, `action:"pull"` replaces `prom_repo_pull`, and `action:"sync"` replaces `prom_repo_sync`; the old leaf names remain executable compatibility aliases but are hidden from the exposed schema surface
+- the model-facing plan surface is gated: `declare_plan` stays core, while `complete_plan_step` is hidden from the base schema and injected turn-locally by `src/gateway/routes/chat.router.ts` after a valid 2+ step declaration or resumed manual plan; `step_complete` remains task/proposal compatibility and `bg_plan_declare`/`bg_plan_advance` are injected only for background-agent sessions
+- gated tool injection pattern: keep canonical schemas in `src/gateway/tools/defs/*`, hide non-entry tools with `SCHEMA_HIDDEN_COMPAT_TOOL_NAMES` in `src/gateway/tool-builder.ts`, then re-add exact definitions inside `handleChat` with a local turn flag and a tool-array refresh. Use this for tools that should appear only after an enabling tool call, not for broad user-requested categories where `request_tool_category` is the right mechanism.
 - the 2026-06-19 core schema compaction pass reduced the always-on core surface from 47 tools / ~15.9k estimated schema tokens to 45 tools / ~13.3k by shortening verbose descriptions and hiding legacy delivery aliases
 - the 2026-06-19 workspace command unification pass made `terminal` cover bounded commands (`action:"run"`), supervised starts (`action:"start"`), and process management (`status`, `log`, `wait`, `kill`, `submit`). The hidden legacy names still route to the same executor for compatibility, while `terminal` command runs reuse the existing run-command deny policy, cwd/boundary analysis, Lite terminal permission mode, command permission grants, approval queue/cards, task pause/resume flow, Telegram approvals, and audit logging.
 - the 2026-06-29 workspace wrapper compaction pass added six unified model-facing workspace tools: `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`. The direct executor normalizes those wrapper actions to the existing granular handlers before execution, so path scope, mutation guards, command policy, approval cards, snapshots, git shell-outs, and code-nav behavior remain centralized in the old handlers while the active `workspace_write` schema becomes much smaller.
-- the 2026-06-29 dev source wrapper compaction pass added `dev_source_read` under `prometheus_source_read` and `dev_source_edit` under `prometheus_source_write`. `dev_source_edit` is still gated by the existing dev source approval flow: the write category cannot be activated until `request_dev_source_edit` or an approved `code_change` proposal grants access, and each delegated granular handler still runs the old session/scope/syntax checks.
+- the 2026-06-29 dev source wrapper compaction pass added `dev_source_read` under `prometheus_source_read` and `dev_source_edit` under `prometheus_source_write`. The dev-source approval trio (`request_dev_source_edit`, `update_dev_source_edit`, `await_dev_source_edit_approval`) is exposed with `prometheus_source_read` so the model inspects files and prepares scope before requesting approval. `dev_source_edit` is still gated by the existing dev source approval flow: the write category cannot be activated until `request_dev_source_edit` or an approved `code_change` proposal grants access, and each delegated granular handler still runs the old session/scope/syntax checks.
 - the 2026-06-29 browser/desktop wrapper compaction pass added `browser_session`, `browser_observe`, `browser_act`, and `browser_extract` under `browser_automation`, plus `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background` under `desktop_automation`. The executor normalizes wrapper actions to the existing granular handlers, preserving browser final-action approvals, observe/capture behavior, desktop screenshot freshness, coordinate validation, scoped window helpers, macro/background lanes, policy checks, and audit logging.
 - the 2026-06-29 external/agents/creative wrapper compaction pass added X/xAI and Vercel wrappers under `external_apps`, agent/team wrappers under `agents_and_teams`, and wrapper tools for each Creative bucket. The executor normalizes wrapper actions to existing extension/direct/capability handlers so connector auth, team state, Creative project state, policy checks, and audit logging stay centralized.
 - the 2026-06-29 voice wrapper compaction pass made the Realtime voice tool surface wrapper-first: `voice_ops`, `voice_browser`, and `voice_desktop` are exposed alongside canonical `skill_*` and rich `show_*` card tools. Granular `voice_web_*`, `voice_browser_*`, `voice_desktop_*`, screenshot/status, and simple generation tools remain executable compatibility handlers behind `executeVoiceAgentToolWithTrace(...)` normalization.
@@ -164,12 +173,12 @@ Registered capability executors currently live under `src/gateway/agents-runtime
 
 Capability-handled families currently include:
 
-- skills: `skill_list`, `skill_read`, `skill_resource_*`, `skill_create*`, `skill_import_bundle`, `skill_export_bundle`, `skill_update_from_source`
-- automations/tasks: `background_*`, `task_control`, `timer`, `internal_watch`, `schedule_job`, `schedule_job_*`, `automation_dashboard`
+- skills: core `skill_list`/`skill_read`, plus `skill_ops` under the `skills` category; hidden compatibility leaves include `skill_resource_*`, `skill_create*`, `skill_import_bundle`, `skill_export_bundle`, `skill_update_from_source`, `skill_update_metadata`, `skill_manifest_write`, `skill_inspect`, `skill_audit_all`, and `skill_repair_metadata`
+- automations/tasks: `background_ops` core wrapper; hidden executable compatibility aliases `background_*`; `task_control`, `timer`, `internal_watch`, `schedule_job`, `schedule_job_*`, `automation_dashboard`; plan-step tools are hidden/injected by `chat.router.ts` rather than capability category activation
 - teams/agents: `agent_*`, `spawn_subagent`, `message_subagent`, `dispatch_team_agent`, `team_manage`, `ask_team_coordinator`, `set_agent_model`, `get_agent_models`, team chat/status/artifact tools
 - memory: `business_context_mode`, `memory_*`, `write_note`
 - platform: `mcp__*`, `mcp_server_manage`, `connector_*`, `connector_list`, composite management and saved composites
-- web/media: `web_search`, `web_fetch`, `download_url`, `download_media`, `generate_image`, `generate_video`, `analyze_image`, `analyze_video`, `video_analyze_imported_video`, `save_site_shortcut`
+- web/media: `web_search`, `web_fetch`, `download_url`, `download_media`, `media_generate` plus hidden `generate_image`/`generate_video` compatibility aliases, `analyze_image`, `analyze_video`, `video_analyze_imported_video`, `save_site_shortcut`
 
 Direct executor switch handlers still own lower-level or specialized families:
 
@@ -233,8 +242,7 @@ Current model-facing web/media tool surface includes:
 - `web_fetch`
 - `download_url`
 - `download_media`
-- `generate_image`
-- `generate_video`
+- `media_generate`
 - `analyze_image`
 - `analyze_video`
 - `video_analyze_imported_video`
@@ -249,12 +257,12 @@ Current behavior:
 - for multiple X/Twitter status URLs, call `web_fetch({ urls: [...] })`; for one X/Twitter status URL, call `web_fetch({ url })`
 - `download_url` is for direct file/image/PDF links
 - `download_media` is for media-page extraction via `yt-dlp`
-- `generate_image` supports provider override `auto | openai | openai_codex | xai`
-- `generate_video` supports the configured video generation provider/model path, currently xAI-backed by default
+- `media_generate(action:"image")` supports provider override `auto | openai | openai_codex | xai`
+- `media_generate(action:"video")` supports the configured video generation provider/model path, currently xAI-backed by default
 - `analyze_video` samples frames and can extract audio/transcripts when local tools are available
 - web/media execution is now handled by `webMediaCapabilityExecutor` before the fallback switch path
-- old `web_search_single`, `web_search_multi`, and `web_fetch_batch` remain executable compatibility aliases but are hidden from the exposed schema surface
-- Image/video provider selection must not be tied to the current chat LLM provider. If the user is chatting with Grok, Claude, or another model, `generate_image` and `generate_video` should still be able to use any configured media endpoint whose credentials exist in config/vault/OAuth.
+- old `web_search_single`, `web_search_multi`, `web_fetch_batch`, `generate_image`, and `generate_video` remain executable compatibility aliases but are hidden from the exposed schema surface
+- Image/video provider selection must not be tied to the current chat LLM provider. If the user is chatting with Grok, Claude, or another model, `media_generate` should still be able to use any configured media endpoint whose credentials exist in config/vault/OAuth.
 
 Implementation facts for the 2026-06-17 workspace batch-file-tools update:
 

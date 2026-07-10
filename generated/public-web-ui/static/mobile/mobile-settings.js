@@ -345,8 +345,9 @@ function renderProviderFields(provider, cfg = {}) {
   const endpointId = endpointInputId(provider);
   const keyId = apiKeyInputId(provider);
   const effortId = effortInputId(provider);
-  const efforts = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'].map(v => ({ value: v, label: v || 'none' }));
-  const anthropicEfforts = ['', 'low', 'medium', 'high', 'xhigh', 'max'].map(v => ({ value: v, label: v === 'xhigh' ? 'extra high' : (v || 'provider default') }));
+  const efforts = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(v => ({ value: v, label: v === 'xhigh' ? 'X high' : (v || 'none') }));
+  const codexEfforts = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(v => ({ value: v, label: v === 'xhigh' ? 'X high' : v === 'ultra' ? 'Ultra' : (v || 'none') }));
+  const anthropicEfforts = ['', 'low', 'medium', 'high', 'xhigh', 'max'].map(v => ({ value: v, label: v === 'xhigh' ? 'X high' : (v || 'provider default') }));
   if (provider === 'ollama') {
     return `
       ${field('Endpoint', input(endpointId, cfg.endpoint || 'http://localhost:11434'))}
@@ -369,7 +370,7 @@ function renderProviderFields(provider, cfg = {}) {
   if (provider === 'openai_codex') {
     return `
       ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gpt-5.5')), cfg.model || 'gpt-5.5'))}
-      ${field('Reasoning Effort', select(effortId, efforts, cfg.reasoning_effort || ''))}
+      ${field('Reasoning Effort', select(effortId, codexEfforts, cfg.reasoning_effort || ''))}
       <div class="pm-settings-callout">Connect or disconnect the ChatGPT account from Credentials/Auth controls on desktop if OAuth needs renewal.</div>
     `;
   }

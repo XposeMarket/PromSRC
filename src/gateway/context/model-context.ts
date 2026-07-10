@@ -225,7 +225,10 @@ export function resolveActiveModelContextProfile(providerModelInfo?: Partial<Mod
 
 export function buildContextBudget(profile: ModelContextProfile): ContextBudget {
   const safetyHeadroomTokens = Math.max(512, Math.floor(profile.contextWindowTokens * 0.1));
-  const reservedOutputTokens = Math.min(profile.maxOutputTokens || 4096, Math.max(1024, Math.floor(profile.contextWindowTokens * 0.2)));
+  const reservedOutputTokens = Math.min(
+    profile.maxOutputTokens || 4096,
+    Math.max(1024, Math.min(32768, Math.floor(profile.contextWindowTokens * 0.08))),
+  );
   const reservedReasoningTokens = profile.supportsReasoningTokens ? Math.min(profile.reasoningBudgetTokens || 0, Math.floor(profile.contextWindowTokens * 0.12)) : 0;
   const inputBudgetTokens = Math.max(1024, profile.contextWindowTokens - reservedOutputTokens - reservedReasoningTokens - safetyHeadroomTokens);
   return {
@@ -234,7 +237,7 @@ export function buildContextBudget(profile: ModelContextProfile): ContextBudget 
     reservedReasoningTokens,
     safetyHeadroomTokens,
     inputBudgetTokens,
-    compactionTriggerTokens: Math.floor(inputBudgetTokens * 0.75),
+    compactionTriggerTokens: Math.floor(inputBudgetTokens * 0.9),
     toolContextBudgetTokens: Math.max(600, Math.floor(inputBudgetTokens * 0.16)),
     summaryBudgetTokens: Math.max(700, Math.floor(inputBudgetTokens * 0.08)),
   };

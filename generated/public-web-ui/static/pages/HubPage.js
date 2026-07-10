@@ -708,7 +708,8 @@ export function renderProviderUsageCard(p) {
   const tokens = p.tokens || {};
   let body = '';
   if (windows.length) {
-    body += windows.map(w => renderUsageGauge(w.label, w.used_percent, w.reset_at)).join('');
+    body += windows.map(w => renderUsageGauge(w.label, w.used_percent, w.reset_at)
+      + (w.detail ? `<div class="usage-gauge-reset">${escHtml(w.detail)}</div>` : '')).join('');
   } else if (p.budget && p.budget.limit_tokens > 0) {
     body = renderUsageGauge('Monthly budget', p.budget.used_percent, null)
       + `<div class="usage-gauge-reset">${compactNumber(p.budget.used_tokens)} / ${compactNumber(p.budget.limit_tokens)} tokens</div>`;
@@ -727,7 +728,7 @@ export function renderProviderUsageCard(p) {
       </div>
       ${body}
       ${err}
-      <div class="usage-provider-foot">${compactNumber(tokens.total || 0)} tokens · ${compactNumber(tokens.calls || 0)} calls</div>
+      <div class="usage-provider-foot">${p.plan_label ? `${escHtml(p.plan_label)} · ` : ''}${compactNumber(tokens.total || 0)} tokens · ${compactNumber(tokens.calls || 0)} calls</div>
     </div>
   `;
 }

@@ -1,0 +1,24 @@
+{
+  "run_id": "hermes_2026-07-09_shell_ops_basic_v1_strict_rerun",
+  "agent": "hermes",
+  "benchmark_id": "shell_ops_basic_v1_strict_rerun",
+  "base_benchmark_id": "shell_ops_basic_v1",
+  "measurement_mode": "black_box_cli_with_internal_telemetry",
+  "status": "pass",
+  "total_wall_ms": 24038,
+  "exit_code": 0,
+  "model_calls": 3,
+  "model_latency_ms": 12763,
+  "tool_calls": 2,
+  "tool_latency_ms": 2786,
+  "tool_errors": 0,
+  "tokens_input": 92293,
+  "tokens_output": 231,
+  "artifacts": [
+    "C:\\Users\\rafel\\PromSRC\\workspace\\benchmarks\\agent-comparison\\runs\\2026-07-09\\hermes\\shell_ops_basic_v1_strict_rerun\\stdout.txt",
+    "C:\\Users\\rafel\\PromSRC\\workspace\\benchmarks\\agent-comparison\\runs\\2026-07-09\\hermes\\shell_ops_basic_v1_strict_rerun\\stderr.txt",
+    "C:\\Users\\rafel\\PromSRC\\workspace\\benchmarks\\agent-comparison\\runs\\2026-07-09\\hermes\\shell_ops_basic_v1_strict_rerun\\events.jsonl"
+  ],
+  "notes": "Strict rerun with final-output suppression guard.",
+  "final_output": "SHELL_OPS_BASIC_V1_PASS: recovered=true\n\nsession_id: 20260709_095039_9ca23a"
+}

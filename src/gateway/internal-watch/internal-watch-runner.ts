@@ -327,20 +327,23 @@ export class InternalWatchRunner {
       this.runningWatchIds.delete(watch.id);
       return;
     }
-    setModelBusy(true);
-    const firedCount = watch.firedCount + 1;
-    const terminal = firedCount >= watch.maxFirings;
-    updateInternalWatch(watch.id, {
-      status: terminal ? 'matched' : 'active',
-      firedCount,
-      matchedAt: new Date().toISOString(),
-      completedAt: terminal ? new Date().toISOString() : undefined,
-    });
-    const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
-    this.broadcast({ type: 'internal_watch_matched', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
-    await this.deliver(watch, obs, 'match', watch.onMatch);
-    setModelBusy(false);
-    this.runningWatchIds.delete(watch.id);
+    try {
+      setModelBusy(true);
+      const firedCount = watch.firedCount + 1;
+      const terminal = firedCount >= watch.maxFirings;
+      updateInternalWatch(watch.id, {
+        status: terminal ? 'matched' : 'active',
+        firedCount,
+        matchedAt: new Date().toISOString(),
+        completedAt: terminal ? new Date().toISOString() : undefined,
+      });
+      const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+      this.broadcast({ type: 'internal_watch_matched', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
+      await this.deliver(watch, obs, 'match', watch.onMatch);
+    } finally {
+      setModelBusy(false);
+      this.runningWatchIds.delete(watch.id);
+    }
   }
 
   private async fireTimeout(watch: InternalWatch): Promise<void> {
@@ -349,19 +352,22 @@ export class InternalWatchRunner {
       this.runningWatchIds.delete(watch.id);
       return;
     }
-    setModelBusy(true);
-    updateInternalWatch(watch.id, {
-      status: 'timed_out',
-      timedOutAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-    });
-    const obs = watch.lastObservation || { status: 'timeout' };
-    const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
-    this.broadcast({ type: 'internal_watch_timeout', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
-    const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
-    await this.deliver(watch, obs, 'timeout', timeoutInstruction);
-    setModelBusy(false);
-    this.runningWatchIds.delete(watch.id);
+    try {
+      setModelBusy(true);
+      updateInternalWatch(watch.id, {
+        status: 'timed_out',
+        timedOutAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+      const obs = watch.lastObservation || { status: 'timeout' };
+      const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+      this.broadcast({ type: 'internal_watch_timeout', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
+      const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
+      await this.deliver(watch, obs, 'timeout', timeoutInstruction);
+    } finally {
+      setModelBusy(false);
+      this.runningWatchIds.delete(watch.id);
+    }
   }
 
   private async deliver(watch: InternalWatch, obs: Observation, kind: 'match' | 'timeout', template: string): Promise<void> {

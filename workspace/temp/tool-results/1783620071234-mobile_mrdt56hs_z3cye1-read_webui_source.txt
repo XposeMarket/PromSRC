@@ -1,0 +1,242 @@
+web-ui/src/mobile/mobile-model-badge.js (613 lines) [window 1-240, truncated]:
+1: // mobile-model-badge.js — interactive header model badge for Prometheus Mobile.
+2: //
+3: // The header used to show a static "Online" pill. It now shows the *current
+4: // main-chat model* (truncated to a friendly short name) while keeping the same
+5: // green/red gateway online/offline dot.
+6: //
+7: //   • TAP            → reasoning / thinking-level sheet for the ACTIVE provider
+8: //                      (mirrors the desktop composer reasoning controls).
+9: //   • PRESS-AND-HOLD → haptic buzz + quick provider→model switch sheet, limited
+10: //                      to providers the user actually has saved credentials for.
+11: //
+12: // Haptics: iOS Safari has no Web Vibration API. The working trick (per the
+13: // 2026 iOS 26.5 discussion) is a *native* `<input type="checkbox" switch>`:
+14: // a real tap that toggles it emits a system haptic. We embed one, invisibly,
+15: // inside every badge so the physical touch buzzes natively, and we also fire
+16: // `navigator.vibrate` (Android) + a programmatic toggle at the long-press
+17: // threshold as best-effort. All paths degrade silently.
+18: 
+19: import { mobileGatewayFetch } from './mobile-api.js';
+20: 
+21: // ── Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ──
+22: const BUILTIN_LABELS = {
+23:   ollama: 'Ollama (local)',
+24:   llama_cpp: 'llama.cpp (local)',
+25:   lm_studio: 'LM Studio (local)',
+26:   openai: 'OpenAI',
+27:   openai_codex: 'OpenAI Codex',
+28:   anthropic: 'Anthropic Claude',
+29:   perplexity: 'Perplexity',
+30:   gemini: 'Google Gemini',
+31:   xai: 'xAI Grok',
+32: };
+33: 
+34: const BUILTIN_STATIC_MODELS = {
+35:   openai: ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+36:   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+37:   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+38:   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+39:   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
+40:   xai: ['grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
+41: };
+42: 
+43: // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
+44: const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
+45: const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
+46: const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+47: const PERPLEXITY_EFFORT_OPTIONS = ['', 'low', 'medium', 'high'];
+48: const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
+49: const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
+50: const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+51: 
+52: // ── Caches ───────────────────────────────────────────────────────────────────
+53: let _llmCache = null;            // full llm config { provider, providers }
+54: let _catalogCache = null;        // [{ id, name, runtime, ... }]
+55: let _credentialedIds = null;     // [providerId, ...]
+56: 
+57: function _esc(s) {
+58:   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+59:     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+60:   ));
+61: }
+62: 
+63: // ── Friendly model-name truncation ───────────────────────────────────────────
+64: // claude-haiku-4-5-20251001 → "Claude Haiku 4.5"
+65: // gpt-5.5 → "GPT 5.5"   ·   grok-4.20-reasoning → "Grok 4.20"
+66: export function prettifyModelName(model, provider) {
+67:   const raw = String(model || '').trim();
+68:   const providerId = String(provider || '').trim().toLowerCase();
+69:   if (!raw) return _providerLabel(providerId) || 'Model';
+70:   let s = raw.toLowerCase();
+71:   // Drop date stamps like -20251001 / 20250514.
+72:   s = s.replace(/-?20\d{6}\b/g, '');
+73:   // Drop trailing qualifier words that add noise on a tiny badge.
+74:   s = s.replace(/-(reasoning|non-reasoning|latest|preview|exp|instruct|thinking|online)\b/g, '');
+75:   s = s.replace(/-\d{4}\b/g, '');
+76:   // Strip the redundant "claude-" family prefix (anthropic).
+77:   s = s.replace(/^claude-/, '');
+78:   // Version dashes between digits become dots: 4-5 → 4.5.
+79:   s = s.replace(/(\d)-(\d)/g, '$1.$2');
+80:   // Remaining separators → spaces.
+81:   s = s.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+82:   if (!s) s = raw;
+83: 
+84:   if (/^gpt\b/.test(s)) {
+85:     s = s.replace(/^gpt\b/i, 'GPT');
+86:   } else if (/^o\d\b/.test(s)) {
+87:     s = s.toUpperCase();
+88:   } else if (providerId === 'anthropic' || /^(opus|sonnet|haiku)\b/.test(s)) {
+89:     s = s.replace(/^(opus|sonnet|haiku)\b/i, 'Claude $1');
+90:   } else if (providerId === 'gemini' || /^gemini\b/.test(s)) {
+91:     s = s.replace(/^gemini\b/i, 'Gemini');
+92:   } else if (providerId === 'xai' || /^grok\b/.test(s)) {
+93:     s = s.replace(/^grok\b/i, 'Grok');
+94:   } else if (providerId === 'perplexity' || /^sonar\b/.test(s)) {
+95:     s = s.replace(/^sonar\b/i, 'Sonar');
+96:   } else {
+97:     s = s.replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
+98:   }
+99: 
+100:   s = s.replace(/\bmini\b/gi, 'mini')
+101:     .replace(/\b(Pro|Flash|Lite|Build|Codex|Max|Haiku|Opus|Sonnet|Deep|Research|Multi|Agent)\b/gi, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+102:     .replace(/\s+/g, ' ')
+103:     .trim();
+104:   if (s.length > 24) s = s.slice(0, 23).trim() + '…';
+105:   return s;
+106: }
+107: 
+108: // ── Haptic feedback ──────────────────────────────────────────────────────────
+109: function _ensureHapticSwitch() {
+110:   let sw = document.getElementById('pm-haptic-switch');
+111:   if (!sw) {
+112:     sw = document.createElement('input');
+113:     sw.type = 'checkbox';
+114:     sw.setAttribute('switch', '');     // iOS native switch styling = haptic on toggle
+115:     sw.id = 'pm-haptic-switch';
+116:     sw.setAttribute('aria-hidden', 'true');
+117:     sw.tabIndex = -1;
+118:     sw.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+119:     document.body.appendChild(sw);
+120:   }
+121:   return sw;
+122: }
+123: 
+124: export function pmHaptic(strength = 12) {
+125:   try { if (navigator.vibrate) navigator.vibrate(strength); } catch {}
+126:   // Programmatic toggle of a native iOS switch — best-effort earlier buzz.
+127:   try { const sw = _ensureHapticSwitch(); sw.checked = !sw.checked; } catch {}
+128: }
+129: 
+130: // Give an arbitrary button the same real iOS haptic the model badge has: a native
+131: // `<input switch>` overlay sits on top of the button so the user's physical tap
+132: // toggles it (system haptic), then we forward the activation to the real control.
+133: // The overlay is a sibling (inside a wrapper) — not a child — so it survives the
+134: // button's innerHTML being rewritten (the send button morphs send↔voice↔abort).
+135: export function attachMobileButtonHaptic(btn, activate) {
+136:   if (!btn || btn.dataset.pmHaptic === '1') return;
+137:   btn.dataset.pmHaptic = '1';
+138:   let host = btn.parentElement;
+139:   if (!host || !host.classList.contains('pm-haptic-host')) {
+140:     host = document.createElement('span');
+141:     host.className = 'pm-haptic-host';
+142:     btn.parentNode.insertBefore(host, btn);
+143:     host.appendChild(btn);
+144:   }
+145:   const sw = document.createElement('input');
+146:   sw.type = 'checkbox';
+147:   sw.setAttribute('switch', '');
+148:   sw.className = 'pm-haptic-switch-overlay';
+149:   sw.setAttribute('aria-hidden', 'true');
+150:   sw.tabIndex = -1;
+151:   host.appendChild(sw);
+152:   sw.addEventListener('click', () => {
+153:     pmHaptic(10);
+154:     try { typeof activate === 'function' ? activate() : btn.click(); } catch {}
+155:   });
+156: }
+157: 
+158: // ── Data loaders ─────────────────────────────────────────────────────────────
+159: async function _loadLlm(force) {
+160:   if (_llmCache && !force) return _llmCache;
+161:   try {
+162:     const d = await mobileGatewayFetch('/api/settings/provider');
+163:     _llmCache = d?.llm || { provider: 'ollama', providers: {} };
+164:   } catch {
+165:     _llmCache = _llmCache || { provider: 'ollama', providers: {} };
+166:   }
+167:   return _llmCache;
+168: }
+169: 
+170: async function _loadCatalog(force) {
+171:   if (_catalogCache && !force) return _catalogCache;
+172:   try {
+173:     const d = await mobileGatewayFetch('/api/extensions/catalog?kind=provider');
+174:     _catalogCache = Array.isArray(d?.items) ? d.items : [];
+175:   } catch {
+176:     _catalogCache = Object.keys(BUILTIN_LABELS).map((id) => ({ id, name: BUILTIN_LABELS[id], runtime: {} }));
+177:   }
+178:   return _catalogCache;
+179: }
+180: 
+181: async function _loadCredentialedIds(force) {
+182:   if (_credentialedIds && !force) return _credentialedIds;
+183:   try {
+184:     const d = await mobileGatewayFetch('/api/settings/credentialed-model-providers');
+185:     _credentialedIds = Array.isArray(d?.providers) ? d.providers.map(String) : [];
+186:   } catch {
+187:     _credentialedIds = [];
+188:   }
+189:   return _credentialedIds;
+190: }
+191: 
+192: function _providerLabel(id) {
+193:   const item = (_catalogCache || []).find((p) => p.id === id);
+194:   return item?.name || BUILTIN_LABELS[id] || id;
+195: }
+196: 
+197: function _modelsForProvider(provider) {
+198:   const item = (_catalogCache || []).find((p) => p.id === provider);
+199:   const out = [];
+200:   const push = (arr) => { if (Array.isArray(arr)) for (const m of arr) { const s = String(m?.name || m || '').trim(); if (s && !out.includes(s)) out.push(s); } };
+201:   // Catalog order is source of truth; builtin fills gaps only.
+202:   push(item?.runtime?.options?.staticModels);
+203:   push(BUILTIN_STATIC_MODELS[provider]);
+204:   const def = item?.config?.defaults?.model;
+205:   if (def && !out.includes(String(def))) out.unshift(String(def));
+206:   return out;
+207: }
+208: 
+209: function _activeModel(llm) {
+210:   const provider = String(llm?.provider || 'ollama');
+211:   const model = String(llm?.providers?.[provider]?.model || '');
+212:   return { provider, model };
+213: }
+214: 
+215: function _modelDetail(detail = {}) {
+216:   const modelRef = String(detail?.modelRef || '').trim();
+217:   const slashIdx = modelRef.indexOf('/');
+218:   const provider = String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim();
+219:   const model = String(detail?.model || (slashIdx > 0 ? modelRef.slice(slashIdx + 1) : modelRef) || '').trim();
+220:   return { provider, model };
+221: }
+222: 
+223: function _setBadgeLabel(label) {
+224:   const safe = String(label || '').trim() || 'Online';
+225:   window.__pmModelBadgeLabel = safe;
+226:   document.querySelectorAll('.pm-model-badge .pm-model-badge-label').forEach((el) => {
+227:     el.textContent = safe;
+228:   });
+229:   return safe;
+230: }
+231: 
+232: // ── Badge label refresh ──────────────────────────────────────────────────────
+233: export async function refreshMobileModelBadge(force = false, modelChangeDetail = null) {
+234:   const eventModel = _modelDetail(modelChangeDetail || {});
+235:   if (eventModel.model || eventModel.provider) {
+236:     const label = _setBadgeLabel(prettifyModelName(eventModel.model, eventModel.provider));
+237:     // switch_model is turn-scoped and does not mutate /api/settings/provider, so
+238:     // keep the streamed active-model label instead of overwriting it from config.
+239:     if (String(modelChangeDetail?.sourceEventType || '') === 'model_switched') {
+240:       _llmCache = null;
+[READ_TRUNCATED] Returned 240 of 613 lines. Use start_line:241, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

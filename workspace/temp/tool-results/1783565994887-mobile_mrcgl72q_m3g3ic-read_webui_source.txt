@@ -1,0 +1,232 @@
+web-ui/src/mobile/mobile-context-window.js (471 lines) [window 241-470, truncated]:
+241:         <div class="pm-ctx-plan-body" id="pm-ctx-plan-body"></div>
+242:       </div>
+243:     </div>
+244:   `;
+245: }
+246: 
+247: function _setExpanded(expanded) {
+248:   _expanded = !!expanded;
+249:   const metrics = document.getElementById('pm-ctx-metrics');
+250:   const toggle = document.getElementById('pm-ctx-toggle');
+251:   if (metrics) metrics.hidden = !expanded;
+252:   if (toggle) toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+253: }
+254: 
+255: function _renderRows(rows, windowTokens, depth = 0) {
+256:   const source = Array.isArray(rows) ? rows : [];
+257:   return source.map((row) => {
+258:     const tokens = Math.max(0, Number(row?.tokens || 0));
+259:     const pct = windowTokens > 0 ? `${((tokens / windowTokens) * 100).toFixed(1)}%` : '';
+260:     const pctText = row?.percentLabel ? String(row.percentLabel) : (row?.percentBasis === 'window' ? pct : '');
+261:     const children = Array.isArray(row?.children) ? row.children.filter(Boolean) : [];
+262:     const rowId = String(row?.id || row?.label || `row_${depth}`);
+263:     const expandable = children.length > 0;
+264:     const expanded = expandable && _expandedRows.has(rowId);
+265:     const tag = expandable ? 'button' : 'div';
+266:     const typeAttr = expandable ? ' type="button"' : '';
+267:     const dataAttr = expandable ? ` data-pm-ctx-row-id="${escapeHtml(rowId)}" aria-expanded="${expanded ? 'true' : 'false'}"` : '';
+268:     const caret = expandable ? `<span class="pm-ctx-caret" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>` : '';
+269:     const estimate = row?.estimated ? '<span class="pm-ctx-estimate">est</span>' : '';
+270:     const childHtml = expanded ? _renderRows(children, windowTokens, depth + 1) : '';
+271:     return `<${tag}${typeAttr}${dataAttr} class="pm-ctx-row${expandable ? ' is-expandable' : ''}${depth > 0 ? ' is-child' : ''}" style="--pm-ctx-depth:${Math.max(0, depth)};"><span>${caret}${escapeHtml(row?.label || 'Context')}${estimate}</span><span class="pm-ctx-row-val">${_fmtTokens(tokens)}</span><span class="pm-ctx-row-pct">${escapeHtml(pctText)}</span></${tag}>${childHtml}`;
+272:   }).join('');
+273: }
+274: 
+275: function _renderContext(data) {
+276:   data = _applyLiveOverlay(data);
+277:   const ring = document.getElementById('pm-ctx-chip-ring');
+278:   const chip = document.getElementById('pm-ctx-chip');
+279:   const fill = document.getElementById('pm-ctx-fill');
+280:   const total = document.getElementById('pm-ctx-total');
+281:   const headLabel = document.getElementById('pm-ctx-head-label');
+282:   const metrics = document.getElementById('pm-ctx-metrics');
+283:   if (!data || data.success === false) {
+284:     if (ring) ring.style.setProperty('--pm-ctx-deg', '0deg');
+285:     if (fill) fill.style.width = '0%';
+286:     if (total) total.textContent = 'Unavailable';
+287:     if (headLabel) headLabel.innerHTML = 'Context window<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+288:     if (metrics) metrics.innerHTML = '';
+289:     return;
+290:   }
+291:   const currentState = data.currentState || {};
+292:   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
+293:   const windowTokens = _displayLimit(data, currentState);
+294:   const modelWindowTokens = Math.max(0, Number(data.contextWindowTokens || currentState.contextWindowTokens || 0));
+295:   const isCompactionLimit = modelWindowTokens > 0 && windowTokens > 0 && modelWindowTokens !== windowTokens;
+296:   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
+297:   if (ring) ring.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
+298:   if (chip) chip.title = `Context before compaction: ${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} tokens${modelWindowTokens && modelWindowTokens !== windowTokens ? ` (model window ${_fmtTokens(modelWindowTokens)})` : ''}`;
+299:   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
+300:   if (headLabel) headLabel.innerHTML = `${isCompactionLimit ? 'Before compaction' : 'Context window'}<svg class="pm-ctx-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
+301:   if (total) total.textContent = `${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} (${Math.round(percent)}%)${isCompactionLimit ? ` · window ${_fmtTokens(modelWindowTokens)}` : ''}`;
+302: 
+303:   const rows = Array.isArray(currentState.rows) ? currentState.rows : [];
+304:   if (metrics) {
+305:     metrics.innerHTML = _renderRows(rows, windowTokens);
+306:   }
+307: }
+308: 
+309: function _renderPlan() {
+310:   const wrap = document.getElementById('pm-ctx-plan');
+311:   const body = document.getElementById('pm-ctx-plan-body');
+312:   if (!wrap || !body) return;
+313:   const providers = (_planData && Array.isArray(_planData.providers)) ? _planData.providers : [];
+314:   const prov = providers.find((p) => String(p.provider).toLowerCase() === String(_activeProvider).toLowerCase());
+315:   if (!prov) { wrap.hidden = true; body.innerHTML = ''; return; }
+316: 
+317:   const windows = Array.isArray(prov.windows) ? prov.windows : [];
+318:   let html = '';
+319:   if (windows.length) {
+320:     html += windows.map((w) => {
+321:       const pct = Math.max(0, Math.min(100, Number(w.used_percent) || 0));
+322:       const left = (100 - pct).toFixed(0);
+323:       const reset = _fmtReset(w.reset_at || w.resets_at, w.label);
+324:       return `
+325:         <div class="pm-ctx-gauge">
+326:           <div class="pm-ctx-gauge-head"><span>${escapeHtml(w.label || '')}</span><span class="pm-ctx-gauge-pct">${left}% left</span></div>
+327:           <div class="pm-ctx-gauge-track"><div class="pm-ctx-gauge-fill ${_gaugeClass(pct)}" style="width:${pct}%"></div></div>
+328:           ${reset ? `<div class="pm-ctx-gauge-reset">${escapeHtml(reset)}</div>` : ''}
+329:         </div>`;
+330:     }).join('');
+331:   }
+332:   if (!windows.length) {
+333:     const t = prov.tokens || {};
+334:     html += `<div class="pm-ctx-plan-tokens">${_fmtTokens(t.total || 0)} tokens · ${Number(t.calls || 0)} calls tracked</div>`;
+335:   }
+336:   body.innerHTML = html;
+337:   wrap.hidden = false;
+338: }
+339: 
+340: async function _refresh(sessionId, { force = false, provider = '' } = {}) {
+341:   const seq = ++_refreshSeq;
+342:   _lastSessionId = String(sessionId || _lastSessionId || '');
+343:   const providerOverride = String(provider || '').trim().toLowerCase();
+344:   if (force) {
+345:     _planFetchAt = 0;
+346:     _planData = null;
+347:     if (providerOverride) _activeProvider = providerOverride;
+348:     else _activeProvider = '';
+349:   } else if (providerOverride) {
+350:     _activeProvider = providerOverride;
+351:   }
+352: 
+353:   // Context window for the active session.
+354:   try {
+355:     if (sessionId) {
+356:       const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-window`);
+357:       if (seq === _refreshSeq) _renderContext(data && data.success !== false ? data : null);
+358:     } else if (seq === _refreshSeq) {
+359:       _renderContext(null);
+360:     }
+361:   } catch { if (seq === _refreshSeq) _renderContext(null); }
+362: 
+363:   // Active provider (for plan-usage scoping) + usage limits. Model-change events
+364:   // force this cache so plan usage updates at the same time as the context ring.
+365:   try {
+366:     if (!_activeProvider) {
+367:       const p = await mobileGatewayFetch('/api/settings/provider');
+368:       _activeProvider = String(p?.llm?.provider || '').toLowerCase();
+369:     }
+370:     const now = Date.now();
+371:     if (force || !_planData || now - _planFetchAt > 60000) {
+372:       const lim = await mobileGatewayFetch('/api/usage/limits');
+373:       if (lim && lim.success !== false) { _planData = lim; _planFetchAt = now; }
+374:     }
+375:     if (seq === _refreshSeq) _renderPlan();
+376:     if (force) console.info('[mobile context] refreshed after model change', { sessionId, provider: _activeProvider });
+377:   } catch { /* leave plan hidden */ }
+378: }
+379: 
+380: function _providerFromModelChange(detail = {}) {
+381:   const modelRef = String(detail?.modelRef || '').trim();
+382:   const slashIdx = modelRef.indexOf('/');
+383:   return String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim().toLowerCase();
+384: }
+385: 
+386: function _bindModelChangeListener(getSessionId) {
+387:   if (_modelChangeListenerBound) return;
+388:   _modelChangeListenerBound = true;
+389:   window.__pmMobileRefreshContextWindow = (detail = {}) => {
+390:     const sid = String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || _lastSessionId || '');
+391:     return _refresh(sid, { force: true, provider: _providerFromModelChange(detail) });
+392:   };
+393:   window.addEventListener('pm-model-changed', (event) => {
+394:     window.__pmMobileRefreshContextWindow?.(event?.detail || {});
+395:   });
+396: }
+397: 
+398: function _close() {
+399:   const pop = document.getElementById('pm-ctx-popover');
+400:   const chip = document.getElementById('pm-ctx-chip');
+401:   if (pop) pop.hidden = true;
+402:   if (chip) {
+403:     chip.hidden = false;
+404:     chip.setAttribute('aria-expanded', 'false');
+405:   }
+406:   _open = false;
+407:   if (_outsideHandler) {
+408:     document.removeEventListener('pointerdown', _outsideHandler, true);
+409:     _outsideHandler = null;
+410:   }
+411: }
+412: 
+413: function _open_(getSessionId) {
+414:   const pop = document.getElementById('pm-ctx-popover');
+415:   const chip = document.getElementById('pm-ctx-chip');
+416:   if (!pop || !chip) return;
+417:   _open = true;
+418:   pop.hidden = false;
+419:   chip.setAttribute('aria-expanded', 'true');
+420:   chip.hidden = true;
+421:   _setExpanded(false);
+422:   _refresh(typeof getSessionId === 'function' ? getSessionId() : '');
+423:   // Close when tapping outside the popover or the chip.
+424:   _outsideHandler = (e) => {
+425:     if (pop.contains(e.target) || chip.contains(e.target)) return;
+426:     _close();
+427:   };
+428:   document.addEventListener('pointerdown', _outsideHandler, true);
+429: }
+430: 
+431: export function wireMobileContextWindow(page, { getSessionId } = {}) {
+432:   const chip = page.querySelector('#pm-ctx-chip');
+433:   const toggle = page.querySelector('#pm-ctx-toggle');
+434:   if (!chip) return;
+435:   _getSessionId = typeof getSessionId === 'function' ? getSessionId : null;
+436:   _bindModelChangeListener(getSessionId);
+437:   window.__pmMobileContextTurnStart = (detail = {}) => _resetLiveTurn(String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || ''));
+438:   window.__pmMobileContextTurnDone = (detail = {}) => _settleLiveTurn(String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || ''));
+439:   window.__pmMobileContextStreamEvent = (evt = {}, detail = {}) => {
+440:     const sid = String(detail?.sessionId || evt?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || '');
+441:     if (String(evt?.type || '') === 'tool_result') _recordLiveToolResult(sid, evt);
+442:     else if (['tool_call', 'tool_progress', 'vision_injected', 'runtime_registered'].includes(String(evt?.type || ''))) _scheduleRefresh(sid, 650);
+443:   };
+444:   // Reset transient state for the fresh page render.
+445:   _open = false; _expanded = false; _expandedRows = new Set();
+446:   if (_outsideHandler) { document.removeEventListener('pointerdown', _outsideHandler, true); _outsideHandler = null; }
+447: 
+448:   chip.addEventListener('click', (e) => {
+449:     e.stopPropagation();
+450:     if (_open) _close(); else _open_(getSessionId);
+451:   });
+452:   if (toggle) toggle.addEventListener('click', (e) => { e.stopPropagation(); _setExpanded(!_expanded); });
+453:   const metrics = page.querySelector('#pm-ctx-metrics');
+454:   if (metrics) {
+455:     metrics.addEventListener('click', (e) => {
+456:       const row = e.target?.closest?.('[data-pm-ctx-row-id]');
+457:       if (!row) return;
+458:       e.stopPropagation();
+459:       const id = row.dataset.pmCtxRowId;
+460:       if (!id) return;
+461:       if (_expandedRows.has(id)) _expandedRows.delete(id);
+462:       else _expandedRows.add(id);
+463:       _refresh(typeof getSessionId === 'function' ? getSessionId() : '');
+464:     });
+465:   }
+466: 
+467:   // Pre-load so the ring shows the real fill as soon as the chat opens,
+468:   // not just after the popover is first tapped.
+469:   _refresh(typeof getSessionId === 'function' ? getSessionId() : '');
+470: }
+[READ_TRUNCATED] Returned 230 of 471 lines. Use start_line:471, num_lines:240 for the next chunk, or pass full:true only when the whole file is truly needed.

@@ -810,7 +810,7 @@ WHEN TO USE EACH:
   → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles (planner+builder+verifier etc.)
 TEAM OPS: Do NOT call granular team_manage directly from main chat. Use ask_team_coordinator for normal managed team work; use team_ops_wrapper/team_collab_ops only when you intentionally need lower-level managed-team operations.`,
 
-  skills: `SKILLS (catalog + maintenance — routing rule lives in the [SKILLS] block): skills are living, reusable workflow playbooks, and the goal is to have one for essentially every workflow. After finishing real work (a multi-step task, a tricky fix, or any non-trivial workflow), maintain the system while evidence is fresh — update an outdated/incomplete/wrong skill in the same turn (skill_resource_write/delete, skill_update_metadata for discovery metadata, skill_manifest_write only for full overlay changes), or create one if a reusable workflow had no fit (skill_create_bundle when it needs resources/templates/examples/schemas, skill_create for a one-file playbook). CRITICAL on create/update: set accurate trigger words/metadata — the kinds of requests that should surface this skill — so it auto-matches next time the same kind of work comes up. For trigger-only fixes, prefer skill_update_metadata({ id, addTriggers:[...] }) so existing triggers are preserved instead of rebuilding/replacing the whole skill. Load bundle resources only as needed via skill_resource_list(id)/skill_resource_read(id,path); add focused files under examples/templates/schemas/prompts/references rather than bloating SKILL.md. Don't force maintenance chatter into casual replies; an unmaintained or missing skill is a liability. Core skill tools (always available): skill_list, skill_read, skill_inspect, skill_resource_list/read/write/delete, skill_update_metadata, skill_manifest_write, skill_import_bundle, skill_export_bundle, skill_update_from_source, skill_create, skill_create_bundle.`,
+  skills: `SKILLS (catalog + maintenance — routing rule lives in the [SKILLS] block): skills are living, reusable workflow playbooks, and the goal is to have one for essentially every workflow. Core skill tools are only skill_list and skill_read. For maintenance, first activate the skills category, then use skill_ops. After finishing real work (a multi-step task, a tricky fix, or any non-trivial workflow), maintain the system while evidence is fresh — update an outdated/incomplete/wrong skill in the same turn with skill_ops(action:"resource_write"|"resource_delete"|"update_metadata"|"manifest_write"), or create one if a reusable workflow had no fit with skill_ops(action:"create_bundle") for resource/template/example/schema-heavy skills or skill_ops(action:"create") for a one-file playbook. CRITICAL on create/update: set accurate trigger words/metadata — the kinds of requests that should surface this skill — so it auto-matches next time the same kind of work comes up. For trigger-only fixes, prefer skill_ops(action:"update_metadata", id, addTriggers) so existing triggers are preserved instead of rebuilding/replacing the whole skill. Load bundle resources only as needed via skill_ops(action:"resource_list", id) / skill_ops(action:"resource_read", id, path); add focused files under examples/templates/schemas/prompts/references rather than bloating SKILL.md. Don't force maintenance chatter into casual replies; an unmaintained or missing skill is a liability.`,
 
   agent_builder: `AGENT BUILDER (localhost:3005): search_workflow_templates(query) first → architect_workflow() only if no match → verify_workflow_credentials → deploy_workflow → create_node_subagent if needed.
 STOP if credentials missing — tell user exactly what's needed with add_credential_url links. Workflows run inside Agent Builder — use execute_workflow_template(), NOT browser_* tools.`,
@@ -893,7 +893,7 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
   creative_video: 'use creative_video_ops for video, shot, storyboard, audio, caption, sequence, timeline, and composition work.',
   creative_hyperframes: 'use creative_hyperframes_ops for HyperFrames and HTML motion clip/template tools for source-backed animated videos.',
   creative_quality: 'use creative_quality_ops for frame renders, layout checks, text fit, contrast, overlaps, timing, and clip validation.',
-  skills: 'author and maintain reusable skills: skill_create, skill_create_bundle, import/export/update bundles, skill_update_metadata for trigger/metadata patches, skill_manifest_write for full overlays, skill_resource_write/delete, and skill_inspect.',
+  skills: 'author and maintain reusable skills with skill_ops: create/create_bundle, import/export/update bundles, update_metadata, manifest_write, resource read/write/delete/list, inspect, audit_all, and repair_metadata. Core skill tools are only skill_list and skill_read.',
   model_management: 'administer agent model routing/templates: get_agent_models, set_agent_model, list/save/update/apply/select/delete agent model templates.',
   business: 'manage structured entity files: list_entities, read_entity, write_entity, and append_entity_event for clients, contacts, projects, vendors, and social accounts.',
 };
@@ -915,10 +915,10 @@ function buildToolCategoryMatchContext(messageText: string, activatedCategories:
   return lines.length ? `[TOOL_CATEGORY_MATCH]\n${lines.join('\n')}` : '';
 }
 
-const BG_AGENT_RUNTIME_HINT = `BACKGROUND AGENTS: background_spawn(task_prompt, id?) runs a full parallel agent that does real work and reports back. Reach for it proactively — it is a primary tool, not a last resort. Two patterns to default to:
-  1) INVESTIGATE-FIRST: before committing to a multi-step path, an uncertain change, or a big answer, spawn an agent to dig in and report findings, then act on what it returns. e.g. "Let me investigate this properly" → background_spawn(a self-contained research/scan task) → proceed once it reports back. Prefer this over guessing or doing a long serial investigation inline.
+const BG_AGENT_RUNTIME_HINT = `BACKGROUND AGENTS: background_ops(action:"spawn", prompt) runs a full parallel agent that does real work and reports back. Reach for it proactively — it is a primary tool, not a last resort. Two patterns to default to:
+  1) INVESTIGATE-FIRST: before committing to a multi-step path, an uncertain change, or a big answer, spawn an agent to dig in and report findings, then act on what it returns. e.g. "Let me investigate this properly" → background_ops({action:"spawn", prompt:"self-contained research/scan task"}) → proceed once it reports back. Prefer this over guessing or doing a long serial investigation inline.
   2) PARALLELIZE: when a piece of work is independent of what you're doing right now, spawn it to run concurrently instead of serially — gather data, scan the repo, run a web lookup, write a file, update memory, or prep one thing while you do another (e.g. browse a site while an agent builds a file). Don't do independent work one-at-a-time when it can overlap.
-task_prompt MUST be fully self-contained: include exact paths, URLs, context, and instructions — the spawned agent has no access to "the conversation". The finalization gate waits for and merges same-turn background_spawn results before your final reply. Use background_wait(wait_ms) to intentionally pause the foreground turn while spawned agents finish before you continue. Don't call background_join/status unless explicitly needed. Spawned agents plan with bg_plan_declare/bg_plan_advance.`;
+prompt MUST be fully self-contained: include exact paths, URLs, context, and instructions — the spawned agent has no access to "the conversation". The finalization gate waits for and merges same-turn background_ops spawn results before your final reply. Use background_ops(action:"wait", wait_ms) to intentionally pause the foreground turn while spawned agents finish before you continue. Don't call background_ops action="join"/"status" unless explicitly needed. Legacy background_* tools remain executable compatibility aliases but are hidden from the normal schema surface. Spawned agents plan with bg_plan_declare/bg_plan_advance.`;
 
 export function buildToolsContext(activatedCategories: Set<string>): string {
   // Build dynamic search provider summary inline (getConfig already imported at top of file)
@@ -964,7 +964,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['creative_image', 'creative_image (creative_image_ops wrapper)'],
     ['creative_video', 'creative_video (creative_video_ops wrapper)'],
     ['creative_hyperframes', 'creative_hyperframes (creative_hyperframes_ops wrapper)'],
-    ['skills', 'skills (skill authoring, packaging, import/export, and resource maintenance)'],
+    ['skills', 'skills (skill_ops wrapper for authoring, packaging, import/export, resource maintenance, inspection, and metadata audits)'],
     ['model_management', 'model_management (agent fleet model administration and templates)'],
     ['business', 'business (structured business entity lifecycle administration)'],
   ];
@@ -998,7 +998,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     .map(([, label]) => label)
     .join(' | ');
 
-  const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill tools including skill_list/skill_read/skill_resource_*/skill_inspect/skill_update_metadata/skill_manifest_write/skill_import_bundle/skill_create_bundle, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
+  const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill_list/skill_read only for core skill discovery, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
   Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
@@ -1042,7 +1042,7 @@ Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct
   → 'low' (speed): single command, file read/summary, write_note only, quick lookups.
   → 'medium' (careful): multi-step analysis or structured work that doesn't need full primary model power.
   → Stay on primary: ${isPublicDistributionBuild() ? 'proposal work, deep reasoning, auth/security/build, anything expensive if wrong.' : 'src/ edits, proposals, deep reasoning, auth/security/build, anything expensive if wrong.'}
-  → Mixed intent rule: if a turn contains BOTH memory work (memory_write/write_note) and a separate actionable task, prefer background_spawn for the memory sidecar so primary execution continues in parallel.
+  → Mixed intent rule: if a turn contains BOTH memory work (memory_write/write_note) and a separate actionable task, prefer background_ops(action:"spawn") for the memory sidecar so primary execution continues in parallel.
   → If you choose not to spawn and you used switch_model for a memory side action, continue executing the user's remaining task in the same turn (do not stop after memory).
   Auto-reverts after turn end — never switch back manually.
 

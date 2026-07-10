@@ -675,42 +675,6 @@ export function isExecutionLikeRequest(message: string): boolean {
   return /\b(create|build|implement|develop|scaffold|generate|fix|debug|edit|update|refactor|rewrite|patch|setup|configure|calendar|app|component|project|file|folder|directory|workspace|code|desktop|window|screen|mouse|keyboard|clipboard|vs code|vscode)\b/i.test(m);
 }
 
-export function isBrowserAutomationRequest(message: string): boolean {
-  const m = String(message || '');
-  const hasBrowserVerb = /\b(open|go to|navigate|visit|browse|click|type|fill|press|submit|log ?in|login|use my computer)\b/i.test(m);
-  const hasTarget = /(?:https?:\/\/)?(?:www\.)?[a-z0-9][a-z0-9.-]+\.[a-z]{2,}(?:\/\S*)?/i.test(m)
-    || /\b(chatgpt|google|reddit|x\.com|twitter|github|youtube)\b/i.test(m);
-  return hasBrowserVerb && hasTarget;
-}
-
-export function isDesktopAutomationRequest(message: string): boolean {
-  const m = String(message || '');
-  const hasDesktopVerb = /\b(check|look|see|open|focus|click|type|press|read|copy|paste|use my computer|screenshot)\b/i.test(m);
-  const hasDesktopTarget = /\b(desktop|screen|window|app|application|vs code|vscode|terminal|notepad|clipboard|codex)\b/i.test(m);
-  const statusAsk = /\b(is|did|has).*\b(done|finished|complete|completed)\b/i.test(m);
-  return (hasDesktopVerb && hasDesktopTarget) || (statusAsk && /\b(vs code|vscode|codex)\b/i.test(m));
-}
-
-export function extractLikelyUrl(message: string): string | null {
-  const raw = String(message || '');
-  const directUrlMatch = raw.match(/\bhttps?:\/\/[^\s)]+/i);
-  const domainMatch = raw.match(/\b(?:www\.)?[a-z0-9][a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s)]*)?/i);
-  const url = (directUrlMatch?.[0] || domainMatch?.[0] || '').trim();
-  if (!url) return null;
-  const normalized = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-  return normalized.replace(/["'<>]/g, '');
-}
-
-export function looksLikeSafetyRefusal(text: string): boolean {
-  const s = String(text || '').trim().toLowerCase();
-  if (!s) return false;
-  return (
-    /disallowed|can't (help|assist|do that|use your computer)|cannot (help|assist|do that|use your computer)|unable to (help|assist|do that)/i.test(s)
-    || /i (can't|cannot) (control|operate|use) (your|the) computer/i.test(s)
-    || /against (policy|safety)/i.test(s)
-  );
-}
-
 export function looksLikeIntentOnlyReply(text: string): boolean {
   const s = String(text || '').trim();
   if (!s) return true;

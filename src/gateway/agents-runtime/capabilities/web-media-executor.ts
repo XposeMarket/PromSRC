@@ -278,6 +278,9 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           count: args.count != null ? Number(args.count) : undefined,
           provider: args.provider != null ? String(args.provider) : undefined,
           model: args.model != null ? String(args.model) : undefined,
+          background: args.background != null ? String(args.background) : undefined,
+          output_format: args.output_format != null ? String(args.output_format) : undefined,
+          quality: args.quality != null ? String(args.quality) : undefined,
           output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
           save_to_workspace: args.save_to_workspace != null ? args.save_to_workspace === true : undefined,
           on_image_persisted: (image) => {

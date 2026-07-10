@@ -23,6 +23,10 @@ const CALLBACK_PORT = Number(process.env.PROMETHEUS_XAI_OAUTH_PORT || '56121');
 const CALLBACK_PATH = '/callback';
 const CALLBACK_URL = `http://${CALLBACK_HOST}:${CALLBACK_PORT}${CALLBACK_PATH}`;
 const VAULT_KEY = 'xai.oauth_tokens';
+const accountVaultKey = (accountId?: string): string => {
+  const id = String(accountId || '').trim();
+  return id ? `${VAULT_KEY}.${id}` : VAULT_KEY;
+};
 
 export interface XAITokens {
   access_token: string;
@@ -42,9 +46,9 @@ export interface XAIRuntimeCredentials {
   base_url: string;
 }
 
-type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string };
+type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string; accountId?: string };
 let _bgResult: BgOAuthResult = { done: false };
-let _activeFlow: { verifier: string; state: string; authUrl: string; createdAt: number; tokenEndpoint: string } | null = null;
+let _activeFlow: { verifier: string; state: string; authUrl: string; createdAt: number; tokenEndpoint: string; accountId?: string } | null = null;
 
 function generateVerifier(): string {
   return crypto.randomBytes(32).toString('base64url');
@@ -96,16 +100,16 @@ async function discovery(): Promise<{ authorization_endpoint: string; token_endp
   return { authorization_endpoint, token_endpoint };
 }
 
-function saveTokens(configDir: string, tokens: XAITokens): void {
-  getVault(configDir).set(VAULT_KEY, JSON.stringify(tokens), 'xai-oauth:save');
+function saveTokens(configDir: string, tokens: XAITokens, accountId?: string): void {
+  getVault(configDir).set(accountVaultKey(accountId), JSON.stringify(tokens), 'xai-oauth:save');
   log.security('[xai-oauth] Tokens saved to vault');
   try {
     require('../extensions/xai-extension-adapter').refreshXAITools();
   } catch {}
 }
 
-export function loadXAITokens(configDir: string): XAITokens | null {
-  const secret = getVault(configDir).get(VAULT_KEY, 'xai-oauth:load');
+export function loadXAITokens(configDir: string, accountId?: string): XAITokens | null {
+  const secret = getVault(configDir).get(accountVaultKey(accountId), 'xai-oauth:load');
   if (!secret) return null;
   try {
     const tokens = JSON.parse(secret.expose()) as XAITokens;
@@ -115,20 +119,20 @@ export function loadXAITokens(configDir: string): XAITokens | null {
   }
 }
 
-export function clearXAITokens(configDir: string): void {
-  getVault(configDir).delete(VAULT_KEY, 'xai-oauth:clear');
+export function clearXAITokens(configDir: string, accountId?: string): void {
+  getVault(configDir).delete(accountVaultKey(accountId), 'xai-oauth:clear');
   log.security('[xai-oauth] Tokens cleared from vault');
   try {
     require('../extensions/xai-extension-adapter').refreshXAITools();
   } catch {}
 }
 
-export function isXAIConnected(configDir: string): boolean {
-  return loadXAITokens(configDir) !== null;
+export function isXAIConnected(configDir: string, accountId?: string): boolean {
+  return loadXAITokens(configDir, accountId) !== null;
 }
 
-export async function refreshXAITokens(configDir: string): Promise<XAITokens> {
-  const existing = loadXAITokens(configDir);
+export async function refreshXAITokens(configDir: string, accountId?: string): Promise<XAITokens> {
+  const existing = loadXAITokens(configDir, accountId);
   if (!existing?.refresh_token) throw new Error('No xAI refresh token; reconnect xAI OAuth.');
   const tokenEndpoint = validateXaiEndpoint(existing.token_endpoint || (await discovery()).token_endpoint, 'token_endpoint');
   const res = await fetch(tokenEndpoint, {
@@ -146,7 +150,7 @@ export async function refreshXAITokens(configDir: string): Promise<XAITokens> {
     if (res.status === 400 || res.status === 401) {
       // Refresh token has expired or been revoked — clear stale session so UI
       // shows disconnected rather than a forever-broken "connected" state.
-      clearXAITokens(configDir);
+      clearXAITokens(configDir, accountId);
       throw new Error(`xAI OAuth session expired (${res.status}). Please reconnect xAI in Settings → Models.`);
     }
     throw new Error(`xAI token refresh failed (${res.status}): ${text.slice(0, 300)}`);
@@ -163,12 +167,12 @@ export async function refreshXAITokens(configDir: string): Promise<XAITokens> {
     expires_at: Date.now() + Number(data.expires_in || 3600) * 1000,
     refresh_token_expires_at: rtExpiresIn > 0 ? Date.now() + rtExpiresIn * 1000 : existing.refresh_token_expires_at,
   };
-  saveTokens(configDir, tokens);
+  saveTokens(configDir, tokens, accountId);
   return tokens;
 }
 
-export async function getValidXAIToken(configDir: string): Promise<string> {
-  let tokens = loadXAITokens(configDir);
+export async function getValidXAIToken(configDir: string, accountId?: string): Promise<string> {
+  let tokens = loadXAITokens(configDir, accountId);
   if (!tokens) throw new Error('xAI OAuth is not connected. Connect xAI in Settings -> Models.');
   const expiresAt = Number(tokens.expires_at || 0);
   const refreshExpiresAt = Number(tokens.refresh_token_expires_at || 0);
@@ -178,14 +182,14 @@ export async function getValidXAIToken(configDir: string): Promise<string> {
     ? Date.now() > expiresAt - 2 * 60 * 1000
     : accessTokenIsExpiring(tokens.access_token, 2 * 60 * 1000);
   if (accessTokenNearExpiry || refreshTokenNearExpiry) {
-    tokens = await refreshXAITokens(configDir);
+    tokens = await refreshXAITokens(configDir, accountId);
   }
   return tokens.access_token;
 }
 
-export async function getValidXAIRuntimeCredentials(configDir: string): Promise<XAIRuntimeCredentials> {
-  const apiKey = await getValidXAIToken(configDir);
-  const tokens = loadXAITokens(configDir);
+export async function getValidXAIRuntimeCredentials(configDir: string, accountId?: string): Promise<XAIRuntimeCredentials> {
+  const apiKey = await getValidXAIToken(configDir, accountId);
+  const tokens = loadXAITokens(configDir, accountId);
   return {
     provider: 'xai-oauth',
     auth_mode: 'oauth_pkce',
@@ -223,10 +227,10 @@ async function exchangeAuthorizationCode(configDir: string, code: string, redire
     base_url: DEFAULT_BASE_URL,
     expires_at: Date.now() + Number(data.expires_in || 3600) * 1000,
     refresh_token_expires_at: rtExpiresIn > 0 ? Date.now() + rtExpiresIn * 1000 : undefined,
-  });
+  }, flow.accountId);
 }
 
-export async function completeXAIOAuthWithCode(configDir: string, code: string): Promise<{ success: boolean; error?: string }> {
+export async function completeXAIOAuthWithCode(configDir: string, code: string, accountId?: string): Promise<{ success: boolean; error?: string; accountId?: string }> {
   const flow = _activeFlow;
   if (!flow || Date.now() - flow.createdAt > 10 * 60 * 1000) {
     return { success: false, error: 'No active xAI OAuth flow. Click Connect again, then paste the code from the browser page.' };
@@ -234,10 +238,12 @@ export async function completeXAIOAuthWithCode(configDir: string, code: string):
   const trimmed = String(code || '').trim();
   if (!trimmed) return { success: false, error: 'Paste the code shown by xAI.' };
   try {
+    if (accountId && !flow.accountId) flow.accountId = accountId;
     await exchangeAuthorizationCode(configDir, trimmed, CALLBACK_URL, flow);
+    const completedAccountId = flow.accountId;
     _activeFlow = null;
-    _bgResult = { done: true, success: true };
-    return { success: true };
+    _bgResult = { done: true, success: true, accountId: completedAccountId };
+    return { success: true, accountId: completedAccountId };
   } catch (err: any) {
     const error = String(err?.message || err);
     _bgResult = { done: true, success: false, error };
@@ -252,7 +258,7 @@ function openBrowser(url: string) {
   exec(cmd, () => {});
 }
 
-export async function startXAIOAuthFlowBackground(configDir: string): Promise<{ authUrl: string } | { error: string }> {
+export async function startXAIOAuthFlowBackground(configDir: string, accountId?: string): Promise<{ authUrl: string } | { error: string }> {
   if (_activeFlow && Date.now() - _activeFlow.createdAt < 10 * 60 * 1000) {
     _bgResult = { done: false };
     return { authUrl: _activeFlow.authUrl };
@@ -275,7 +281,8 @@ export async function startXAIOAuthFlowBackground(configDir: string): Promise<{ 
     referrer: 'prometheus',
   });
   const authUrl = `${endpoints.authorization_endpoint}?${params.toString()}`;
-  _activeFlow = { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint };
+  const account = String(accountId || '').trim() || undefined;
+  _activeFlow = { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint, accountId: account };
   _bgResult = { done: false };
 
   const server = http.createServer(async (req, res) => {
@@ -296,11 +303,11 @@ export async function startXAIOAuthFlowBackground(configDir: string): Promise<{ 
     if (returnedState !== state) return fail('State mismatch; restart xAI login.');
 
     try {
-      await exchangeAuthorizationCode(configDir, code, CALLBACK_URL, { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint });
+      await exchangeAuthorizationCode(configDir, code, CALLBACK_URL, { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint, accountId: account });
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>Connected to Prometheus xAI OAuth</h2><p>You can close this window.</p></body></html>');
       server.close(); _activeFlow = null;
-      _bgResult = { done: true, success: true };
+      _bgResult = { done: true, success: true, accountId: account };
     } catch (err: any) {
       fail(String(err?.message || err));
     }

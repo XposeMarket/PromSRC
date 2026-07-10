@@ -27,11 +27,11 @@ const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PERPLEXITY_MODEL = 'sonar-pro';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-pro';
 
-function getProviderConfig(): { active: ProviderID; providers: any } {
+function getProviderConfig(): { active: ProviderID; providers: any; accountId?: string } {
   const raw = getConfig().getConfig() as any;
 
   if (raw.llm?.provider) {
-    return { active: raw.llm.provider, providers: raw.llm.providers || {} };
+    return { active: raw.llm.provider, providers: raw.llm.providers || {}, accountId: raw.llm.accountId };
   }
 
   return {
@@ -57,6 +57,41 @@ function getProviderSettings(id: string, providers: any): Record<string, unknown
   };
 }
 
+function readAccountId(id: string, providers: any, requestedAccountId?: string): string {
+  const providerCfg = providers?.[id];
+  const accounts = providerCfg?.accounts && typeof providerCfg.accounts === 'object' && !Array.isArray(providerCfg.accounts)
+    ? providerCfg.accounts
+    : {};
+  const requested = String(requestedAccountId || '').trim();
+  if (requested && accounts[requested]) return requested;
+  const providerDefault = String(providerCfg?.defaultAccountId || '').trim();
+  if (providerDefault && accounts[providerDefault]) return providerDefault;
+  const first = Object.keys(accounts).find(key => accounts[key] && typeof accounts[key] === 'object');
+  return first || requested || '';
+}
+
+function getProviderAccountSettings(id: string, providers: any, requestedAccountId?: string): { cfg: Record<string, unknown>; accountId?: string } {
+  const base = getProviderSettings(id, providers);
+  const providerCfg = providers?.[id] && typeof providers[id] === 'object' && !Array.isArray(providers[id])
+    ? providers[id]
+    : {};
+  const accountId = readAccountId(id, providers, requestedAccountId);
+  const accounts = providerCfg?.accounts && typeof providerCfg.accounts === 'object' && !Array.isArray(providerCfg.accounts)
+    ? providerCfg.accounts
+    : {};
+  const accountCfg = accountId && accounts[accountId] && typeof accounts[accountId] === 'object' && !Array.isArray(accounts[accountId])
+    ? accounts[accountId]
+    : {};
+  const { accounts: _accounts, defaultAccountId: _defaultAccountId, ...providerNoAccounts } = providerCfg;
+  const cfg = {
+    ...getProviderDefaultConfig(id),
+    ...providerNoAccounts,
+    ...accountCfg,
+  };
+  void base;
+  return { cfg, accountId: accountId || undefined };
+}
+
 function getProviderDisplayName(id: string): string {
   return getProviderDescriptor(id)?.name || id;
 }
@@ -75,12 +110,14 @@ function requireApiKey(id: string, cfg: Record<string, unknown>): string {
 }
 
 let cachedProvider: LLMProvider | null = null;
-let cachedProviderId: ProviderID | null = null;
+let cachedProviderKey: string | null = null;
 
 export function getProvider(): LLMProvider {
-  const { active, providers } = getProviderConfig();
+  const { active, providers, accountId } = getProviderConfig();
+  const selectedAccountId = readAccountId(active, providers, accountId);
+  const cacheKey = `${active}:${selectedAccountId || ''}`;
 
-  if (cachedProvider && cachedProviderId === active) {
+  if (cachedProvider && cachedProviderKey === cacheKey) {
     if (active === 'ollama' && cachedProvider instanceof OllamaAdapter) {
       const cfg = getProviderSettings('ollama', providers);
       cachedProvider.updateEndpoint(readStringSetting(cfg, 'endpoint') || 'http://localhost:11434');
@@ -88,36 +125,36 @@ export function getProvider(): LLMProvider {
     return cachedProvider;
   }
 
-  cachedProviderId = active;
-  cachedProvider = buildProvider(active, providers);
+  cachedProviderKey = cacheKey;
+  cachedProvider = buildProvider(active, providers, selectedAccountId);
   return cachedProvider;
 }
 
 export function resetProvider(): void {
   cachedProvider = null;
-  cachedProviderId = null;
+  cachedProviderKey = null;
 }
 
-export function buildProviderById(providerId: string): LLMProvider {
+export function buildProviderById(providerId: string, accountId?: string): LLMProvider {
   const raw = getConfig().getConfig() as any;
   const providers = raw.llm?.providers || {};
-  return buildProvider(providerId, providers);
+  return buildProvider(providerId, providers, accountId);
 }
 
 export function buildProviderForLLM(llm: any): LLMProvider {
   const active = String(llm?.provider || 'ollama');
   const providers = llm?.providers || {};
-  return buildProvider(active, providers);
+  return buildProvider(active, providers, llm?.accountId);
 }
 
-function buildProvider(id: ProviderID, providers: any): LLMProvider {
+function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMProvider {
   const descriptor = getProviderDescriptor(id);
   if (!descriptor) {
     log.warn(`[Provider] Unknown provider "${id}", falling back to Ollama`);
     return new OllamaAdapter('http://localhost:11434');
   }
 
-  const cfg = getProviderSettings(id, providers);
+  const { cfg, accountId: resolvedAccountId } = getProviderAccountSettings(id, providers, accountId);
   const runtime = getProviderRuntimeOptions(id);
 
   switch (descriptor.runtime.binding) {
@@ -132,7 +169,7 @@ function buildProvider(id: ProviderID, providers: any): LLMProvider {
         : {};
       const explicitAuthMode = readStringSetting(rawProviderCfg, 'auth_mode');
       const authMode = explicitAuthMode || readStringSetting(cfg, 'auth_mode') || 'api_key';
-      const useXaiOAuth = id === 'xai' && (authMode === 'oauth' || (!explicitAuthMode && isXAIConnected(getConfigDir())));
+      const useXaiOAuth = id === 'xai' && (authMode === 'oauth' || (!explicitAuthMode && isXAIConnected(getConfigDir(), resolvedAccountId)));
       const apiKey = useXaiOAuth
         ? undefined
         : authType === 'api_key'
@@ -142,7 +179,7 @@ function buildProvider(id: ProviderID, providers: any): LLMProvider {
       return new OpenAICompatAdapter({
         endpoint,
         apiKey,
-        getToken: useXaiOAuth ? () => getValidXAIToken(getConfigDir()) : undefined,
+        getToken: useXaiOAuth ? () => getValidXAIToken(getConfigDir(), resolvedAccountId) : undefined,
         providerId: id,
         chatCompletionsPath: runtime.chatCompletionsPath,
         modelsPath: runtime.modelsPath,
@@ -154,12 +191,12 @@ function buildProvider(id: ProviderID, providers: any): LLMProvider {
     }
 
     case 'providers/openai-codex-adapter': {
-      return new OpenAICodexAdapter(getConfigDir());
+      return new OpenAICodexAdapter({ configDir: getConfigDir(), accountId: resolvedAccountId });
     }
 
     case 'providers/anthropic-adapter': {
       if (id === 'anthropic') {
-        return new AnthropicAdapter(getConfigDir());
+        return new AnthropicAdapter({ configDir: getConfigDir(), accountId: resolvedAccountId });
       }
       return new AnthropicAdapter({
         providerId: id,

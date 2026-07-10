@@ -1,0 +1,12 @@
+{
+  "skillId": "voice-browser-desktop-smoke-test",
+  "reason": "resource-write",
+  "createdAt": "2026-07-09T04:48:35.668Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\voice-browser-desktop-smoke-test",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "acf4eb26a2371d4a"
+}

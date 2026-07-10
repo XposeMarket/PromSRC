@@ -136,20 +136,27 @@ export const CODEX_EFFORT_MAP: Record<string, string> = {
   high: 'high',
   extra_high: 'xhigh',
   xhigh: 'xhigh',
-  max: 'xhigh',
+  ultra: 'ultra',
+  max: 'max',
 };
 
 export class OpenAICodexAdapter implements LLMProvider {
   readonly id = 'openai_codex' as const;
   private configDir: string;
+  private accountId?: string;
 
-  constructor(configDir: string) {
-    this.configDir = configDir;
+  constructor(config: string | { configDir: string; accountId?: string }) {
+    if (typeof config === 'string') {
+      this.configDir = config;
+      return;
+    }
+    this.configDir = config.configDir;
+    this.accountId = String(config.accountId || '').trim() || undefined;
   }
 
   private async getHeaders(): Promise<Record<string, string>> {
-    const token = await getValidToken(this.configDir);
-    const tokens = loadTokens(this.configDir);
+    const token = await getValidToken(this.configDir, this.accountId);
+    const tokens = loadTokens(this.configDir, this.accountId);
     const accountId = tokens?.account_id || '';
 
     const headers: Record<string, string> = {

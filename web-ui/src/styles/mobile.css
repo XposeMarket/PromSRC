@@ -235,6 +235,21 @@ body.pm-mobile-active {
   text-size-adjust: 100%;
   overscroll-behavior: none;
 }
+/* Safari composites the document backdrop, not a nested fixed app root, into
+   the translucent area behind its top chrome. Keep a root-owned fixed backdrop
+   behind the mobile shell, matching the simple structure used by NebulaX. */
+html:has(body.pm-mobile-active) {
+  min-height: 100%;
+  background: var(--pm-bg) !important;
+}
+body.pm-mobile-active::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--pm-bg);
+}
 :root[data-theme="dark"] body.pm-mobile-active,
 :root[data-skin="blue"] body.pm-mobile-active,
 :root[data-skin="purple"] body.pm-mobile-active {
@@ -279,12 +294,62 @@ body.pm-mobile-active select {
 /* Lock desktop scroll behind mobile */
 body.pm-mobile-active { overflow: hidden; }
 
+/* Use Safari's document scroller on mobile. This lets moving page content
+   participate in Safari's translucent top-chrome composition; a fixed,
+   overflow-hidden app with a nested scroller cannot cross that boundary. */
+body.pm-mobile-active.pm-mobile-document-scroll {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+body.pm-mobile-active.pm-mobile-document-scroll #mobile-root {
+  display: block;
+  width: 100%;
+  min-height: 100dvh;
+}
+body.pm-mobile-active.pm-mobile-document-scroll .pm-app {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  min-height: 100dvh;
+  overflow: visible;
+  transform: none;
+  will-change: auto;
+}
+body.pm-mobile-active.pm-mobile-document-scroll .pm-page {
+  min-height: 100dvh !important;
+}
+body.pm-mobile-active.pm-mobile-document-scroll .pm-body {
+  overflow-y: visible;
+  -webkit-overflow-scrolling: auto;
+}
+body.pm-mobile-active.pm-mobile-document-scroll .pm-header,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-tabbar,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-composer,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-mobile-goal-strip,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-chat-connection-status,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-mobile-queued-prompts,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-background-spawn-dock,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-ctx-chip,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-ctx-popover {
+  position: fixed;
+}
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
+  transform: translate3d(min(72vw, 330px), 0, 0) scale(.986);
+  will-change: transform, border-radius;
+}
+
 /* Installed PWA: with apple-mobile-web-app-status-bar-style=black-translucent
    the web view renders *behind* the iOS status bar, so the area behind it shows
    the page itself. Paint the root dark so there is never a white strip at the
    very top (and the safe-area shows the app, not the page background). */
 @media (display-mode: standalone) {
-  html, body { background-color: #101112; }
+  html, body { background-color: var(--pm-bg); }
   body.pm-mobile-active { background-color: var(--pm-bg); }
 }
 
@@ -520,9 +585,9 @@ body.pm-model-badge-pressing * {
 /* ── Model badge popover (reasoning + provider/model switch) ──────────────── */
 .pm-msheet-scrim {
   position: fixed; inset: 0;
-  background: rgba(7, 10, 14, 0.14);
-  -webkit-backdrop-filter: blur(3px) brightness(0.95);
-  backdrop-filter: blur(3px) brightness(0.95);
+  background: rgba(7, 10, 14, 0.18);
+  -webkit-backdrop-filter: blur(8px) saturate(1.05) brightness(0.92);
+  backdrop-filter: blur(8px) saturate(1.05) brightness(0.92);
   opacity: 0; transition: opacity .18s ease;
   z-index: 10000;
 }
@@ -539,19 +604,16 @@ body.pm-model-badge-pressing * {
   padding: 14px;
   border-radius: 28px;
   background:
-    linear-gradient(to bottom,
-      rgba(255,255,255,.14) 0%, rgba(255,255,255,.025) 18%,
-      transparent 42%, transparent 72%,
-      rgba(255,255,255,.045) 90%, rgba(255,255,255,.10) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.075), rgba(255,255,255,.025) 58%, rgba(234,106,31,.04));
-  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+    linear-gradient(180deg, rgba(255, 255, 255, .88), rgba(250, 247, 241, .76)),
+    linear-gradient(135deg, rgba(255, 255, 255, .62), rgba(255, 247, 235, .46) 58%, rgba(234, 106, 31, .08));
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,.42);
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.30),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.14),
-    0 18px 60px rgba(0,0,0,.32),
-    0 1px 4px rgba(0,0,0,.16);
-  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
-  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
+    inset 0 1px 0 rgba(255,255,255,.62),
+    inset 0 -1px 0 rgba(255,255,255,.22),
+    0 18px 58px rgba(35, 24, 14, .22),
+    0 2px 10px rgba(35, 24, 14, .10);
+  backdrop-filter: blur(22px) saturate(1.55) brightness(1.04);
+  -webkit-backdrop-filter: blur(22px) saturate(1.55) brightness(1.04);
   opacity: 0;
   transform: translateY(-8px) scale(.97);
   transform-origin: top center;
@@ -588,19 +650,17 @@ body.pm-model-badge-pressing * {
   margin: 6px 0 0; text-align: center;
 }
 :root[data-theme="dark"] .pm-msheet {
-  border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
+  border-color: rgba(255,255,255,.16);
   background:
-    linear-gradient(to bottom,
-      rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 18%,
-      transparent 42%, transparent 72%,
-      rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 58%, rgba(234,106,31,.05));
+    linear-gradient(180deg, rgba(39, 39, 42, .88), rgba(22, 22, 24, .78)),
+    linear-gradient(135deg, rgba(255,255,255,.13), rgba(255,255,255,.055) 58%, rgba(234,106,31,.08));
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.18),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.09),
-    0 18px 60px rgba(0,0,0,.38),
-    0 1px 4px rgba(0,0,0,.16);
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 -1px 0 rgba(255,255,255,.06),
+    0 20px 64px rgba(0,0,0,.46),
+    0 2px 10px rgba(0,0,0,.22);
 }
+
 .pm-msheet-handle {
   display: none;
 }
@@ -692,6 +752,319 @@ body.pm-model-badge-pressing * {
   font-size: 14px; font-weight: 500;
 }
 .pm-msheet-toggle-hint { font-size: 11px; font-weight: 500; color: var(--pm-muted); }
+
+/* Voice-mode-style reasoning/model takeover: centered controls obscure the lower third of chat. */
+.pm-msheet-scrim.is-reasoning,
+.pm-msheet-scrim.is-model-switch {
+  background:
+    linear-gradient(180deg,
+      rgba(7, 10, 14, 0) 0%,
+      rgba(7, 10, 14, .12) 36%,
+      rgba(7, 10, 14, .62) 68%,
+      rgba(7, 10, 14, .88) 100%);
+  -webkit-backdrop-filter: blur(9px) saturate(1.06) brightness(.74);
+  backdrop-filter: blur(9px) saturate(1.06) brightness(.74);
+}
+.pm-msheet.is-reasoning,
+.pm-msheet.is-model-switch {
+  left: 0 !important;
+  right: 0 !important;
+  top: auto !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box;
+  transform: translateY(100%);
+  transform-origin: bottom center;
+}
+.pm-msheet.is-reasoning.open,
+.pm-msheet.is-model-switch.open { transform: translateY(0); }
+
+.pm-msheet.is-reasoning {
+  height: 280px;
+  max-height: 38dvh;
+  padding: 24px 26px calc(28px + env(safe-area-inset-bottom));
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  justify-content: center;
+}
+.pm-msheet.is-reasoning .pm-msheet-head,
+.pm-msheet.is-reasoning .pm-msheet-handle { display: none; }
+.pm-msheet.is-reasoning .pm-msheet-body {
+  width: min(100%, 520px);
+  margin: 0 auto;
+  padding: 0;
+  overflow: visible;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.pm-msheet.is-reasoning .pm-msheet-loading { padding: 0; }
+.pm-msheet.is-reasoning .pm-reasoning-summary { margin-bottom: 24px; }
+.pm-msheet.is-reasoning .pm-reasoning-control { width: 100%; }
+
+.pm-reasoning-summary {
+  appearance: none;
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--pm-text);
+  font-family: inherit;
+  font-size: 28px;
+  line-height: 1.04;
+  font-weight: 840;
+  letter-spacing: 0;
+  text-shadow: 0 3px 18px rgba(0,0,0,.54), 0 1px 0 rgba(255,255,255,.06);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.pm-reasoning-summary strong,
+#pm-reasoning-live-label { font: inherit; }
+.pm-reasoning-summary strong {
+  max-width: 66%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-reasoning-summary-chev {
+  margin-left: 0;
+  color: color-mix(in srgb, var(--pm-text) 76%, transparent);
+  font-size: 35px;
+  line-height: 1;
+  transform: translateY(-2px);
+}
+.pm-reasoning-summary:active { opacity: .74; }
+
+.pm-reasoning-control {
+  --pm-range-progress: calc(var(--pm-reasoning-index) * 100% / var(--pm-reasoning-steps));
+  position: relative;
+  margin: 0;
+  padding: 0;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-reasoning-track {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
+  gap: 0;
+  height: 64px;
+  padding: 7px;
+  border-radius: 999px;
+  background: rgba(92,92,92,.62);
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow:
+    inset 0 1px 2px rgba(255,255,255,.18),
+    inset 0 -16px 28px rgba(0,0,0,.22),
+    0 18px 58px rgba(0,0,0,.36),
+    0 0 42px rgba(255,255,255,.12);
+  overflow: hidden;
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  backdrop-filter: blur(22px) saturate(1.35);
+}
+.pm-reasoning-fill {
+  position: absolute;
+  z-index: 1;
+  left: 7px;
+  top: 7px;
+  bottom: 7px;
+  width: var(--pm-reasoning-fill-width, calc((100% - 14px) / (var(--pm-reasoning-steps) + 1)));
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7f7f7 100%);
+  box-shadow:
+    0 7px 20px rgba(0,0,0,.28),
+    inset 0 1px 1px rgba(255,255,255,.85),
+    inset 0 -2px 4px rgba(0,0,0,.08);
+  transition: width .16s cubic-bezier(.2,.9,.2,1);
+  pointer-events: none;
+}
+.pm-reasoning-fill::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 50px;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fff 0%, #f8f8f8 100%);
+  box-shadow:
+    0 7px 20px rgba(0,0,0,.25),
+    inset 0 1px 1px rgba(255,255,255,.9),
+    inset 0 -2px 4px rgba(0,0,0,.08);
+}
+.pm-reasoning-control.is-dragging .pm-reasoning-fill { transition: none; }
+.pm-reasoning-segment {
+  appearance: none;
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: transparent;
+  font-size: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.pm-reasoning-segment span { display: none; }
+.pm-reasoning-segment::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255,255,255,.32);
+  box-shadow: 0 1px 3px rgba(0,0,0,.26);
+}
+.pm-reasoning-segment.is-active::after,
+.pm-reasoning-segment.is-filled::after {
+  opacity: 0;
+}
+
+.pm-msheet.is-model-switch {
+  height: auto;
+  min-height: 0;
+  max-height: min(48dvh, 430px);
+  padding: 10px 22px calc(20px + env(safe-area-inset-bottom));
+  border: 1px solid rgba(255,255,255,.13) !important;
+  border-bottom: 0 !important;
+  border-radius: 30px 30px 0 0 !important;
+  background:
+    linear-gradient(180deg, rgba(55, 55, 58, .74), rgba(25, 25, 27, .82)),
+    linear-gradient(135deg, rgba(255,255,255,.15), rgba(255,255,255,.04)) !important;
+  box-shadow: 0 -22px 70px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,255,255,.14) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(1.45) brightness(.92) !important;
+  backdrop-filter: blur(30px) saturate(1.45) brightness(.92) !important;
+  justify-content: flex-start;
+  color: #fff;
+}
+.pm-msheet.is-model-switch .pm-msheet-body {
+  width: min(100%, 560px);
+  margin: 0 auto;
+  padding-bottom: 4px;
+  overflow-y: auto;
+  max-height: calc(min(48dvh, 430px) - 94px - env(safe-area-inset-bottom));
+}
+.pm-msheet.is-model-switch .pm-msheet-head {
+  width: min(100%, 560px);
+  margin-left: auto;
+  margin-right: auto;
+  justify-content: center;
+  min-height: 44px;
+  margin-bottom: 8px;
+  position: relative;
+}
+.pm-msheet.is-model-switch .pm-msheet-handle {
+  display: block;
+  width: 78px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  margin: 0 auto 12px;
+  background: rgba(255,255,255,.38);
+}
+.pm-msheet.is-model-switch .pm-msheet-title {
+  justify-content: center;
+  font-size: 21px;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.pm-msheet.is-model-switch .pm-msheet-close {
+  display: none;
+}
+.pm-msheet.is-model-switch .pm-msheet-back {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(255,255,255,.84);
+  font-size: 30px;
+  padding: 8px 14px 8px 0;
+}
+.pm-advanced-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 28px;
+  background: rgba(255,255,255,.075);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.10),
+    inset 0 -1px 0 rgba(0,0,0,.12);
+}
+.pm-advanced-row {
+  appearance: none;
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) minmax(0, auto) 18px;
+  align-items: center;
+  width: 100%;
+  min-height: 58px;
+  padding: 0 20px 0 26px;
+  border: 0;
+  border-bottom: 1px solid rgba(255,255,255,.10);
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-advanced-row:last-child {
+  border-bottom: 0;
+}
+.pm-advanced-row:active {
+  background: rgba(255,255,255,.08);
+}
+.pm-advanced-row:disabled {
+  opacity: .52;
+}
+.pm-advanced-row-label {
+  min-width: 0;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.pm-advanced-row-value {
+  min-width: 0;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 21px;
+  font-weight: 620;
+  color: rgba(255,255,255,.86);
+}
+.pm-advanced-row-chev {
+  color: rgba(255,255,255,.74);
+  font-size: 19px;
+  line-height: 1;
+  text-align: right;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-reasoning-fill { transition-duration: .01ms !important; }
+}
+
+
+
+
 
 /* Button haptic host — a native iOS switch overlay sits on top of the wrapped
    button so the physical tap emits a system haptic; the wrapper shrink-wraps the
@@ -3150,6 +3523,23 @@ body.pm-model-badge-pressing * {
   overflow-wrap: break-word;
   letter-spacing: 0;
 }
+.pm-msg.from-ai .pm-live-trace,
+.pm-msg.from-ai .pm-live-prose,
+.pm-msg.from-ai .pm-live-md {
+  color: color-mix(in srgb, var(--pm-text) 82%, var(--pm-muted));
+  font-size: clamp(14px, calc(0.92 * var(--pm-chat-reading-size)), 16px);
+  font-weight: 380;
+  line-height: 1.38;
+}
+.pm-msg.from-ai .pm-live-trace .pm-live-text,
+.pm-msg.from-ai .pm-live-trace .pm-live-segment,
+.pm-msg.from-ai .pm-live-prose p,
+.pm-msg.from-ai .pm-live-md p {
+  color: inherit;
+  font-size: 1em;
+  font-weight: 380;
+  line-height: 1.38;
+}
 .pm-msg.from-ai .pm-time {
   text-align: left;
   margin-top: 8px;
@@ -3313,6 +3703,19 @@ body.pm-model-badge-pressing * {
 .pm-msg.from-ai .pm-live-md h3,
 .pm-msg.from-ai .markdown-body h4,
 .pm-msg.from-ai .pm-live-md h4 { font-size: 1em; }
+.pm-msg.from-ai .pm-live-md h1,
+.pm-msg.from-ai .pm-live-md h2,
+.pm-msg.from-ai .pm-live-md h3,
+.pm-msg.from-ai .pm-live-md h4 {
+  margin: 14px 0 7px;
+  color: color-mix(in srgb, var(--pm-text) 88%, var(--pm-muted));
+  font-weight: 620;
+  line-height: 1.22;
+}
+.pm-msg.from-ai .pm-live-md h1 { font-size: 1.05em; }
+.pm-msg.from-ai .pm-live-md h2 { font-size: 1em; }
+.pm-msg.from-ai .pm-live-md h3,
+.pm-msg.from-ai .pm-live-md h4 { font-size: 0.96em; }
 .pm-msg.from-ai .markdown-body ul,
 .pm-msg.from-ai .markdown-body ol,
 .pm-msg.from-ai .pm-live-md ul,
@@ -3338,6 +3741,10 @@ body.pm-model-badge-pressing * {
 .pm-msg.from-ai .pm-live-md strong {
   color: #ffffff;
   font-weight: 750;
+}
+.pm-msg.from-ai .pm-live-md strong {
+  color: color-mix(in srgb, var(--pm-text) 92%, var(--pm-muted));
+  font-weight: 620;
 }
 .pm-msg.from-ai .markdown-body code,
 .pm-msg.from-ai .pm-live-md code {
@@ -11061,14 +11468,10 @@ body.pm-mobile-active #settings-save-btn {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
   border: none;
   outline: none;
-  border-radius: 10px;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.01) 52%, rgba(234,106,31,.018));
-  backdrop-filter: blur(var(--pm-lg-header-blur, 1.5px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
-  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 1.5px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  border-radius: 0;
+  background: transparent;
   color: var(--pm-text);
   font: inherit;
   font-size: 14px;
@@ -11079,34 +11482,22 @@ body.pm-mobile-active #settings-save-btn {
   padding: 10px 12px;
   cursor: pointer;
   position: relative;
-  overflow: hidden;
-}
-
-.pm-chat-settings-menu-item::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 10px;
-  pointer-events: none;
-  border: none;
-  mix-blend-mode: soft-light;
-  opacity: 0;
+  text-align: left;
 }
 
 .pm-chat-settings-menu-item:not(:last-child) {
-  margin-bottom: 6px;
+  margin-bottom: 2px;
 }
 
 .pm-chat-settings-menu-item:active,
 .pm-chat-settings-menu-item:hover {
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.03) 52%, rgba(234,106,31,.03));
+  background: rgba(255,255,255,.045);
 }
 
 .pm-chat-settings-menu-item:focus-visible {
-  outline: none;
+  outline: 1px solid rgba(255,255,255,.28);
+  outline-offset: -2px;
 }
-
 @keyframes pm-chat-settings-popover {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }

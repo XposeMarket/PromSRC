@@ -1,0 +1,26 @@
+{
+  "run_id": "hermes_2026-07-09_desktop_basic_v1",
+  "agent": "hermes",
+  "benchmark_id": "desktop_basic_v1",
+  "measurement_mode": "black_box_cli_with_internal_telemetry",
+  "status": "pass",
+  "blocked_reason": null,
+  "total_wall_ms": 67691,
+  "exit_code": 0,
+  "model_calls": 7,
+  "model_latency_ms": 47743,
+  "tool_calls": 8,
+  "tool_latency_ms": 6819,
+  "tool_errors": 0,
+  "retries": null,
+  "tokens_input": 242118,
+  "tokens_output": 1541,
+  "estimated_cost_usd": null,
+  "artifacts": [
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/desktop_basic_v1/stdout.txt",
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/desktop_basic_v1/stderr.txt",
+    "benchmarks/agent-comparison/runs/2026-07-09/hermes/desktop_basic_v1/events.jsonl"
+  ],
+  "final_output": "\u250a review diff\n\u001b[38;2;218;165;32ma/benchmarks\\agent-comparison\\fixtures\\desktop_basic_v1\\report.md \u2192 b/benchmarks\\agent-comparison\\fixtures\\desktop_basic_v1\\report.md\u001b[0m\n\u001b[38;2;139;134;130m@@ -0,0 +1,9 @@\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+# Desktop Basic V1 Report\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Desktop automation used: Windows host desktop APIs via PowerShell/.NET (`System.Windows.Forms.SystemInformation.VirtualScreen`, `System.Drawing.Graphics.CopyFromScreen`) and process/window enumeration (`Get-Process` with `MainWindowHandle`).\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Fresh screenshot captured: `benchmarks/agent-comparison/fixtures/desktop_basic_v1/desktop_screenshot.png`.\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Screenshot evidence: virtual desktop size 3440x1440; saved PNG size verified as 4,212,968 bytes.\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Window/app observation: active window list captured to `benchmarks/agent-comparison/fixtures/desktop_basic_v1/windows.json`.\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Observed windows/apps: 6 windows, including Chrome (`New Tab - Google Chrome`), Codex (`Codex`), Microsoft Edge (`Prometheus - Personal - Microsoft Edge`), Notepad (`SKILL.md - Notepad`), Snipping Tool (`Snipping Tool`), and Windows Terminal (`C:\\WINDOWS\\system32\\cmd.exe`).\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Harmless verification action performed: listed existing top-level windows only. No text was typed, no windows were closed, no submissions were made, and no user data was modified.\u001b[0m\n\u001b[38;2;255;255;255;48;2;19;87;20m+- Result: desktop_observed=true.\u001b[0m\nDESKTOP_BASIC_V1_PASS: desktop_observed=true\n\nsession_id: 20260709_090939_5fba47",
+  "notes": "Hermes run via Python/PowerShell wrapper; internal telemetry enabled by HERMES_TELEMETRY_PATH."
+}

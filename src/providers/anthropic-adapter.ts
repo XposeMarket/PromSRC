@@ -57,16 +57,24 @@ export interface AnthropicDirectConfig {
 export class AnthropicAdapter implements LLMProvider {
   readonly id: string;
   private configDir?: string;
+  private accountId?: string;
   private directConfig?: AnthropicDirectConfig;
 
-  constructor(config: string | AnthropicDirectConfig) {
+  constructor(config: string | (AnthropicDirectConfig & { accountId?: string }) | { configDir: string; accountId?: string }) {
     if (typeof config === 'string') {
       this.id = 'anthropic';
       this.configDir = config;
       return;
     }
+    if ('configDir' in config) {
+      this.id = 'anthropic';
+      this.configDir = config.configDir;
+      this.accountId = String(config.accountId || '').trim() || undefined;
+      return;
+    }
     this.id = config.providerId;
     this.directConfig = config;
+    this.accountId = String(config.accountId || '').trim() || undefined;
   }
 
   private isAdaptiveThinkingCapableModel(model: string): boolean {
@@ -561,7 +569,7 @@ export class AnthropicAdapter implements LLMProvider {
   private buildHeaders(model: string, extendedThinkingEnabled = false): Record<string, string> {
     const headers = this.directConfig
       ? this.buildDirectHeaders()
-      : buildAuthHeaders(this.configDir!);
+      : buildAuthHeaders(this.configDir!, this.accountId);
     const isThinkingGeneration = /claude-(sonnet|opus)-4-(6|7|8)/.test(model);
     if (isThinkingGeneration && extendedThinkingEnabled) {
       const existing = headers['anthropic-beta'];
@@ -638,7 +646,7 @@ export class AnthropicAdapter implements LLMProvider {
     // that may have empty system prompts. API keys don't need this.
     const isOAuth = !this.directConfig
       && this.configDir
-      && loadTokens(this.configDir)?.auth_type === 'setup_token';
+      && loadTokens(this.configDir, this.accountId)?.auth_type === 'setup_token';
     const claudeCodePreamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
 
     if (system) {
@@ -930,7 +938,7 @@ export class AnthropicAdapter implements LLMProvider {
   async testConnection(): Promise<boolean> {
     try {
       if (!this.directConfig) {
-        getValidToken(this.configDir!);
+        getValidToken(this.configDir!, this.accountId);
       }
       const headers = this.buildHeaders('claude-haiku-4-5-20251001', false);
       const response = await fetch(this.getMessagesEndpoint(), {

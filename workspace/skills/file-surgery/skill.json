@@ -109,6 +109,26 @@
       "path": "references/workspace-file-tools-not-shell.md",
       "type": "doc",
       "description": "File tool routing, grep no-match, src-edit pointer"
+    },
+    {
+      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-repos-promsrc--2026-07-08.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
+    },
+    {
+      "path": "references/recovery/recovery-note-find-replace-webui-source-failed-error-text-not-found-in-w-2026-07-08.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
+    },
+    {
+      "path": "references/recovery/recovery-note-find-replace-webui-source-failed-error-text-not-found-in-w-2026-07-09.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
+    },
+    {
+      "path": "references/recovery/recovery-note-find-replace-webui-source-failed-error-text-not-found-in-w-2026-07-10.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
     }
   ]
 }

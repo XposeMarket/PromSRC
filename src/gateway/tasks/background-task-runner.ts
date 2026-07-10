@@ -74,6 +74,7 @@ import {
   updateLiveRuntimeCheckpoint,
 } from '../live-runtime-registry';
 import { notifyTaskWebPush } from '../notifications/task-events';
+import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 const pauseRequests = new Set<string>();
@@ -2422,6 +2423,9 @@ export class BackgroundTaskRunner {
   }
 
 	  private async _deliverToChannel(task: TaskRecord, message: string, opts?: { forceTelegram?: boolean }): Promise<void> {
+    if (task.voiceDispatch?.workgroupId) {
+      updateVoiceWorkgroupWorkerStatus(task.voiceDispatch.workgroupId, task.id, task.status);
+    }
     // Sub-agent path: notify parent instead of user chat
     if (task.parentTaskId) {
       try {
@@ -2687,6 +2691,8 @@ export class BackgroundTaskRunner {
 
     let verificationText = taskResult;
     try {
+      task.verificationStatus = 'running';
+      saveTask(task);
       const verifyResult = await this.handleChat(
         verifyPrompt, verifySessionId, noOp,
         undefined, undefined, undefined,
@@ -2708,14 +2714,19 @@ export class BackgroundTaskRunner {
     // Deliver verified result to originating session
     if (task.originatingSessionId) {
       try {
-        addMessage(task.originatingSessionId, {
-          role: 'assistant',
-          content: verificationText,
-          timestamp: Date.now(),
-        } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+        if (task.suppressOriginDelivery !== true) {
+          addMessage(task.originatingSessionId, {
+            role: 'assistant',
+            content: verificationText,
+            timestamp: Date.now(),
+          } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+        }
       } catch (e) {
         console.warn('[RunOnce] addMessage to originating session failed:', e);
       }
+    }
+    if (task.voiceDispatch?.workgroupId) {
+      updateVoiceWorkgroupWorkerStatus(task.voiceDispatch.workgroupId, task.id, 'complete');
     }
 
     console.log(`[RunOnce] Task "${task.title}" (${task.id}) verified and delivered to session ${task.originatingSessionId}`);

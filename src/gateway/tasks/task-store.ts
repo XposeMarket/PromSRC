@@ -316,6 +316,15 @@ export interface TaskRecord {
   suppressOriginDelivery?: boolean;
   /** Tracks the silent verification phase for run_once tasks */
   verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
+  /** Set when this task was launched by the realtime voice worker-dispatch batch path. */
+  voiceDispatch?: {
+    workgroupId: string;
+    workerIndex: number;
+    workerTotal: number;
+    sourceTranscript?: string;
+    delivery?: 'report_each' | 'grouped_summary' | 'task_panel_only';
+    mode?: 'parallel' | 'sequential';
+  };
 
   // Ã¢â€â‚¬Ã¢â€â‚¬ Multi-agent architecture fields Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   /** true = use manager/worker split; false or undefined = legacy handleChat() mode */
@@ -358,6 +367,7 @@ export interface TaskSummary {
   scheduleId?: string;
   taskKind?: 'scheduled' | 'run_once';
   verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
+  voiceDispatch?: TaskRecord['voiceDispatch'];
   managerEnabled?: boolean;
   executorProvider?: string;
 }
@@ -509,6 +519,26 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
       || input?.verificationStatus === 'skipped'
       ? input.verificationStatus
       : undefined,
+    voiceDispatch: input?.voiceDispatch && typeof input.voiceDispatch === 'object'
+      ? {
+          workgroupId: String(input.voiceDispatch.workgroupId || '').trim(),
+          workerIndex: Number.isFinite(Number(input.voiceDispatch.workerIndex)) ? Number(input.voiceDispatch.workerIndex) : 0,
+          workerTotal: Number.isFinite(Number(input.voiceDispatch.workerTotal)) ? Number(input.voiceDispatch.workerTotal) : 1,
+          sourceTranscript: typeof input.voiceDispatch.sourceTranscript === 'string' && input.voiceDispatch.sourceTranscript.trim()
+            ? input.voiceDispatch.sourceTranscript.slice(0, 500)
+            : undefined,
+          delivery: input.voiceDispatch.delivery === 'grouped_summary' || input.voiceDispatch.delivery === 'task_panel_only'
+            ? input.voiceDispatch.delivery
+            : input.voiceDispatch.delivery === 'report_each'
+              ? 'report_each'
+              : undefined,
+          mode: input.voiceDispatch.mode === 'sequential'
+            ? 'sequential'
+            : input.voiceDispatch.mode === 'parallel'
+              ? 'parallel'
+              : undefined,
+        }
+      : undefined,
     managerEnabled: input?.managerEnabled === true,
     executorProvider: typeof input?.executorProvider === 'string' && input.executorProvider.trim()
       ? input.executorProvider.slice(0, 200)
@@ -641,6 +671,7 @@ function buildTaskSummary(task: TaskRecord): TaskSummary {
       : undefined,
     taskKind: task.taskKind,
     verificationStatus: task.verificationStatus,
+    voiceDispatch: task.voiceDispatch ? { ...task.voiceDispatch } : undefined,
     managerEnabled: task.managerEnabled === true,
     executorProvider: typeof task.executorProvider === 'string' && task.executorProvider.trim()
       ? task.executorProvider.slice(0, 200)
@@ -759,6 +790,7 @@ export function createTask(params: {
   taskKind?: 'scheduled' | 'run_once';
   originatingSessionId?: string;
   suppressOriginDelivery?: boolean;
+  voiceDispatch?: TaskRecord['voiceDispatch'];
 }): TaskRecord {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -789,6 +821,7 @@ export function createTask(params: {
     taskKind: params.taskKind,
     originatingSessionId: params.originatingSessionId,
     suppressOriginDelivery: params.suppressOriginDelivery,
+    voiceDispatch: params.voiceDispatch,
     verificationStatus: params.taskKind === 'run_once' ? 'pending' : undefined,
 
     plan: params.plan,

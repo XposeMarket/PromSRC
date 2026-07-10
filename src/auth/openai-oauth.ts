@@ -107,6 +107,7 @@ interface OAuthFlowState {
   state: string;
   authUrl: string;
   createdAt: number;
+  accountId?: string;
 }
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
@@ -132,6 +133,10 @@ function clearFlow(configDir: string) {
 // The legacy plaintext oauth-openai.json is migrated on first load and removed.
 
 const VAULT_KEY = 'openai.oauth_tokens';
+const accountVaultKey = (accountId?: string): string => {
+  const id = String(accountId || '').trim();
+  return id ? `${VAULT_KEY}.${id}` : VAULT_KEY;
+};
 
 /** Migrate legacy plaintext credentials file into vault, then delete it */
 function migrateLegacyCredentials(configDir: string): void {
@@ -150,17 +155,17 @@ function migrateLegacyCredentials(configDir: string): void {
   }
 }
 
-export function loadTokens(configDir: string): OAuthTokens | null {
+export function loadTokens(configDir: string, accountId?: string): OAuthTokens | null {
   migrateLegacyCredentials(configDir);
   const vault  = getVault(configDir);
-  const secret = vault.get(VAULT_KEY, 'oauth:load');
+  const secret = vault.get(accountVaultKey(accountId), 'oauth:load');
   if (!secret) return null;
   try {
     const tokens = JSON.parse(secret.expose()) as OAuthTokens;
-    const key = path.resolve(configDir);
+    const key = `${path.resolve(configDir)}:${String(accountId || '')}`;
     if (!nonTtlTokenMigrated.has(key)) {
       // One-time in-process migration: rewrite entry without vault TTL.
-      vault.set(VAULT_KEY, JSON.stringify(tokens), 'oauth:migrate_non_ttl');
+      vault.set(accountVaultKey(accountId), JSON.stringify(tokens), 'oauth:migrate_non_ttl');
       nonTtlTokenMigrated.add(key);
     }
     return tokens;
@@ -169,23 +174,23 @@ export function loadTokens(configDir: string): OAuthTokens | null {
   }
 }
 
-export function saveTokens(configDir: string, tokens: OAuthTokens): void {
+export function saveTokens(configDir: string, tokens: OAuthTokens, accountId?: string): void {
   // access_token and refresh_token must NEVER appear in any log
   const vault = getVault(configDir);
   // Persist OAuth credentials without vault TTL.
   // Access-token expiry is enforced by `expires_at` + refresh flow, and refresh_token
   // should survive long-running background automation.
-  vault.set(VAULT_KEY, JSON.stringify(tokens), 'oauth:save');
+  vault.set(accountVaultKey(accountId), JSON.stringify(tokens), 'oauth:save');
   log.security('[oauth] Tokens saved to vault (account:', tokens.account_id ?? 'unknown', ')');
 }
 
-export function clearTokens(configDir: string): void {
-  getVault(configDir).delete(VAULT_KEY, 'oauth:clear');
+export function clearTokens(configDir: string, accountId?: string): void {
+  getVault(configDir).delete(accountVaultKey(accountId), 'oauth:clear');
   log.security('[oauth] Tokens cleared from vault');
 }
 
-export function isConnected(configDir: string): boolean {
-  return loadTokens(configDir) !== null;
+export function isConnected(configDir: string, accountId?: string): boolean {
+  return loadTokens(configDir, accountId) !== null;
 }
 
 // ─── PKCE ───────────────────────────────────────────────────────────────────────
@@ -199,13 +204,13 @@ function generateChallenge(verifier: string): string {
 
 // ─── Token refresh ──────────────────────────────────────────────────────────────
 
-export async function refreshTokens(configDir: string): Promise<OAuthTokens> {
-  const key = path.resolve(configDir);
+export async function refreshTokens(configDir: string, accountId?: string): Promise<OAuthTokens> {
+  const key = `${path.resolve(configDir)}:${String(accountId || '')}`;
   const existingRefresh = refreshInFlight.get(key);
   if (existingRefresh) return existingRefresh;
 
   const refreshPromise = (async () => {
-    const existing = loadTokens(configDir);
+    const existing = loadTokens(configDir, accountId);
     if (!existing?.refresh_token) throw new Error('No refresh token — please reconnect.');
 
     const res = await fetch(TOKEN_URL, {
@@ -220,7 +225,7 @@ export async function refreshTokens(configDir: string): Promise<OAuthTokens> {
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
-      const latest = loadTokens(configDir);
+      const latest = loadTokens(configDir, accountId);
       if (
         latest?.refresh_token
         && latest.refresh_token !== existing.refresh_token
@@ -236,17 +241,17 @@ export async function refreshTokens(configDir: string): Promise<OAuthTokens> {
     const apiKey  = idToken ? await tryExchangeForApiKey(idToken) : existing.api_key;
 
     const claims = idToken ? decodeJwtClaims(idToken) : {};
-    const accountId = claims.chatgpt_account_id || claims.sub || existing.account_id;
+    const oauthAccountId = claims.chatgpt_account_id || claims.sub || existing.account_id;
 
     const tokens: OAuthTokens = {
       access_token:  data.access_token || existing.access_token,
       api_key:       apiKey ?? existing.api_key,
       refresh_token: data.refresh_token || existing.refresh_token,
       expires_at:    Date.now() + (data.expires_in || 3600) * 1000,
-      account_id:    accountId,
+      account_id:    oauthAccountId,
       id_token:      idToken,
     };
-    saveTokens(configDir, tokens);
+    saveTokens(configDir, tokens, accountId);
     return tokens;
   })();
 
@@ -260,12 +265,12 @@ export async function refreshTokens(configDir: string): Promise<OAuthTokens> {
 
 // ─── Get valid token (auto-refresh) ────────────────────────────────────────────
 
-export async function getValidToken(configDir: string): Promise<string> {
-  let tokens = loadTokens(configDir);
+export async function getValidToken(configDir: string, accountId?: string): Promise<string> {
+  let tokens = loadTokens(configDir, accountId);
   if (!tokens) throw new Error('Not connected to OpenAI. Go to Settings → Models → OpenAI Codex and click Connect.');
 
   if (Date.now() > tokens.expires_at - 5 * 60 * 1000) {
-    tokens = await refreshTokens(configDir);
+    tokens = await refreshTokens(configDir, accountId);
   }
   return tokens.access_token;
 }
@@ -280,7 +285,7 @@ export interface OAuthFlowResult {
   authUrl?: string;
 }
 
-export async function startOAuthFlow(configDir: string): Promise<OAuthFlowResult> {
+export async function startOAuthFlow(configDir: string, accountId?: string): Promise<OAuthFlowResult> {
   const existing = getFlow(configDir);
   if (existing) {
     return { success: false, needsManualPaste: true, authUrl: existing.authUrl,
@@ -309,7 +314,8 @@ export async function startOAuthFlow(configDir: string): Promise<OAuthFlowResult
   });
 
   const authUrl = `${AUTH_URL}?${params.toString()}`;
-  setFlow(configDir, { verifier, state, authUrl, createdAt: Date.now() });
+  const account = String(accountId || '').trim() || undefined;
+  setFlow(configDir, { verifier, state, authUrl, createdAt: Date.now(), accountId: account });
 
   return new Promise((resolve) => {
     const server = http.createServer(async (req, res) => {
@@ -365,7 +371,7 @@ export async function startOAuthFlow(configDir: string): Promise<OAuthFlowResult
           id_token:      idToken,
         };
 
-        saveTokens(configDir, tokens);
+        saveTokens(configDir, tokens, account);
         clearFlow(configDir);
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -396,7 +402,7 @@ export async function startOAuthFlow(configDir: string): Promise<OAuthFlowResult
 type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string; account_id?: string };
 let _bgResult: BgOAuthResult = { done: false };
 
-export function startOAuthFlowBackground(configDir: string): { authUrl: string } | { error: string } {
+export function startOAuthFlowBackground(configDir: string, accountId?: string): { authUrl: string } | { error: string } {
   const existing = getFlow(configDir);
   if (existing) {
     _bgResult = { done: false }; // reset so poll works
@@ -425,7 +431,8 @@ export function startOAuthFlowBackground(configDir: string): { authUrl: string }
   });
 
   const authUrl = `${AUTH_URL}?${params.toString()}`;
-  setFlow(configDir, { verifier, state, authUrl, createdAt: Date.now() });
+  const account = String(accountId || '').trim() || undefined;
+  setFlow(configDir, { verifier, state, authUrl, createdAt: Date.now(), accountId: account });
   _bgResult = { done: false };
 
   // Start callback server in background — do NOT await
@@ -482,7 +489,7 @@ export function startOAuthFlowBackground(configDir: string): { authUrl: string }
         id_token:      idToken,
       };
 
-      saveTokens(configDir, tokens);
+      saveTokens(configDir, tokens, account);
       clearFlow(configDir);
 
       res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -520,6 +527,7 @@ export function pollOAuthBackground(): BgOAuthResult {
 export async function exchangeManualCodeFromPending(
   configDir: string,
   redirectedUrl: string,
+  accountId?: string,
 ): Promise<OAuthFlowResult> {
   const flow = getFlow(configDir);
   if (!flow) return { success: false, error: 'No active OAuth session — click Connect again.' };
@@ -566,7 +574,7 @@ export async function exchangeManualCodeFromPending(
       id_token:      idToken,
     };
 
-    saveTokens(configDir, tokens);
+    saveTokens(configDir, tokens, accountId || flow.accountId);
     clearFlow(configDir);
     return { success: true, account_id: accountId };
   } catch (err: any) {

@@ -1,0 +1,363 @@
+src/auth/xai-oauth.ts (362 lines) [window 1-362]:
+1: /**
+2:  * xai-oauth.ts
+3:  * Browser OAuth for xAI Grok account/subscription auth.
+4:  *
+5:  * This does not bypass xAI entitlements. It stores the OAuth bearer token and
+6:  * lets xAI decide whether the connected account tier may use API-style Grok,
+7:  * image, video, and audio endpoints.
+8:  */
+9: 
+10: import crypto from 'crypto';
+11: import http from 'http';
+12: import { exec } from 'child_process';
+13: import { getVault } from '../security/vault';
+14: import { log } from '../security/log-scrubber';
+15: 
+16: const ISSUER = 'https://auth.x.ai';
+17: const DISCOVERY_URL = `${ISSUER}/.well-known/openid-configuration`;
+18: const DEFAULT_BASE_URL = 'https://api.x.ai/v1';
+19: const CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
+20: const SCOPE = 'openid profile email offline_access grok-cli:access api:access';
+21: const CALLBACK_HOST = process.env.PROMETHEUS_XAI_OAUTH_HOST || '127.0.0.1';
+22: const CALLBACK_PORT = Number(process.env.PROMETHEUS_XAI_OAUTH_PORT || '56121');
+23: const CALLBACK_PATH = '/callback';
+24: const CALLBACK_URL = `http://${CALLBACK_HOST}:${CALLBACK_PORT}${CALLBACK_PATH}`;
+25: const VAULT_KEY = 'xai.oauth_tokens';
+26: 
+27: export interface XAITokens {
+28:   access_token: string;
+29:   refresh_token: string;
+30:   expires_at: number;
+31:   refresh_token_expires_at?: number;
+32:   id_token?: string;
+33:   token_type?: string;
+34:   token_endpoint?: string;
+35:   base_url?: string;
+36: }
+37: 
+38: export interface XAIRuntimeCredentials {
+39:   provider: 'xai-oauth';
+40:   auth_mode: 'oauth_pkce';
+41:   api_key: string;
+42:   base_url: string;
+43: }
+44: 
+45: type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string };
+46: let _bgResult: BgOAuthResult = { done: false };
+47: let _activeFlow: { verifier: string; state: string; authUrl: string; createdAt: number; tokenEndpoint: string } | null = null;
+48: 
+49: function generateVerifier(): string {
+50:   return crypto.randomBytes(32).toString('base64url');
+51: }
+52: 
+53: function generateChallenge(verifier: string): string {
+54:   return crypto.createHash('sha256').update(verifier).digest('base64url');
+55: }
+56: 
+57: function validateXaiEndpoint(raw: string, field: string): string {
+58:   const url = new URL(raw);
+59:   if (url.protocol !== 'https:') throw new Error(`xAI ${field} must be HTTPS`);
+60:   const host = url.hostname.toLowerCase();
+61:   if (host !== 'x.ai' && !host.endsWith('.x.ai')) {
+62:     throw new Error(`xAI ${field} host must be x.ai or a *.x.ai subdomain`);
+63:   }
+64:   return raw;
+65: }
+66: 
+67: function resolveXAIBaseUrl(tokens?: XAITokens | null): string {
+68:   return (
+69:     process.env.PROMETHEUS_XAI_BASE_URL
+70:     || process.env.XAI_BASE_URL
+71:     || process.env.HERMES_XAI_BASE_URL
+72:     || tokens?.base_url
+73:     || DEFAULT_BASE_URL
+74:   ).replace(/\/+$/, '');
+75: }
+76: 
+77: function accessTokenIsExpiring(accessToken: string, skewMs: number): boolean {
+78:   if (!accessToken || !accessToken.includes('.')) return false;
+79:   try {
+80:     const parts = accessToken.split('.');
+81:     if (parts.length < 2) return false;
+82:     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as any;
+83:     const exp = Number(payload?.exp || 0);
+84:     return Number.isFinite(exp) && exp > 0 && exp * 1000 <= Date.now() + Math.max(0, skewMs);
+85:   } catch {
+86:     return false;
+87:   }
+88: }
+89: 
+90: async function discovery(): Promise<{ authorization_endpoint: string; token_endpoint: string }> {
+91:   const res = await fetch(DISCOVERY_URL, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
+92:   if (!res.ok) throw new Error(`xAI discovery failed (${res.status})`);
+93:   const data = await res.json() as any;
+94:   const authorization_endpoint = validateXaiEndpoint(String(data?.authorization_endpoint || ''), 'authorization_endpoint');
+95:   const token_endpoint = validateXaiEndpoint(String(data?.token_endpoint || ''), 'token_endpoint');
+96:   return { authorization_endpoint, token_endpoint };
+97: }
+98: 
+99: function saveTokens(configDir: string, tokens: XAITokens): void {
+100:   getVault(configDir).set(VAULT_KEY, JSON.stringify(tokens), 'xai-oauth:save');
+101:   log.security('[xai-oauth] Tokens saved to vault');
+102:   try {
+103:     require('../extensions/xai-extension-adapter').refreshXAITools();
+104:   } catch {}
+105: }
+106: 
+107: export function loadXAITokens(configDir: string): XAITokens | null {
+108:   const secret = getVault(configDir).get(VAULT_KEY, 'xai-oauth:load');
+109:   if (!secret) return null;
+110:   try {
+111:     const tokens = JSON.parse(secret.expose()) as XAITokens;
+112:     return tokens?.access_token && tokens?.refresh_token ? tokens : null;
+113:   } catch {
+114:     return null;
+115:   }
+116: }
+117: 
+118: export function clearXAITokens(configDir: string): void {
+119:   getVault(configDir).delete(VAULT_KEY, 'xai-oauth:clear');
+120:   log.security('[xai-oauth] Tokens cleared from vault');
+121:   try {
+122:     require('../extensions/xai-extension-adapter').refreshXAITools();
+123:   } catch {}
+124: }
+125: 
+126: export function isXAIConnected(configDir: string): boolean {
+127:   return loadXAITokens(configDir) !== null;
+128: }
+129: 
+130: export async function refreshXAITokens(configDir: string): Promise<XAITokens> {
+131:   const existing = loadXAITokens(configDir);
+132:   if (!existing?.refresh_token) throw new Error('No xAI refresh token; reconnect xAI OAuth.');
+133:   const tokenEndpoint = validateXaiEndpoint(existing.token_endpoint || (await discovery()).token_endpoint, 'token_endpoint');
+134:   const res = await fetch(tokenEndpoint, {
+135:     method: 'POST',
+136:     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+137:     body: new URLSearchParams({
+138:       grant_type: 'refresh_token',
+139:       client_id: CLIENT_ID,
+140:       refresh_token: existing.refresh_token,
+141:     }).toString(),
+142:     signal: AbortSignal.timeout(30_000),
+143:   });
+144:   if (!res.ok) {
+145:     const text = await res.text().catch(() => '');
+146:     if (res.status === 400 || res.status === 401) {
+147:       // Refresh token has expired or been revoked — clear stale session so UI
+148:       // shows disconnected rather than a forever-broken "connected" state.
+149:       clearXAITokens(configDir);
+150:       throw new Error(`xAI OAuth session expired (${res.status}). Please reconnect xAI in Settings → Models.`);
+151:     }
+152:     throw new Error(`xAI token refresh failed (${res.status}): ${text.slice(0, 300)}`);
+153:   }
+154:   const data = await res.json() as any;
+155:   const rtExpiresIn = Number(data.refresh_token_expires_in || 0);
+156:   const tokens: XAITokens = {
+157:     access_token: String(data.access_token || existing.access_token),
+158:     refresh_token: String(data.refresh_token || existing.refresh_token),
+159:     id_token: data.id_token || existing.id_token,
+160:     token_type: String(data.token_type || existing.token_type || 'Bearer'),
+161:     token_endpoint: tokenEndpoint,
+162:     base_url: existing.base_url || DEFAULT_BASE_URL,
+163:     expires_at: Date.now() + Number(data.expires_in || 3600) * 1000,
+164:     refresh_token_expires_at: rtExpiresIn > 0 ? Date.now() + rtExpiresIn * 1000 : existing.refresh_token_expires_at,
+165:   };
+166:   saveTokens(configDir, tokens);
+167:   return tokens;
+168: }
+169: 
+170: export async function getValidXAIToken(configDir: string): Promise<string> {
+171:   let tokens = loadXAITokens(configDir);
+172:   if (!tokens) throw new Error('xAI OAuth is not connected. Connect xAI in Settings -> Models.');
+173:   const expiresAt = Number(tokens.expires_at || 0);
+174:   const refreshExpiresAt = Number(tokens.refresh_token_expires_at || 0);
+175:   // Proactively refresh if the refresh token itself expires within 30 minutes.
+176:   const refreshTokenNearExpiry = refreshExpiresAt > 0 && Date.now() > refreshExpiresAt - 30 * 60 * 1000;
+177:   const accessTokenNearExpiry = expiresAt
+178:     ? Date.now() > expiresAt - 2 * 60 * 1000
+179:     : accessTokenIsExpiring(tokens.access_token, 2 * 60 * 1000);
+180:   if (accessTokenNearExpiry || refreshTokenNearExpiry) {
+181:     tokens = await refreshXAITokens(configDir);
+182:   }
+183:   return tokens.access_token;
+184: }
+185: 
+186: export async function getValidXAIRuntimeCredentials(configDir: string): Promise<XAIRuntimeCredentials> {
+187:   const apiKey = await getValidXAIToken(configDir);
+188:   const tokens = loadXAITokens(configDir);
+189:   return {
+190:     provider: 'xai-oauth',
+191:     auth_mode: 'oauth_pkce',
+192:     api_key: apiKey,
+193:     base_url: resolveXAIBaseUrl(tokens),
+194:   };
+195: }
+196: 
+197: async function exchangeAuthorizationCode(configDir: string, code: string, redirectUri: string, flow: NonNullable<typeof _activeFlow>): Promise<void> {
+198:   const tokenRes = await fetch(flow.tokenEndpoint, {
+199:     method: 'POST',
+200:     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+201:     body: new URLSearchParams({
+202:       grant_type: 'authorization_code',
+203:       code,
+204:       redirect_uri: redirectUri,
+205:       client_id: CLIENT_ID,
+206:       code_verifier: flow.verifier,
+207:     }).toString(),
+208:     signal: AbortSignal.timeout(30_000),
+209:   });
+210:   if (!tokenRes.ok) {
+211:     const text = await tokenRes.text().catch(() => '');
+212:     throw new Error(`Token exchange failed (${tokenRes.status}): ${text.slice(0, 300)}`);
+213:   }
+214:   const data = await tokenRes.json() as any;
+215:   if (!data?.access_token || !data?.refresh_token) throw new Error('xAI OAuth response missing access or refresh token.');
+216:   const rtExpiresIn = Number(data.refresh_token_expires_in || 0);
+217:   saveTokens(configDir, {
+218:     access_token: String(data.access_token),
+219:     refresh_token: String(data.refresh_token),
+220:     id_token: data.id_token,
+221:     token_type: String(data.token_type || 'Bearer'),
+222:     token_endpoint: flow.tokenEndpoint,
+223:     base_url: DEFAULT_BASE_URL,
+224:     expires_at: Date.now() + Number(data.expires_in || 3600) * 1000,
+225:     refresh_token_expires_at: rtExpiresIn > 0 ? Date.now() + rtExpiresIn * 1000 : undefined,
+226:   });
+227: }
+228: 
+229: export async function completeXAIOAuthWithCode(configDir: string, code: string): Promise<{ success: boolean; error?: string }> {
+230:   const flow = _activeFlow;
+231:   if (!flow || Date.now() - flow.createdAt > 10 * 60 * 1000) {
+232:     return { success: false, error: 'No active xAI OAuth flow. Click Connect again, then paste the code from the browser page.' };
+233:   }
+234:   const trimmed = String(code || '').trim();
+235:   if (!trimmed) return { success: false, error: 'Paste the code shown by xAI.' };
+236:   try {
+237:     await exchangeAuthorizationCode(configDir, trimmed, CALLBACK_URL, flow);
+238:     _activeFlow = null;
+239:     _bgResult = { done: true, success: true };
+240:     return { success: true };
+241:   } catch (err: any) {
+242:     const error = String(err?.message || err);
+243:     _bgResult = { done: true, success: false, error };
+244:     return { success: false, error };
+245:   }
+246: }
+247: 
+248: function openBrowser(url: string) {
+249:   const cmd = process.platform === 'win32' ? `start "" "${url}"`
+250:     : process.platform === 'darwin' ? `open "${url}"`
+251:     : `xdg-open "${url}"`;
+252:   exec(cmd, () => {});
+253: }
+254: 
+255: export async function startXAIOAuthFlowBackground(configDir: string): Promise<{ authUrl: string } | { error: string }> {
+256:   if (_activeFlow && Date.now() - _activeFlow.createdAt < 10 * 60 * 1000) {
+257:     _bgResult = { done: false };
+258:     return { authUrl: _activeFlow.authUrl };
+259:   }
+260: 
+261:   const endpoints = await discovery();
+262:   const verifier = generateVerifier();
+263:   const challenge = generateChallenge(verifier);
+264:   const state = crypto.randomBytes(16).toString('hex');
+265:   const params = new URLSearchParams({
+266:     response_type: 'code',
+267:     client_id: CLIENT_ID,
+268:     redirect_uri: CALLBACK_URL,
+269:     scope: SCOPE,
+270:     code_challenge: challenge,
+271:     code_challenge_method: 'S256',
+272:     state,
+273:     nonce: crypto.randomBytes(16).toString('hex'),
+274:     plan: 'generic',
+275:     referrer: 'prometheus',
+276:   });
+277:   const authUrl = `${endpoints.authorization_endpoint}?${params.toString()}`;
+278:   _activeFlow = { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint };
+279:   _bgResult = { done: false };
+280: 
+281:   const server = http.createServer(async (req, res) => {
+282:     if (!req.url?.startsWith(CALLBACK_PATH)) { res.writeHead(404); res.end(); return; }
+283:     const url = new URL(req.url, CALLBACK_URL);
+284:     const code = url.searchParams.get('code');
+285:     const returnedState = url.searchParams.get('state');
+286:     const error = url.searchParams.get('error');
+287: 
+288:     const fail = (msg: string) => {
+289:       res.writeHead(200, { 'Content-Type': 'text/html' });
+290:       res.end(`<html><body><h2>${msg}</h2><p>You can close this window.</p></body></html>`);
+291:       server.close(); _activeFlow = null;
+292:       _bgResult = { done: true, success: false, error: msg };
+293:     };
+294: 
+295:     if (error || !code) return fail(error || 'No code returned');
+296:     if (returnedState !== state) return fail('State mismatch; restart xAI login.');
+297: 
+298:     try {
+299:       await exchangeAuthorizationCode(configDir, code, CALLBACK_URL, { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint });
+300:       res.writeHead(200, { 'Content-Type': 'text/html' });
+301:       res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>Connected to Prometheus xAI OAuth</h2><p>You can close this window.</p></body></html>');
+302:       server.close(); _activeFlow = null;
+303:       _bgResult = { done: true, success: true };
+304:     } catch (err: any) {
+305:       fail(String(err?.message || err));
+306:     }
+307:   });
+308: 
+309:   server.on('error', (err: any) => {
+310:     _activeFlow = null;
+311:     _bgResult = { done: true, success: false, error: `Callback server error: ${err.message}` };
+312:   });
+313:   server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
+314:     openBrowser(authUrl);
+315:     setTimeout(() => {
+316:       if (!(_bgResult as any).done) {
+317:         server.close(); _activeFlow = null;
+318:         _bgResult = { done: true, success: false, error: 'Timed out waiting for xAI OAuth callback.' };
+319:       }
+320:     }, 5 * 60 * 1000);
+321:   });
+322: 
+323:   return { authUrl };
+324: }
+325: 
+326: export function pollXAIOAuthBackground(): BgOAuthResult {
+327:   return _bgResult;
+328: }
+329: 
+330: // Keep-alive: runs every 30 minutes while the server is up to silently rotate
+331: // the access token (and refresh token, if xAI rotates on refresh) before the
+332: // refresh token's own TTL expires. Without this, a ~36-hour gap in usage lets
+333: // the refresh token expire and forces the user to re-authenticate.
+334: const KEEPALIVE_INTERVAL_MS = 30 * 60 * 1000;
+335: let _keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+336: 
+337: export function startXAITokenKeepAlive(configDir: string): void {
+338:   if (_keepAliveTimer) return;
+339:   _keepAliveTimer = setInterval(async () => {
+340:     const tokens = loadXAITokens(configDir);
+341:     if (!tokens) return;
+342:     try {
+343:       await refreshXAITokens(configDir);
+344:       log.security('[xai-oauth] Keep-alive token refresh succeeded');
+345:     } catch (err: any) {
+346:       // refreshXAITokens already clears stale tokens on 4xx, so just log.
+347:       log.security(`[xai-oauth] Keep-alive refresh failed: ${err?.message}`);
+348:     }
+349:   }, KEEPALIVE_INTERVAL_MS);
+350:   // Unref so the timer doesn't prevent clean process exit.
+351:   if (typeof _keepAliveTimer === 'object' && (_keepAliveTimer as any)?.unref) {
+352:     (_keepAliveTimer as any).unref();
+353:   }
+354: }
+355: 
+356: export function stopXAITokenKeepAlive(): void {
+357:   if (_keepAliveTimer) {
+358:     clearInterval(_keepAliveTimer);
+359:     _keepAliveTimer = null;
+360:   }
+361: }
+362: 

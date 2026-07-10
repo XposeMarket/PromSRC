@@ -769,12 +769,13 @@ function renderChatContextRows(rows, windowTokens) {
 
 function getChatContextWindowDisplayLimit(data, currentState = {}) {
   return Math.max(0, Number(
-    data?.currentContextLimitTokens
+    data?.contextWindowTokens
+    || currentState?.contextWindowTokens
+    || data?.currentContextLimitTokens
     || data?.contextLimitTokens
     || currentState?.contextLimitTokens
-    || data?.compactionTriggerTokens
     || data?.inputBudgetTokens
-    || data?.contextWindowTokens
+    || data?.compactionTriggerTokens
     || 0
   ));
 }
@@ -858,15 +859,13 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
   const currentState = data.currentState || {};
   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
   const windowTokens = getChatContextWindowDisplayLimit(data, currentState);
-  const modelWindowTokens = Math.max(0, Number(data.contextWindowTokens || currentState.contextWindowTokens || 0));
-  const isCompactionLimit = modelWindowTokens > 0 && windowTokens > 0 && modelWindowTokens !== windowTokens;
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
-  btn.title = `Context before compaction: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens${modelWindowTokens && modelWindowTokens !== windowTokens ? ` (model window ${formatContextTokenCount(modelWindowTokens)})` : ''}`;
+  btn.title = `Context window: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens`;
   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
-  setChatContextWindowHeadLabel(isCompactionLimit ? 'Before compaction' : 'Context window');
+  setChatContextWindowHeadLabel('Context window');
   if (total) {
-    total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)${isCompactionLimit ? ` · window ${formatContextTokenCount(modelWindowTokens)}` : ''}`;
+    total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)`;
   }
   renderChatContextRows(currentState.rows, windowTokens);
 }
@@ -999,6 +998,7 @@ function renderChatContextPlanUsage() {
             <span class="ccw-plan-gauge-pct">${left}% left</span>
           </div>
           <div class="ccw-plan-gauge-track"><div class="ccw-plan-gauge-fill ${ccwUsageGaugeClass(pct)}" style="width:${pct}%"></div></div>
+          ${w.detail ? `<div class="ccw-plan-gauge-reset">${escHtml(w.detail)}</div>` : ''}
         </div>`;
     }).join('');
   }
@@ -20141,32 +20141,73 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
 
   // Worker control — handled client-side via existing flows
   if (name === 'dispatch_prometheus_worker') {
-    const task = String(args.task || '').trim();
-    if (task) {
+    const singleTask = String(args.task || args.prompt || '').trim();
+    const tasks = Array.isArray(args.tasks)
+      ? args.tasks.map((raw, index) => {
+          const prompt = typeof raw === 'string'
+            ? raw
+            : String(raw?.prompt || raw?.task || raw?.objective || raw?.message || '').trim();
+          if (!prompt) return null;
+          const title = typeof raw === 'object' && raw
+            ? String(raw.title || raw.name || raw.label || '').trim()
+            : '';
+          return { title: title || `Voice worker ${index + 1}`, prompt };
+        }).filter(Boolean)
+      : [];
+    if (!tasks.length && singleTask) tasks.push({ title: String(args.title || '').trim(), prompt: singleTask });
+    const dispatchLabel = tasks.length > 1
+      ? `${tasks.length} workers: ${tasks.map((task) => task.title || task.prompt).join('; ')}`
+      : String(tasks[0]?.prompt || singleTask || '').trim();
+    let data = null;
+    let dispatched = false;
+    let error = '';
+    if (tasks.length) {
       try {
         voiceAgentRealtimeTurn.dispatchedWorkerThisResponse = true;
         cancelVoiceAgentRealtimeResponseForDispatch();
-        removeRecentRealtimeAgentChatMessage(sessionId, 'user', task || voiceAgentRealtimeTurn.lastUserTranscript);
-        markVoiceAgentRealtimeWorkerDispatch(sessionId, task);
-        // Reuse the regular chat send path so the worker runs with full context.
-        // sendChat(queuedMessage, options) — pass the task as the queued message so
-        // it does not depend on composer state, and skip the voice-agent decision
-        // (the realtime model already decided to hand off).
-        if (typeof window.sendChat === 'function') {
-          await window.sendChat(task, { skipVoiceAgent: true, voiceSource: 'realtime_agent_dispatch' });
+        removeRecentRealtimeAgentChatMessage(sessionId, 'user', singleTask || voiceAgentRealtimeTurn.lastUserTranscript || dispatchLabel);
+        markVoiceAgentRealtimeWorkerDispatch(sessionId, dispatchLabel);
+        const response = await fetch('/api/voice-agent/dispatch-workers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            task: singleTask,
+            tasks,
+            delivery: 'report_each',
+            sourceTranscript: String(voiceAgentRealtimeTurn.lastUserTranscript || singleTask || dispatchLabel || '').trim(),
+            source: 'desktop_realtime_agent_dispatch',
+          }),
+        });
+        data = await response.json().catch(() => ({}));
+        dispatched = response.ok && (data?.success === true || data?.ok === true);
+        error = data?.error || '';
+        if (dispatched) {
+          addSessionProcessEntry(sessionId, 'info', `Dispatched ${tasks.length} Prometheus worker${tasks.length === 1 ? '' : 's'}.`, {
+            actor: 'Voice Agent (Realtime)',
+            workgroupId: data?.workgroupId || '',
+            taskIds: data?.taskIds || [],
+          });
           setTimeout(() => refreshVoiceAgentRealtimeWorkerContext('worker_dispatched_fast').catch(() => {}), 300);
           setTimeout(() => refreshVoiceAgentRealtimeWorkerContext('worker_dispatched').catch(() => {}), 1200);
         }
       } catch (err) {
+        error = String(err?.message || err);
         console.warn('[voice-agent-realtime] dispatch failed', err);
       }
     }
     sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({
-      ok: true,
-      dispatched: !!task,
-      task,
+      ok: dispatched,
+      dispatched,
+      task: singleTask,
+      tasks,
+      workgroupId: data?.workgroupId || '',
+      taskIds: data?.taskIds || [],
+      error,
       spoken_confirmation_not_needed: true,
-      note: 'Worker dispatch has started through the chat worker bridge. Do not speak another handoff acknowledgement.',
+      note: dispatched
+        ? 'Worker dispatch has started through the voice workgroup bridge. Do not speak another handoff acknowledgement.'
+        : 'Worker dispatch failed before any worker started.',
     }), { createResponse: false });
     return;
   }

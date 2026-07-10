@@ -1,6 +1,6 @@
 # TOOLS.md — Available Tools & Usage Guide
 
-Last updated: 2026-05-20
+Last updated: 2026-07-08
 
 ## Session Sync (2026-03-27)
 
@@ -29,8 +29,8 @@ Aligned to current runtime after this session's cleanup:
 
 ## Tool Category System
 
-Tools are split into **core** tools that are always available and **17 on-demand runtime categories**.
-Activate a category once per session with `request_tool_category` and it stays active for that session.
+Tools are split into **core** tools that are always available and **23 on-demand runtime categories**.
+Activate a category with `request_tool_category`. Main-chat activation defaults to `scope:"turn"` so large tool surfaces do not stay loaded accidentally. Use `scope:"next_turn"` for one follow-up, `scope:"ttl"` with `turns` for a bounded multi-turn workflow, or `scope:"session"` only for explicit ongoing work.
 
 | Category | What it unlocks |
 |---|---|
@@ -42,7 +42,6 @@ Activate a category once per session with `request_tool_category` and it stays a
 | `workspace_write` | Workspace file mutation, git/test/lint helpers, command/process tools |
 | `advanced_memory` | Memory graph, timeline, project search, related records, index maintenance |
 | `media_assets` | Download and analyze images, video, audio, and remote media assets |
-| `media_quality` | Image/video QA: contrast, text overflow, frame renders, caption/audio timing |
 | `automations` | Schedule detail/history/outputs/patch/stuck-control/dashboard tools |
 | `external_apps` | Connected connector tools such as Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian, X/Twitter, xAI/Grok |
 | `integration_admin` | MCP server setup, webhooks, and integration quick setup/admin |
@@ -50,14 +49,21 @@ Activate a category once per session with `request_tool_category` and it stays a
 | `proposal_admin` | Pending proposal inspection/editing |
 | `mcp_server_tools` | Dynamic `mcp__<serverId>__<toolName>` tools from connected MCP servers |
 | `composite_tools` | Saved multi-step composite tools plus composite management |
-| `creative_mode` | Creative editor, HTML Motion, HyperFrames, composition, and creative QA tools |
+| `creative_basic` | Creative project, scene, canvas/editor, mode, element, style, and export basics |
+| `creative_image` | Creative image, asset, layer, icon, generation, and image-derived scene operations |
+| `creative_video` | Creative video, shot, audio, caption, sequence, timeline, and composition operations |
+| `creative_hyperframes` | HyperFrames and HTML Motion clips, templates, variables, patches, QA, and exports |
+| `creative_quality` | Creative/image/video QA: layout, contrast, text fit, frame renders, timing, and imported-video checks |
+| `skills` | `skill_ops` wrapper for skill authoring, packaging, metadata/resource maintenance, import/export, inspection, and metadata audits beyond core `skill_list`/`skill_read` |
+| `model_management` | Agent model defaults, routing, and reusable model templates |
+| `business` | Structured business entities and entity event lifecycle administration |
 
 Common aliases still normalize to those category IDs:
-`browser`, `desktop`, `team_ops`, `teams`, `agents`, `source_read`, `source_write`, `file_ops`, `files`, `shell`, `commands`, `run_commands`, `memory`, `media`, `schedule`, `scheduling`, `connectors`, `integrations`, `mcp`, and `composites`.
+`browser`, `desktop`, `team_ops`, `teams`, `agents`, `source_read`, `source_write`, `file_ops`, `files`, `shell`, `commands`, `run_commands`, `memory`, `media`, `schedule`, `scheduling`, `connectors`, `integrations`, `mcp`, `composites`, `creative`, `creative_mode`, `image_mode`, `video_mode`, `hyperframes`, `creative_qa`, `media_quality`, `skill_authoring`, `models`, `agent_models`, and `entities`.
 
-**Core tools (always available without activation):** file read/search, web search/fetch, basic memory, skills, tasks, `schedule_job`, `write_proposal`, model switching, plan/progress tools, `send_telegram`, delivery tools, `connector_list`, `ask_team_coordinator`, `deploy_analysis_team`, `get_creative_mode`, `switch_creative_mode`, `generate_image`, `generate_video`, `background_spawn`, `background_status`, `background_progress`, `background_wait`, and `background_join`.
+**Core tools (always available without activation):** file read/search helpers, web search/fetch, basic memory/write-note tools, compact skill discovery (`skill_list`, `skill_read` only), tasks, `schedule_job`, `write_proposal`, `prom_repo_ops`, current model switching, plan/progress tools, `delivery_send`, `media_generate`, `connector_list`, `ask_team_coordinator`, `chat_with_subagent`, `agent_run_ops`, `get_creative_mode`, `switch_creative_mode`, and `background_ops`.
 
-**Important routing note:** `run_command`, `terminal`, `start_process`, and `process_*` are under `workspace_write` in the current Prometheus gateway runtime. They are not core in the category-gated builder.
+**Important routing note:** the normal exposed surfaces are wrapper-first. Use `workspace_read/edit/run/git/safety/code_nav`, `dev_source_read/edit`, `prom_repo_ops`, `skill_ops`, `browser_session/observe/act/extract`, `desktop_screen/apps/window/input/macro/background`, `agent_ops/agent_chat_ops/team_ops_wrapper/team_collab_ops`, connector wrappers such as `x_posts` or `vercel_ops`, `media_generate`, `delivery_send`, `background_ops`, and Creative wrappers such as `creative_project`, `creative_scene`, and `creative_*_ops`. Granular tools such as `run_command`, `terminal`, `browser_open`, `desktop_screenshot`, `generate_image`, `generate_video`, `delivery_send_screenshot`, `present_file`, `prom_repo_push`, `prom_repo_pull`, `prom_repo_sync`, `background_spawn`, `background_status`, `background_progress`, `background_wait`, `background_join`, skill maintenance leaves (`skill_inspect`, `skill_resource_*`, `skill_update_metadata`, `skill_manifest_write`, `skill_import_bundle`, `skill_export_bundle`, `skill_update_from_source`, `skill_create`, `skill_create_bundle`, `skill_audit_all`, `skill_repair_metadata`), and direct `creative_*` leaf tools remain executable compatibility internals but are usually hidden from the normal schema surface.
 
 ### Current Category Inventory
 
@@ -68,26 +74,32 @@ The current live builder maps tools roughly like this:
 | `advanced_memory` | `memory_accept_claim`, `memory_consolidate`, `memory_debug_search`, `memory_embedding_backfill`, `memory_embedding_status`, `memory_get_related`, `memory_graph_snapshot`, `memory_index_refresh`, `memory_provider_status`, `memory_read_record`, `memory_reject_claim`, `memory_review_claims`, `memory_search_project`, `memory_search_timeline`, `memory_supersede_record` |
 | `agents_and_teams` | `agent_info`, `agent_list`, `agent_update`, `delete_agent`, `dispatch_team_agent`, `dispatch_to_agent`, `get_agent_result`, `manage_team_context_ref`, `manage_team_goal`, `message_main_agent`, `message_subagent`, `post_to_team_chat`, `reply_to_team`, `request_context`, `request_manager_help`, `request_team_member_turn`, `share_artifact`, `spawn_subagent`, `talk_to_manager`, `talk_to_subagent`, `talk_to_teammate`, `team_manage`, `update_my_status`, `update_team_goal` |
 | `automations` | `automation_dashboard`, `schedule_job_detail`, `schedule_job_history`, `schedule_job_log_search`, `schedule_job_outputs`, `schedule_job_patch`, `schedule_job_stuck_control` |
-| `browser_automation` | All `browser_*` tools plus `inspect_console`, `run_accessibility_check`, and `save_site_shortcut` |
-| `desktop_automation` | All `desktop_*` tools |
+| `browser_automation` | Wrapper-first: `browser_session`, `browser_observe`, `browser_act`, `browser_extract`; granular browser tools remain compatibility handlers |
+| `desktop_automation` | Wrapper-first: `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, `desktop_background`; granular desktop tools remain compatibility handlers |
 | `media_assets` | `analyze_image`, `analyze_video`, `download_media`, `download_url` |
-| `media_quality` | `image_check_contrast`, `image_check_text_overflow`, `image_detect_empty_regions`, `image_get_bounds_summary`, `image_get_element_at_point`, `image_get_overlaps`, `video_check_audio_sync`, `video_check_caption_timing`, `video_render_contact_sheet`, `video_render_frame` |
-| `prometheus_source_read` | `grep_prom`, `grep_source`, `grep_webui_source`, `list_prom`, `list_source`, `list_webui_source`, `prom_file_stats`, `read_prom_file`, `read_source`, `read_webui_source`, `source_stats`, `src_stats`, `webui_source_stats`, `webui_stats` |
-| `prometheus_source_write` | `delete_lines_prom`, `delete_lines_source`, `delete_lines_webui_source`, `delete_prom_file`, `delete_source`, `delete_webui_source`, `find_replace_prom`, `find_replace_source`, `find_replace_webui_source`, `insert_after_prom`, `insert_after_source`, `insert_after_webui_source`, `replace_lines_prom`, `replace_lines_source`, `replace_lines_webui_source`, `write_prom_file`, `write_source`, `write_webui_source` |
-| `workspace_write` | Workspace mutation tools, git/test/lint/format helpers, `terminal`, `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, `process_submit` |
+| `prometheus_source_read` | Wrapper-first: `dev_source_read`; also exposes the dev-source approval request/update/wait tools after source inspection; old granular source/prom/web-ui readers remain compatibility handlers |
+| `prometheus_source_write` | Wrapper-first after approval: `dev_source_edit`; old granular source/web-ui writers remain compatibility handlers |
+| `workspace_write` | Wrapper-first: `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, `workspace_code_nav`; granular file/git/run helpers remain compatibility handlers |
 | `integration_admin` | `integration_quick_setup`, `mcp_server_manage`, `webhook_manage` |
 | `social_intelligence` | `social_intel` |
 | `proposal_admin` | `edit_proposal` |
 | `composite_tools` | `create_composite`, `get_composite`, `edit_composite`, `delete_composite`, `list_composites`, plus saved composite definitions from `.prometheus/composites/` |
-| `creative_mode` | `creative_*`, `hyperframes_*`, and creative video QA tools such as `video_analyze_frame`, `video_analyze_timeline`, `video_check_keyframes`, `video_extract_clip_frames`, `video_analyze_imported_video` |
-| `external_apps` | Connected extension/connector tools, including `connector_*` and `x_api_*` tools |
+| `creative_basic` | `creative_project`, `creative_scene` |
+| `creative_image` | `creative_image_ops` |
+| `creative_video` | `creative_video_ops` |
+| `creative_hyperframes` | `creative_hyperframes_ops` |
+| `creative_quality` | `creative_quality_ops`, including image/video QA compatibility handlers such as `image_check_contrast`, `video_render_frame`, and imported-video checks |
+| `external_apps` | Connected extension/connector tools and wrappers, including X/xAI wrappers (`x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, `x_admin`) and `vercel_ops` |
 | `mcp_server_tools` | Dynamic `mcp__server__tool` functions from connected MCP servers |
+| `skills` | Wrapper-first: `skill_ops`; old skill maintenance leaves remain compatibility handlers |
+| `model_management` | `get_agent_models`, `set_agent_model`, and agent model template management |
+| `business` | `list_entities`, `read_entity`, `write_entity`, `append_entity_event` |
 
 ---
 
 ## File Tools
 
-Read/list/search tools are core. Mutation tools such as `create_file`, `replace_lines`, `insert_after`, `delete_lines`, `find_replace`, and `delete_file` require `workspace_write`.
+Read/list/search helpers are core where exposed. For normal activated workspace work, prefer the wrapper-first surface: `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`. Granular tools such as `create_file`, `replace_lines`, `insert_after`, `delete_lines`, `find_replace`, and `delete_file` remain compatibility handlers and require `workspace_write`.
 
 | Tool | What it does |
 |------|-------------|
@@ -156,8 +168,20 @@ Legacy Prometheus runtimes may expose `run_command`; current Codex desktop sessi
 
 | Tool | What it does |
 |------|-------------|
-| `send_telegram` | Send message or screenshot to user's Telegram. Works from ANY session. Also links the Telegram↔Session bridge so replies continue this conversation. |
+| `delivery_send` | Unified delivery/presentation wrapper. `action:"send"` sends text/files/images, `action:"screenshot"` captures or reuses screenshots, and `action:"present_file"` presents one or many files as assistant artifacts while optionally delivering them. For batches, pass `paths`, `files`, or `attachmentPaths`. |
+| `send_telegram` | Compatibility alias for Telegram-only proactive messages/screenshots. Prefer `delivery_send`. |
 | `save_site_shortcut` | Save a browser site shortcut for quick access |
+
+## Prometheus Dev / Self-Edit Flow
+
+| Tool | What it does |
+|------|-------------|
+| `write_proposal` | Core proposal lane for broader or riskier changes that need proposal review. |
+| `prom_repo_ops` | Core Prometheus repo sync wrapper. Use `action:"push"`, `action:"pull"`, or `action:"sync"`; old `prom_repo_push`, `prom_repo_pull`, and `prom_repo_sync` names remain executable compatibility aliases but are hidden. |
+| `request_dev_source_edit` | Available with `prometheus_source_read`; request scoped dev-source approval after inspecting and identifying the files to edit. |
+| `update_dev_source_edit` | Available with `prometheus_source_read`; revise a pending dev-source approval plan after steer/interruption. |
+| `await_dev_source_edit_approval` | Available with `prometheus_source_read`; resume waiting for the same dev-source approval after handling steer. |
+| `gateway_restart` | Core quick gateway restart helper. Use as a final action after live changes that require process restart. |
 
 ## Memory Tools
 
@@ -174,7 +198,11 @@ Legacy Prometheus runtimes may expose `run_command`; current Codex desktop sessi
 |------|-------------|
 | `task_control` | List, update, pause, resume, complete tasks |
 | `schedule_job` | Create, update, delete, list, run cron jobs |
-| `declare_plan` | Declare a multi-step plan (shown in UI progress tracker) |
+| `declare_plan` | Declare a multi-step plan (shown in UI progress tracker). After a valid 2+ step plan, `complete_plan_step` is injected for the rest of the current turn. |
+
+### Plan Step Flow
+
+`declare_plan` is the only normal always-visible plan tool. Once it succeeds with at least two steps, Prometheus refreshes the current turn's tool schema and temporarily exposes `complete_plan_step`. Use `complete_plan_step` after each phase is truly finished, with concrete evidence in `note`. It disappears again on the next turn unless another active/resumed plan requires it.
 
 ## Background Agent Tools *(core — always available)*
 
@@ -184,10 +212,7 @@ One-shot ephemeral parallel agents with full tool access. No profile files, no p
 
 | Tool | What it does |
 |------|-------------|
-| `background_spawn` | Spawn an ephemeral background agent. `prompt` required. **Result auto-merged at turn end — never call background_join.** |
-| `background_status` | Check state (`queued`, `in_progress`, `completed`, `failed`). Only poll if you need to branch on state mid-turn. |
-| `background_progress` | Alias of `background_status`. |
-| `background_join` | **Do not call.** System-only — finalization gate runs this automatically. |
+| `background_ops` | Unified background agent wrapper. Use `action:"spawn"` with a self-contained `prompt`; use `action:"wait"` only to pause the foreground turn; `status`/`progress` are for rare mid-turn branching; `join` is normally system-only. |
 
 ### Spawn decision rule — ALL 3 must be true
 1. Work is **independent** of your primary tool sequence (no shared dependencies)
@@ -205,20 +230,20 @@ GOOD: "Call write_note with content='Tested bg agents 2026-03-27. Result: workin
 ```
 
 ### How it works
-1. `background_spawn(prompt)` → agent starts, your turn continues in parallel
+1. `background_ops({ action: "spawn", prompt })` → agent starts, your turn continues in parallel
 2. Do your primary work
 3. Finalization gate **automatically** joins all agents at turn end and merges results into final reply
 4. Late completions inject into the reply via WebSocket — no polling needed
 
 ### Join policies (set on spawn)
-- `wait_until_timeout` *(default, 15s)* — waits up to `timeout_ms` at turn end
-- `wait_all` — blocks finalization until agent finishes; use for multi-step bg tasks
+- `wait_all` *(default)* — blocks finalization until agent finishes; use for multi-step bg tasks
+- `wait_until_timeout` — waits up to `timeout_ms` at turn end
 - `best_effort_merge` — merges if already done, skips otherwise
 
 ### Mid-plan spawning
-You can call `background_spawn` during any active `declare_plan` step. The bg agent runs in parallel with your remaining steps and is collected at turn end. Only do this when the side-work doesn't gate any subsequent step.
+You can call `background_ops({ action: "spawn", prompt })` during any active `declare_plan` step. The bg agent runs in parallel with your remaining steps and is collected at turn end. Only do this when the side-work doesn't gate any subsequent step.
 
-### Background agent plan tools *(bg agents only — not available to main agent)*
+### Background agent plan tools *(injected for bg agents only — not available to main agent)*
 
 For multi-step bg agent tasks (2+ meaningful phases), bg agents should plan their own work:
 
@@ -231,9 +256,9 @@ For multi-step bg agent tasks (2+ meaningful phases), bg agents should plan thei
 ```
 User: "Refactor module X and update the docs for it"
 
-Spawn: background_spawn("Read D:/Prometheus/src/X.ts [paste content].
+Spawn: background_ops({ action: "spawn", prompt: "Read D:/Prometheus/src/X.ts [paste content].
         Refactor foo() to use async/await using replace_lines.
-        Exact lines to change: [lines N-M]. New content: [exact new code].")
+        Exact lines to change: [lines N-M]. New content: [exact new code]." })
 
 Primary: update the docs directly
 
@@ -324,11 +349,13 @@ Gate: merges both outcomes into one reply
 
 ## Skills Tools
 
+`skill_list` and `skill_read` are the only core skill tools. Skill authoring, bundle/import/export, metadata, manifest, resource inspection/mutation, fleet audit, and repair helpers live under the `skills` category through `skill_ops`.
+
 | Tool | What it does |
 |------|-------------|
 | `skill_list` | List installed skills (34+ available) |
 | `skill_read` | Read a skill's playbook content |
-| `skill_create` | Create a new skill |
+| `skill_ops` | Category-gated maintenance wrapper. Actions include `inspect`, `resource_list`, `resource_read`, `resource_write`, `resource_delete`, `update_metadata`, `manifest_write`, `import_bundle`, `export_bundle`, `update_from_source`, `create`, `create_bundle`, `audit_all`, and `repair_metadata`. |
 
 ## CIS Intelligence Tools
 
@@ -337,15 +364,16 @@ Gate: merges both outcomes into one reply
 | `deploy_analysis_team` | Deploy a one-shot 5-agent website intelligence team (SEO, Performance, GEO, Backlinks, Content). Pass a URL, get a full audit report delivered to main chat. Team self-deletes after delivery. |
 | `social_intel` | Analyze a social media profile. Pass platform (instagram/tiktok/x/linkedin/facebook) + handle. Returns engagement metrics, growth analysis, content recommendations. Persisted to `entities/social/[platform].md`. |
 
-## CIS Entity Tools *(Block B — coming soon)*
+## CIS Entity Tools
 
-These tools let agents read and write structured business knowledge during a session. Until they're built, use `read_file` / `create_file` directly on `workspace/entities/`.
+These tools let agents read and write structured business knowledge during a session. They live under the `business` category. `business_context_mode` remains core for reading/injecting `BUSINESS.md` without activating the full entity mutation surface.
 
 | Tool | What it does |
 |------|-------------|
 | `read_entity(type, id)` | Read a business entity file — e.g. `read_entity("client", "acme-corp")` reads `entities/clients/acme-corp.md` |
 | `write_entity(type, id, content)` | Create or update an entity file. Use for clients, projects, vendors, contacts, social profiles. |
 | `list_entities(type?)` | List all entity files. Pass a type to filter: `list_entities("project")` → all project files. |
+| `append_entity_event(type, id, event)` | Append a structured event/timeline note to an entity record. |
 
 **Entity types:** `client`, `project`, `vendor`, `contact`, `social`
 **Naming:** lowercase hyphenated slug — "Acme Corp" → `acme-corp`
@@ -384,7 +412,7 @@ These tools let agents read and write structured business knowledge during a ses
 | Send user a message on Telegram | `send_telegram` (also bridges session) |
 | Send user a screenshot on Telegram | `desktop_screenshot` then `send_telegram({ screenshot: true })` |
 | Create or manage a task | `task_control` |
-| Run side work in parallel with main response | `background_spawn` → do primary work → finalization gate merges automatically |
+| Run side work in parallel with main response | `background_ops({ action: "spawn", prompt })` → do primary work → finalization gate merges automatically |
 | Schedule a recurring job | `schedule_job` |
 | Create or message a standalone subagent | `request_tool_category("agents_and_teams")`, then `spawn_subagent` / `message_subagent` |
 | Create a team | `team_manage({ action: "create" })` (agents must exist first) |

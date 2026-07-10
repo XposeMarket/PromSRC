@@ -1,0 +1,339 @@
+--- src/auth/xai-oauth.ts via read_source ---
+src/auth/xai-oauth.ts (362 lines) read result exceeded inline budget. Requested window 1-362.
+[TOOL_RESULT_ARTIFACT] Full output saved to temp/tool-results/1783538141162-mobile_mrcghgkh_mmlgpg-read_source.txt. Read targeted ranges from that artifact only if needed.
+
+--- src/auth/openai-oauth.ts via read_source ---
+src/auth/openai-oauth.ts (583 lines) [window 1-80, truncated]:
+1: /**
+2:  * openai-oauth.ts
+3:  * Handles the full OpenAI Codex OAuth PKCE flow.
+4:  *
+5:  * Key insight from the actual Codex CLI (codex-rs/login/src/server.rs):
+6:  *   - The OAuth access_token IS the bearer token for chatgpt.com/backend-api
+7:  *   - JWT claims are nested under 'https://api.openai.com/auth' namespace
+8:  *   - Token exchange for an API key is optional; CLI continues without it on failure
+9:  *   - The refresh flow returns a new access_token + id_token
+10:  */
+11: 
+12: import fs from 'fs';
+13: import path from 'path';
+14: import http from 'http';
+15: import crypto from 'crypto';
+16: import { exec } from 'child_process';
+17: import { getVault } from '../security/vault';
+18: import { log } from '../security/log-scrubber';
+19: 
+20: // ─── Constants ──────────────────────────────────────────────────────────────────
+21: 
+22: const AUTH_URL      = 'https://auth.openai.com/oauth/authorize';
+23: const TOKEN_URL     = 'https://auth.openai.com/oauth/token';
+24: const CALLBACK_HOST = process.env.PROMETHEUS_OPENAI_OAUTH_HOST || 'localhost';
+25: const CALLBACK_PORT = Number(process.env.PROMETHEUS_OPENAI_OAUTH_PORT || '1455');
+26: const CALLBACK_PATH = '/auth/callback';
+27: const CALLBACK_URL  = `http://${CALLBACK_HOST}:${CALLBACK_PORT}${CALLBACK_PATH}`;
+28: 
+29: // Public OAuth client ID used by the official Codex CLI
+30: const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+31: 
+32: // ─── Token Storage ──────────────────────────────────────────────────────────────
+33: 
+34: export interface OAuthTokens {
+35:   /** OAuth access_token — used as Bearer token for chatgpt.com/backend-api/codex */
+36:   access_token: string;
+37:   /** Optional API key from token exchange — for api.openai.com if needed */
+38:   api_key?: string;
+39:   refresh_token: string;
+40:   expires_at: number; // Unix ms
+41:   account_id?: string;
+42:   id_token?: string;
+43: }
+44: 
+45: // ─── JWT helpers ────────────────────────────────────────────────────────────────
+46: 
+47: /**
+48:  * Decode claims from an OpenAI JWT.
+49:  * OpenAI nests org/account claims under the 'https://api.openai.com/auth' key.
+50:  */
+51: function decodeJwtClaims(jwt: string): Record<string, any> {
+52:   const parts = String(jwt).split('.');
+53:   if (parts.length < 2) return {};
+54:   try {
+55:     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+56:     const ns = payload['https://api.openai.com/auth'];
+57:     return (ns && typeof ns === 'object') ? ns : payload;
+58:   } catch {
+59:     return {};
+60:   }
+61: }
+62: 
+63: export function buildCodexCloudflareHeaders(accessToken?: string, explicitAccountId?: string): Record<string, string> {
+64:   const headers: Record<string, string> = {
+65:     'User-Agent': 'codex_cli_rs/0.0.0 (Prometheus)',
+66:     originator: 'codex_cli_rs',
+67:   };
+68:   let accountId = String(explicitAccountId || '').trim();
+69:   if (!accountId && accessToken) {
+70:     const claims = decodeJwtClaims(accessToken);
+71:     accountId = String(claims.chatgpt_account_id || claims.sub || '').trim();
+72:   }
+73:   if (accountId) {
+74:     headers['ChatGPT-Account-ID'] = accountId;
+75:   }
+76:   return headers;
+77: }
+78: 
+79: // ─── Optional token exchange ────────────────────────────────────────────────────
+80: 
+[READ_TRUNCATED] Returned 80 of 583 lines. Use start_line:81, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- src/auth/anthropic-oauth.ts via read_source ---
+src/auth/anthropic-oauth.ts (201 lines) [window 1-80, truncated]:
+1: /**
+2:  * anthropic-oauth.ts
+3:  * Handles Anthropic Claude subscription auth via the setup-token flow.
+4:  *
+5:  * Mirrors how OpenClaw handles Anthropic auth:
+6:  *   - User runs `claude setup-token` from Claude Code CLI
+7:  *   - Pastes the resulting token into Prometheus (Settings → Models → Anthropic)
+8:  *   - Token is stored AES-256-GCM encrypted via SecretVault
+9:  *   - Token is used as Bearer auth for api.anthropic.com/v1/messages
+10:  *
+11:  * The setup-token produces a long-lived OAuth token (sk-ant-oat-*)
+12:  * that authenticates against the user's Claude Pro/Max subscription.
+13:  *
+14:  * Flow (same as OpenClaw):
+15:  *   1. Run `claude setup-token` on any machine with Claude Code CLI
+16:  *   2. Paste the token into Prometheus
+17:  *   3. Stored as a token auth profile (no refresh needed — long-lived)
+18:  *   4. If token expires/revoked, re-run `claude setup-token` and paste again
+19:  *
+20:  * Note: Anthropic setup-token auth is technical compatibility.
+21:  * Anthropic has restricted subscription usage outside Claude Code in the past.
+22:  * Use at your own discretion — see OpenClaw docs for current policy status.
+23:  */
+24: 
+25: import { spawnSync } from 'child_process';
+26: import { getVault } from '../security/vault';
+27: import { log } from '../security/log-scrubber';
+28: 
+29: // ─── Constants ──────────────────────────────────────────────────────────────────
+30: 
+31: const VAULT_KEY = 'anthropic.oauth_tokens';
+32: 
+33: // Anthropic API endpoint
+34: export const ANTHROPIC_API_BASE = 'https://api.anthropic.com';
+35: export const ANTHROPIC_API_VERSION = '2023-06-01';
+36: 
+37: // OAuth requests behave much more reliably when we mirror Claude Code's
+38: // header shape instead of sending only the bare oauth beta.
+39: const OAUTH_BETA_HEADERS = [
+40:   'claude-code-20250219',
+41:   'oauth-2025-04-20',
+42:   'fine-grained-tool-streaming-2025-05-14',
+43: ];
+44: const CLAUDE_CLI_VERSION_FALLBACK = '2.1.75';
+45: let cachedClaudeCliVersion: string | null = null;
+46: 
+47: function detectClaudeCliVersion(): string {
+48:   if (cachedClaudeCliVersion) return cachedClaudeCliVersion;
+49: 
+50:   for (const command of ['claude', 'claude-code']) {
+51:     try {
+52:       const result = spawnSync(command, ['--version'], {
+53:         encoding: 'utf8',
+54:         timeout: 5_000,
+55:         windowsHide: true,
+56:       });
+57:       const stdout = String(result.stdout || '').trim();
+58:       const version = stdout.split(/\s+/)[0] || '';
+59:       if (/^\d/.test(version)) {
+60:         cachedClaudeCliVersion = version;
+61:         return version;
+62:       }
+63:     } catch {
+64:       // Fall through to the next command or the static fallback.
+65:     }
+66:   }
+67: 
+68:   cachedClaudeCliVersion = CLAUDE_CLI_VERSION_FALLBACK;
+69:   return cachedClaudeCliVersion;
+70: }
+71: 
+72: // ─── Token Storage ──────────────────────────────────────────────────────────────
+73: 
+74: export interface AnthropicTokens {
+75:   /** The setup-token (sk-ant-oat-*) — used as Bearer token */
+76:   access_token: string;
+77:   /** When the token was stored (Unix ms) */
+78:   stored_at: number;
+79:   /** Optional: account email or identifier */
+80:   account_id?: string;
+[READ_TRUNCATED] Returned 80 of 201 lines. Use start_line:81, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- src/providers/openai-codex-adapter.ts via read_source ---
+src/providers/openai-codex-adapter.ts (654 lines) [window 1-80, truncated]:
+1: /**
+2:  * openai-codex-adapter.ts
+3:  *
+4:  * Dedicated adapter for OpenAI Codex via ChatGPT Plus/Pro OAuth.
+5:  * Uses https://chatgpt.com/backend-api/codex/responses — NOT /v1/chat/completions.
+6:  *
+7:  * Required headers:
+8:  *   Authorization: Bearer <api_token>        (from OAuth token exchange)
+9:  *   ChatGPT-Account-Id: <account_id>         (from JWT claims)
+10:  *   OpenAI-Beta: responses=experimental
+11:  *
+12:  * Response format: SSE stream, we read response.completed for the final output.
+13:  * Tool calls come back as response.output items with type "function_call".
+14:  */
+15: 
+16: import fs from 'fs';
+17: import path from 'path';
+18: import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
+19: import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
+20: import { contentToString, stripCacheMarker } from './content-utils';
+21: import { getConfig } from '../config/config';
+22: 
+23: const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
+24: function envMs(name: string, fallback: number, minimum: number): number {
+25:   const value = Number(process.env[name]);
+26:   return Number.isFinite(value) ? Math.max(minimum, value) : fallback;
+27: }
+28: const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 900_000, 60_000);
+29: const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 300_000, 60_000);
+30: const DEFAULT_CODEX_INSTRUCTIONS = 'You are Prometheus, a helpful AI assistant. Answer the user directly and follow the conversation context.';
+31: 
+32: // Models available via Codex OAuth (latest first; official OpenAI IDs only).
+33: // GPT-5.6 preview models are limited-access IDs published by OpenAI for API and Codex.
+34: // Keep GPT-5.5 as the stable default/fallback until the account/workspace is provisioned for GPT-5.6.
+35: export const CODEX_MODELS = [
+36:   'gpt-5.6-sol',
+37:   'gpt-5.6-terra',
+38:   'gpt-5.6-luna',
+39:   'gpt-5.5',
+40:   'gpt-5.4-codex',
+41:   'gpt-5.4-codex-mini',
+42:   'gpt-5.4',
+43:   'gpt-5.4-mini',
+44:   'gpt-5.3-codex',
+45:   'gpt-5.3-codex-spark',
+46:   'gpt-5.3',
+47:   'gpt-5.2-codex',
+48:   'gpt-5.2',
+49:   'gpt-5.1-codex-max',
+50:   'gpt-5.1-codex-mini',
+51:   'gpt-5.1-codex',
+52:   'gpt-5.1',
+53: ];
+54: 
+55: const CHATGPT_ACCOUNT_CODEX_MODEL_FALLBACKS: Record<string, string> = {
+56:   'gpt-5.6-sol': 'gpt-5.5',
+57:   'gpt-5.6-terra': 'gpt-5.5',
+58:   'gpt-5.6-luna': 'gpt-5.5',
+59:   'gpt-5.5': 'gpt-5.4',
+60:   'gpt-5.4-codex': 'gpt-5.4',
+61:   'gpt-5.4-codex-mini': 'gpt-5.4-mini',
+62:   'gpt-5.3-codex': 'gpt-5.3',
+63:   'gpt-5.3-codex-spark': 'gpt-5.3',
+64:   'gpt-5.2-codex': 'gpt-5.2',
+65:   'gpt-5.1-codex-max': 'gpt-5.1',
+66:   'gpt-5.1-codex-mini': 'gpt-5.1',
+67:   'gpt-5.1-codex': 'gpt-5.1',
+68: };
+69: 
+70: function getChatgptAccountCompatibleModel(model: string): string {
+71:   return CHATGPT_ACCOUNT_CODEX_MODEL_FALLBACKS[String(model || '').trim()] || String(model || '').trim();
+72: }
+73: 
+74: function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string): boolean {
+75:   return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
+76: }
+77: 
+78: function writeCodexModelRuntimeStatus(status: {
+79:   configuredModel: string;
+80:   requestedModel: string;
+[READ_TRUNCATED] Returned 80 of 654 lines. Use start_line:81, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.
+
+--- src/providers/anthropic-adapter.ts via read_source ---
+src/providers/anthropic-adapter.ts (952 lines) [window 1-80, truncated]:
+1: /**
+2:  * anthropic-adapter.ts
+3:  *
+4:  * Provider adapter for Anthropic Claude models via api.anthropic.com/v1/messages.
+5:  * Uses Anthropic's native message format (NOT OpenAI-compat).
+6:  *
+7:  * Supports both:
+8:  *   - setup-token auth (sk-ant-oat-*) from Claude Pro/Max subscription
+9:  *   - API key auth (sk-ant-api-*) from Anthropic Console
+10:  *
+11:  * Auth is handled by anthropic-oauth.ts (vault-backed token storage).
+12:  *
+13:  * Mirrors how OpenClaw routes Anthropic requests:
+14:  *   - Bearer auth + anthropic-beta: oauth-2025-04-20 for OAuth tokens
+15:  *   - x-api-key header for API keys
+16:  *   - anthropic-version: 2023-06-01
+17:  */
+18: 
+19: import type {
+20:   LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult,
+21:   GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ToolCall,
+22: } from './LLMProvider';
+23: import {
+24:   buildAuthHeaders, getValidToken, loadTokens,
+25:   ANTHROPIC_API_BASE,
+26: } from '../auth/anthropic-oauth';
+27: import { contentToString, splitOnCacheMarker } from './content-utils';
+28: import { getConfig } from '../config/config';
+29: 
+30: // Anthropic ignores cache breakpoints on segments below the minimum cacheable
+31: // size, but to avoid emitting pointless cache writes we only mark the system
+32: // prefix when it is comfortably large. ~1024 tokens ≈ 3500 chars at 3.5 ch/tok.
+33: const ANTHROPIC_MIN_CACHE_CHARS = 3500;
+34: 
+35: // Models available via Anthropic
+36: export const ANTHROPIC_MODELS = [
+37:   'claude-fable-5',
+38:   'claude-opus-4-8',
+39:   'claude-opus-4-7',
+40:   'claude-opus-4-6',
+41:   'claude-sonnet-5',
+42:   'claude-sonnet-4-6',
+43:   'claude-sonnet-4-5-20250514',
+44:   'claude-haiku-4-5-20251001',
+45:   'claude-sonnet-4-20250514',
+46: ];
+47: 
+48: export interface AnthropicDirectConfig {
+49:   providerId: string;
+50:   apiKey: string;
+51:   baseUrl?: string;
+52:   authHeader?: 'bearer' | 'x-api-key';
+53:   staticModels?: string[];
+54:   defaultHeaders?: Record<string, string>;
+55: }
+56: 
+57: export class AnthropicAdapter implements LLMProvider {
+58:   readonly id: string;
+59:   private configDir?: string;
+60:   private directConfig?: AnthropicDirectConfig;
+61: 
+62:   constructor(config: string | AnthropicDirectConfig) {
+63:     if (typeof config === 'string') {
+64:       this.id = 'anthropic';
+65:       this.configDir = config;
+66:       return;
+67:     }
+68:     this.id = config.providerId;
+69:     this.directConfig = config;
+70:   }
+71: 
+72:   private isAdaptiveThinkingCapableModel(model: string): boolean {
+73:     return /^claude-fable-5(?:\b|[-_])/.test(model)
+74:       || /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model)
+75:       || /^claude-sonnet-5(?:\b|[-_])/.test(model)
+76:       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model);
+77:   }
+78: 
+79:   private supportsXHighEffort(model: string): boolean {
+80:     return /^claude-opus-4-(7|8)(?:\b|[-_])/.test(model);
+[READ_TRUNCATED] Returned 80 of 952 lines. Use start_line:81, num_lines:80 for the next chunk, or pass full:true only when the whole file is truly needed.

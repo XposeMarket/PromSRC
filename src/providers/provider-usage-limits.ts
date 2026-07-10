@@ -28,6 +28,16 @@ export interface UsageWindow {
   used_percent: number;
   /** ISO timestamp the window resets, when known. */
   reset_at: string | null;
+  /** Optional provider-native used amount for credit/cost pools. */
+  used?: number | null;
+  /** Optional provider-native limit amount for credit/cost pools. */
+  limit?: number | null;
+  /** Optional provider-native remaining amount for credit/cost pools. */
+  remaining?: number | null;
+  /** Optional provider-native unit, e.g. "credits" or "USD". */
+  unit?: string | null;
+  /** Optional compact human detail shown under gauges. */
+  detail?: string | null;
 }
 
 export interface ProviderBudget {
@@ -166,6 +176,15 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 type LiveResult = { windows: UsageWindow[]; plan_label: string | null; error: string | null };
 
+type GrokAuth = {
+  source: 'prometheus_oauth' | 'grok_cli_auth';
+  access_token: string;
+  refresh_token?: string;
+  token_endpoint?: string;
+  auth_path?: string;
+  raw?: any;
+};
+
 async function fetchAnthropicLive(configDir: string): Promise<LiveResult | null> {
   // The usage endpoint requires the `user:profile` scope, which the main
   // setup-token (inference-only) does NOT carry. We use a separate, opt-in
@@ -232,9 +251,235 @@ async function fetchCodexLive(configDir: string): Promise<LiveResult | null> {
   return { windows, plan_label: null, error: null };
 }
 
-// Note on xAI/Grok: Prometheus authenticates xAI via x.ai OAuth (for api.x.ai),
-// which is separate from Management API team billing. Keep xAI usage here on
-// local token accounting only so usage display cannot alter the OAuth chat path.
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const raw = value && typeof value === 'object' && 'val' in (value as any) ? (value as any).val : value;
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function getPath(obj: any, path: string): unknown {
+  return path.split('.').reduce((acc, part) => (acc && typeof acc === 'object') ? acc[part] : undefined, obj);
+}
+
+function firstPathNumber(obj: any, paths: string[]): number | null {
+  return firstNumber(...paths.map((p) => getPath(obj, p)));
+}
+
+function firstPathString(obj: any, paths: string[]): string | null {
+  return firstString(...paths.map((p) => getPath(obj, p)));
+}
+
+function money(value: number | null, unit: string | null): string {
+  if (value == null || !Number.isFinite(value)) return '';
+  const isMoney = !unit || /usd|\$|credit/i.test(unit);
+  return isMoney
+    ? `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`;
+}
+
+function normaliseGrokBillingWindow(body: any): UsageWindow | null {
+  const root = body?.config && typeof body.config === 'object' ? body.config : body;
+  const pool = body?.weeklyPool || body?.sharedPool || body?.usagePool || body?.credits || root;
+  const used = firstPathNumber(pool, [
+    'used.val', 'used.value', 'usedCredits.val', 'usedCredits', 'usage.used.val', 'usage.used',
+    'totalUsed.val', 'totalUsed', 'amountUsed.val', 'amountUsed',
+  ]);
+  const limit = firstPathNumber(pool, [
+    'weeklyLimit.val', 'weeklyLimit', 'monthlyLimit.val', 'monthlyLimit', 'limit.val', 'limit',
+    'total.val', 'total', 'pool.val', 'pool', 'creditLimit.val', 'creditLimit',
+  ]);
+  const explicitRemaining = firstPathNumber(pool, [
+    'remaining.val', 'remaining', 'remainingCredits.val', 'remainingCredits', 'available.val', 'available',
+    'balance.val', 'balance',
+  ]);
+  const remaining = explicitRemaining != null ? explicitRemaining
+    : (used != null && limit != null ? Math.max(0, limit - used) : null);
+  const usedPercent = firstPathNumber(pool, ['used_percent', 'usedPercent', 'percentUsed', 'utilization', 'percentage'])
+    ?? (used != null && limit != null && limit > 0 ? (used / limit) * 100 : null);
+  const resetAt = resetIsoFrom({
+    reset_at: firstPathString(pool, [
+      'reset_at', 'resetAt', 'resets_at', 'resetsAt', 'billingPeriodEnd', 'billing_period_end',
+      'periodEnd', 'period_end', 'nextResetAt', 'next_reset_at',
+    ]),
+    reset_after_seconds: firstPathNumber(pool, [
+      'reset_after_seconds', 'resetAfterSeconds', 'resets_in_seconds', 'secondsUntilReset',
+      'seconds_until_reset', 'resetCountdownSeconds',
+    ]),
+  });
+  const period = firstPathString(pool, ['period', 'window', 'cadence', 'limitType'])
+    || (firstPathString(pool, ['billingPeriodStart', 'billing_period_start']) ? 'Monthly' : 'Weekly');
+  const unit = firstPathString(pool, ['unit', 'currency']) || 'credits';
+  const parts = [
+    remaining != null && limit != null ? `Remaining ${money(remaining, unit)} / ${money(limit, unit)}` : '',
+    used != null ? `Used ${money(used, unit)}` : '',
+  ].filter(Boolean);
+  return {
+    label: /month/i.test(period) ? 'Monthly pool' : /day/i.test(period) ? `${period} pool` : 'Weekly pool',
+    used_percent: clampPct(usedPercent ?? 0),
+    reset_at: resetAt,
+    used,
+    limit,
+    remaining,
+    unit,
+    detail: parts.join(' · ') || null,
+  };
+}
+
+function localGrokAuthPath(): string {
+  const os = require('os');
+  const path = require('path');
+  return path.join(os.homedir(), '.grok', 'auth.json');
+}
+
+function extractGrokAuth(raw: any, authPath: string): GrokAuth | null {
+  const access = firstPathString(raw, [
+    'access_token', 'accessToken', 'tokens.access_token', 'tokens.accessToken',
+    'oauth.access_token', 'oauth.accessToken',
+  ]);
+  if (!access) return null;
+  const refresh = firstPathString(raw, [
+    'refresh_token', 'refreshToken', 'tokens.refresh_token', 'tokens.refreshToken',
+    'oauth.refresh_token', 'oauth.refreshToken',
+  ]) || undefined;
+  const tokenEndpoint = firstPathString(raw, [
+    'token_endpoint', 'tokenEndpoint', 'tokens.token_endpoint', 'oauth.token_endpoint',
+  ]) || undefined;
+  return { source: 'grok_cli_auth', access_token: access, refresh_token: refresh, token_endpoint: tokenEndpoint, auth_path: authPath, raw };
+}
+
+function loadLocalGrokAuth(): GrokAuth | null {
+  try {
+    const fs = require('fs');
+    const authPath = localGrokAuthPath();
+    if (!fs.existsSync(authPath)) return null;
+    return extractGrokAuth(JSON.parse(String(fs.readFileSync(authPath, 'utf8'))), authPath);
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalGrokAuth(auth: GrokAuth, update: any): void {
+  if (!auth.auth_path || !auth.raw || !update?.access_token) return;
+  const fs = require('fs');
+  const raw = { ...auth.raw };
+  const setKnown = (snake: string, camel: string, value: unknown) => {
+    if (raw[snake] != null) raw[snake] = value;
+    else if (raw[camel] != null) raw[camel] = value;
+  };
+  setKnown('access_token', 'accessToken', String(update.access_token));
+  if (update.refresh_token) setKnown('refresh_token', 'refreshToken', String(update.refresh_token));
+  if (raw.tokens && typeof raw.tokens === 'object') {
+    raw.tokens.access_token = String(update.access_token);
+    if (update.refresh_token) raw.tokens.refresh_token = String(update.refresh_token);
+  }
+  if (raw.oauth && typeof raw.oauth === 'object') {
+    raw.oauth.access_token = String(update.access_token);
+    if (update.refresh_token) raw.oauth.refresh_token = String(update.refresh_token);
+  }
+  fs.writeFileSync(auth.auth_path, JSON.stringify(raw, null, 2));
+}
+
+async function refreshLocalGrokAuth(auth: GrokAuth): Promise<GrokAuth | null> {
+  if (!auth.refresh_token) return null;
+  const endpoint = auth.token_endpoint || 'https://auth.x.ai/oauth/token';
+  const url = new URL(endpoint);
+  if (url.protocol !== 'https:' || (url.hostname !== 'auth.x.ai' && !url.hostname.endsWith('.x.ai'))) {
+    throw new Error('Grok auth refresh endpoint is not an x.ai HTTPS endpoint');
+  }
+  const res = await withTimeout(fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: 'b1a00492-073a-47ea-816f-4c329264a828',
+      refresh_token: auth.refresh_token,
+    }).toString(),
+  }), 15000);
+  if (!res.ok) return null;
+  const data: any = await res.json().catch(() => ({}));
+  if (!data?.access_token) return null;
+  try { saveLocalGrokAuth(auth, data); } catch { /* best-effort local CLI cache update */ }
+  return { ...auth, access_token: String(data.access_token), refresh_token: String(data.refresh_token || auth.refresh_token) };
+}
+
+async function loadGrokBillingAuth(configDir: string): Promise<GrokAuth | null> {
+  try {
+    const oauth = require('../auth/xai-oauth');
+    const tokens = oauth.loadXAITokens(configDir);
+    if (tokens?.access_token) {
+      let accessToken = String(tokens.access_token);
+      try { accessToken = await oauth.getValidXAIToken(configDir); } catch { /* use stored token */ }
+      return {
+        source: 'prometheus_oauth',
+        access_token: accessToken,
+        refresh_token: tokens.refresh_token,
+        token_endpoint: tokens.token_endpoint,
+      };
+    }
+  } catch { /* fall back to Grok CLI auth */ }
+  return loadLocalGrokAuth();
+}
+
+async function grokProxyGet(pathname: string, auth: GrokAuth): Promise<Response> {
+  return withTimeout(fetch(`https://cli-chat-proxy.grok.com${pathname}`, {
+    headers: {
+      Authorization: `Bearer ${auth.access_token}`,
+      Accept: 'application/json',
+      'User-Agent': 'Prometheus/grok-usage',
+    },
+  }), 15000);
+}
+
+async function fetchGrokLive(configDir: string): Promise<LiveResult | null> {
+  let auth = await loadGrokBillingAuth(configDir);
+  if (!auth?.access_token) return null;
+
+  let res = await grokProxyGet('/v1/billing?format=credits', auth);
+  if ((res.status === 401 || res.status === 403) && auth.source === 'prometheus_oauth') {
+    try {
+      const oauth = require('../auth/xai-oauth');
+      const refreshed = await oauth.refreshXAITokens(configDir);
+      auth = { ...auth, access_token: String(refreshed.access_token || auth.access_token), refresh_token: refreshed.refresh_token || auth.refresh_token };
+      res = await grokProxyGet('/v1/billing?format=credits', auth);
+    } catch { /* keep original response */ }
+  } else if ((res.status === 401 || res.status === 403) && auth.source === 'grok_cli_auth') {
+    const refreshed = await refreshLocalGrokAuth(auth).catch(() => null);
+    if (refreshed) {
+      auth = refreshed;
+      res = await grokProxyGet('/v1/billing?format=credits', auth);
+    }
+  }
+  if (!res.ok) return { windows: [], plan_label: null, error: `Grok billing ${res.status}` };
+
+  const billing: any = await res.json().catch(() => ({}));
+  const windows = [normaliseGrokBillingWindow(billing)].filter(Boolean) as UsageWindow[];
+
+  let planLabel = firstPathString(billing, [
+    'plan.label', 'plan.name', 'subscription.plan', 'subscription.name', 'account.plan', 'planLabel',
+  ]);
+  try {
+    const settings = await grokProxyGet('/v1/settings', auth);
+    if (settings.ok) {
+      const body: any = await settings.json().catch(() => ({}));
+      planLabel = firstPathString(body, [
+        'plan.label', 'plan.name', 'subscription.plan', 'subscription.name', 'account.plan',
+        'user.plan', 'organization.plan', 'tier', 'planLabel',
+      ]) || planLabel;
+    }
+  } catch { /* billing is enough */ }
+
+  return { windows, plan_label: planLabel, error: windows.length ? null : 'Grok billing response had no recognised credit pool' };
+}
 
 // ─── Live cache ──────────────────────────────────────────────────────────────
 
@@ -249,6 +494,7 @@ async function getLive(providerId: string, configDir: string): Promise<LiveResul
   try {
     if (providerId === 'anthropic') result = await fetchAnthropicLive(configDir);
     else if (providerId === 'openai_codex') result = await fetchCodexLive(configDir);
+    else if (providerId === 'xai') result = await fetchGrokLive(configDir);
   } catch (err: any) {
     result = { windows: [], plan_label: null, error: err?.message || String(err) };
   }
@@ -280,10 +526,9 @@ function internalTokens(providerId: string, events: ReturnType<typeof readModelU
 }
 
 /**
- * Read Grok CLI local session files (~/.grok/sessions) and sum their token
- * usage. There is no live xAI/Grok usage endpoint, so — like TokenTracker —
- * we passively read the files the Grok CLI already writes. Returns zeros if the
- * CLI isn't installed or no sessions exist. We never write to these files.
+ * Read Grok CLI local session files and unified logs, then sum token usage.
+ * Live billing provides the credit pool when available; these local files add
+ * Today/Last-month style call/token totals without sending any log contents out.
  */
 function readGrokCliTokens(): { total: number; calls: number; monthTotal: number } {
   const out = { total: 0, calls: 0, monthTotal: 0 };
@@ -291,13 +536,35 @@ function readGrokCliTokens(): { total: number; calls: number; monthTotal: number
     const os = require('os');
     const path = require('path');
     const fs = require('fs');
-    const base = path.join(os.homedir(), '.grok', 'sessions');
-    if (!fs.existsSync(base)) return out;
-
     const monthStart = new Date();
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
     const monthMs = monthStart.getTime();
+
+    const addUsage = (obj: any, fallbackCurrentMonth = false) => {
+      const input = firstNumber(obj?.inputTokens, obj?.input_tokens, obj?.usage?.inputTokens, obj?.usage?.input_tokens, obj?.tokens?.input);
+      const output = firstNumber(obj?.outputTokens, obj?.output_tokens, obj?.usage?.outputTokens, obj?.usage?.output_tokens, obj?.tokens?.output);
+      const total = firstNumber(obj?.totalTokens, obj?.total_tokens, obj?.usage?.totalTokens, obj?.usage?.total_tokens, obj?.tokens?.total)
+        ?? ((input || output) ? Number(input || 0) + Number(output || 0) : 0);
+      if (!total || total <= 0) return;
+      out.total += total;
+      out.calls += 1;
+      const t = Date.parse(obj?.timestamp || obj?.time || obj?.createdAt || obj?.created_at || '');
+      if ((Number.isFinite(t) && t >= monthMs) || (!Number.isFinite(t) && fallbackCurrentMonth)) out.monthTotal += total;
+    };
+
+    const logsPath = path.join(os.homedir(), '.grok', 'logs', 'unified.jsonl');
+    if (fs.existsSync(logsPath)) {
+      const lines = String(fs.readFileSync(logsPath, 'utf8')).split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try { addUsage(JSON.parse(trimmed)); } catch { /* skip malformed line */ }
+      }
+    }
+
+    const base = path.join(os.homedir(), '.grok', 'sessions');
+    if (!fs.existsSync(base)) return out;
 
     const sessionDirs = fs.readdirSync(base, { withFileTypes: true })
       .filter((d: any) => d.isDirectory())
@@ -311,17 +578,7 @@ function readGrokCliTokens(): { total: number; calls: number; monthTotal: number
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          try {
-            const obj = JSON.parse(trimmed);
-            const tt = Number(obj.totalTokens ?? obj.total_tokens ?? 0);
-            if (tt > 0) {
-              out.total += tt;
-              out.calls += 1;
-              const t = Date.parse(obj.timestamp || obj.time || '');
-              if (Number.isFinite(t) && t >= monthMs) out.monthTotal += tt;
-              else if (!Number.isFinite(t)) out.monthTotal += tt; // undated → count as current
-            }
-          } catch { /* skip malformed line */ }
+          try { addUsage(JSON.parse(trimmed), true); } catch { /* skip malformed line */ }
         }
       }
       // signals.json: snapshot with a contextTokensUsed value (fallback).
@@ -362,6 +619,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   const events = readModelUsageEvents();
   const ids = (Array.isArray(credentialedIds) ? credentialedIds : [])
     .filter((id) => id && !LOCAL_PROVIDERS.has(id));
+  if (!ids.includes('xai') && loadLocalGrokAuth()) ids.push('xai');
 
   const providers = await Promise.all(ids.map(async (id): Promise<ProviderUsage> => {
     const live = await getLive(id, configDir);

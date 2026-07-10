@@ -1,54 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "animejs",
-  "name": "animejs",
-  "description": "Anime.js adapter patterns for HyperFrames. Use when writing Anime.js animations or timelines inside HyperFrames compositions, registering animations on window.__hfAnime, making Anime.js seek-driven and deterministic, or translating Anime.js examples into render-safe HyperFrames HTML.",
-  "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "description": "Use this skill when animating DOM elements, SVG, web UI, creative prototypes, timelines, entrances/exits, or motion effects specifically with Anime.js or when choosing Anime.js for lightweight web animation.",
   "triggers": [
-    "animejs"
+    "Anime.js animation",
+    "use Anime.js",
+    "animate DOM elements",
+    "animate SVG with Anime",
+    "web animation timeline",
+    "Anime stagger effect",
+    "Anime easing",
+    "JavaScript animation sequence",
+    "animated landing page",
+    "motion effects with Anime",
+    "build an animation timeline",
+    "animate UI elements",
+    "creative DOM animation",
+    "Anime.js docs",
+    "smooth UI motion"
   ],
   "categories": [
-    "generic",
-    "imported"
+    "creative",
+    "animation",
+    "web-ui"
   ],
-  "requiredTools": [],
-  "requires": {
-    "tools": [],
-    "toolCategories": [],
-    "connectors": [],
-    "env": [],
-    "bins": [],
-    "platforms": [],
-    "permissions": [
-      "workspaceRead",
-      "shell",
-      "desktop",
-      "externalSideEffects"
-    ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
-  },
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": false,
-    "shell": true,
-    "browser": false,
-    "desktop": true,
-    "externalSideEffects": true
-  },
-  "resources": [],
-  "status": "ready",
-  "lifecycle": "experimental",
-  "ownership": "prometheus-owned-overlay",
-  "executionEnabled": true,
-  "riskLevel": "medium"
+  "requiredTools": [
+    "creative_basic",
+    "workspace_write"
+  ],
+  "lifecycle": "active",
+  "id": "animejs"
 }
