@@ -67,17 +67,15 @@ function buildMainGolden() {
       callerContextPresent: false,
       capabilities: { vision: true, provider: 'openai', model: 'gpt-test' },
       skillRouting: {
-        version: 1,
+        version: 2,
         mode: 'active',
         messageHash: 'fixture',
-        selected: [],
-        advisory: [],
+        candidates: [],
         excluded: [],
         discoveryRecommended: false,
         discoveryReason: '',
-        completeInstructionsInjected: false,
-        injectedInstructionChars: 0,
-        estimatedInjectedTokens: 0,
+        autoInjectedInstructions: false,
+        instructionsRequireSkillRead: true,
       },
     },
   });
@@ -144,7 +142,8 @@ function testMainGolden(): void {
   assert.equal(manifest.stage4InstructionRouting.mode, 'active');
   assert.ok(manifest.stage4InstructionRouting.estimatedSavedTokens >= 0);
   assert.equal(manifest.skillRouting?.mode, 'active');
-  assert.equal(manifest.skillRouting?.completeInstructionsInjected, false);
+  assert.equal(manifest.skillRouting?.autoInjectedInstructions, false);
+  assert.equal(manifest.skillRouting?.instructionsRequireSkillRead, true);
 }
 
 function testWorkerAndProviderGolden(): void {

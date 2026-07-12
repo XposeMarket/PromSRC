@@ -27,9 +27,9 @@ export interface SkillRoutingRankedMatch {
   matchedDomains: string[];
 }
 
-export interface SkillRoutingSelection {
+export interface SkillRoutingCandidate {
   id: string;
-  reason: 'explicit_mention' | 'user_selected_relevant' | 'high_confidence_trigger';
+  reason: 'explicit_mention' | 'user_selected_relevant' | 'strong_trigger_match' | 'plausible_trigger_match';
   score: number;
   confidence: SkillRoutingConfidence;
   instructionChars: number;
@@ -37,17 +37,15 @@ export interface SkillRoutingSelection {
 }
 
 export interface SkillRoutingReport {
-  version: 1;
+  version: 2;
   mode: SkillRoutingMode;
   messageHash: string;
-  selected: SkillRoutingSelection[];
-  advisory: Array<{ id: string; score: number; confidence: SkillRoutingConfidence; reason: string }>;
+  candidates: SkillRoutingCandidate[];
   excluded: Array<{ id: string; reason: string }>;
   discoveryRecommended: boolean;
   discoveryReason: string;
-  completeInstructionsInjected: boolean;
-  injectedInstructionChars: number;
-  estimatedInjectedTokens: number;
+  autoInjectedInstructions: false;
+  instructionsRequireSkillRead: true;
 }
 
 const recentReports = new Map<string, SkillRoutingReport>();
@@ -110,56 +108,46 @@ export function resolveSkillRuntimeRouting(input: {
   const forcedIds = normalizeIds(input.forcedSkillIds);
   const byId = new Map(input.skills.filter(isAvailable).map((skill) => [skill.id.toLowerCase(), skill]));
   const ranked = input.rankedMatches.filter((match) => byId.has(match.id.toLowerCase()) && !excludedIds.has(match.id.toLowerCase()));
-  const selected: SkillRoutingSelection[] = [];
-  const selectedIds = new Set<string>();
+  const candidates: SkillRoutingCandidate[] = [];
+  const candidateIds = new Set<string>();
   const excluded: Array<{ id: string; reason: string }> = Array.from(excludedIds).map((id) => ({ id, reason: 'explicitly_excluded' }));
-  const select = (match: SkillRoutingRankedMatch, reason: SkillRoutingSelection['reason']) => {
+  const addCandidate = (match: SkillRoutingRankedMatch, reason: SkillRoutingCandidate['reason']) => {
     const key = match.id.toLowerCase();
-    if (selectedIds.has(key) || selected.length >= 3) return;
-    selectedIds.add(key);
+    if (candidateIds.has(key) || candidates.length >= 3) return;
+    candidateIds.add(key);
     const instructionChars = String(match.skill.instructions || '').length;
-    selected.push({ id: match.id, reason, score: match.score, confidence: match.confidence, instructionChars, estimatedTokens: Math.ceil(instructionChars / 4) });
+    candidates.push({ id: match.id, reason, score: match.score, confidence: match.confidence, instructionChars, estimatedTokens: Math.ceil(instructionChars / 4) });
   };
 
-  for (const match of ranked.filter((item) => item.explicitMention && isExplicitSkillInvocation(input.message, item.skill))) select(match, 'explicit_mention');
+  for (const match of ranked.filter((item) => item.explicitMention && isExplicitSkillInvocation(input.message, item.skill))) addCandidate(match, 'explicit_mention');
   for (const id of forcedIds) {
-    if (excludedIds.has(id) || selectedIds.has(id)) continue;
+    if (excludedIds.has(id) || candidateIds.has(id)) continue;
     const match = ranked.find((item) => item.id.toLowerCase() === id);
-    if (match && match.confidence !== 'low') select(match, 'user_selected_relevant');
+    if (match && match.confidence !== 'low') addCandidate(match, 'user_selected_relevant');
     else excluded.push({ id, reason: byId.has(id) ? 'user_selected_but_not_relevant' : 'user_selected_unavailable_or_missing' });
   }
 
-  if (!selected.length) {
-    const implicit = ranked.find((match) =>
-      !isDefinitionalMention(input.message)
-      && (match.confidence === 'high' || (match.confidence === 'medium' && match.score >= 65 && match.matchedTriggers.length > 0))
-      && match.implicitEligible
-      && !match.domainConflict
-      && (match.matchedTriggers.length > 0 || match.matchedDomains.length >= 2)
-    );
-    if (implicit) select(implicit, 'high_confidence_trigger');
+  if (!isDefinitionalMention(input.message)) {
+    for (const match of ranked) {
+      if (!match.implicitEligible || match.domainConflict || candidateIds.has(match.id.toLowerCase())) continue;
+      const strong = match.confidence === 'high' && (match.matchedTriggers.length > 0 || match.matchedDomains.length >= 2);
+      const plausible = match.confidence === 'medium' && match.score >= 45 && match.matchedTriggers.length > 0;
+      if (strong) addCandidate(match, 'strong_trigger_match');
+      else if (plausible) addCandidate(match, 'plausible_trigger_match');
+    }
   }
 
-  const advisory = isDefinitionalMention(input.message)
-    ? []
-    : ranked
-        .filter((match) => !selectedIds.has(match.id.toLowerCase()) && match.confidence !== 'low')
-        .slice(0, 3)
-        .map((match) => ({ id: match.id, score: match.score, confidence: match.confidence, reason: match.domainConflict ? 'domain_conflict' : 'not_unambiguous' }));
-  const discoveryRecommended = selected.length === 0 && isSpecializedWorkflowRequest(input.message);
-  const injectedInstructionChars = selected.reduce((sum, item) => sum + item.instructionChars, 0);
+  const discoveryRecommended = candidates.length === 0 && isSpecializedWorkflowRequest(input.message);
   return {
-    version: 1,
+    version: 2,
     mode,
     messageHash: hash(String(input.message || '')),
-    selected,
-    advisory,
+    candidates,
     excluded,
     discoveryRecommended,
     discoveryReason: discoveryRecommended ? 'specialized_workflow_without_unambiguous_match' : '',
-    completeInstructionsInjected: mode === 'active' && selected.length > 0,
-    injectedInstructionChars: mode === 'active' ? injectedInstructionChars : 0,
-    estimatedInjectedTokens: mode === 'active' ? Math.ceil(injectedInstructionChars / 4) : 0,
+    autoInjectedInstructions: false,
+    instructionsRequireSkillRead: true,
   };
 }
 
@@ -170,20 +158,21 @@ export function buildActiveSkillRoutingContext(input: {
   const byId = new Map(input.skills.map((skill) => [skill.id, skill]));
   const lines = [
     '[SKILLS]',
-    'Load skill instructions only when the full task matches. Explicitly named or unambiguous skills below are already loaded completely; follow them before acting. Ignore weak lexical overlap.',
+    'Matching metadata is a candidate signal, not an instruction. Compare each candidate against the full request, then call skill_read for only the single most relevant skill. If none is actually relevant, read none. Never read every matching skill.',
   ];
-  for (const selection of input.report.selected) {
-    const skill = byId.get(selection.id);
-    if (!skill) continue;
-    lines.push('', `[ACTIVATED_SKILL id="${skill.id}" reason="${selection.reason}"]`, String(skill.instructions || ''), `[/ACTIVATED_SKILL id="${skill.id}"]`);
+  if (input.report.candidates.length) {
+    lines.push('', '[MATCHING_SKILLS] — candidates only; instructions are not loaded');
+    for (const candidate of input.report.candidates) {
+      const skill = byId.get(candidate.id);
+      if (!skill) continue;
+      lines.push(`- ${skill.id} [${candidate.reason}; ${candidate.confidence}; score ${candidate.score}] — ${skill.description || skill.name}`);
+    }
+    lines.push('Choose based on the complete workflow, not trigger overlap. Call skill_read({"id":"<skill-id>"}) for the one genuinely relevant candidate before acting. An explicitly requested skill should be read unless it is unavailable, excluded, or clearly unrelated to what the user asked.');
   }
   if (input.report.discoveryRecommended) {
     lines.push('', '[SKILL_DISCOVERY_REQUIRED]', 'No installed skill matched this specialized workflow unambiguously. Call skill_list once with a concise task-style query, inspect relevance, then call skill_read for at most one strong result before acting. If no strong result exists, continue without forcing a skill.');
-  } else if (!input.report.selected.length) {
+  } else if (!input.report.candidates.length) {
     lines.push('', 'No skill is required for this turn. Do not call skill_list or skill_read unless the task develops into a genuinely specialized workflow.');
-  }
-  if (input.report.advisory.length) {
-    lines.push('', '[SKILL_ADVISORY]', 'These are not active instructions. Ignore them unless a concrete non-obvious procedure clearly requires one:', ...input.report.advisory.map((item) => `- ${item.id} [${item.confidence}; score ${item.score}]`));
   }
   lines.push('', 'After completing a genuinely reusable workflow with no good skill fit, offer to create one or submit an evidence-backed candidate; never mutate the skill catalog automatically.');
   return lines.join('\n');

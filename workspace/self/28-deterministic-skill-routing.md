@@ -25,27 +25,27 @@ Skill instructions are received in full only after a successful `skill_read` too
 
 The canonical resolver is `src/runtime/skill-routing-resolver.ts`.
 
-1. Explicit `$skill-id`, `skill:skill-id`, or a direct use/apply/read instruction may select up to three skills.
-2. A user-selected skill is loaded only when the current request ranks it at least medium relevance; unrelated selections are recorded but not injected.
-3. Without an explicit selection, at most one implicit skill is selected. It must be high confidence, eligible, domain-consistent, and supported by an exact/strong trigger or multiple matching domains.
-4. Definitional mentions such as “what does market research mean?” do not invoke a same-named skill.
-5. Medium matches are advisory only and never loaded automatically.
-6. A specialized workflow with no unambiguous match receives `SKILL_DISCOVERY_REQUIRED`: call `skill_list` once, then read at most one strong result. Continue without a skill if discovery remains weak.
-7. Active selected skills are injected with their complete entrypoint content between `ACTIVATED_SKILL` markers. Content is not truncated.
+1. Explicit `$skill-id`, `skill:skill-id`, direct use/apply/read requests, UI selections, and strong trigger matches produce at most three compact candidates.
+2. Candidates contain metadata only. Matching is evidence that a skill may be relevant, never authority to inject its instructions.
+3. Prometheus compares candidate descriptions with the complete request and calls `skill_read` for only the single genuinely relevant skill. If none fits, it reads none. It must never read every matching skill.
+4. A user-selected skill remains subject to relevance checking; an explicitly requested skill should normally be read unless unavailable, excluded, or clearly unrelated.
+5. Definitional mentions such as “what does market research mean?” produce no candidates.
+6. A specialized workflow with no plausible candidate receives `SKILL_DISCOVERY_REQUIRED`: call `skill_list` once, then read at most one strong result. Continue without a skill if discovery remains weak.
+7. No skill instructions are automatically injected by the resolver. Complete instructions enter the reasoning context only through `skill_read` after Prometheus chooses.
 8. After a reusable unmatched workflow, Prometheus may offer a new skill or submit an evidence-backed candidate. It must not mutate the catalog automatically.
 
 ## Modes and rollback
 
 - `PROMETHEUS_SKILL_ROUTING_MODE=legacy`: exact pre-Stage-5 prompt builder.
 - `PROMETHEUS_SKILL_ROUTING_MODE=shadow`: preserve legacy output while recording deterministic decisions.
-- `PROMETHEUS_SKILL_ROUTING_MODE=active`: deterministic conditional context and complete selected instructions.
+- `PROMETHEUS_SKILL_ROUTING_MODE=active`: deterministic candidate filtering, model relevance judgment, and `skill_read`-only instruction loading.
 
 Default source mode is `active`. Whole-stage rollback requires one environment-variable change and a graceful restart.
 
 ## Agent surfaces
 
 - Main, teach, local, direct-subagent, background-agent, team-subagent, and tiered prompt paths all call `buildTurnContext`; they share the resolver.
-- Realtime voice now consumes the same resolver decisions, marks required versus advisory reads, and requires `skill_list` only for deterministic no-match workflow discovery.
+- Realtime voice consumes the same candidate decisions and leaves the final `skill_read` choice to the voice model. Its automation scout no longer auto-reads the first lexical result.
 - Prompt manifests retrieve the per-session resolver report immediately before provider dispatch.
 
 ## Benchmark and live gates
@@ -57,7 +57,7 @@ The deterministic corpus contains 552 cases:
 - 240 collision/negative cases.
 - 96 no-match discovery cases.
 
-Additional assertions cover explicit multi-skill selection, explicit-only skills, unrelated UI selection, complete untruncated instruction injection, and legacy/shadow/active rollback behavior.
+Additional assertions cover explicit multi-skill candidates, explicit-only skills, unrelated UI selection, no automatic instruction injection, complete simple/bundle reads, and legacy/shadow/active rollback behavior.
 
 Live validation must confirm: neutral, explicit skill, strong implicit skill, collision, missing-skill discovery, direct subagent, and Realtime voice metadata behavior after a canonical gateway restart.
 
@@ -69,13 +69,13 @@ Observed pre-dispatch manifests:
 
 | Case | Result |
 |---|---|
-| Neutral greeting | No selected or advisory skill; no discovery |
-| Definitional collision | “What does market research mean?” selected nothing and exposed no advisory metadata |
-| Explicit main-chat skill | `$market-research` selected by `explicit_mention`; all 953 entrypoint characters injected |
-| Natural specialized request | Product-launch request selected `product-launch-video`; all 23,835 entrypoint characters injected |
-| Missing specialized workflow | Payroll reconciliation selected nothing, required one `skill_list`, found zero strong matches, and continued without force-loading a weak result |
-| Direct subagent | `runtimeRole=direct_subagent`; complete `market-research` instructions injected without main USER/MEMORY context |
-| Realtime voice explicit | `market-research` marked `REQUIRED READ`; weaker candidates advisory only |
+| Neutral greeting | No skill candidate and no discovery |
+| Definitional collision | “What does market research mean?” produced no candidate metadata |
+| Explicit main-chat skill | `$market-research` surfaced as a candidate; Prometheus chose it and called `skill_read` |
+| Natural specialized request | Product-launch candidates were shown; Prometheus chose the relevant one rather than loading every match |
+| Missing specialized workflow | Payroll reconciliation required one `skill_list`, found zero strong matches, and continued without force-loading a weak result |
+| Direct subagent | `runtimeRole=direct_subagent`; manifest confirmed candidate metadata only and `autoInjectedInstructions=false` |
+| Realtime voice explicit | Matching candidates shown; voice model chooses at most one `skill_read` |
 | Realtime voice collision | No matched skills and an empty skill context |
 | Realtime voice missing workflow | Required one compact discovery pass and allowed continuation without a skill |
 
@@ -85,7 +85,8 @@ No live validation prompt performed file, proposal, business-record, browser, or
 
 On the current 145-skill catalog:
 
-- Neutral active skill context: 513 characters / approximately 129 tokens, versus 1,519 characters / approximately 380 tokens in legacy mode—a saving of roughly 251 tokens per unrelated turn.
-- Missing-workflow discovery context: 672 characters / approximately 168 tokens, still smaller than legacy while making discovery mandatory.
-- A selected skill intentionally increases the first provider call by its complete entrypoint size. For `product-launch-video`, this is approximately 5,959 instruction tokens. This replaces a discretionary later `skill_read` round and guarantees the complete instructions are present before reasoning/action.
-- Selected skill content is volatile task context and therefore changes the prompt hash. Stable core prompt prefixes remain separately cacheable on providers that honor the existing cache marker.
+- Neutral active skill context: 570 characters / approximately 143 tokens, versus 1,519 characters / approximately 380 tokens in legacy mode—a saving of roughly 238 tokens per unrelated turn.
+- A two-candidate product-launch context is approximately 415 tokens versus approximately 602 in legacy mode, before the chosen skill is read.
+- Missing-workflow discovery context: 729 characters / approximately 183 tokens, still smaller than legacy while making discovery mandatory.
+- Candidate metadata remains compact. A complete skill entrypoint is added only to the next reasoning round after Prometheus calls `skill_read`.
+- `skill_read` bypasses the generic 12,000-character tool-result clip, so the complete chosen `SKILL.md` reaches the model. Bundle reads also include the complete resource index; resource contents remain progressive through `skill_resource_read` so templates, examples, assets, and references do not pollute the prompt unless needed.

@@ -2,7 +2,7 @@ export interface SkillRoutingBenchmarkCase {
   id: string;
   source: 'typed' | 'voice' | 'collision' | 'discovery';
   message: string;
-  expectedSelected: string[];
+  expectedCandidates: string[];
   discoveryRecommended?: boolean;
 }
 
@@ -17,7 +17,7 @@ function expand(prefix: string, source: SkillRoutingBenchmarkCase['source'], mes
         id: `${prefix}_${String(index++).padStart(4, '0')}`,
         source,
         message: `${lead}${item.text}`.trim(),
-        expectedSelected: item.selected || [],
+        expectedCandidates: item.selected || [],
         discoveryRecommended: item.discovery,
       });
     }

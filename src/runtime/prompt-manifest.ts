@@ -313,7 +313,7 @@ export function buildRuntimePromptManifest(input: RuntimePromptManifestInput): R
     exposedCategories,
     skillRouting: skillRouting ? {
       mode: skillRouting.mode,
-      selected: skillRouting.selected.map((item) => item.id),
+      candidates: skillRouting.candidates.map((item) => item.id),
       discoveryRecommended: skillRouting.discoveryRecommended,
     } : undefined,
     toolHash: sha256(schemaText),

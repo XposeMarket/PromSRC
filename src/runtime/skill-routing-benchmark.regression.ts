@@ -41,48 +41,49 @@ let exact = 0;
 const failures: Array<{ id: string; expected: string[]; actual: string[]; discoveryExpected: boolean; discoveryActual: boolean }> = [];
 for (const test of SKILL_ROUTING_BENCHMARK_CASES) {
   const report = resolve(test.message);
-  const actual = report.selected.map((item) => item.id).sort();
-  const expected = [...test.expectedSelected].sort();
+  const actual = report.candidates.map((item) => item.id).sort();
+  const expected = [...test.expectedCandidates].sort();
   const discoveryExpected = test.discoveryRecommended === true;
   if (JSON.stringify(actual) === JSON.stringify(expected) && report.discoveryRecommended === discoveryExpected) exact += 1;
   else failures.push({ id: test.id, expected, actual, discoveryExpected, discoveryActual: report.discoveryRecommended });
 }
 
 const explicit = resolve('Use $coding-debugger and skill:gmail-replies for this combined request.');
-assert.deepEqual(explicit.selected.map((item) => item.id).sort(), ['coding-debugger', 'gmail-replies']);
+assert.deepEqual(explicit.candidates.map((item) => item.id).sort(), ['coding-debugger', 'gmail-replies']);
 const explicitOnly = resolve('Use Three.js for this scene.');
-assert.equal(explicitOnly.selected[0]?.id, 'three');
+assert.equal(explicitOnly.candidates[0]?.id, 'three');
 const definitional = resolve('What does market research mean?');
-assert.equal(definitional.selected.length, 0);
-assert.equal(definitional.advisory.length, 0);
+assert.equal(definitional.candidates.length, 0);
 const unrelatedForced = resolve('Say hello.', ['coding-debugger']);
-assert.equal(unrelatedForced.selected.length, 0);
+assert.equal(unrelatedForced.candidates.length, 0);
 assert(unrelatedForced.excluded.some((item) => item.id === 'coding-debugger' && item.reason === 'user_selected_but_not_relevant'));
 const relevantForced = resolve('debug typescript authentication failure in the backend', ['coding-debugger']);
-assert.equal(relevantForced.selected[0]?.reason, 'user_selected_relevant');
+assert.equal(relevantForced.candidates[0]?.reason, 'user_selected_relevant');
 const excludedExplicit = resolveSkillRuntimeRouting({
   skills,
   rankedMatches: rankSkillMatches(skills, 'Use $coding-debugger for this.', { limit: 12 }),
   message: 'Use $coding-debugger for this.',
   excludedSkillIds: ['coding-debugger'],
 });
-assert.equal(excludedExplicit.selected.length, 0);
+assert.equal(excludedExplicit.candidates.length, 0);
 
 const complete = resolve('debug typescript authentication failure in the backend');
 const activeContext = buildActiveSkillRoutingContext({ report: complete, skills: skills as SkillRoutingSkill[] });
-assert(activeContext.includes('COMPLETE-coding-debugger-INSTRUCTIONS'));
-assert(activeContext.includes('END-coding-debugger'));
+assert(activeContext.includes('[MATCHING_SKILLS]'));
+assert(activeContext.includes('coding-debugger'));
+assert(activeContext.includes('skill_read'));
+assert(!activeContext.includes('COMPLETE-coding-debugger-INSTRUCTIONS'));
 assert(!activeContext.includes('COMPLETE-gmail-replies-INSTRUCTIONS'));
 
 const originalMode = process.env.PROMETHEUS_SKILL_ROUTING_MODE;
 process.env.PROMETHEUS_SKILL_ROUTING_MODE = 'shadow';
 const shadow = resolve('debug typescript authentication failure in the backend');
 assert.equal(shadow.mode, 'shadow');
-assert.equal(shadow.completeInstructionsInjected, false);
+assert.equal(shadow.autoInjectedInstructions, false);
 process.env.PROMETHEUS_SKILL_ROUTING_MODE = 'legacy';
 const legacy = resolve('debug typescript authentication failure in the backend');
 assert.equal(legacy.mode, 'legacy');
-assert.equal(legacy.completeInstructionsInjected, false);
+assert.equal(legacy.autoInjectedInstructions, false);
 if (originalMode === undefined) delete process.env.PROMETHEUS_SKILL_ROUTING_MODE;
 else process.env.PROMETHEUS_SKILL_ROUTING_MODE = originalMode;
 
@@ -93,7 +94,8 @@ console.log(JSON.stringify({
   exact,
   accuracy: exact / SKILL_ROUTING_BENCHMARK_CASES.length,
   sources: Object.fromEntries(['typed', 'voice', 'collision', 'discovery'].map((source) => [source, SKILL_ROUTING_BENCHMARK_CASES.filter((item) => item.source === source).length])),
-  explicitMultiSkill: explicit.selected.map((item) => item.id),
-  completeInstructionInjection: true,
+  explicitMultiSkillCandidates: explicit.candidates.map((item) => item.id),
+  automaticInstructionInjection: false,
+  instructionsRequireSkillRead: true,
   failureCount: failures.length,
 }, null, 2));
