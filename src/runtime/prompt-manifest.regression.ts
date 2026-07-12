@@ -66,6 +66,19 @@ function buildMainGolden() {
       declaredSystemSegmentIds: ['core.base', 'personality.context'],
       callerContextPresent: false,
       capabilities: { vision: true, provider: 'openai', model: 'gpt-test' },
+      skillRouting: {
+        version: 1,
+        mode: 'active',
+        messageHash: 'fixture',
+        selected: [],
+        advisory: [],
+        excluded: [],
+        discoveryRecommended: false,
+        discoveryReason: '',
+        completeInstructionsInjected: false,
+        injectedInstructionChars: 0,
+        estimatedInjectedTokens: 0,
+      },
     },
   });
 }
@@ -130,6 +143,8 @@ function testMainGolden(): void {
   assert.deepEqual(manifest.instructionResolution.missingRequiredSegmentIds, []);
   assert.equal(manifest.stage4InstructionRouting.mode, 'active');
   assert.ok(manifest.stage4InstructionRouting.estimatedSavedTokens >= 0);
+  assert.equal(manifest.skillRouting?.mode, 'active');
+  assert.equal(manifest.skillRouting?.completeInstructionsInjected, false);
 }
 
 function testWorkerAndProviderGolden(): void {

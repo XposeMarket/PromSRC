@@ -12,8 +12,9 @@ import {
   type Stage4InstructionIntents,
   type Stage4InstructionRoutingReport,
 } from './instruction-intent-detector';
+import { getSkillRoutingReport, type SkillRoutingReport } from './skill-routing-resolver';
 
-export const RUNTIME_PROMPT_MANIFEST_VERSION = 3;
+export const RUNTIME_PROMPT_MANIFEST_VERSION = 4;
 
 export type RuntimePromptRole =
   | 'main'
@@ -43,6 +44,7 @@ export interface RuntimePromptManifestContext {
   capabilities?: Record<string, string | number | boolean | null | undefined>;
   callerContextPresent?: boolean;
   instructionIntents?: Stage4InstructionIntents;
+  skillRouting?: SkillRoutingReport;
 }
 export interface RuntimePromptManifestInput {
   callType: 'chat' | 'generate';
@@ -90,6 +92,7 @@ export interface RuntimePromptManifest {
   policyIds: string[];
   instructionResolution: InstructionResolutionReport;
   stage4InstructionRouting: Stage4InstructionRoutingReport;
+  skillRouting?: SkillRoutingReport;
   systemMessages: RuntimePromptSystemMessageSummary[];
   messageSurface: {
     count: number;
@@ -148,6 +151,8 @@ const SEGMENT_MARKERS: Array<{ id: string; pattern: RegExp }> = [
   { id: 'skills.general', pattern: /\[SKILLS\]/ },
   { id: 'skills.matching', pattern: /\[MATCHING_SKILLS\]/ },
   { id: 'skills.active', pattern: /\[ACTIVE_SKILLS\]/ },
+  { id: 'skills.full_result', pattern: /\[ACTIVATED_SKILL\s/ },
+  { id: 'skills.matching', pattern: /\[SKILL_ADVISORY\]/ },
   { id: 'onboarding.meet', pattern: /\[ONBOARDING MEET & GREET MODE\]/ },
   { id: 'caller.team_manager', pattern: /\[TEAM MANAGER/ },
   { id: 'caller.team_subagent', pattern: /\[(?:TEAM DISPATCH|TEAM MEMBER|YOUR ROLE ON THIS TEAM)/ },
@@ -287,6 +292,7 @@ export function buildRuntimePromptManifest(input: RuntimePromptManifestInput): R
     business_context_intent: false,
     reasons: {},
   });
+  const skillRouting = context.skillRouting || getSkillRoutingReport(input.sessionId);
   const stableIdentity = JSON.stringify({
     version: RUNTIME_PROMPT_MANIFEST_VERSION,
     callType: input.callType,
@@ -305,6 +311,11 @@ export function buildRuntimePromptManifest(input: RuntimePromptManifestInput): R
     policyIds,
     activeCategories,
     exposedCategories,
+    skillRouting: skillRouting ? {
+      mode: skillRouting.mode,
+      selected: skillRouting.selected.map((item) => item.id),
+      discoveryRecommended: skillRouting.discoveryRecommended,
+    } : undefined,
     toolHash: sha256(schemaText),
   });
   const hash = sha256(stableIdentity);
@@ -331,6 +342,7 @@ export function buildRuntimePromptManifest(input: RuntimePromptManifestInput): R
     policyIds,
     instructionResolution,
     stage4InstructionRouting,
+    skillRouting,
     systemMessages: systemEntries,
     messageSurface: {
       count: messages.length,
