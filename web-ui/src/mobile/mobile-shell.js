@@ -631,16 +631,20 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     try { tabbar.releasePointerCapture(pointerId); } catch {}
     tabbar.classList.remove('pm-tabbar-dragging');
     tabbar.classList.remove('pm-tabbar-pressing');
-    const wasDragging = dragging;
     pointerId = null;
     dragging = false;
     velocity = 0;
-    const target = wasDragging ? pendingTab : (e ? tabAtX(e.clientX) : pendingTab);
+    // Use the release coordinate for the final drop. `pendingTab` is only the
+    // most recent pointermove sample and can lag behind a fast finger lift.
+    const target = e && Number.isFinite(e.clientX) ? tabAtX(e.clientX) : pendingTab;
     if (!target) return;
     const id = target.getAttribute('data-tab');
     const tabObj = mobileNavTabs.find((x) => x.id === id);
-    const currentId = tabbar.querySelector('.pm-tab.active')?.getAttribute('data-tab')
-      || (getActiveTab ? getActiveTab() : '') || '';
+    // During a drag setActive() intentionally moves the visual highlight, so
+    // the DOM's `.active` tab is the drop candidate—not the loaded page. Read
+    // the router-owned tab first or every dragged release looks like a no-op.
+    const currentId = (getActiveTab ? getActiveTab() : '')
+      || tabbar.querySelector('.pm-tab.active')?.getAttribute('data-tab') || '';
     // Remember the tab we're leaving so the post-navigation re-render glides the
     // pill *from* it rather than snapping.
     try { if (currentId) sessionStorage.setItem(PM_ACTIVE_TAB_KEY, currentId); } catch {}

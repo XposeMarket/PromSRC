@@ -30,6 +30,12 @@ const path       = require('path');
 const http       = require('http');
 const fs         = require('fs');
 const crypto     = require('crypto');
+const {
+  isTrustedRendererUrl,
+  normalizeEmbeddedBrowserUrl,
+  normalizeExternalUrl,
+  parseWindowsListeningPids,
+} = require('./security');
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const GATEWAY_URL  = 'http://127.0.0.1:18789';
@@ -355,26 +361,25 @@ function sleep(ms) {
 }
 
 // ─── Port cleanup ──────────────────────────────────────────────────────────
-// On Windows, if the previous gateway process didn't exit cleanly it may still
-// hold port 18789. Kill any LISTENING process on that port before spawning.
-function killPortIfInUse(port) {
+// Never kill an arbitrary process just because it owns the configured port.
+// Refuse startup instead; the operator can then identify and close the owner.
+function assertGatewayPortAvailable(port) {
   if (process.platform !== 'win32') return;
   try {
-    const output = execSync(`netstat -ano | findstr LISTENING | findstr :${port}`, {
+    const output = execSync('netstat -ano -p tcp', {
       encoding: 'utf-8', stdio: 'pipe',
     });
-    const lines = output.trim().split('\n');
-    for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      const pid = parts[parts.length - 1];
-      if (pid && /^\d+$/.test(pid) && pid !== '0' && Number(pid) !== process.pid) {
-        try {
-          execSync(`taskkill /PID ${pid} /F`, { stdio: 'pipe' });
-          console.log(`[Prometheus] Killed stale gateway (PID ${pid}) holding port ${port}`);
-        } catch { /* ignore */ }
-      }
+    const owners = parseWindowsListeningPids(output, port).filter((pid) => pid !== process.pid);
+    if (owners.length) {
+      throw new Error(
+        `Prometheus cannot start because port ${port} is already in use by PID ${owners.join(', ')}. ` +
+        'Close that process and start Prometheus again.'
+      );
     }
-  } catch { /* port not in use or netstat unavailable */ }
+  } catch (error) {
+    if (error && /already in use by PID/.test(String(error.message || ''))) throw error;
+    writeGatewayLog(`[main] Port ownership check unavailable: ${error && error.message ? error.message : error}\n`);
+  }
 }
 
 // ─── Gateway Log ───────────────────────────────────────────────────────────
@@ -601,9 +606,7 @@ function startGateway() {
   writeGatewayLog(`[main] Data dir: ${USER_DATA_DIR}\n`);
   writeGatewayLog(`[main] Packaged: ${IS_PACKAGED_RUNTIME}\n`);
 
-  // Kill any stale gateway process that may still hold the port from a previous run.
-  // This is synchronous — Windows releases the port almost immediately after kill.
-  killPortIfInUse(18789);
+  assertGatewayPortAvailable(18789);
 
   // Bundled skills path — inside extraResources (outside asar, accessible to Node subprocess)
   const bundledSkillsDir = IS_PACKAGED_RUNTIME
@@ -849,10 +852,7 @@ function normalizeNativeBrowserBounds(bounds = {}) {
 }
 
 function normalizeBrowserUrlForLoad(url) {
-  const raw = String(url || '').trim();
-  if (!raw) return 'about:blank';
-  if (/^(about|data|file|https?):/i.test(raw)) return raw;
-  return `https://${raw}`;
+  return normalizeEmbeddedBrowserUrl(url);
 }
 
 // Broadcasts the PRESENTED (canvas-visible) view's state to the renderer.
@@ -923,7 +923,15 @@ function wireNativeViewEvents(view, partition) {
     writeGatewayLog(`[main][inhouse-preload-error] ${preloadPath}: ${error && error.message ? error.message : error}\n`);
   });
   wc.setWindowOpenHandler(({ url }) => {
-    if (url) wc.loadURL(url).catch((err) => { meta.lastError = err?.message || String(err); onUpdate(); });
+    try {
+      const targetUrl = normalizeBrowserUrlForLoad(url);
+      if (targetUrl !== 'about:blank') {
+        wc.loadURL(targetUrl).catch((err) => { meta.lastError = err?.message || String(err); onUpdate(); });
+      }
+    } catch (err) {
+      meta.lastError = err?.message || String(err);
+      onUpdate();
+    }
     return { action: 'deny' };
   });
   wc.on('did-start-loading', () => { meta.loading = true; onUpdate(); });
@@ -1072,13 +1080,9 @@ async function navigateNativeBrowserSurface({ action = '', url = '', sessionId =
 // the user's clicks are intercepted (not performed) and reported back so the
 // renderer can stage a Teach step.
 function setNativeBrowserTeachCapture({ sessionId = '', enabled = false } = {}) {
-  try {
-    const { wc } = requireNativeViewForSession(sessionId);
-    wc.send('prometheus-teach-capture', !!enabled);
-    writeGatewayLog(`[main] teach-capture set enabled=${!!enabled} sessionId=${sessionId}\n`);
-  } catch (err) {
-    writeGatewayLog(`[main] teach-capture FAILED: ${err && err.message ? err.message : err}\n`);
-  }
+  const { wc } = requireNativeViewForSession(sessionId);
+  wc.send('prometheus-teach-capture', !!enabled);
+  writeGatewayLog(`[main] teach-capture set enabled=${!!enabled} sessionId=${sessionId}\n`);
   return { ok: true, enabled: !!enabled };
 }
 
@@ -1432,24 +1436,53 @@ const PAIRING_ADMIN_ROUTES = [
 
 function requireTrustedMainFrame(event) {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
-    throw new Error('Pairing administration is available only from the Prometheus desktop window.');
+    throw new Error('This desktop operation is available only from the Prometheus window.');
   }
   if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
-    throw new Error('Pairing administration is not available to child frames.');
+    throw new Error('Desktop operations are not available to child frames.');
   }
-  let senderUrl;
-  try {
-    senderUrl = new URL(event.senderFrame.url);
-  } catch {
-    throw new Error('Untrusted pairing administration sender.');
-  }
-  if (senderUrl.origin !== new URL(GATEWAY_URL).origin || senderUrl.username || senderUrl.password) {
-    throw new Error('Untrusted pairing administration sender.');
+  if (!isTrustedRendererUrl(event.senderFrame.url, GATEWAY_URL)) {
+    throw new Error('Untrusted desktop operation sender.');
   }
 }
 
-ipcMain.handle('pairing-admin:request', async (event, payload = {}) => {
-  requireTrustedMainFrame(event);
+function handleTrustedMain(channel, handler) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    requireTrustedMainFrame(event);
+    return handler(event, ...args);
+  });
+}
+
+function requireTrustedNativeMainFrame(event) {
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
+    throw new Error('Teach capture events are accepted only from an embedded browser main frame.');
+  }
+  const partition = presentedNativePartition;
+  const view = partition ? getNativeViewByPartition(partition) : null;
+  if (!view || view.webContents !== event.sender) {
+    throw new Error('Teach capture events are accepted only from the presented browser surface.');
+  }
+  const sessionId = String(nativeBrowserState.sessionId || '').trim();
+  if (!sessionId || nativeBrowserSessionPartitions.get(sessionId) !== partition) {
+    throw new Error('Teach capture has no validated owning session.');
+  }
+  return sessionId;
+}
+
+function relayTeachEvent(event, channel, payload = {}) {
+  let sessionId;
+  try {
+    sessionId = requireTrustedNativeMainFrame(event);
+  } catch (error) {
+    writeGatewayLog(`[main] Rejected ${channel}: ${error && error.message ? error.message : error}\n`);
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send(channel, { ...payload, sessionId }); } catch {}
+  }
+}
+
+handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
   const method = String(payload?.method || 'GET').trim().toUpperCase();
   const requestPath = String(payload?.path || '').trim();
   let parsed;
@@ -1486,9 +1519,9 @@ ipcMain.handle('pairing-admin:request', async (event, payload = {}) => {
   return data;
 });
 
-ipcMain.handle('get-app-version', () => CURRENT_VERSION);
+handleTrustedMain('get-app-version', () => CURRENT_VERSION);
 
-ipcMain.handle('select-canvas-paths', async (_event, options = {}) => {
+handleTrustedMain('select-canvas-paths', async (_event, options = {}) => {
   const mode = options && options.mode === 'folder' ? 'folder' : 'files';
   const result = await dialog.showOpenDialog(mainWindow, {
     title: mode === 'folder' ? 'Add Folder to Canvas' : 'Add Files to Canvas',
@@ -1500,55 +1533,42 @@ ipcMain.handle('select-canvas-paths', async (_event, options = {}) => {
   return Array.isArray(result.filePaths) ? result.filePaths : [];
 });
 
-ipcMain.handle('native-browser:available', () => nativeBrowserState.available === true);
-ipcMain.handle('native-browser:attach', async (_event, options = {}) => attachNativeBrowserSurface(options));
-ipcMain.handle('native-browser:detach', async () => hideNativeBrowserSurface('detached'));
-ipcMain.handle('native-browser:set-bounds', async (_event, bounds = {}) => setNativeBrowserBounds(bounds, bounds && bounds.sessionId));
-ipcMain.handle('native-browser:navigate', async (_event, payload = {}) => navigateNativeBrowserSurface(payload));
-ipcMain.handle('native-browser:focus', async () => {
+handleTrustedMain('native-browser:available', () => nativeBrowserState.available === true);
+handleTrustedMain('native-browser:attach', async (_event, options = {}) => attachNativeBrowserSurface(options));
+handleTrustedMain('native-browser:detach', async () => hideNativeBrowserSurface('detached'));
+handleTrustedMain('native-browser:set-bounds', async (_event, bounds = {}) => setNativeBrowserBounds(bounds, bounds && bounds.sessionId));
+handleTrustedMain('native-browser:navigate', async (_event, payload = {}) => navigateNativeBrowserSurface(payload));
+handleTrustedMain('native-browser:focus', async () => {
   const sid = String(nativeBrowserState.sessionId || '').trim();
   try { requireNativeViewForSession(sid).wc.focus(); } catch {}
   return broadcastNativeBrowserState();
 });
-ipcMain.handle('native-browser:state', async () => broadcastNativeBrowserState());
-ipcMain.handle('native-browser:teach-capture', async (_event, options = {}) => setNativeBrowserTeachCapture(options));
+handleTrustedMain('native-browser:state', async () => broadcastNativeBrowserState());
+handleTrustedMain('native-browser:teach-capture', async (_event, options = {}) => setNativeBrowserTeachCapture(options));
 
 // Relay Teach capture events from the in-house view's preload to the Prometheus
 // renderer, tagged with the presented session so the right Teach session records.
-ipcMain.on('prometheus-teach-click', (_event, payload = {}) => {
-  writeGatewayLog(`[main] teach-click relayed selector=${payload && payload.selector} -> session=${nativeBrowserState.sessionId}\n`);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('native-browser-teach-click', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
-  }
+ipcMain.on('prometheus-teach-click', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-teach-click', payload);
 });
-ipcMain.on('prometheus-teach-hover', (_event, payload = {}) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('native-browser-teach-hover', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
-  }
+ipcMain.on('prometheus-teach-hover', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-teach-hover', payload);
 });
-ipcMain.on('prometheus-teach-fill', (_event, payload = {}) => {
-  writeGatewayLog(`[main] teach-fill relayed selector=${payload && payload.selector}\n`);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('native-browser-teach-fill', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
-  }
+ipcMain.on('prometheus-teach-fill', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-teach-fill', payload);
 });
-ipcMain.on('prometheus-teach-key', (_event, payload = {}) => {
-  writeGatewayLog(`[main] teach-key relayed key=${payload && payload.key}\n`);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('native-browser-teach-key', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
-  }
+ipcMain.on('prometheus-teach-key', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-teach-key', payload);
 });
-ipcMain.on('prometheus-teach-scroll', (_event, payload = {}) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('native-browser-teach-scroll', { ...payload, sessionId: nativeBrowserState.sessionId }); } catch {}
-  }
+ipcMain.on('prometheus-teach-scroll', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-teach-scroll', payload);
 });
 
-ipcMain.handle('updater:get-state', () => getUpdaterState());
+handleTrustedMain('updater:get-state', () => getUpdaterState());
 
-ipcMain.handle('updater:check', async () => checkForPrometheusUpdates('manual'));
+handleTrustedMain('updater:check', async () => checkForPrometheusUpdates('manual'));
 
-ipcMain.handle('updater:install', async () => {
+handleTrustedMain('updater:install', async () => {
   if (!autoUpdater) {
     updaterStatus = 'unsupported';
     updaterMessage = 'Updates are available only in packaged public builds.';
@@ -1597,17 +1617,33 @@ function createWindow() {
     mainWindow.focus();
   });
 
+  const openExternalSafely = (url) => {
+    const externalUrl = normalizeExternalUrl(url);
+    if (!externalUrl) {
+      writeGatewayLog(`[main] Blocked unsafe external URL: ${String(url || '').slice(0, 300)}\n`);
+      return;
+    }
+    shell.openExternal(externalUrl).catch((error) => {
+      writeGatewayLog(`[main] Failed to open external URL: ${error && error.message ? error.message : error}\n`);
+    });
+  };
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (isTrustedRendererUrl(url, GATEWAY_URL)) {
+      mainWindow.loadURL(url);
+    } else {
+      openExternalSafely(url);
+    }
     return { action: 'deny' };
   });
 
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(GATEWAY_URL)) {
-      event.preventDefault();
-      shell.openExternal(url);
-    }
-  });
+  const guardMainNavigation = (event, url) => {
+    if (isTrustedRendererUrl(url, GATEWAY_URL)) return;
+    event.preventDefault();
+    openExternalSafely(url);
+  };
+  mainWindow.webContents.on('will-navigate', guardMainNavigation);
+  mainWindow.webContents.on('will-redirect', guardMainNavigation);
 
   mainWindow.on('closed', () => { mainWindow = null; });
 }
@@ -1706,9 +1742,8 @@ app.whenReady().then(async () => {
   } catch (err) {
     writeGatewayLog(`[main] Native browser RPC unavailable: ${err && err.message ? err.message : err}\n`);
   }
-  startGateway();
-
   try {
+    startGateway();
     await waitForGateway();
     createWindow();
     loader.close();

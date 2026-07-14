@@ -6736,8 +6736,10 @@ function _upsertMobileVoiceWorkgroup(sessionId, rawWorkgroup, acknowledgement = 
     thread.push(message);
   }
   workgroup.workers
-    .filter((worker) => worker.kind === 'background_task' && worker.taskId)
+    .filter((worker) => worker.kind === 'background_task' && worker.taskId && !/^bg_/i.test(String(worker.taskId)))
     .forEach((worker) => _refreshMobileVoiceWorkerJournal(worker.taskId, 40));
+  _drainPendingMobileVoiceBackgroundEvents(workgroup);
+  _removeMobileVoiceWorkersFromBackgroundDock(sid);
   _scheduleMobileThreadCacheSave(sid, 120);
   if (options.render !== false && String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
   if (options.render !== false && String(__pmVoice?.targetSessionId || '').trim() === sid) __pmVoice.renderRecent?.();
@@ -6745,6 +6747,91 @@ function _upsertMobileVoiceWorkgroup(sessionId, rawWorkgroup, acknowledgement = 
 }
 
 const _mobileVoiceWorkgroupRestoreRequests = new Map();
+const _pendingMobileVoiceBackgroundEvents = new Map();
+
+function _mobileBackgroundVoiceWorkgroupId(msg = {}) {
+  const direct = String(msg.voiceWorkgroupId || msg.workgroupId || '').trim();
+  if (direct) return direct;
+  const tag = (Array.isArray(msg.tags) ? msg.tags : [])
+    .find((value) => String(value || '').startsWith('voice_workgroup:'));
+  return tag ? String(tag).slice('voice_workgroup:'.length).trim() : '';
+}
+
+function _mobileBackgroundSpawnIsVoiceWorker(msg = {}) {
+  if (msg.voiceDispatch === true || _mobileBackgroundVoiceWorkgroupId(msg)) return true;
+  const taskId = _mobileBackgroundSpawnId(msg) || String(msg.id || '').trim();
+  return !!(taskId && _findMobileVoiceWorkerByTaskId(taskId));
+}
+
+function _removeMobileVoiceWorkersFromBackgroundDock(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  const voiceTaskIds = new Set();
+  (Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : []).forEach((message) => {
+    (Array.isArray(message?.voiceWorkgroup?.workers) ? message.voiceWorkgroup.workers : [])
+      .forEach((worker) => { if (worker?.taskId) voiceTaskIds.add(String(worker.taskId)); });
+  });
+  let changed = false;
+  const lanes = _mobileBackgroundSpawnLanes();
+  voiceTaskIds.forEach((taskId) => {
+    if (lanes[taskId]) {
+      delete lanes[taskId];
+      changed = true;
+    }
+  });
+  if (changed) _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid);
+  return changed;
+}
+
+function _routeMobileVoiceBackgroundEvent(event = {}, done = false) {
+  if (!_mobileBackgroundSpawnIsVoiceWorker(event)) return false;
+  const taskId = _mobileBackgroundSpawnId(event) || String(event.id || '').trim();
+  const workgroupId = _mobileBackgroundVoiceWorkgroupId(event);
+  const found = taskId ? _findMobileVoiceWorkerByTaskId(taskId) : null;
+  if (!found?.worker) {
+    if (taskId) {
+      const queued = _pendingMobileVoiceBackgroundEvents.get(taskId) || [];
+      queued.push({ event, done });
+      _pendingMobileVoiceBackgroundEvents.set(taskId, queued.slice(-40));
+    }
+    if (workgroupId) {
+      mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(workgroupId)}`)
+        .then((data) => _upsertMobileVoiceWorkgroup(event.sessionId, data?.workgroup))
+        .catch(() => {});
+    }
+    return true;
+  }
+  const eventType = String(event.eventType || event.type || '').trim();
+  const action = String(event.action || event.name || event.toolName || '').trim();
+  const detail = done
+    ? String(event.result || event.error || (event.state === 'failed' ? 'Worker failed.' : 'Worker complete.')).trim()
+    : eventType === 'tool_call'
+      ? `${action || 'Tool'}${event.args ? `(${_safeJsonPreview(event.args, 120)})` : ''}`
+      : eventType === 'tool_result'
+        ? `${action || 'Tool'}: ${_safeJsonPreview(event.result || event.output || event.error || 'complete', 180)}`
+        : String(event.message || event.thinking || event.text || event.current_step || event.state || '').trim();
+  if (detail) _appendMobileVoiceWorkerProcess(taskId, done ? (event.state === 'failed' ? 'error' : 'final') : eventType, detail, event);
+  if (done) {
+    found.worker.status = event.state === 'failed' || event.error ? 'failed' : 'complete';
+    found.worker.finalResult = String(event.result || event.error || '').trim();
+    found.worker.updatedAt = Date.now();
+    found.workgroup.status = _mobileVoiceWorkgroupStatus(found.workgroup.workers);
+    _scheduleMobileThreadCacheSave(found.sessionId, 120);
+    if (String(__pmChat.activeSessionId || '').trim() === found.sessionId) _renderMobileChatSessionNow(found.sessionId);
+    if (String(__pmVoice?.targetSessionId || '').trim() === found.sessionId) __pmVoice.renderRecent?.();
+  }
+  _removeMobileVoiceWorkersFromBackgroundDock(found.sessionId);
+  return true;
+}
+
+function _drainPendingMobileVoiceBackgroundEvents(workgroup) {
+  (Array.isArray(workgroup?.workers) ? workgroup.workers : []).forEach((worker) => {
+    const taskId = String(worker?.taskId || '').trim();
+    const queued = taskId ? _pendingMobileVoiceBackgroundEvents.get(taskId) : null;
+    if (!queued?.length) return;
+    _pendingMobileVoiceBackgroundEvents.delete(taskId);
+    queued.forEach((item) => _routeMobileVoiceBackgroundEvent(item.event, item.done));
+  });
+}
 
 function _restoreMobileVoiceWorkgroupsForSession(sessionId, { render = true } = {}) {
   const sid = String(sessionId || '').trim();
@@ -6831,6 +6918,8 @@ if (typeof window !== 'undefined' && !window.__pmMobileVoiceWorkgroupBridgeInsta
       })
       .catch(() => {});
   });
+  wsEventBus.on('bg_agent_event', (event = {}) => _routeMobileVoiceBackgroundEvent(event, false));
+  wsEventBus.on('bg_agent_done', (event = {}) => _routeMobileVoiceBackgroundEvent(event, true));
   wsEventBus.on('task_running', (event = {}) => {
     const taskId = String(event.taskId || '').trim();
     if (_appendMobileVoiceWorkerProcess(taskId, 'resume', 'Worker started.', event)) _refreshMobileVoiceWorkerJournal(taskId);
@@ -26121,6 +26210,7 @@ async function _recoverMobileBackgroundSpawnDock({ sessionId = __pmChat.activeSe
   const byId = new Map();
   const add = (item, fromStatus = false) => {
     const status = _mobileParseBackgroundStatus(item) || {};
+    if (_mobileBackgroundSpawnIsVoiceWorker(status)) return;
     const id = _mobileBackgroundSpawnId(status) || String(status.id || '').trim();
     if (!id || _mobileBackgroundSpawnClearedIds()[id]) return;
     const prev = byId.get(id) || {};
@@ -26159,6 +26249,7 @@ async function _recoverMobileBackgroundSpawnDock({ sessionId = __pmChat.activeSe
 }
 
 function _mobileBackgroundSpawnMatchesSession(msg = {}, sessionId = __pmChat.activeSessionId) {
+  if (_mobileBackgroundSpawnIsVoiceWorker(msg)) return false;
   const id = _mobileBackgroundSpawnId(msg);
   if (id && _mobileBackgroundSpawnClearedIds()[id]) return false;
   const activeSid = String(sessionId || '').trim();

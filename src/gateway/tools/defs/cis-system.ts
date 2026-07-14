@@ -1067,7 +1067,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_ops',
         description:
-          'Dev-only Prometheus repo sync wrapper. Use action:"push" to stage sync-eligible changes, commit, and push; action:"pull" to bring down remote changes; or action:"sync" for the safe two-way commit → merge → push flow. Omit message for push/sync first to get a diff/stat for an accurate commit message.',
+          'Dev-only asynchronous Prometheus repo sync wrapper. Use action:"push" to safely stage eligible changes, scan, commit, and push; action:"pull" to bring down remote changes; or action:"sync" for commit → merge → push. Omit message for a truly read-only preview that does not touch the Git index. Mutations use a cross-process repo lock and stable-snapshot staging.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -1095,7 +1095,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_push',
         description:
-          'Dev-only: stage sync-eligible Prometheus repo changes, commit, and push. Omit message first to get a diff/stat for an accurate commit message. Supports set_pat for auth recovery.',
+          'Dev-only asynchronous repo checkpoint: safely stage sync-eligible Prometheus changes, run secret/large-file and diff checks, commit, and push. Omit message for a read-only preview that does not modify the Git index. Uses a cross-process lock and supports set_pat for auth recovery.',
         parameters: {
           type: 'object',
           required: [],
@@ -1112,7 +1112,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_pull',
         description:
-          'Dev-only: git pull --no-edit for the Prometheus repo. Use to bring down edits from another machine. Does not rebuild/restart; use prom_apply_dev_changes after source/UI changes.',
+          'Dev-only asynchronous git pull --no-edit for the Prometheus repo, serialized through the repo-sync lock. Use to bring down edits from another machine. Does not rebuild/restart; use prom_apply_dev_changes after source/UI changes.',
         parameters: {
           type: 'object',
           required: [],
@@ -1126,7 +1126,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'prom_repo_sync',
         description:
-          'Dev-only safe two-way sync: commit local eligible changes, pull/merge origin, then push. Omit message first to get diff/stat; if conflicts occur, no push happens. Does not rebuild/restart.',
+          'Dev-only asynchronous two-way sync: lock, stage a stable eligible snapshot, scan, commit, pull/merge origin, then push. Omit message for a read-only preview. If conflicts occur, no push happens and the local commit remains safe. Does not rebuild/restart.',
         parameters: {
           type: 'object',
           required: [],

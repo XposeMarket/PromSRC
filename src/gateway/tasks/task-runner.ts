@@ -18,6 +18,7 @@ import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
+import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -429,6 +430,32 @@ const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
 const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
 const _ephemeralBackgroundRuns = new Map<string, EphemeralBackgroundRecord>();
 
+function backgroundVoiceWorkgroupId(record: Pick<EphemeralBackgroundStatus, 'tags'>): string {
+  const tag = (Array.isArray(record.tags) ? record.tags : [])
+    .find((value) => String(value || '').startsWith('voice_workgroup:'));
+  return tag ? String(tag).slice('voice_workgroup:'.length).trim() : '';
+}
+
+function backgroundVoiceDispatchMetadata(record: Pick<EphemeralBackgroundStatus, 'tags'>): Record<string, any> {
+  const voiceWorkgroupId = backgroundVoiceWorkgroupId(record);
+  return voiceWorkgroupId ? { voiceDispatch: true, voiceWorkgroupId, workgroupId: voiceWorkgroupId, tags: record.tags } : { tags: record.tags };
+}
+
+function persistBackgroundVoiceWorker(record: EphemeralBackgroundRecord): void {
+  const workgroupId = backgroundVoiceWorkgroupId(record);
+  if (!workgroupId) return;
+  const status = record.state === 'completed' ? 'complete' : record.state === 'in_progress' ? 'running' : record.state;
+  try {
+    updateVoiceWorkgroupWorkerStatus(workgroupId, record.id, status, {
+      currentStep: status === 'running' ? 'Working in the background' : undefined,
+      finalResult: record.state === 'completed' ? String(record.result || '').trim() : String(record.error || '').trim(),
+      updatedAt: Date.now(),
+    });
+  } catch (err: any) {
+    console.warn(`[Background Agent] Could not persist voice workgroup status for ${record.id}: ${err?.message || err}`);
+  }
+}
+
 // ─── Background Agent deps (injected at startup via setBackgroundAgentDeps) ──
 type BgHandleChat = (
   prompt: string,
@@ -648,6 +675,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
           broadcastWS({
             ...eventData,
+            ...backgroundVoiceDispatchMetadata(record),
             type: 'bg_agent_event',
             sessionId: spawnerSessionId,
             spawnerSessionId,
@@ -695,8 +723,9 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.error = 'Aborted by operator.';
           record.state = 'failed';
           record.completedAt = Date.now();
+          persistBackgroundVoiceWorker(record);
           if (spawnerSessionId) {
-            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
+            broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
           }
           finishLiveRuntime(runtimeId);
           return;
@@ -708,18 +737,20 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.result = (finalText || 'Background task completed with no textual output.') + toolSummary;
         record.state = 'completed';
         record.completedAt = Date.now();
+        persistBackgroundVoiceWorker(record);
         console.log(`[Background Agent] ${record.id} completed`);
 
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'completed', result: record.result, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
+          broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'completed', result: record.result, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
         }
       } catch (err: any) {
         record.error = String(err?.message || err || 'Background execution failed');
         record.state = 'failed';
         record.completedAt = Date.now();
+        persistBackgroundVoiceWorker(record);
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
+          broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
         }
       }
       finishLiveRuntime(runtimeId);
@@ -747,6 +778,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.completedAt = Date.now();
       console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
     } finally {
+      persistBackgroundVoiceWorker(record);
       finishLiveRuntime(runtimeId);
     }
   })();
@@ -855,6 +887,7 @@ export function backgroundAbort(backgroundId: string): { ok: boolean; status?: E
   rec.state = 'failed';
   rec.error = 'Aborted by operator.';
   rec.completedAt = Date.now();
+  persistBackgroundVoiceWorker(rec);
   return { ok: true, status: statusFromRecord(rec) };
 }
 

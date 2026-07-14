@@ -15563,7 +15563,20 @@ function ensureBackgroundSpawnClearedIds() {
   return window.backgroundSpawnClearedIds;
 }
 
+function backgroundSpawnVoiceWorkgroupId(msg = {}) {
+  const direct = String(msg.voiceWorkgroupId || msg.workgroupId || '').trim();
+  if (direct) return direct;
+  const tag = (Array.isArray(msg.tags) ? msg.tags : [])
+    .find((value) => String(value || '').startsWith('voice_workgroup:'));
+  return tag ? String(tag).slice('voice_workgroup:'.length).trim() : '';
+}
+
+function backgroundSpawnIsVoiceWorker(msg = {}) {
+  return msg.voiceDispatch === true || !!backgroundSpawnVoiceWorkgroupId(msg);
+}
+
 function backgroundSpawnEventSessionMatches(msg = {}) {
+  if (backgroundSpawnIsVoiceWorker(msg)) return false;
   const id = backgroundSpawnLaneId(msg);
   if (id && ensureBackgroundSpawnClearedIds().has(id)) return false;
   const sid = String(msg.sessionId || msg.spawnerSessionId || '').trim();

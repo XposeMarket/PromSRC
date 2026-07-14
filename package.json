@@ -28,6 +28,7 @@
     "test:agent-identity-memory": "npm run build:backend && node scripts/test-agent-identity-memory.mjs",
     "test:codex-spark-usage": "npm run build:backend && node scripts/test-codex-spark-usage.mjs",
     "test:untrusted-content-boundary": "npm run build && node scripts/test-untrusted-content-boundary.mjs",
+    "test:electron-security-boundary": "node scripts/test-electron-security-boundary.mjs",
     "test:skill-curator-pipeline": "npm run build:backend && node scripts/test-skill-curator-pipeline.mjs",
     "test:skill-routing": "npm run build:backend && node scripts/test-skill-routing.mjs",
     "test:skill-catalog": "npm run build:backend && node scripts/test-live-skill-catalog.mjs",

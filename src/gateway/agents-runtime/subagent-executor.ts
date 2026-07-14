@@ -58,6 +58,7 @@ import {
 } from '../../tools/file-intelligence';
 import { getMCPManager } from '../mcp-manager';
 import { getProcessSupervisor } from '../process/supervisor';
+import { executePromRepoSyncTool } from '../prom-repo-sync';
 import { buildToolBenchmarkAggregate } from '../tool-observations';
 import {
   applyLineEndingTolerantFindReplace,
@@ -18869,6 +18870,22 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
         // ── prom_repo_push / prom_repo_pull: git sync of the Prometheus repo ───
         if (name === 'prom_repo_push' || name === 'prom_repo_pull' || name === 'prom_repo_sync') {
+          // The async engine is the default. It keeps Git outside the gateway event loop,
+          // preserves read-only previews, serializes mutations with a cross-process lock,
+          // and verifies the staging snapshot before commit. Keep the former inline engine
+          // behind an explicit emergency rollback flag until the new path has soaked.
+          if (process.env.PROMETHEUS_LEGACY_REPO_SYNC !== '1') {
+            const configDir = (() => {
+              try { return getConfig().getConfigDir(); } catch { return path.join(os.homedir(), '.prometheus'); }
+            })();
+            const outcome = await executePromRepoSyncTool({
+              name,
+              args,
+              repoRoot: path.resolve(__dirname, '..', '..', '..'),
+              configDir,
+            });
+            return { name, args, result: outcome.message, error: !outcome.ok };
+          }
           const { execSync } = require('child_process');
           const fsmod = require('fs');
           const osmod = require('os');

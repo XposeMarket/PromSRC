@@ -2145,6 +2145,12 @@ async function handleChat(
   const callerContextText = String(callerContext || '');
   const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
   const voiceAgentChatHandoffActive = /\[VOICE_AGENT_CHAT_HANDOFF\]/i.test(callerContextText);
+  const linkedVoiceWorkgroup = voiceAgentChatHandoffActive
+    ? listVoiceWorkgroupsForSession(sessionId).find((workgroup) => {
+        if (['complete', 'failed'].includes(String(workgroup.status || '').toLowerCase())) return false;
+        return workgroup.workers.some((worker) => worker.kind === 'primary_chat' && !['complete', 'failed'].includes(String(worker.status || '').toLowerCase()));
+      }) || null
+    : null;
   const voiceNarrator = voiceAgentHandoffActive ? createVoiceNarrator(sessionId, message, (data) => {
     rawSendSSE('voice_milestone', data);
     mirrorSessionChatEvent(sessionId, 'voice_milestone', data, broadcastWS);
@@ -3562,13 +3568,62 @@ async function handleChat(
 
   const executeToolWithTelemetry = async (toolName: string, toolArgs: any, toolCallId = ''): Promise<ToolResult> => {
     const startedAt = Date.now();
+    const wrapperAction = String(toolArgs?.action || toolArgs?.operation || toolArgs?.mode || '').trim().toLowerCase();
+    const isBackgroundSpawn = toolName === 'background_spawn'
+      || (toolName === 'background_ops' && (wrapperAction === 'spawn' || wrapperAction === 'start'));
+    const effectiveToolArgs = isBackgroundSpawn && linkedVoiceWorkgroup
+      ? {
+          ...(toolArgs && typeof toolArgs === 'object' ? toolArgs : {}),
+          tags: Array.from(new Set([
+            ...(Array.isArray(toolArgs?.tags) ? toolArgs.tags.map((tag: unknown) => String(tag || '').trim()).filter(Boolean) : []),
+            'voice_dispatch',
+            `voice_workgroup:${linkedVoiceWorkgroup.id}`,
+          ])).slice(0, 12),
+        }
+      : toolArgs;
     try {
-      const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
-      return attachUniversalToolTelemetry(toolResult, toolName, toolArgs, startedAt);
+      const toolResult = await executeTool(toolName, effectiveToolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
+      if (isBackgroundSpawn && linkedVoiceWorkgroup && !toolResult?.error) {
+        try {
+          const parsed = typeof toolResult.result === 'string' ? JSON.parse(toolResult.result) : toolResult.result;
+          const taskId = String(parsed?.id || '').trim();
+          if (taskId) {
+            const current = loadVoiceWorkgroup(linkedVoiceWorkgroup.id) || linkedVoiceWorkgroup;
+            if (!current.workers.some((worker) => worker.taskId === taskId)) {
+              const prompt = String(effectiveToolArgs?.task_prompt || effectiveToolArgs?.prompt || '').trim();
+              const updated = addVoiceWorkgroupWorker(linkedVoiceWorkgroup.id, {
+                taskId,
+                title: compactVoiceDispatchTitle(prompt, `Voice worker ${current.workers.length + 1}`),
+                prompt,
+                index: current.workers.length,
+                status: String(parsed?.state || 'running'),
+                kind: 'background_task',
+                currentStep: 'Working in the background',
+                updatedAt: Date.now(),
+              });
+              broadcastWS({
+                type: 'voice_worker_update',
+                sessionId,
+                workgroupId: linkedVoiceWorkgroup.id,
+                taskId,
+                title: prompt,
+                kind: 'milestone',
+                status: String(parsed?.state || 'running'),
+                currentStep: 'Working in the background',
+                timestamp: Date.now(),
+                workgroup: updated || undefined,
+              });
+            }
+          }
+        } catch (err: any) {
+          console.warn('[VoiceDispatch] Could not attach background spawn to voice workgroup:', err?.message || err);
+        }
+      }
+      return attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt);
     } catch (err: any) {
       return makeInstrumentedToolResult(
         toolName,
-        toolArgs,
+        effectiveToolArgs,
         `Tool execution failed: ${String(err?.message || err || 'Unknown error')}`,
         true,
         startedAt,

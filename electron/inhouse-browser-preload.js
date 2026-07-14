@@ -45,6 +45,23 @@ function buildSelector(el) {
   return parts.join(' > ');
 }
 
+function isSensitiveElement(el) {
+  if (!el || el.nodeType !== 1) return false;
+  const tag = String(el.tagName || '').toLowerCase();
+  const type = String((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+  if (tag === 'input' && ['password'].includes(type)) return true;
+  const autocomplete = String((el.getAttribute && el.getAttribute('autocomplete')) || '').toLowerCase();
+  if (/^(?:current-password|new-password|one-time-code|cc-number|cc-csc|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete)) return true;
+  const hints = [
+    el.id,
+    el.getAttribute && el.getAttribute('name'),
+    el.getAttribute && el.getAttribute('aria-label'),
+    el.getAttribute && el.getAttribute('placeholder'),
+    el.getAttribute && el.getAttribute('data-testid'),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /(?:password|passwd|passcode|one[ _-]?time|\botp\b|\btotp\b|\bpin\b|security[ _-]?code|\bcvv\b|\bcvc\b|card[ _-]?number|payment|recovery[ _-]?(?:code|key|phrase)|seed[ _-]?phrase|private[ _-]?key|api[ _-]?key|access[ _-]?token|auth[ _-]?token|client[ _-]?secret)/i.test(hints);
+}
+
 function describeElement(el) {
   if (!el || el.nodeType !== 1) return null;
   const rect = el.getBoundingClientRect();
@@ -54,10 +71,11 @@ function describeElement(el) {
     tagName: tag,
     id: String(el.id || ''),
     role: String((el.getAttribute && el.getAttribute('role')) || ''),
-    text: String((el.getAttribute && el.getAttribute('aria-label')) || el.innerText || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+    text: String((el.getAttribute && el.getAttribute('aria-label')) || el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180),
     // A human label that ISN'T the typed value (for naming fill steps).
     label: String((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.getAttribute('title'))) || '').replace(/\s+/g, ' ').trim().slice(0, 120),
     editable: tag === 'input' || tag === 'textarea' || el.isContentEditable === true,
+    sensitive: isSensitiveElement(el),
     bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
     viewport: { width: window.innerWidth, height: window.innerHeight },
   };
@@ -81,7 +99,7 @@ ipcRenderer.on('prometheus-teach-capture', (_event, enabled) => {
 // so we capture the element that actually received the activation.
 window.addEventListener('click', (event) => {
   try { console.log('[inhouse-preload] click capture=' + teachCapture + ' btn=' + event.button); } catch {}
-  if (!teachCapture) return;
+  if (!teachCapture || event.isTrusted !== true) return;
   if (event.button !== 0) return;
   const info = describeElement(event.target);
   ipcRenderer.send('prometheus-teach-click', {
@@ -102,6 +120,7 @@ function flushPendingFill() {
   if (!pendingFill) return;
   const f = pendingFill;
   pendingFill = null;
+  if (f.sensitive) return;
   const text = elementValue(f.el);
   if (!text) return;
   ipcRenderer.send('prometheus-teach-fill', {
@@ -115,23 +134,23 @@ function flushPendingFill() {
 }
 
 window.addEventListener('input', (event) => {
-  if (!teachCapture) return;
+  if (!teachCapture || event.isTrusted !== true) return;
   const el = event.target;
   if (!el || !(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true)) return;
   const info = describeElement(el);
   // New target — flush the previous field first.
   if (pendingFill && pendingFill.el !== el) flushPendingFill();
-  pendingFill = { el, selector: info.selector, label: info.label, tagName: info.tagName, role: info.role, bounds: info.bounds };
+  pendingFill = { el, selector: info.selector, label: info.label, tagName: info.tagName, role: info.role, bounds: info.bounds, sensitive: info.sensitive === true };
 }, true);
 
 window.addEventListener('blur', (event) => {
-  if (!teachCapture) return;
+  if (!teachCapture || event.isTrusted !== true) return;
   if (pendingFill && event.target === pendingFill.el) flushPendingFill();
 }, true);
 
 // ── Special keys ────────────────────────────────────────────────────────────
 window.addEventListener('keydown', (event) => {
-  if (!teachCapture) return;
+  if (!teachCapture || event.isTrusted !== true) return;
   const key = String(event.key || '');
   if (['Enter', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
     // Commit any typed text as a fill step BEFORE the submit/navigation key.
@@ -151,7 +170,7 @@ let scrollAccumX = 0;
 let scrollAccumY = 0;
 let scrollTimer = 0;
 window.addEventListener('wheel', (event) => {
-  if (!teachCapture) return;
+  if (!teachCapture || event.isTrusted !== true) return;
   scrollAccumX += event.deltaX || 0;
   scrollAccumY += event.deltaY || 0;
   if (scrollTimer) clearTimeout(scrollTimer);
@@ -166,7 +185,7 @@ window.addEventListener('wheel', (event) => {
 
 // Lightweight hover reporting for the recording highlight overlay.
 window.addEventListener('pointermove', (event) => {
-  if (!teachCapture) return;
+  if (!teachCapture || event.isTrusted !== true) return;
   const now = Date.now();
   if (now - lastHoverAt < 90) return;
   lastHoverAt = now;
