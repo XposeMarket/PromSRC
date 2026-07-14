@@ -17563,6 +17563,18 @@ function normalizePrimaryVoiceWorker(body: any): NormalizedPrimaryVoiceWorker | 
   };
 }
 
+router.get('/api/voice-agent/workgroups/session/:sessionId', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || '').trim();
+    const requestedLimit = Number(req.query.limit || 8);
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(20, Math.floor(requestedLimit))) : 8;
+    const workgroups = listVoiceWorkgroupsForSession(sessionId).slice(0, limit);
+    res.json({ ok: true, success: true, sessionId, workgroups });
+  } catch (err: any) {
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
 router.get('/api/voice-agent/workgroups/:id', (req, res) => {
   try {
     const workgroup = loadVoiceWorkgroup(String(req.params.id || ''));

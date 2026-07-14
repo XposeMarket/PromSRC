@@ -6700,7 +6700,7 @@ function _refreshMobileVoiceWorkerJournal(taskId, delayMs = 120) {
   _mobileVoiceWorkerJournalTimers.set(id, timer);
 }
 
-function _upsertMobileVoiceWorkgroup(sessionId, rawWorkgroup, acknowledgement = '') {
+function _upsertMobileVoiceWorkgroup(sessionId, rawWorkgroup, acknowledgement = '', options = {}) {
   const sid = String(sessionId || rawWorkgroup?.parentSessionId || '').trim();
   const workgroup = _normalizeMobileVoiceWorkgroup(rawWorkgroup);
   if (!sid || !workgroup) return null;
@@ -6738,9 +6738,41 @@ function _upsertMobileVoiceWorkgroup(sessionId, rawWorkgroup, acknowledgement = 
   workgroup.workers
     .filter((worker) => worker.kind === 'background_task' && worker.taskId)
     .forEach((worker) => _refreshMobileVoiceWorkerJournal(worker.taskId, 40));
-  if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
-  if (String(__pmVoice?.targetSessionId || '').trim() === sid) __pmVoice.renderRecent?.();
+  _scheduleMobileThreadCacheSave(sid, 120);
+  if (options.render !== false && String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
+  if (options.render !== false && String(__pmVoice?.targetSessionId || '').trim() === sid) __pmVoice.renderRecent?.();
   return message;
+}
+
+const _mobileVoiceWorkgroupRestoreRequests = new Map();
+
+function _restoreMobileVoiceWorkgroupsForSession(sessionId, { render = true } = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID) return Promise.resolve([]);
+  const existing = _mobileVoiceWorkgroupRestoreRequests.get(sid);
+  if (existing) return existing;
+  const request = mobileGatewayFetch(`/api/voice-agent/workgroups/session/${encodeURIComponent(sid)}?limit=8`)
+    .then((data) => {
+      const workgroups = Array.isArray(data?.workgroups) ? data.workgroups.slice().reverse() : [];
+      workgroups.forEach((workgroup) => _upsertMobileVoiceWorkgroup(sid, workgroup, '', { render: false }));
+      if (workgroups.length) {
+        __pmChat.threads[sid] = _reconcileMobileThreadOrder(__pmChat.threads[sid] || []);
+        if (String(__pmChat.activeSessionId || '').trim() === sid) {
+          __pmChat.thread = __pmChat.threads[sid];
+          if (render) _renderMobileChatSessionNow(sid);
+        }
+        if (String(__pmVoice?.targetSessionId || '').trim() === sid) __pmVoice.renderRecent?.();
+        _scheduleMobileThreadCacheSave(sid, 120);
+      }
+      return workgroups;
+    })
+    .catch((err) => {
+      console.warn('[mobile voice workgroup] restore failed', { sessionId: sid, error: String(err?.message || err) });
+      return [];
+    })
+    .finally(() => _mobileVoiceWorkgroupRestoreRequests.delete(sid));
+  _mobileVoiceWorkgroupRestoreRequests.set(sid, request);
+  return request;
 }
 
 function _applyMobileVoiceWorkerUpdate(event = {}) {
@@ -6821,6 +6853,10 @@ if (typeof window !== 'undefined' && !window.__pmMobileVoiceWorkgroupBridgeInsta
   });
   ['task_panel_update', 'task_complete', 'task_paused', 'task_awaiting_input', 'task_needs_assistance'].forEach((eventName) => {
     wsEventBus.on(eventName, (event = {}) => _refreshMobileVoiceWorkerJournal(event.taskId, eventName === 'task_panel_update' ? 80 : 0));
+  });
+  wsEventBus.on('ws:open', () => {
+    const sid = String(__pmChat.activeSessionId || __pmVoice?.targetSessionId || '').trim();
+    if (sid) _restoreMobileVoiceWorkgroupsForSession(sid).catch(() => {});
   });
 }
 
@@ -9817,6 +9853,9 @@ void main() {
       .finally(() => {
         initialSessionLoadPending = false;
       });
+  }
+  if (requestedSession !== MOBILE_CHAT_SESSION_ID) {
+    _restoreMobileVoiceWorkgroupsForSession(requestedSession).catch(() => {});
   }
 
   let mobileRecoveryInFlight = null;
@@ -21747,11 +21786,15 @@ void main() {
   });
 
   if (!inlineMode) {
-    _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced }).catch(() => {
-      __pmVoice.targetSessionId = __pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID;
-      __pmVoice.targetSessionLabel = __pmVoice.targetSessionLabel || 'Mobile - New Chat';
-      _paintVoiceTarget();
-    });
+    _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced })
+      .then((sid) => _restoreMobileVoiceWorkgroupsForSession(sid).catch(() => {}))
+      .catch(() => {
+        __pmVoice.targetSessionId = __pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID;
+        __pmVoice.targetSessionLabel = __pmVoice.targetSessionLabel || 'Mobile - New Chat';
+        _paintVoiceTarget();
+      });
+  } else {
+    _restoreMobileVoiceWorkgroupsForSession(__pmVoice.targetSessionId).catch(() => {});
   }
 
   // ── Provider detection ─────────────────────────────────────────────
