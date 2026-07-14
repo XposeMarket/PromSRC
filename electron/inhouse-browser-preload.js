@@ -66,16 +66,17 @@ function describeElement(el) {
   if (!el || el.nodeType !== 1) return null;
   const rect = el.getBoundingClientRect();
   const tag = String(el.tagName || '').toLowerCase();
+  const sensitive = isSensitiveElement(el);
   return {
     selector: buildSelector(el),
     tagName: tag,
     id: String(el.id || ''),
     role: String((el.getAttribute && el.getAttribute('role')) || ''),
-    text: String((el.getAttribute && el.getAttribute('aria-label')) || el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+    text: sensitive ? '' : String((el.getAttribute && el.getAttribute('aria-label')) || el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180),
     // A human label that ISN'T the typed value (for naming fill steps).
-    label: String((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.getAttribute('title'))) || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+    label: sensitive ? 'Sensitive field' : String((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.getAttribute('title'))) || '').replace(/\s+/g, ' ').trim().slice(0, 120),
     editable: tag === 'input' || tag === 'textarea' || el.isContentEditable === true,
-    sensitive: isSensitiveElement(el),
+    sensitive,
     bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
     viewport: { width: window.innerWidth, height: window.innerHeight },
   };

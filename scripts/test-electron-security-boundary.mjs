@@ -103,8 +103,11 @@ function element({ type = 'text', name = '', value = '', autocomplete = '', plac
 const password = element({ type: 'password', name: 'password', value: 'never-record-me' });
 domListeners.get('input')({ isTrusted: true, target: password });
 domListeners.get('blur')({ isTrusted: true, target: password });
+domListeners.get('click')({ isTrusted: true, target: password, button: 0, clientX: 5, clientY: 6 });
 assert.equal(sent.some((entry) => JSON.stringify(entry).includes('never-record-me')), false);
 assert.equal(sent.some((entry) => entry.channel === 'prometheus-teach-fill'), false);
+assert.equal(sent.at(-1).payload.label, 'Sensitive field');
+assert.equal(sent.at(-1).payload.text, '');
 
 const recovery = element({ name: 'recovery_code', value: 'secret-recovery-code' });
 domListeners.get('input')({ isTrusted: true, target: recovery });

@@ -31,7 +31,17 @@
 - `src/gateway/routes/coding.router.ts` exposes coding workspace/session, diff, branch, stage, and commit operations
 - `src/gateway/routes/onboarding.router.ts` owns account-scoped onboarding/tutorial/model/memory-seed state
 
-## 3A) Account/Auth Gate and Router Mounting
+## 3A) Electron desktop trust boundary
+
+- `electron/security.js` is the pure URL/port parsing boundary used by the desktop main process. Renderer trust is an exact parsed-origin comparison against `http://127.0.0.1:18789`; credentials, malformed URLs, alternate ports/hosts/schemes, child frames, and non-main-window senders are rejected.
+- Every privileged `ipcMain.handle(...)` registration goes through `handleTrustedMain(...)`. Teach events are separate: they must come from the main frame of the currently presented native-browser `webContents`, whose partition must map to the active session.
+- Main-window navigation and redirects stay on the exact gateway origin. Only credential-free `https:` links may be handed to the operating system; unsafe/custom schemes are blocked.
+- The embedded browser accepts only credential-free HTTP(S) pages plus the internal `about:blank` sentinel. `file:`, `data:`, `javascript:`, and custom-protocol loads are rejected.
+- Electron startup never kills an arbitrary process that happens to own port 18789. On Windows it reports the listening PID and refuses startup; watchdog/quit cleanup may terminate only the child process Electron itself spawned.
+- Teach capture ignores synthetic DOM events, never derives element descriptions from input values, and drops fills for password, payment, OTP, token, recovery, seed/private-key, and client-secret fields. Delivery errors propagate instead of returning a false `{ ok: true }`.
+- Run `npm run test:electron-security-boundary` after changing `electron/main.js`, either preload, or `electron/security.js`.
+
+## 3B) Account/Auth Gate and Router Mounting
 
 The gateway now mounts almost all application routes behind both gateway auth and account-login checks in `src/gateway/server-v2.ts`.
 
